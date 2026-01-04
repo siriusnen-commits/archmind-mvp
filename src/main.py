@@ -31,32 +31,61 @@ MAX_RETRIES = 2
 
 def inject_required_files(files: Dict[str, str], project_name: str) -> Dict[str, str]:
     """
-    Guarantee README.md, requirements.txt, main.py exist at project root.
-    FastAPI template (default port 8000).
-    If missing OR empty, inject minimal runnable defaults.
+    FastAPI template is enforced.
+    Model output is ignored for runtime-critical files.
     """
-    # requirements.txt (also fix empty file)
-    req = files.get("requirements.txt", "").strip()
-    if not req:
-        files["requirements.txt"] = (
-            "fastapi==0.115.0\n"
-            "uvicorn[standard]==0.30.6\n"
+
+    # 🔒 FORCE FastAPI requirements
+    files["requirements.txt"] = (
+        "fastapi==0.115.0\n"
+        "uvicorn[standard]==0.30.6\n"
+    )
+
+    # 🔒 FORCE main.py (FastAPI)
+    files["main.py"] = (
+        "import os\n"
+        "from fastapi import FastAPI\n\n"
+        "app = FastAPI()\n\n"
+        "@app.get('/')\n"
+        "def health():\n"
+        "    return {'status': 'ok'}\n\n"
+        "if __name__ == '__main__':\n"
+        "    import uvicorn\n"
+        "    host = os.getenv('HOST', '0.0.0.0')\n"
+        "    port = int(os.getenv('PORT', '8000'))\n"
+        "    uvicorn.run('main:app', host=host, port=port, reload=True)\n"
+    )
+
+    # README.md
+    if not files.get("README.md", "").strip():
+        files["README.md"] = (
+            f"# {project_name}\n\n"
+            "## Setup\n"
+            "```bash\n"
+            "python3 -m venv .venv\n"
+            "source .venv/bin/activate\n"
+            "python -m pip install -r requirements.txt\n"
+            "```\n\n"
+            "## Run\n"
+            "```bash\n"
+            "PORT=8000 python main.py\n"
+            "```\n"
         )
 
-    # main.py (FastAPI)
+    return files
+
+    # main.py
     if not files.get("main.py", "").strip():
         files["main.py"] = (
             "import os\n"
-            "from fastapi import FastAPI\n\n"
-            "app = FastAPI()\n\n"
+            "from flask import Flask\n\n"
+            "app = Flask(__name__)\n\n"
             "@app.get('/')\n"
             "def health():\n"
             "    return {'status': 'ok'}\n\n"
             "if __name__ == '__main__':\n"
-            "    import uvicorn\n"
-            "    host = os.getenv('HOST', '0.0.0.0')\n"
             "    port = int(os.getenv('PORT', '8000'))\n"
-            "    uvicorn.run('main:app', host=host, port=port, reload=True)\n"
+            "    app.run(host='0.0.0.0', port=port, debug=True)\n"
         )
 
     # README.md
@@ -72,14 +101,20 @@ def inject_required_files(files: Dict[str, str], project_name: str) -> Dict[str,
             "## Run\n"
             "```bash\n"
             "PORT=8000 python main.py\n"
-            "```\n\n"
-            "## Test\n"
-            "```bash\n"
-            "curl -s http://localhost:8000/\n"
             "```\n"
         )
 
     return files
+
+def fallback_spec(project_name: str) -> Dict[str, Any]:
+    # 최소 실행 가능한 FastAPI 스켈레톤
+    return {
+        "project_name": project_name,
+        "summary": "Fallback spec because model output was invalid JSON.",
+        "stack": {"language": "python", "framework": "fastapi", "server": "uvicorn"},
+        "directories": [],
+        "files": {},
+    }
 
 def call_ollama_chat(text: str) -> str:
     url = f"{OLLAMA_BASE_URL.rstrip('/')}/api/chat"
@@ -138,12 +173,21 @@ def repair_json_with_model(bad_json: str) -> str:
 def parse_json_or_debug(raw: str) -> Dict[str, Any]:
     try:
         return json.loads(raw)
+
     except json.JSONDecodeError:
         # 1) save raw
         DEBUG_RAW_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
         DEBUG_RAW_OUTPUT.write_text(raw + "\n", encoding="utf-8")
 
-        # 2) try repair once
+        # ===== Track A: simple auto-fix (no model call) =====
+        fixed = try_close_braces(raw)
+        if fixed != raw:
+            try:
+                return json.loads(fixed)
+            except json.JSONDecodeError:
+                pass  # fall through to model repair
+
+        # ===== 2) try repair once (model-based) =====
         repaired = repair_json_with_model(raw)
         try:
             return json.loads(repaired)
@@ -274,14 +318,24 @@ def build_generation_request(prompt: str, idea: str, last_error: str | None = No
         )
     return f"{prompt}\n\nPRODUCT IDEA:\n{idea}\n{correction}"
 
-
-def generate_valid_spec(prompt: str, idea: str) -> Dict[str, Any]:
+def generate_valid_spec(prompt: str, idea: str, forced_name: str | None = None) -> Dict[str, Any]:
     last_err: str | None = None
+
+    # fallback name 결정 (모델이 망가져도 폴더는 고정)
+    fallback_name = (forced_name or "archmind_project").strip() or "archmind_project"
+
     for attempt in range(1, MAX_RETRIES + 1):
         req = build_generation_request(prompt, idea, last_err)
         raw = call_ollama_chat(req)
-        spec = parse_json_or_debug(raw)
 
+        # 1) parse (with Track A inside parse_json_or_debug)
+        try:
+            spec = parse_json_or_debug(raw)
+        except RuntimeError as e:
+            print(f"[WARN] Invalid JSON from model. Using fallback spec. Details: {e}")
+            spec = fallback_spec(project_name=fallback_name)
+
+        # 2) validate + fix
         try:
             spec = validate_and_fix_spec(spec)
             return spec
@@ -290,7 +344,6 @@ def generate_valid_spec(prompt: str, idea: str) -> Dict[str, Any]:
             print(f"[WARN] Spec validation failed (attempt {attempt}/{MAX_RETRIES}): {e}")
 
     raise RuntimeError(f"Failed to generate valid spec after {MAX_RETRIES} attempts: {last_err}")
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -302,7 +355,10 @@ def main():
     prompt = PROMPT_PATH.read_text(encoding="utf-8")
     idea = INPUT_PATH.read_text(encoding="utf-8")
 
-    spec = generate_valid_spec(prompt, idea)
+    spec = generate_valid_spec(prompt, idea, forced_name=args.name)
+
+    if args.name:
+        spec["project_name"] = args.name
 
     project_name = (args.name.strip() if args.name else spec["project_name"])
     dirs: List[str] = spec.get("directories", [])
