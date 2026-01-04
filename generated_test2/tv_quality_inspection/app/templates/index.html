@@ -1,0 +1,15 @@
+<html>
+<head>
+    <title>TV Quality Inspection Log</title>
+</head>
+<body>
+    <h1>Log a quality issue:</h1>
+    <form action="/log" method="post">
+        <label for="issue_description">Issue description:</label><br/>
+        <input type="text" id="issue_description" name="issue_description"><br/>
+        <label for="photo_url">Photo URL:</label><br/>
+        <input type="url" id="photo_url" name="photo_url"><br/>
+        <input type="submit" value="Log issue">
+    </form>
+</body>
+</html>

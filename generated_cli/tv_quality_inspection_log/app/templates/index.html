@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>TV Quality Inspection Log</title>
+</head>
+<body>
+    <h1>Log Entry Form</h1>
+    <form action="/log" method="post">
+        <label for="timestamp">Timestamp:</label><br>
+        <input type="text" id="timestamp" name="timestamp"><br>
+        <label for="quality">Quality (0-100):</label><br>
+        <input type="number" id="quality" name="quality"><br>
+        <input type="submit" value="Log Entry">
+    </form>
+</body>
+</html>

@@ -1,0 +1,22 @@
+{
+  "project_name": "tv_quality_inspection_log",
+  "summary": "A system to record and analyze TV quality inspection logs.",
+  "stack": {
+    "language": "python",
+    "framework": "flask",
+    "db": "sqlite3",
+    "deploy": "docker"
+  },
+  "directories": [
+    "app",
+    "logs"
+  ],
+  "files": {
+    "app/main.py": "from flask import Flask, request\nfrom sqlite3 import connect\napp = Flask(__name__)\n@app.route('/log', methods=['POST'])\ndef log_entry():\n    conn = connect(':memory:')\n    c = conn.cursor()\n    c.execute('CREATE TABLE IF NOT EXISTS logs (id INTEGER PRIMARY KEY, timestamp TEXT, quality REAL)')\n    data = request.get_json()\n    c.execute('INSERT INTO logs VALUES (NULL, ?, ?)', (data['timestamp'], data['quality']))\n    conn.commit()\n    return {'message': 'Log entry recorded.'}\nif __name__ == '__main__':\n    app.run(debug=True)\n",
+    "app/templates/index.html": "<!DOCTYPE html>\n<html>\n<head>\n    <title>TV Quality Inspection Log</title>\n</head>\n<body>\n    <h1>Log Entry Form</h1>\n    <form action=\"/log\" method=\"post\">\n        <label for=\"timestamp\">Timestamp:</label><br>\n        <input type=\"text\" id=\"timestamp\" name=\"timestamp\"><br>\n        <label for=\"quality\">Quality (0-100):</label><br>\n        <input type=\"number\" id=\"quality\" name=\"quality\"><br>\n        <input type=\"submit\" value=\"Log Entry\">\n    </form>\n</body>\n</html>",
+    "logs/log.txt": "2022-01-01 12:00:00, 85.0\n2022-01-02 14:30:00, 92.5",
+    "requirements.txt": "flask==2.0.1\nWerkzeug==2.0.3\nJinja2==3.0.3\nitsdangerous==2.0.1\nclick==8.0.4\n",
+    "main.py": "import os\nfrom flask import Flask\n\napp = Flask(__name__)\n\n@app.get('/')\ndef health():\n    return {'status': 'ok'}\n\nif __name__ == '__main__':\n    port = int(os.getenv('PORT', '8000'))\n    app.run(host='0.0.0.0', port=port, debug=True)\n",
+    "README.md": "# tv_quality_inspection_log\n\n## Setup\n```bash\npython3 -m venv .venv\nsource .venv/bin/activate\npython -m pip install -r requirements.txt\n```\n\n## Run\n```bash\nPORT=8000 python main.py\n```\n"
+  }
+}

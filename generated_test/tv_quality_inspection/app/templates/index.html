@@ -1,14 +1,13 @@
-<!DOCTYPE html>
 <html>
 <head>
-  <title>TV Quality Inspection</title>
+    <title>TV Quality Inspection</title>
 </head>
 <body>
-  <h1>Record Defects</h1>
-  <form action="/log" method="post">
-    <input type="text" name="defect_description">
-    <input type="file" name="photo">
-    <button type="submit">Log Defect</button>
-  </form>
+    <h1>Log Defect</h1>
+    <form action="/log" method="post">
+        <label for="defect">Defect:</label><br>
+        <input type="text" id="defect" name="defect"><br>
+        <input type="submit" value="Log">
+    </form>
 </body>
 </html>
