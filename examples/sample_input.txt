@@ -1,0 +1,2 @@
+A quality inspection log system for TV manufacturing.
+Operators record defects, attach photos, track rework, and export daily reports.

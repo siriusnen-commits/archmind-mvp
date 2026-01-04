@@ -11,3 +11,9 @@ Given a product idea, output a developer-ready architecture in this exact format
 7) Project Directory Skeleton (tree)
 
 Be concise, practical, and avoid fluff.
+
+---
+
+PRODUCT IDEA:
+A quality inspection log system for TV manufacturing.
+Operators record defects, attach photos, track rework, and export daily reports.
