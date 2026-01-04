@@ -29,3 +29,4 @@ Rules:
 - MUST include README.md with setup and run instructions.
 - Do NOT include standard library modules (e.g., sqlite3, json, os, datetime) in requirements/dependencies.
 - For SQLite, use Python's built-in sqlite3 (no pip dependency).
+- Default to FastAPI + Uvicorn for Python web APIs (not Flask).

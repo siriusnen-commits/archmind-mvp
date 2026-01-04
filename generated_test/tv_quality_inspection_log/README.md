@@ -11,3 +11,8 @@ python -m pip install -r requirements.txt
 ```bash
 PORT=8000 python main.py
 ```
+
+## Test
+```bash
+curl -s http://localhost:8000/
+```

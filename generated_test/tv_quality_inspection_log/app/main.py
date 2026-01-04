@@ -1,8 +1,21 @@
-from flask import Flask, request, jsonify
-app = Flask(__name__)
-@app.route('/log', methods=['POST'])
-def log_defect():
-  # TO DO: implement logging logic
-  pass
+{"defects": []}
+
+from fastapi import FastAPI, File, UploadFile
+from pydantic import BaseModel
+from typing import List
+
+app = FastAPI()
+
+class Defect(BaseModel):
+    defect_id: int
+    description: str
+    photo: UploadFile
+
+@app.post('/defects')
+def create_defect(defect: Defect, file: UploadFile = File(...)):
+    # TO DO: implement database storage and rework tracking
+    pass
+
 if __name__ == '__main__':
-  app.run(debug=True)
+    import uvicorn
+    uvicorn.run(app, host='0.0.0.0', port=8000)

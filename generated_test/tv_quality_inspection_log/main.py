@@ -1,12 +1,14 @@
 import os
-from flask import Flask
+from fastapi import FastAPI
 
-app = Flask(__name__)
+app = FastAPI()
 
 @app.get('/')
 def health():
     return {'status': 'ok'}
 
 if __name__ == '__main__':
+    import uvicorn
+    host = os.getenv('HOST', '0.0.0.0')
     port = int(os.getenv('PORT', '8000'))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    uvicorn.run('main:app', host=host, port=port, reload=True)

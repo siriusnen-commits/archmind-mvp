@@ -32,31 +32,31 @@ MAX_RETRIES = 2
 def inject_required_files(files: Dict[str, str], project_name: str) -> Dict[str, str]:
     """
     Guarantee README.md, requirements.txt, main.py exist at project root.
+    FastAPI template (default port 8000).
     If missing OR empty, inject minimal runnable defaults.
     """
     # requirements.txt (also fix empty file)
     req = files.get("requirements.txt", "").strip()
     if not req:
         files["requirements.txt"] = (
-            "flask==2.0.1\n"
-            "Werkzeug==2.0.3\n"
-            "Jinja2==3.0.3\n"
-            "itsdangerous==2.0.1\n"
-            "click==8.0.4\n"
+            "fastapi==0.115.0\n"
+            "uvicorn[standard]==0.30.6\n"
         )
 
-    # main.py
+    # main.py (FastAPI)
     if not files.get("main.py", "").strip():
         files["main.py"] = (
             "import os\n"
-            "from flask import Flask\n\n"
-            "app = Flask(__name__)\n\n"
+            "from fastapi import FastAPI\n\n"
+            "app = FastAPI()\n\n"
             "@app.get('/')\n"
             "def health():\n"
             "    return {'status': 'ok'}\n\n"
             "if __name__ == '__main__':\n"
+            "    import uvicorn\n"
+            "    host = os.getenv('HOST', '0.0.0.0')\n"
             "    port = int(os.getenv('PORT', '8000'))\n"
-            "    app.run(host='0.0.0.0', port=port, debug=True)\n"
+            "    uvicorn.run('main:app', host=host, port=port, reload=True)\n"
         )
 
     # README.md
@@ -72,6 +72,10 @@ def inject_required_files(files: Dict[str, str], project_name: str) -> Dict[str,
             "## Run\n"
             "```bash\n"
             "PORT=8000 python main.py\n"
+            "```\n\n"
+            "## Test\n"
+            "```bash\n"
+            "curl -s http://localhost:8000/\n"
             "```\n"
         )
 
@@ -290,6 +294,7 @@ def generate_valid_spec(prompt: str, idea: str) -> Dict[str, Any]:
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--name", default=None, help="Override project name (folder name)")
     ap.add_argument("--force", action="store_true", help="Overwrite existing generated files")
     ap.add_argument("--out", default=str(GENERATED_ROOT), help="Output root directory (default: generated/)")
     args = ap.parse_args()
@@ -299,7 +304,7 @@ def main():
 
     spec = generate_valid_spec(prompt, idea)
 
-    project_name = spec["project_name"]
+    project_name = (args.name.strip() if args.name else spec["project_name"])
     dirs: List[str] = spec.get("directories", [])
     files: Dict[str, str] = spec.get("files", {})
 
@@ -323,6 +328,11 @@ def main():
 
     print(f"[OK] Generated project: {project_root}")
     print(f"[OK] Model={MODEL}, files={len(files)}, dirs={len(dirs)}")
+    print("\nNext steps:")
+    print(f"  cd {project_root}")
+    print("  python3 -m venv .venv && source .venv/bin/activate")
+    print("  python -m pip install -r requirements.txt")
+    print("  PORT=8000 python main.py")
 
 
 if __name__ == "__main__":
