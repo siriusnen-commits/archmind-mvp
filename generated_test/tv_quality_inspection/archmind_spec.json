@@ -1,0 +1,22 @@
+{
+  "project_name": "tv_quality_inspection",
+  "summary": "Record and track TV manufacturing defects with photo attachments and daily report exports.",
+  "stack": {
+    "language": "python",
+    "framework": "flask",
+    "db": "sqlite3",
+    "deploy": "gunicorn"
+  },
+  "directories": [
+    "app",
+    "logs"
+  ],
+  "files": {
+    "app/main.py": "from flask import Flask, request, jsonify\nfrom sqlite3 import dbapi2 as sqlite\napp = Flask(__name__)\n@app.route('/log', methods=['POST'])\ndef log_defect():\n    # TO DO: implement defect logging logic\n    pass\nif __name__ == '__main__':\n    app.run(debug=True)\n",
+    "app/templates/index.html": "<!DOCTYPE html>\n<html>\n<head>\n  <title>TV Quality Inspection</title>\n</head>\n<body>\n  <h1>Record Defects</h1>\n  <form action=\"/log\" method=\"post\">\n    <input type=\"text\" name=\"defect_description\">\n    <input type=\"file\" name=\"photo\">\n    <button type=\"submit\">Log Defect</button>\n  </form>\n</body>\n</html>",
+    "logs/log.txt": "",
+    "requirements.txt": "",
+    "main.py": "from flask import Flask\n\napp = Flask(__name__)\n\n@app.get('/')\ndef health():\n    return {'status': 'ok'}\n\nif __name__ == '__main__':\n    app.run(host='0.0.0.0', port=5000, debug=True)\n",
+    "README.md": "# tv_quality_inspection\n\n## Setup\n```bash\npython3 -m venv .venv\nsource .venv/bin/activate\npip install -r requirements.txt\n```\n\n## Run\n```bash\npython3 main.py\n```\n"
+  }
+}

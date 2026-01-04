@@ -1,0 +1,1 @@
+TV_QUALITY_INSPECTION_LOG_DB = 'tv_quality_inspection_log.db'

@@ -1,0 +1,18 @@
+{
+  "project_name": "tv_quality_inspection",
+  "summary": "Log system for TV manufacturing quality inspections.",
+  "stack": {
+    "language": "python",
+    "framework": "flask",
+    "db": "sqlite3",
+    "deploy": "gunicorn"
+  },
+  "directories": ["app", "logs"],
+  "files": {
+    "app/main.py": "from flask import Flask, request, jsonify\napp = Flask(__name__)\n@app.route('/log', methods=['POST'])\ndef log_defect():\n    # TO DO: implement logging logic\n    pass\nif __name__ == '__main__':\n    app.run(debug=True)",
+    "app/templates/index.html": "<html><body><h1>TV Quality Inspection Log</h1><form action=\"/log\" method=\"post\"><input type=\"text\" name=\"defect_description\"><input type=\"file\" name=\"photo\"><button type=\"submit\">Log Defect</button></form></body></html>",
+    "app/static/style.css": "body {\n  font-family: Arial, sans-serif;\n}\nh1 {\n  color: #00698f;\n}",
+    "logs/log.txt": "",
+    "requirements.txt": "flask",
+    "README.md": "# TV Quality Inspection Log System\n\n## Setup\nInstall Flask using pip:\npip install flask\n\n## Run the app\nRun the app using gunicorn:\ngunicorn main:app"
+}

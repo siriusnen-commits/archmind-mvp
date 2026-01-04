@@ -1,0 +1,24 @@
+{
+  "project_name": "tv_quality_inspection_log",
+  "summary": "Record and track TV manufacturing defects with photo attachments and daily report exports.",
+  "stack": {
+    "language": "python",
+    "framework": "flask",
+    "db": "sqlite",
+    "deploy": "heroku"
+  },
+  "directories": [
+    "app/config",
+    "app/templates",
+    "app/static"
+  ],
+  "files": {
+    "app/__init__.py": "",
+    "app/routes.py": "",
+    "app/models.py": "",
+    "app/templates/index.html": "<!DOCTYPE html><html><body>Quality Inspection Log</body></html>",
+    "app/static/style.css": "body { font-family: Arial, sans-serif; }",
+    "config.py": "TV_QUALITY_INSPECTION_LOG_DB = 'tv_quality_inspection_log.db'",
+    "requirements.txt": "flask==2.0.1\nsqlite3==2.7.16"
+  }
+}
