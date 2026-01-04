@@ -17,3 +17,5 @@ but because they never become executable structures.
 - [ ] Core prompt design
 - [ ] Architecture output format
 - [ ] Code skeleton generation
+
+##
