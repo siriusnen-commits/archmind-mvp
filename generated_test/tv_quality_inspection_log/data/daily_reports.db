@@ -1,5 +1,0 @@
-PRAGMA foreign_keys=ON;
-CREATE TABLE daily_reports (
-  date TEXT PRIMARY KEY,
-  defects_count INTEGER
-);

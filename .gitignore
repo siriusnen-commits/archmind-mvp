@@ -1,0 +1,10 @@
+# --- ArchMind generated outputs ---
+generated_test/
+generated/
+examples/last_raw_output.txt
+examples/last_repaired_output.txt
+
+# --- Python ---
+.venv/
+__pycache__/
+*.pyc

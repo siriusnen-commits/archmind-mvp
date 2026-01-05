@@ -1,1 +1,0 @@
-{"database": "quality_inspection_log.db"}
