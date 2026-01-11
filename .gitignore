@@ -1,10 +1,24 @@
-# --- ArchMind generated outputs ---
-generated_test/
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtualenv
+.venv/
+venv/
+
+# Pytest / tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+# Generated outputs (ArchMind)
 generated/
+generated_test/
+generated_test2/
+generated_cli/
+
+# Local artifacts
 examples/last_raw_output.txt
 examples/last_repaired_output.txt
-
-# --- Python ---
-.venv/
-__pycache__/
-*.pyc
