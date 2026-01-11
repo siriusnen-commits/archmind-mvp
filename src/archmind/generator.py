@@ -5,7 +5,7 @@ import json
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
 
@@ -16,49 +16,27 @@ DEBUG_RAW_OUTPUT = Path("examples/last_raw_output.txt")
 DEBUG_REPAIRED_OUTPUT = Path("examples/last_repaired_output.txt")
 
 
-# =========================
-# Options
-# =========================
 @dataclass
 class GenerateOptions:
     out: Path
     force: bool = False
     name: Optional[str] = None
-    template: str = "fastapi"
+    template: str = "fastapi"  # "fastapi" | "fastapi-ddd"
     model: str = "llama3:latest"
     ollama_base_url: str = "http://localhost:11434"
     max_retries: int = 2
     timeout_s: int = 240
 
 
-# =========================
-# JSON helpers (Track A + repair)
-# =========================
-def try_close_braces(s: str) -> str:
-    """Cheap JSON fix: close missing braces."""
-    open_cnt = s.count("{")
-    close_cnt = s.count("}")
-    if close_cnt < open_cnt:
-        s = s + ("\n" + ("}" * (open_cnt - close_cnt)))
-    return s
-
-
-def fallback_spec(project_name: str) -> Dict[str, Any]:
-    """Fallback spec used when model output is not recoverable."""
-    return {
-        "project_name": project_name,
-        "summary": "Fallback spec used because model output was invalid JSON.",
-        "stack": {"language": "python", "framework": "fastapi", "server": "uvicorn"},
-        "directories": [],
-        "files": {},
-    }
-
-
-# =========================
-# Ollama API calls
-# =========================
-def _ollama_chat_payload(req: str, *, model: str, temperature: float) -> Dict[str, Any]:
-    return {
+# -----------------------------
+# Model I/O (Ollama)
+# -----------------------------
+def call_ollama_chat(req: str, *, model: str, base_url: str, timeout_s: int) -> str:
+    """
+    Call Ollama /api/chat and return message.content as a string.
+    """
+    url = f"{base_url.rstrip('/')}/api/chat"
+    payload = {
         "model": model,
         "format": "json",
         "messages": [
@@ -66,13 +44,9 @@ def _ollama_chat_payload(req: str, *, model: str, temperature: float) -> Dict[st
             {"role": "user", "content": req},
         ],
         "stream": False,
-        "options": {"temperature": temperature},
+        "options": {"temperature": 0.2},
     }
-
-
-def call_ollama_chat(req: str, *, model: str, base_url: str, timeout_s: int) -> str:
-    url = f"{base_url.rstrip('/')}/api/chat"
-    r = requests.post(url, json=_ollama_chat_payload(req, model=model, temperature=0.2), timeout=timeout_s)
+    r = requests.post(url, json=payload, timeout=timeout_s)
     r.raise_for_status()
     data = r.json()
     msg = data.get("message") or {}
@@ -80,6 +54,9 @@ def call_ollama_chat(req: str, *, model: str, base_url: str, timeout_s: int) -> 
 
 
 def repair_json_with_model(raw: str, *, model: str, base_url: str, timeout_s: int) -> str:
+    """
+    Ask the model to repair invalid JSON. Returns a string that should be valid JSON.
+    """
     url = f"{base_url.rstrip('/')}/api/chat"
     repair_prompt = (
         "You will be given INVALID JSON. Return ONLY a repaired VALID JSON object.\n"
@@ -90,22 +67,64 @@ def repair_json_with_model(raw: str, *, model: str, base_url: str, timeout_s: in
         "INVALID JSON:\n"
         f"{raw}\n"
     )
-    r = requests.post(url, json=_ollama_chat_payload(repair_prompt, model=model, temperature=0.0), timeout=timeout_s)
+    payload = {
+        "model": model,
+        "format": "json",
+        "messages": [
+            {"role": "system", "content": "Return ONLY valid JSON. No markdown. No commentary."},
+            {"role": "user", "content": repair_prompt},
+        ],
+        "stream": False,
+        "options": {"temperature": 0.0},
+    }
+    r = requests.post(url, json=payload, timeout=timeout_s)
     r.raise_for_status()
     data = r.json()
     msg = data.get("message") or {}
     return (msg.get("content") or "").strip()
 
 
+# -----------------------------
+# Spec helpers
+# -----------------------------
+def try_close_braces(s: str) -> str:
+    """
+    Cheap fix: if braces are unbalanced, append missing '}' at the end.
+    """
+    open_cnt = s.count("{")
+    close_cnt = s.count("}")
+    if close_cnt < open_cnt:
+        s = s + ("\n" + ("}" * (open_cnt - close_cnt)))
+    return s
+
+
+def fallback_spec(project_name: str) -> Dict[str, Any]:
+    """
+    Safe minimal spec when model output is invalid.
+    """
+    return {
+        "project_name": project_name,
+        "summary": "Fallback spec used because model output was invalid JSON.",
+        "stack": {"language": "python", "framework": "fastapi", "server": "uvicorn"},
+        "directories": [],
+        "files": {},
+    }
+
+
 def parse_json_or_debug(raw: str, *, model: str, base_url: str, timeout_s: int) -> Dict[str, Any]:
-    """Parse JSON, try Track A auto-fix, then model repair once. Save debug files on failure."""
+    """
+    Parse JSON. If it fails:
+      1) save raw output
+      2) try cheap fix (close braces)
+      3) ask model once to repair JSON and save repaired output if still invalid
+    """
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
         DEBUG_RAW_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
         DEBUG_RAW_OUTPUT.write_text(raw + "\n", encoding="utf-8")
 
-        # Track A: cheap auto-fix (missing braces)
+        # Track A: cheap auto-fix
         fixed = try_close_braces(raw)
         if fixed != raw:
             try:
@@ -113,11 +132,12 @@ def parse_json_or_debug(raw: str, *, model: str, base_url: str, timeout_s: int) 
             except json.JSONDecodeError:
                 pass
 
-        # Repair via model once
+        # Track B: repair via model once
         repaired = repair_json_with_model(raw, model=model, base_url=base_url, timeout_s=timeout_s)
         try:
             return json.loads(repaired)
         except json.JSONDecodeError as e2:
+            DEBUG_REPAIRED_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
             DEBUG_REPAIRED_OUTPUT.write_text(repaired + "\n", encoding="utf-8")
             raise RuntimeError(
                 "Model did not return valid JSON (even after repair). "
@@ -126,10 +146,14 @@ def parse_json_or_debug(raw: str, *, model: str, base_url: str, timeout_s: int) 
             )
 
 
-# =========================
-# Spec validation/normalization
-# =========================
 def validate_and_fix_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalize and validate spec structure.
+    Ensures:
+      - spec is dict
+      - directories is list
+      - files is dict[str,str]
+    """
     if not isinstance(spec, dict):
         raise ValueError("Spec must be a JSON object")
 
@@ -147,7 +171,7 @@ def validate_and_fix_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(spec["files"], dict):
         raise ValueError("files must be an object mapping path->content")
 
-    # Keep only str->str files
+    # Keep only string->string files
     cleaned_files: Dict[str, str] = {}
     for k, v in spec["files"].items():
         if isinstance(k, str) and isinstance(v, str):
@@ -165,6 +189,13 @@ def build_generation_request(prompt: str, idea: str, last_error: Optional[str] =
 
 
 def generate_valid_spec(prompt: str, idea: str, opt: GenerateOptions) -> Dict[str, Any]:
+    """
+    Generate spec with retries:
+      - call model
+      - parse/repair JSON
+      - validate structure
+      - fallback spec if model keeps failing JSON
+    """
     last_err: Optional[str] = None
     fallback_name = (opt.name or "archmind_project").strip() or "archmind_project"
 
@@ -187,33 +218,28 @@ def generate_valid_spec(prompt: str, idea: str, opt: GenerateOptions) -> Dict[st
     raise RuntimeError(f"Failed to generate valid spec after {opt.max_retries} attempts: {last_err}")
 
 
-# =========================
+# -----------------------------
 # Template application
-# =========================
+# -----------------------------
 def apply_template(spec: Dict[str, Any], opt: GenerateOptions) -> Dict[str, Any]:
-    # 0) project_name: CLI --name 우선
+    """
+    Apply a deterministic template to make outputs reliable.
+    """
     project_name = str((opt.name or spec.get("project_name") or "archmind_project"))
     spec["project_name"] = project_name
 
-    # 1) files 확보
-    files_any = spec.get("files")
-    files: Dict[str, str] = files_any if isinstance(files_any, dict) else {}
+    files = spec.get("files")
+    if not isinstance(files, dict):
+        files = {}
 
-    # 2) template별 강제 적용
     if opt.template == "fastapi":
-        # 모델 결과를 살리되, 실행 가능한 런타임만 강제
         files = enforce_fastapi_runtime(files, project_name)
 
     elif opt.template == "fastapi-ddd":
-        # 완전 결정적 템플릿(모델 출력 무시)
+        # DDD: template is the source of truth (ignore model files/dirs)
         files = enforce_fastapi_ddd({}, project_name)
-
-        # directories도 템플릿 기준으로 고정(잡폴더 생성 방지)
         spec["directories"] = [
             "app",
-            "app/api",
-            "app/api/routers",
-            "app/core",
             "app/db",
             "app/domain",
             "app/repositories",
@@ -222,16 +248,15 @@ def apply_template(spec: Dict[str, Any], opt: GenerateOptions) -> Dict[str, Any]
         ]
 
     else:
-        # unknown template -> safe default
         files = enforce_fastapi_runtime(files, project_name)
 
     spec["files"] = files
     return spec
 
 
-# =========================
-# File system writing
-# =========================
+# -----------------------------
+# Safe project writing
+# -----------------------------
 def safe_write_file(path: Path, content: str, force: bool) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and not force:
@@ -239,7 +264,7 @@ def safe_write_file(path: Path, content: str, force: bool) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def ensure_dirs(base: Path, dirs: list[str]) -> None:
+def ensure_dirs(base: Path, dirs: List[str]) -> None:
     base_resolved = base.resolve()
     for d in dirs:
         p = (base / d).resolve()
@@ -248,7 +273,7 @@ def ensure_dirs(base: Path, dirs: list[str]) -> None:
         p.mkdir(parents=True, exist_ok=True)
 
 
-def ensure_files(base: Path, files: Dict[str, str], force: bool) -> None:
+def ensure_files(base: Path, files: Dict[str, str], *, force: bool) -> None:
     base_resolved = base.resolve()
     for rel, content in files.items():
         p = (base / rel).resolve()
@@ -263,7 +288,7 @@ def write_project(spec: Dict[str, Any], opt: GenerateOptions) -> Path:
 
     if project_root.exists():
         if opt.force:
-            # --force: remove stale files from previous generations
+            # --force should remove stale files from previous generations
             shutil.rmtree(project_root)
         else:
             raise FileExistsError(
@@ -272,10 +297,13 @@ def write_project(spec: Dict[str, Any], opt: GenerateOptions) -> Path:
             )
 
     project_root.mkdir(parents=True, exist_ok=True)
-
-    ensure_dirs(project_root, [d for d in (spec.get("directories") or []) if isinstance(d, str)])
+    ensure_dirs(project_root, spec.get("directories") or [])
     ensure_files(project_root, spec.get("files") or {}, force=opt.force)
 
-    # save spec snapshot
-    safe_write_file(project_root / "archmind_spec.json", json.dumps(spec, ensure_ascii=False, indent=2), force=True)
+    # Save spec snapshot (always overwrite inside a newly created folder)
+    safe_write_file(
+        project_root / "archmind_spec.json",
+        json.dumps(spec, ensure_ascii=False, indent=2),
+        force=True,
+    )
     return project_root
