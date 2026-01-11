@@ -22,3 +22,6 @@ generated_cli/
 # Local artifacts
 examples/last_raw_output.txt
 examples/last_repaired_output.txt
+
+# Packaging
+*.egg-info/
