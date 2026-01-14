@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -142,14 +143,154 @@ def _format_cmd(cmd: list[str]) -> str:
     return " ".join(cmd)
 
 
+def _select_python_executable(project_dir: Path) -> str:
+    venv_python = project_dir / ".venv" / "bin" / "python"
+    if venv_python.is_file():
+        return str(venv_python)
+    return sys.executable
+
+
+def _extract_failure_summary_lines(summary_path: Path, json_path: Optional[Path]) -> list[str]:
+    if summary_path.exists():
+        lines = summary_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        start = next((i for i, line in enumerate(lines) if line.startswith("4) Failure summary:")), -1)
+        if start != -1:
+            end = next(
+                (i for i in range(start + 1, len(lines)) if lines[i].startswith("5) ")),
+                len(lines),
+            )
+            section = [line.strip() for line in lines[start + 1 : end] if line.strip()]
+            if section:
+                return section
+        return [line.strip() for line in lines[-10:] if line.strip()]
+
+    if json_path is not None and json_path.exists():
+        try:
+            payload = json.loads(json_path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        backend_lines = payload.get("backend", {}).get("summary_lines") or []
+        frontend_lines = payload.get("frontend", {}).get("summary_lines") or []
+        return [str(line) for line in backend_lines + frontend_lines][:10]
+    return []
+
+
+def _extract_failure_details(output: str) -> dict[str, Optional[str | list[str]]]:
+    lines = output.splitlines()
+    test_name: Optional[str] = None
+    file_path: Optional[str] = None
+
+    for line in lines:
+        if line.startswith("FAILED ") or line.startswith("ERROR "):
+            candidate = line.split(" ", 1)[1]
+            test_id = candidate.split(" - ", 1)[0].strip()
+            test_name = test_id
+            if "::" in test_id:
+                file_path = test_id.split("::", 1)[0]
+            else:
+                file_path = test_id
+            break
+
+    if file_path is None:
+        match = re.search(r'File "([^"]+)"', output)
+        if match:
+            file_path = match.group(1)
+
+    trace_idx = next((i for i, line in enumerate(lines) if "Traceback" in line), -1)
+    stack_top = lines[trace_idx : trace_idx + 6] if trace_idx != -1 else []
+    stack_bottom = lines[-6:] if lines else []
+
+    return {
+        "test_name": test_name,
+        "file_path": file_path,
+        "stack_top": stack_top,
+        "stack_bottom": stack_bottom,
+    }
+
+
+def _build_failure_prompt(
+    command: str,
+    summary_lines: list[str],
+    details: dict[str, Optional[str | list[str]]],
+    files_hint: list[str],
+) -> str:
+    test_name = details.get("test_name") or "확인 필요"
+    file_path = details.get("file_path") or (files_hint[0] if files_hint else "확인 필요")
+    stack_top = details.get("stack_top") or []
+    stack_bottom = details.get("stack_bottom") or []
+
+    summary_block = "\n".join(f"- {line}" for line in summary_lines) if summary_lines else "- (요약 없음)"
+    files_block = file_path if isinstance(file_path, str) else "확인 필요"
+
+    stack_top_block = "\n".join(stack_top) if stack_top else "(스택트레이스 상단 없음)"
+    stack_bottom_block = "\n".join(stack_bottom) if stack_bottom else "(스택트레이스 하단 없음)"
+
+    return (
+        "# 재현 커맨드\n"
+        f"{command}\n\n"
+        "# 실패 요약\n"
+        f"{summary_block}\n\n"
+        "# 실패 지점\n"
+        f"- 실패한 테스트: {test_name}\n"
+        f"- 파일 경로: {files_block}\n"
+        "- 스택트레이스(상단):\n"
+        f"{stack_top_block}\n"
+        "- 스택트레이스(하단):\n"
+        f"{stack_bottom_block}\n\n"
+        "# 수정 지시문\n"
+        "- 목표: python -m pytest -q 통과\n"
+        f"- 수정 대상: {files_block}\n"
+        "- 변경 범위를 최소화하라\n\n"
+        "# 완료 조건 체크리스트\n"
+        "- [ ] python -m pytest -q 통과\n"
+        "- [ ] 기존 기능 영향 없음\n"
+    )
+
+
+def write_failure_prompt(
+    config: RunConfig,
+    result: RunResult,
+    command_override: Optional[str] = None,
+) -> Optional[Path]:
+    if result.overall_exit_code == 0:
+        return None
+
+    command = command_override or config.command
+    summary_lines = _extract_failure_summary_lines(result.summary_path, result.json_summary_path)
+
+    output = ""
+    files_hint: list[str] = []
+    if result.backend.status == "FAIL":
+        output = result.backend.output
+    elif result.frontend.status == "FAIL":
+        output = "\n".join(
+            f"{step.stdout}\n{step.stderr}" for step in result.frontend.steps if step.exit_code != 0
+        )
+
+    files_hint = []
+    for match in re.findall(r'File "([^"]+)"', output):
+        files_hint.append(match)
+    for match in re.findall(r"^(.+?\.py):\d+:", output, flags=re.MULTILINE):
+        files_hint.append(match)
+    files_hint = list(dict.fromkeys(files_hint))
+
+    details = _extract_failure_details(output)
+    prompt_text = _build_failure_prompt(command, summary_lines, details, files_hint)
+
+    prompt_path = config.log_dir / f"{result.timestamp}.prompt.md"
+    prompt_path.write_text(prompt_text, encoding="utf-8")
+    return prompt_path
+
+
 def run_backend_pytest(config: RunConfig) -> BackendResult:
     pytest_ini = config.project_dir / "pytest.ini"
     tests_dir = config.project_dir / "tests"
+    python_exec = _select_python_executable(config.project_dir)
 
     if pytest_ini.exists():
-        cmd = [sys.executable, "-m", "pytest", "-c", "./pytest.ini", "-q"]
+        cmd = [python_exec, "-m", "pytest", "-c", "./pytest.ini", "-q"]
     elif tests_dir.exists():
-        cmd = [sys.executable, "-m", "pytest", "-q"]
+        cmd = [python_exec, "-m", "pytest", "-q"]
     else:
         return BackendResult(
             status="SKIPPED",
@@ -481,7 +622,7 @@ def write_log_and_summary(config: RunConfig, backend: BackendResult, frontend: F
         }
         json_path.write_text(json.dumps(json_payload, indent=2), encoding="utf-8")
 
-    return RunResult(
+    result = RunResult(
         backend=backend,
         frontend=frontend,
         overall_exit_code=overall_exit_code,
@@ -490,6 +631,12 @@ def write_log_and_summary(config: RunConfig, backend: BackendResult, frontend: F
         json_summary_path=json_path,
         timestamp=timestamp,
     )
+    if overall_exit_code != 0:
+        try:
+            write_failure_prompt(config, result)
+        except Exception:
+            pass
+    return result
 
 
 def run_pipeline(config: RunConfig) -> RunResult:
