@@ -13,6 +13,7 @@ def test_tool_sources_compile() -> None:
     root = Path(__file__).resolve().parents[1]
     targets = [
         root / "src" / "archmind" / "cli.py",
+        root / "src" / "archmind" / "runner.py",
         root / "src" / "archmind" / "generator.py",
         root / "src" / "archmind" / "templates" / "fastapi.py",
         root / "src" / "archmind" / "templates" / "fastapi_ddd.py",
