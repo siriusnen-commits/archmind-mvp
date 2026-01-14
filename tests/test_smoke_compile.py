@@ -14,6 +14,8 @@ def test_tool_sources_compile() -> None:
     targets = [
         root / "src" / "archmind" / "cli.py",
         root / "src" / "archmind" / "runner.py",
+        root / "src" / "archmind" / "fixer.py",
+        root / "src" / "archmind" / "patcher.py",
         root / "src" / "archmind" / "generator.py",
         root / "src" / "archmind" / "templates" / "fastapi.py",
         root / "src" / "archmind" / "templates" / "fastapi_ddd.py",

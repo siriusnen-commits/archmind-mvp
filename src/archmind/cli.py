@@ -159,12 +159,16 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--cmd", default="pytest", help="Command preset (default: pytest)")
     r.add_argument("--pytest-args", default=None, help="Extra pytest arguments")
     r.add_argument("--timeout-s", type=int, default=240, help="Command timeout seconds")
+    r.add_argument("--fix", action="store_true", help="Auto-fix failing tests")
+    r.add_argument("--max-iter", type=int, default=3, help="Max fix iterations")
+    r.add_argument("--dry-run", action="store_true", help="Print diff only (no apply)")
+    r.add_argument("--auto-commit", action="store_true", help="Auto-commit on success")
     r.set_defaults(func=run_run)
     return p
 
 
 def run_run(args: argparse.Namespace) -> int:
-    from archmind.runner import run_project
+    from archmind.runner import run_project, run_project_with_fix
 
     project_dir = Path(args.path).expanduser().resolve()
     if not project_dir.exists():
@@ -173,6 +177,17 @@ def run_run(args: argparse.Namespace) -> int:
     if not project_dir.is_dir():
         print(f"[ERROR] Path is not a directory: {project_dir}", file=sys.stderr)
         return 2
+
+    if args.fix:
+        return run_project_with_fix(
+            project_dir=project_dir,
+            cmd=args.cmd,
+            pytest_args=args.pytest_args,
+            timeout_s=args.timeout_s,
+            max_iter=args.max_iter,
+            dry_run=args.dry_run,
+            auto_commit=args.auto_commit,
+        )
 
     return run_project(
         project_dir=project_dir,
