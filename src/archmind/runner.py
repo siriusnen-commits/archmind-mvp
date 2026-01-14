@@ -660,8 +660,19 @@ def run_pipeline(config: RunConfig) -> RunResult:
         reason="frontend not requested.",
     )
 
-    run_backend = config.run_all or config.backend_only or not config.frontend_only
-    run_frontend = config.run_all or config.frontend_only
+    if config.backend_only:
+        run_backend = True
+        run_frontend = False
+    elif config.frontend_only:
+        run_backend = False
+        run_frontend = True
+    elif config.run_all:
+        run_backend = True
+        run_frontend = True
+    else:
+        # default to backend-only when no explicit flags are provided
+        run_backend = True
+        run_frontend = False
 
     if run_backend:
         backend = run_backend_pytest(config)

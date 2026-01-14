@@ -142,6 +142,31 @@ def test_pipeline_failure_creates_prompt_and_summary(tmp_path: Path) -> None:
     assert list(log_dir.glob("*.prompt.md"))
 
 
+def test_pipeline_frontend_only_skips_backend(tmp_path: Path) -> None:
+    tmp_path.joinpath("pytest.ini").write_text("[pytest]\naddopts = -q\n", encoding="utf-8")
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--path",
+            str(tmp_path),
+            "--frontend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+
+    log_dir = tmp_path / ".archmind" / "run_logs"
+    summaries = sorted(log_dir.glob("run_*.summary.txt"))
+    assert summaries, "Expected run summary to be created"
+    summary_text = summaries[-1].read_text(encoding="utf-8")
+    assert "Backend:" in summary_text
+    assert "backend not requested" in summary_text
+
+
 def test_pipeline_backend_only_skips_frontend_in_subprocess(tmp_path: Path) -> None:
     _write_backend_project(tmp_path)
     repo_root = Path(__file__).resolve().parents[1]

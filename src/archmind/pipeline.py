@@ -112,15 +112,29 @@ def _latest_run_summary(project_dir: Path) -> Optional[str]:
 
 
 def _build_run_config(opts: PipelineOptions, project_dir: Path) -> RunConfig:
-    run_all = opts.run_all
-    if not any((opts.run_all, opts.backend_only, opts.frontend_only)):
+    if opts.backend_only:
+        run_all = False
+        backend_only = True
+        frontend_only = False
+    elif opts.frontend_only:
+        run_all = False
+        backend_only = False
+        frontend_only = True
+    elif opts.run_all:
         run_all = True
+        backend_only = False
+        frontend_only = False
+    else:
+        # default: run both when no explicit flags are given
+        run_all = True
+        backend_only = False
+        frontend_only = False
 
     return RunConfig(
         project_dir=project_dir,
         run_all=run_all,
-        backend_only=opts.backend_only,
-        frontend_only=opts.frontend_only,
+        backend_only=backend_only,
+        frontend_only=frontend_only,
         no_install=opts.no_install,
         timeout_s=opts.timeout_s,
         log_dir=project_dir / ".archmind" / "run_logs",
