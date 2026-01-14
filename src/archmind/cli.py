@@ -225,10 +225,10 @@ def run_fix(args: argparse.Namespace) -> int:
     project_dir = Path(args.path).expanduser().resolve()
     if not project_dir.exists():
         print(f"[ERROR] Path not found: {project_dir}", file=sys.stderr)
-        return 64
+        return 2
     if not project_dir.is_dir():
         print(f"[ERROR] Path is not a directory: {project_dir}", file=sys.stderr)
-        return 64
+        return 2
 
     return run_fix_loop(
         project_dir=project_dir,
