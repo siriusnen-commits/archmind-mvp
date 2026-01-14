@@ -176,6 +176,30 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--scope", choices=["backend", "frontend", "all"], default="all", help="Fix scope")
     f.add_argument("--apply", action="store_true", help="Apply changes (required to modify files)")
     f.set_defaults(func=run_fix)
+
+    ppipe = sub.add_parser("pipeline", help="Generate -> run -> fix -> run pipeline")
+    ppipe.add_argument("--path", default=None, help="Existing project path (skip generate)")
+    ppipe.add_argument("--idea", default=None, help="Project idea (generate step)")
+    ppipe.add_argument("--out", default="generated_test", help="Output directory base")
+    ppipe.add_argument("--name", default=None, help="Project name (folder name)")
+    ppipe.add_argument("--template", default="fastapi", choices=_templates_choices(), help="Template name")
+    ppipe.add_argument("--prompt", default=None, help="Override system prompt (advanced)")
+    ppipe.add_argument("--gen-model", default="llama3:latest", help="Ollama model name for generate")
+    ppipe.add_argument("--gen-ollama-base-url", default="http://127.0.0.1:11434", help="Ollama base URL")
+    ppipe.add_argument("--gen-max-retries", type=int, default=3, help="Max retries for model/spec generation")
+    ppipe.add_argument("--gen-timeout-s", type=int, default=240, help="HTTP timeout seconds for generate calls")
+    ppipe.add_argument("--all", action="store_true", help="Run backend + frontend checks")
+    ppipe.add_argument("--backend-only", action="store_true", help="Run backend checks only")
+    ppipe.add_argument("--frontend-only", action="store_true", help="Run frontend checks only")
+    ppipe.add_argument("--no-install", action="store_true", help="Skip frontend install step")
+    ppipe.add_argument("--timeout-s", type=int, default=240, help="Timeout per step")
+    ppipe.add_argument("--scope", choices=["backend", "frontend", "all"], default="all", help="Fix scope")
+    ppipe.add_argument("--max-iterations", type=int, default=3, help="Max fix iterations")
+    ppipe.add_argument("--model", choices=["ollama", "openai", "none"], default="ollama", help="Patch model")
+    ppipe.add_argument("--apply", action="store_true", help="Apply fix changes")
+    ppipe.add_argument("--dry-run", action="store_true", help="Plan only, no execution")
+    ppipe.add_argument("--json-summary", action="store_true", help="Write pipeline summary.json")
+    ppipe.set_defaults(func=run_pipeline_cmd)
     return p
 
 
@@ -239,6 +263,41 @@ def run_fix(args: argparse.Namespace) -> int:
         scope=args.scope,
         apply_changes=args.apply,
     )
+
+
+def run_pipeline_cmd(args: argparse.Namespace) -> int:
+    from archmind.pipeline import PipelineOptions, run_pipeline_command
+
+    if args.path:
+        path = Path(args.path).expanduser().resolve()
+    else:
+        path = None
+
+    opts = PipelineOptions(
+        idea=args.idea,
+        path=path,
+        out=args.out,
+        name=args.name,
+        template=args.template,
+        prompt=args.prompt,
+        gen_model=args.gen_model,
+        gen_ollama_base_url=args.gen_ollama_base_url,
+        gen_max_retries=args.gen_max_retries,
+        gen_timeout_s=args.gen_timeout_s,
+        run_all=args.all,
+        backend_only=args.backend_only,
+        frontend_only=args.frontend_only,
+        no_install=args.no_install,
+        timeout_s=args.timeout_s,
+        scope=args.scope,
+        max_iterations=args.max_iterations,
+        model=args.model,
+        apply=args.apply,
+        dry_run=args.dry_run,
+        json_summary=args.json_summary,
+    )
+
+    return run_pipeline_command(opts)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
