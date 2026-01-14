@@ -129,6 +129,16 @@ def _build_run_config(opts: PipelineOptions, project_dir: Path) -> RunConfig:
     )
 
 
+def _effective_fix_scope(opts: PipelineOptions) -> str:
+    if opts.backend_only:
+        return "backend"
+    if opts.frontend_only:
+        return "frontend"
+    if opts.run_all:
+        return "all"
+    return opts.scope
+
+
 def _write_pipeline_logs(
     project_dir: Path,
     timestamp: str,
@@ -222,7 +232,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
             model=opts.model,
             dry_run=opts.dry_run,
             timeout_s=opts.timeout_s,
-            scope=opts.scope,
+            scope=_effective_fix_scope(opts),
             apply_changes=opts.apply,
         )
         if fix_exit != 0:

@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 
 from archmind.cli import main
+import subprocess
+import sys
 
 
 def _write_backend_project(tmp_path: Path) -> None:
@@ -138,3 +140,36 @@ def test_pipeline_failure_creates_prompt_and_summary(tmp_path: Path) -> None:
     log_dir = tmp_path / ".archmind" / "run_logs"
     assert list(log_dir.glob("run_*.summary.txt"))
     assert list(log_dir.glob("*.prompt.md"))
+
+
+def test_pipeline_backend_only_skips_frontend_in_subprocess(tmp_path: Path) -> None:
+    _write_backend_project(tmp_path)
+    repo_root = Path(__file__).resolve().parents[1]
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "archmind.cli",
+            "pipeline",
+            "--path",
+            str(tmp_path),
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+
+    log_dir = tmp_path / ".archmind" / "run_logs"
+    summaries = sorted(log_dir.glob("run_*.summary.txt"))
+    assert summaries, "Expected run summary to be created"
+    summary_text = summaries[-1].read_text(encoding="utf-8")
+    assert "Frontend:" in summary_text
+    assert "frontend not requested" in summary_text
