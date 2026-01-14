@@ -290,7 +290,6 @@ def run_pipeline_cmd(args: argparse.Namespace) -> int:
     else:
         path = None
 
-    command = "archmind " + " ".join(getattr(args, "_argv", []))
     opts = PipelineOptions(
         idea=args.idea,
         path=path,
@@ -313,7 +312,6 @@ def run_pipeline_cmd(args: argparse.Namespace) -> int:
         apply=args.apply,
         dry_run=args.dry_run,
         json_summary=args.json_summary,
-        command=command.strip(),
     )
 
     return run_pipeline_command(opts)
