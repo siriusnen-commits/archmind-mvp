@@ -90,6 +90,159 @@ def _read_summary_lines(summary_path: Optional[Path]) -> list[str]:
     return summary_path.read_text(encoding="utf-8", errors="replace").splitlines()
 
 
+def _read_failure_summary_section(summary_path: Optional[Path]) -> list[str]:
+    lines = _read_summary_lines(summary_path)
+    if not lines:
+        return []
+    start = next((i for i, line in enumerate(lines) if line.startswith("4) Failure summary:")), -1)
+    if start == -1:
+        return [line for line in lines[-10:] if line.strip()]
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("5) ")), len(lines))
+    section = [line.strip() for line in lines[start + 1 : end] if line.strip()]
+    return section or [line for line in lines[-10:] if line.strip()]
+
+
+def _extract_failure_details(text: str) -> dict[str, Optional[str | list[str]]]:
+    lines = text.splitlines()
+    test_name: Optional[str] = None
+    file_path: Optional[str] = None
+
+    for line in lines:
+        if line.startswith("FAILED ") or line.startswith("ERROR "):
+            candidate = line.split(" ", 1)[1]
+            test_id = candidate.split(" - ", 1)[0].strip()
+            test_name = test_id
+            if "::" in test_id:
+                file_path = test_id.split("::", 1)[0]
+            else:
+                file_path = test_id
+            break
+
+    if file_path is None:
+        match = re.search(r'File "([^"]+)"', text)
+        if match:
+            file_path = match.group(1)
+        else:
+            match = re.search(r"^(.+?\.py):\d+:", text, flags=re.MULTILINE)
+            if match:
+                file_path = match.group(1)
+
+    trace_idx = next((i for i, line in enumerate(lines) if "Traceback" in line), -1)
+    stack_top = lines[trace_idx : trace_idx + 6] if trace_idx != -1 else []
+    stack_bottom = lines[-6:] if lines else []
+
+    return {
+        "test_name": test_name,
+        "file_path": file_path,
+        "stack_top": stack_top,
+        "stack_bottom": stack_bottom,
+    }
+
+
+def _build_fix_prompt(
+    command: str,
+    summary_lines: list[str],
+    failure_details: dict[str, Optional[str | list[str]]],
+    files_hint: list[str],
+) -> str:
+    test_name = failure_details.get("test_name") or "확인 필요"
+    file_path = failure_details.get("file_path") or (files_hint[0] if files_hint else "확인 필요")
+    stack_top = failure_details.get("stack_top") or []
+    stack_bottom = failure_details.get("stack_bottom") or []
+
+    summary_block = "\n".join(f"- {line}" for line in summary_lines) if summary_lines else "- (요약 없음)"
+    files_block = file_path if isinstance(file_path, str) else "확인 필요"
+    stack_top_block = "\n".join(stack_top) if stack_top else "(스택트레이스 상단 없음)"
+    stack_bottom_block = "\n".join(stack_bottom) if stack_bottom else "(스택트레이스 하단 없음)"
+
+    return (
+        "# 재현 커맨드\n"
+        f"{command}\n\n"
+        "# 실패 요약\n"
+        f"{summary_block}\n\n"
+        "# 실패 지점\n"
+        f"- 실패한 테스트: {test_name}\n"
+        f"- 파일 경로: {files_block}\n"
+        "- 스택트레이스(상단):\n"
+        f"{stack_top_block}\n"
+        "- 스택트레이스(하단):\n"
+        f"{stack_bottom_block}\n\n"
+        "# 수정 지시문\n"
+        "- 목표: python -m pytest -q 통과\n"
+        f"- 수정 대상: {files_block}\n"
+        "- 변경 범위를 최소화하라\n\n"
+        "# 완료 조건 체크리스트\n"
+        "- [ ] python -m pytest -q 통과\n"
+        "- [ ] 기존 기능 영향 없음\n"
+    )
+
+
+def _write_fix_prompt(
+    log_dir: Path,
+    timestamp: str,
+    command: str,
+    run_result: RunResult,
+    log_tail: list[str],
+) -> Path:
+    summary_lines = _read_failure_summary_section(run_result.summary_path)
+    log_text = "\n".join(log_tail)
+    details = _extract_failure_details(log_text)
+    files_hint = extract_files_hint(log_tail)
+    prompt_text = _build_fix_prompt(command, summary_lines, details, files_hint)
+    prompt_path = log_dir / f"fix_{timestamp}.prompt.md"
+    prompt_path.write_text(prompt_text, encoding="utf-8")
+    return prompt_path
+
+
+def _write_fix_summary(
+    log_dir: Path,
+    timestamp: str,
+    command: str,
+    project_dir: Path,
+    exit_code: int,
+    run_result: RunResult,
+    dry_run: bool,
+    applied: bool,
+    iteration: int,
+) -> None:
+    summary_path = log_dir / f"fix_{timestamp}.summary.txt"
+    json_path = log_dir / f"fix_{timestamp}.summary.json"
+
+    lines = [
+        "1) Fix meta:",
+        f"- project_dir: {project_dir}",
+        f"- timestamp: {timestamp}",
+        f"- command: {command}",
+        f"- exit_code: {exit_code}",
+        f"- iteration: {iteration}",
+        f"- dry_run: {dry_run}",
+        f"- applied: {applied}",
+        "2) Run summary:",
+        f"- run_exit_code: {run_result.overall_exit_code}",
+        f"- run_log: {run_result.log_path}",
+        f"- run_summary: {run_result.summary_path}",
+    ]
+    summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    payload = {
+        "meta": {
+            "project_dir": str(project_dir),
+            "timestamp": timestamp,
+            "command": command,
+            "exit_code": exit_code,
+            "iteration": iteration,
+            "dry_run": dry_run,
+            "applied": applied,
+        },
+        "run": {
+            "exit_code": run_result.overall_exit_code,
+            "log_path": str(run_result.log_path),
+            "summary_path": str(run_result.summary_path),
+        },
+    }
+    json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
 def build_plan(
     diagnosis: dict[str, Any],
     scope: str,
@@ -144,8 +297,11 @@ def build_plan(
         "path": str(project_dir),
         "key_errors": key_errors,
         "files_hint": files_hint,
+        "files": files_hint,
         "actions": actions,
         "changes": changes,
+        "rationale": "Derived from failure summary and log tail.",
+        "commands_to_verify": ["python -m pytest -q"],
         "diagnosis": diagnosis,
         "scope": scope,
         "meta": {
@@ -368,13 +524,34 @@ def fix_loop(
     apply_changes: bool,
     dry_run: bool,
     timeout_s: int,
+    scope: str,
+    command: Optional[str],
 ) -> int:
-    plan_dir = project_dir / ".archmind" / "fix_plans"
-    plan_dir.mkdir(parents=True, exist_ok=True)
+    log_dir = project_dir / ".archmind" / "run_logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    last_run_result: Optional[RunResult] = None
+    last_timestamp: Optional[str] = None
+    last_iteration = 0
+    last_applied = False
 
     for iteration in range(1, max_iterations + 1):
-        run_result = run_and_collect(project_dir, timeout_s=timeout_s, scope="backend")
+        run_result = run_and_collect(project_dir, timeout_s=timeout_s, scope=scope)
+        last_run_result = run_result
+        last_iteration = iteration
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        last_timestamp = timestamp
         if run_result.overall_exit_code == 0:
+            _write_fix_summary(
+                log_dir,
+                timestamp,
+                command or f"archmind fix --path {project_dir}",
+                project_dir,
+                0,
+                run_result,
+                dry_run,
+                False,
+                iteration,
+            )
             print(f"[OK] fixed in {iteration - 1} iterations")
             return 0
 
@@ -388,13 +565,17 @@ def fix_loop(
             "files_hint": files_hint,
         }
 
-        plan = build_plan(diagnosis, scope="backend", iteration=iteration, project_dir=project_dir)
+        plan = build_plan(diagnosis, scope=scope, iteration=iteration, project_dir=project_dir)
         plan["key_errors"] = key_errors
         plan["files_hint"] = files_hint
 
+        plan["scope"] = scope
+        plan["files"] = files_hint
+        plan["commands_to_verify"] = ["python -m pytest -q"]
         timestamp = plan["meta"]["timestamp"]
-        plan_json_path = plan_dir / f"fix_{timestamp}.plan.json"
-        plan_md_path = plan_dir / f"fix_{timestamp}.plan.md"
+        last_timestamp = timestamp
+        plan_json_path = log_dir / f"fix_{timestamp}.plan.json"
+        plan_md_path = log_dir / f"fix_{timestamp}.plan.md"
         plan_json_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
         plan_md_path.write_text(_plan_to_markdown(plan), encoding="utf-8")
 
@@ -403,13 +584,73 @@ def fix_loop(
         else:
             print(f"[ITER {iteration}/{max_iterations}] detected: no key errors")
 
-        if dry_run or not apply_changes:
+        if dry_run:
             print(f"[ITER {iteration}/{max_iterations}] dry-run: plan written")
+            _write_fix_prompt(
+                log_dir,
+                timestamp,
+                command or f"archmind fix --path {project_dir}",
+                run_result,
+                log_tail,
+            )
+            _write_fix_summary(
+                log_dir,
+                timestamp,
+                command or f"archmind fix --path {project_dir}",
+                project_dir,
+                2,
+                run_result,
+                dry_run,
+                False,
+                iteration,
+            )
+            return 2
+        if not apply_changes:
+            print(f"[ITER {iteration}/{max_iterations}] apply disabled: no changes applied")
+            _write_fix_prompt(
+                log_dir,
+                timestamp,
+                command or f"archmind fix --path {project_dir}",
+                run_result,
+                log_tail,
+            )
+            _write_fix_summary(
+                log_dir,
+                timestamp,
+                command or f"archmind fix --path {project_dir}",
+                project_dir,
+                1,
+                run_result,
+                dry_run,
+                False,
+                iteration,
+            )
             return 1
 
-        applied, _ = apply_rules(plan, project_dir, apply_changes=True)
+        applied, diffs = apply_rules(plan, project_dir, apply_changes=True)
+        last_applied = applied
         if not applied:
             print(f"[ITER {iteration}/{max_iterations}] no changes applied")
+            _write_fix_prompt(
+                log_dir,
+                timestamp,
+                command or f"archmind fix --path {project_dir}",
+                run_result,
+                log_tail,
+            )
+            patch_path = log_dir / f"fix_{timestamp}.patch.diff"
+            patch_path.write_text("", encoding="utf-8")
+            _write_fix_summary(
+                log_dir,
+                timestamp,
+                command or f"archmind fix --path {project_dir}",
+                project_dir,
+                1,
+                run_result,
+                dry_run,
+                False,
+                iteration,
+            )
             return 1
 
         if plan.get("actions"):
@@ -419,14 +660,49 @@ def fix_loop(
                 f"[ITER {iteration}/{max_iterations}] patched {target_path}"
             )
 
-        rerun = run_and_collect(project_dir, timeout_s=timeout_s, scope="backend")
+        patch_path = log_dir / f"fix_{timestamp}.patch.diff"
+        patch_text = "\n".join(diffs)
+        patch_path.write_text(patch_text, encoding="utf-8")
+
+        rerun = run_and_collect(project_dir, timeout_s=timeout_s, scope=scope)
         if rerun.overall_exit_code == 0:
+            _write_fix_summary(
+                log_dir,
+                timestamp,
+                command or f"archmind fix --path {project_dir}",
+                project_dir,
+                0,
+                rerun,
+                dry_run,
+                True,
+                iteration,
+            )
             print(f"[OK] fixed in {iteration} iterations")
             return 0
 
         time.sleep(0.1)
 
     print(f"[FAIL] could not fix after {max_iterations} iterations")
+    if last_run_result is not None and last_timestamp is not None:
+        log_tail = read_tail(last_run_result.log_path, n=120)
+        _write_fix_prompt(
+            log_dir,
+            last_timestamp,
+            command or f"archmind fix --path {project_dir}",
+            last_run_result,
+            log_tail,
+        )
+        _write_fix_summary(
+            log_dir,
+            last_timestamp,
+            command or f"archmind fix --path {project_dir}",
+            project_dir,
+            1,
+            last_run_result,
+            dry_run,
+            last_applied,
+            last_iteration,
+        )
     return 1
 
 
@@ -438,14 +714,17 @@ def run_fix_loop(
     timeout_s: int,
     scope: str,
     apply_changes: bool,
+    command: Optional[str] = None,
 ) -> int:
-    del model, scope
+    del model
     return fix_loop(
         project_dir,
         max_iterations=max_iterations,
         apply_changes=apply_changes,
         dry_run=dry_run,
         timeout_s=timeout_s,
+        scope=scope,
+        command=command,
     )
 
 

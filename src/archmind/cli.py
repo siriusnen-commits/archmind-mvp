@@ -249,20 +249,37 @@ def run_fix(args: argparse.Namespace) -> int:
     project_dir = Path(args.path).expanduser().resolve()
     if not project_dir.exists():
         print(f"[ERROR] Path not found: {project_dir}", file=sys.stderr)
-        return 2
+        return 64
     if not project_dir.is_dir():
         print(f"[ERROR] Path is not a directory: {project_dir}", file=sys.stderr)
-        return 2
-
-    return run_fix_loop(
-        project_dir=project_dir,
-        max_iterations=args.max_iterations,
-        model=args.model,
-        dry_run=args.dry_run,
-        timeout_s=args.timeout_s,
-        scope=args.scope,
-        apply_changes=args.apply,
+        return 64
+    structure_ok = any(
+        (
+            (project_dir / "pytest.ini").exists(),
+            (project_dir / "tests").exists(),
+            (project_dir / "app").exists(),
+            (project_dir / "frontend" / "package.json").exists(),
+        )
     )
+    if not structure_ok:
+        print(f"[ERROR] Path does not look like a project root: {project_dir}", file=sys.stderr)
+        return 64
+
+    command = "archmind " + " ".join(getattr(args, "_argv", []))
+    try:
+        return run_fix_loop(
+            project_dir=project_dir,
+            max_iterations=args.max_iterations,
+            model=args.model,
+            dry_run=args.dry_run,
+            timeout_s=args.timeout_s,
+            scope=args.scope,
+            apply_changes=args.apply,
+            command=command.strip(),
+        )
+    except Exception as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 70
 
 
 def run_pipeline_cmd(args: argparse.Namespace) -> int:
@@ -273,6 +290,7 @@ def run_pipeline_cmd(args: argparse.Namespace) -> int:
     else:
         path = None
 
+    command = "archmind " + " ".join(getattr(args, "_argv", []))
     opts = PipelineOptions(
         idea=args.idea,
         path=path,
@@ -295,6 +313,7 @@ def run_pipeline_cmd(args: argparse.Namespace) -> int:
         apply=args.apply,
         dry_run=args.dry_run,
         json_summary=args.json_summary,
+        command=command.strip(),
     )
 
     return run_pipeline_command(opts)

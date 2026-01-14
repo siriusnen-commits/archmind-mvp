@@ -8,6 +8,7 @@ from archmind.runner import BackendResult, FrontendResult, RunResult
 
 
 def _write_run_artifacts(tmp_path: Path) -> RunResult:
+    tmp_path.joinpath("pytest.ini").write_text("[pytest]\naddopts = -q\n", encoding="utf-8")
     log_dir = tmp_path / ".archmind" / "run_logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / "run_20240101_000000.log"
@@ -95,30 +96,32 @@ def test_fix_plan_generation_creates_plan_files(tmp_path: Path, monkeypatch) -> 
             "backend",
         ]
     )
-    assert exit_code == 1
+    assert exit_code == 2
 
-    plan_dir = tmp_path / ".archmind" / "fix_plans"
-    plans = list(plan_dir.glob("fix_*.plan.json"))
-    mds = list(plan_dir.glob("fix_*.plan.md"))
+    log_dir = tmp_path / ".archmind" / "run_logs"
+    plans = list(log_dir.glob("fix_*.plan.json"))
+    mds = list(log_dir.glob("fix_*.plan.md"))
+    prompts = list(log_dir.glob("fix_*.prompt.md"))
     assert plans, "Expected plan.json to be created"
     assert mds, "Expected plan.md to be created"
+    assert prompts, "Expected prompt.md to be created"
 
 
 def test_fix_max_iterations_stops_after_one(tmp_path: Path, monkeypatch) -> None:
     run_result = _write_run_artifacts(tmp_path)
 
     monkeypatch.setattr("archmind.fixer.run_pipeline", lambda _: run_result)
-    monkeypatch.setattr(
-        "archmind.fixer.build_plan",
-        lambda *_: {
+    def fake_build_plan(*_args, **_kwargs):
+        return {
             "meta": {"timestamp": "20240101_000001", "project_dir": str(tmp_path)},
             "iteration": 1,
             "scope": "backend",
             "diagnosis": {},
             "changes": [],
             "commands_after": [],
-        },
-    )
+        }
+
+    monkeypatch.setattr("archmind.fixer.build_plan", fake_build_plan)
 
     exit_code = main(
         [
@@ -135,3 +138,7 @@ def test_fix_max_iterations_stops_after_one(tmp_path: Path, monkeypatch) -> None
         ]
     )
     assert exit_code == 1
+
+    log_dir = tmp_path / ".archmind" / "run_logs"
+    summaries = list(log_dir.glob("fix_*.summary.txt"))
+    assert summaries, "Expected summary.txt to be created"

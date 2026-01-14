@@ -90,5 +90,9 @@ def test_fix_dry_run_does_not_modify(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("archmind.fixer.run_and_collect", fake_run_and_collect)
 
     exit_code = main(["fix", "--path", str(tmp_path), "--dry-run"])
-    assert exit_code == 1
+    assert exit_code == 2
     assert target.read_text(encoding="utf-8") == original
+
+    log_dir = tmp_path / ".archmind" / "run_logs"
+    assert list(log_dir.glob("fix_*.prompt.md"))
+    assert list(log_dir.glob("fix_*.plan.json"))
