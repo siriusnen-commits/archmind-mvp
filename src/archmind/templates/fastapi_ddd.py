@@ -30,6 +30,7 @@ def enforce_fastapi_ddd(_: Dict[str, str], project_name: str) -> Dict[str, str]:
     files[".env.example"] = (
         f"APP_NAME={project_name}\n"
         "DB_URL=sqlite:///./data/app.db\n"
+        "ALLOW_ORIGINS=*\n"
     )
 
     # packages
@@ -53,6 +54,7 @@ class Settings(BaseSettings):
 
     app_name: str = "{project_name}"
     db_url: str = "sqlite:///./data/app.db"
+    allow_origins: str = "*"
 
 
 settings = Settings()
@@ -95,9 +97,9 @@ class Defect(SQLModel, table=True):
 
     files["app/repositories/defect_repo.py"] = """from __future__ import annotations
 
-from typing import List
+from typing import List, Optional, Tuple
 
-from sqlmodel import Session, select
+from sqlmodel import Session, func, select
 
 from app.domain.models import Defect
 
@@ -110,13 +112,65 @@ class DefectRepository:
         session.refresh(obj)
         return obj
 
-    def list(self, session: Session) -> List[Defect]:
-        return list(session.exec(select(Defect).order_by(Defect.id.desc())).all())
+    def get(self, session: Session, defect_id: int) -> Optional[Defect]:
+        return session.get(Defect, defect_id)
+
+    def list(
+        self,
+        session: Session,
+        *,
+        q: Optional[str] = None,
+        defect_type: Optional[str] = None,
+        sort: str = "id",
+        order: str = "desc",
+        offset: int = 0,
+        limit: int = 20,
+    ) -> Tuple[List[Defect], int]:
+        conditions = []
+        if q:
+            like = f"%{q}%"
+            conditions.append((Defect.note.ilike(like)) | (Defect.defect_type.ilike(like)))
+        if defect_type:
+            conditions.append(Defect.defect_type == defect_type)
+
+        query = select(Defect)
+        count_query = select(func.count()).select_from(Defect)
+        for cond in conditions:
+            query = query.where(cond)
+            count_query = count_query.where(cond)
+
+        order_col = Defect.created_at if sort == "created_at" else Defect.id
+        order_by = order_col.asc() if order == "asc" else order_col.desc()
+
+        total = session.exec(count_query).one()
+        items = list(session.exec(query.order_by(order_by).offset(offset).limit(limit)).all())
+        return items, int(total)
+
+    def update(
+        self,
+        session: Session,
+        obj: Defect,
+        *,
+        defect_type: Optional[str] = None,
+        note: Optional[str] = None,
+    ) -> Defect:
+        if defect_type is not None:
+            obj.defect_type = defect_type
+        if note is not None:
+            obj.note = note
+        session.add(obj)
+        session.commit()
+        session.refresh(obj)
+        return obj
+
+    def delete(self, session: Session, obj: Defect) -> None:
+        session.delete(obj)
+        session.commit()
 """
 
     files["app/services/defect_service.py"] = """from __future__ import annotations
 
-from typing import List
+from typing import List, Optional, Tuple
 
 from sqlmodel import Session
 
@@ -131,13 +185,48 @@ class DefectService:
     def create(self, session: Session, *, defect_type: str, note: str = "") -> Defect:
         return self.repo.create(session, defect_type=defect_type, note=note)
 
-    def list(self, session: Session) -> List[Defect]:
-        return self.repo.list(session)
+    def get(self, session: Session, defect_id: int) -> Optional[Defect]:
+        return self.repo.get(session, defect_id)
+
+    def list(
+        self,
+        session: Session,
+        *,
+        q: Optional[str] = None,
+        defect_type: Optional[str] = None,
+        sort: str = "id",
+        order: str = "desc",
+        offset: int = 0,
+        limit: int = 20,
+    ) -> Tuple[List[Defect], int]:
+        return self.repo.list(
+            session,
+            q=q,
+            defect_type=defect_type,
+            sort=sort,
+            order=order,
+            offset=offset,
+            limit=limit,
+        )
+
+    def update(
+        self,
+        session: Session,
+        obj: Defect,
+        *,
+        defect_type: Optional[str] = None,
+        note: Optional[str] = None,
+    ) -> Defect:
+        return self.repo.update(session, obj, defect_type=defect_type, note=note)
+
+    def delete(self, session: Session, obj: Defect) -> None:
+        return self.repo.delete(session, obj)
 """
 
     files["app/api/schemas.py"] = """from __future__ import annotations
 
 from datetime import datetime
+from typing import List, Optional
 from pydantic import BaseModel
 
 
@@ -146,11 +235,23 @@ class DefectCreate(BaseModel):
     note: str = ""
 
 
+class DefectUpdate(BaseModel):
+    defect_type: Optional[str] = None
+    note: Optional[str] = None
+
+
 class DefectRead(BaseModel):
     id: int
     defect_type: str
     note: str
     created_at: datetime
+
+
+class DefectListResponse(BaseModel):
+    items: List[DefectRead]
+    total: int
+    page: int
+    page_size: int
 """
 
     files["app/api/routers/health.py"] = """from fastapi import APIRouter
@@ -165,10 +266,10 @@ def health():
 
     files["app/api/routers/defects.py"] = """from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session
 
-from app.api.schemas import DefectCreate, DefectRead
+from app.api.schemas import DefectCreate, DefectListResponse, DefectRead, DefectUpdate
 from app.db.session import get_session
 from app.services.defect_service import DefectService
 
@@ -186,11 +287,57 @@ def create_defect(payload: DefectCreate, session: Session = Depends(_session_dep
     return DefectRead.model_validate(obj, from_attributes=True)
 
 
-@router.get("", response_model=list[DefectRead])
-def list_defects(session: Session = Depends(_session_dep)):
+@router.get("", response_model=DefectListResponse)
+def list_defects(
+    session: Session = Depends(_session_dep),
+    q: str | None = Query(default=None),
+    defect_type: str | None = Query(default=None),
+    sort: str = Query(default="id", pattern="^(id|created_at)$"),
+    order: str = Query(default="desc", pattern="^(asc|desc)$"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+):
     svc = DefectService()
-    items = svc.list(session)
-    return [DefectRead.model_validate(x, from_attributes=True) for x in items]
+    offset = (page - 1) * page_size
+    items, total = svc.list(
+        session,
+        q=q,
+        defect_type=defect_type,
+        sort=sort,
+        order=order,
+        offset=offset,
+        limit=page_size,
+    )
+    return DefectListResponse(
+        items=[DefectRead.model_validate(x, from_attributes=True) for x in items],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.put("/{defect_id}", response_model=DefectRead)
+def update_defect(
+    defect_id: int,
+    payload: DefectUpdate,
+    session: Session = Depends(_session_dep),
+):
+    svc = DefectService()
+    obj = svc.get(session, defect_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Defect not found")
+    updated = svc.update(session, obj, defect_type=payload.defect_type, note=payload.note)
+    return DefectRead.model_validate(updated, from_attributes=True)
+
+
+@router.delete("/{defect_id}")
+def delete_defect(defect_id: int, session: Session = Depends(_session_dep)):
+    svc = DefectService()
+    obj = svc.get(session, defect_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Defect not found")
+    svc.delete(session, obj)
+    return {"status": "deleted"}
 """
 
     files["app/api/router.py"] = """from fastapi import APIRouter
@@ -208,6 +355,7 @@ api_router.include_router(defects_router)
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
 from app.core.config import settings
@@ -221,6 +369,20 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+origins = [x.strip() for x in settings.allow_origins.split(",") if x.strip()]
+if not origins:
+    origins = ["*"]
+if origins == ["*"]:
+    allow_origins = ["*"]
+else:
+    allow_origins = origins
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allow_origins,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.include_router(api_router)
 """
 
@@ -244,6 +406,7 @@ if str(ROOT) not in sys.path:
     files["tests/test_health.py"] = """from fastapi.testclient import TestClient
 from app.main import app
 
+
 def test_health():
     client = TestClient(app)
     r = client.get("/health")
@@ -251,5 +414,64 @@ def test_health():
     assert r.json() == {"status": "ok"}
 """
 
-    # README는 지금 단계에선 없어도 됨 (중요한 건 requirements/pytest/tests)
+    files["tests/test_defects.py"] = """from fastapi.testclient import TestClient
+from app.main import app
+from app.db.session import engine
+from sqlmodel import SQLModel
+
+
+def setup_function():
+    SQLModel.metadata.drop_all(engine)
+    SQLModel.metadata.create_all(engine)
+
+
+def test_defects_crud_and_pagination():
+    client = TestClient(app)
+    for i in range(5):
+        r = client.post("/defects", json={"defect_type": "HDMI", "note": f"n{i}"})
+        assert r.status_code == 200
+
+    r = client.get("/defects", params={"page": 1, "page_size": 2})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total"] == 5
+    assert len(data["items"]) == 2
+
+    first_id = data["items"][0]["id"]
+    r = client.put(f"/defects/{first_id}", json={"note": "updated"})
+    assert r.status_code == 200
+    assert r.json()["note"] == "updated"
+
+    r = client.delete(f"/defects/{first_id}")
+    assert r.status_code == 200
+
+    r = client.get("/defects", params={"q": "updated"})
+    assert r.status_code == 200
+    assert r.json()["total"] == 0
+"""
+
+    files["README.md"] = f"""# {project_name}
+
+## Backend setup
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+## Backend run
+```bash
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+## Tests
+```bash
+python -m pytest -q
+```
+
+## Environment
+- `APP_NAME` (default: {project_name})
+- `DB_URL` (default: sqlite:///./data/app.db)
+- `ALLOW_ORIGINS` (default: *)
+"""
     return files

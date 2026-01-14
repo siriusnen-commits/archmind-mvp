@@ -247,6 +247,27 @@ def apply_template(spec: Dict[str, Any], opt: GenerateOptions) -> Dict[str, Any]
             "tests",
         ]
 
+    elif opt.template == "fullstack-ddd":
+        from archmind.templates.fullstack_ddd import enforce_fullstack_ddd
+
+        files = enforce_fullstack_ddd({}, project_name)
+        spec["directories"] = [
+            "app",
+            "app/api",
+            "app/api/routers",
+            "app/core",
+            "app/db",
+            "app/domain",
+            "app/repositories",
+            "app/services",
+            "tests",
+            "frontend",
+            "frontend/app",
+            "frontend/app/ui",
+            "scripts",
+        ]
+        spec["files"] = files
+
     else:
         files = enforce_fastapi_runtime(files, project_name)
 
@@ -307,3 +328,40 @@ def write_project(spec: Dict[str, Any], opt: GenerateOptions) -> Path:
         force=True,
     )
     return project_root
+
+
+# -----------------------------
+# Public entrypoint (CLI calls this)
+# -----------------------------
+def generate_project(idea: str, opt: GenerateOptions):
+    """
+    CLI entrypoint.
+    - builds prompt
+    - generates/repairs spec
+    - applies deterministic template if selected
+    - writes project to disk
+    returns: Path to generated project root
+    """
+    # Deterministic templates should not require model access.
+    if opt.template in {"fastapi-ddd", "fullstack-ddd"}:
+        project_name = (opt.name or "archmind_project").strip() or "archmind_project"
+        spec = fallback_spec(project_name=project_name)
+    else:
+        # prompt text
+        prompt_text = ""
+        if getattr(opt, "prompt", None):
+            try:
+                prompt_text = Path(opt.prompt).read_text(encoding="utf-8")
+            except FileNotFoundError:
+                prompt_text = str(opt.prompt)
+
+        if not prompt_text.strip():
+            # minimal prompt: model output can be unreliable; templates may override anyway
+            prompt_text = (
+                "Return a JSON object with keys: project_name, summary, directories(list), files(object path->content). "
+                "files must be string contents. Do not include markdown."
+            )
+
+        spec = generate_valid_spec(prompt_text, idea, opt)
+    spec = apply_template(spec, opt)
+    return write_project(spec, opt)
