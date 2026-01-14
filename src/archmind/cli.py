@@ -164,6 +164,18 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--log-dir", default=None, help="Log directory (relative to project or absolute)")
     r.add_argument("--json-summary", action="store_true", help="Write summary.json alongside summary.txt")
     r.set_defaults(func=run_run)
+
+    f = sub.add_parser("fix", help="Run auto-fix loop with plans")
+    f.add_argument("--path", required=True, help="Project root path")
+    f.add_argument("--max-iterations", type=int, default=3, help="Max fix iterations")
+    f.add_argument("--model", choices=["ollama", "openai", "none"], default="ollama", help="Patch model")
+    f.add_argument("--ollama-model", default="llama3:latest", help="Ollama model name")
+    f.add_argument("--openai-model", default="gpt-4.1-mini", help="OpenAI model name")
+    f.add_argument("--dry-run", action="store_true", help="Plan only, no changes")
+    f.add_argument("--timeout-s", type=int, default=240, help="Timeout per step")
+    f.add_argument("--scope", choices=["backend", "frontend", "all"], default="all", help="Fix scope")
+    f.add_argument("--apply", action="store_true", help="Apply changes (required to modify files)")
+    f.set_defaults(func=run_fix)
     return p
 
 
@@ -205,6 +217,28 @@ def run_run(args: argparse.Namespace) -> int:
     result = run_pipeline(config)
     print_run_result(result)
     return result.overall_exit_code
+
+
+def run_fix(args: argparse.Namespace) -> int:
+    from archmind.fixer import run_fix_loop
+
+    project_dir = Path(args.path).expanduser().resolve()
+    if not project_dir.exists():
+        print(f"[ERROR] Path not found: {project_dir}", file=sys.stderr)
+        return 64
+    if not project_dir.is_dir():
+        print(f"[ERROR] Path is not a directory: {project_dir}", file=sys.stderr)
+        return 64
+
+    return run_fix_loop(
+        project_dir=project_dir,
+        max_iterations=args.max_iterations,
+        model=args.model,
+        dry_run=args.dry_run,
+        timeout_s=args.timeout_s,
+        scope=args.scope,
+        apply_changes=args.apply,
+    )
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

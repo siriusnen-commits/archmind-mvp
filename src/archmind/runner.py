@@ -449,6 +449,8 @@ def write_log_and_summary(config: RunConfig, backend: BackendResult, frontend: F
                 "project_dir": str(config.project_dir),
                 "timestamp": timestamp,
                 "command": config.command,
+                "log_path": str(log_path),
+                "summary_path": str(summary_path),
             },
             "backend": {
                 "status": backend.status,
@@ -456,6 +458,7 @@ def write_log_and_summary(config: RunConfig, backend: BackendResult, frontend: F
                 "cwd": backend.cwd,
                 "exit_code": backend.exit_code,
                 "duration_s": backend.duration_s,
+                "summary_lines": backend.summary_lines,
             },
             "frontend": {
                 "status": frontend.status,
@@ -472,6 +475,7 @@ def write_log_and_summary(config: RunConfig, backend: BackendResult, frontend: F
                     for step in frontend.steps
                 ],
                 "reason": frontend.reason,
+                "summary_lines": frontend.summary_lines,
             },
             "overall_exit_code": overall_exit_code,
         }
