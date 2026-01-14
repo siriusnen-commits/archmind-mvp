@@ -12,6 +12,7 @@ venv/
 .mypy_cache/
 .ruff_cache/
 .cache/
+.archmind/run_logs/
 
 # Generated outputs (ArchMind)
 generated/
@@ -25,3 +26,9 @@ examples/last_repaired_output.txt
 
 # Packaging
 *.egg-info/
+dist/
+build/
+
+# Node artifacts
+node_modules/
+package-lock.json

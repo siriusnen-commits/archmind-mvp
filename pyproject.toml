@@ -9,8 +9,14 @@ description = "ArchMind - Prompt to Architecture Generator"
 requires-python = ">=3.11"
 dependencies = ["requests"]
 
+[project.optional-dependencies]
+dev = ["pytest==9.0.2"]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[project.scripts]
+archmind = "archmind.cli:main"
