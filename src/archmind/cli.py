@@ -156,45 +156,55 @@ def build_parser() -> argparse.ArgumentParser:
 
     r = sub.add_parser("run", help="Run tests in a project and collect logs")
     r.add_argument("--path", required=True, help="Project root path")
-    r.add_argument("--cmd", default="pytest", help="Command preset (default: pytest)")
-    r.add_argument("--pytest-args", default=None, help="Extra pytest arguments")
-    r.add_argument("--timeout-s", type=int, default=240, help="Command timeout seconds")
-    r.add_argument("--fix", action="store_true", help="Auto-fix failing tests")
-    r.add_argument("--max-iter", type=int, default=3, help="Max fix iterations")
-    r.add_argument("--dry-run", action="store_true", help="Print diff only (no apply)")
-    r.add_argument("--auto-commit", action="store_true", help="Auto-commit on success")
+    r.add_argument("--all", action="store_true", help="Run backend + frontend checks")
+    r.add_argument("--backend-only", action="store_true", help="Run backend checks only")
+    r.add_argument("--frontend-only", action="store_true", help="Run frontend checks only")
+    r.add_argument("--no-install", action="store_true", help="Skip frontend install step")
+    r.add_argument("--timeout-s", type=int, default=240, help="Timeout per command")
+    r.add_argument("--log-dir", default=None, help="Log directory (relative to project or absolute)")
+    r.add_argument("--json-summary", action="store_true", help="Write summary.json alongside summary.txt")
     r.set_defaults(func=run_run)
     return p
 
 
 def run_run(args: argparse.Namespace) -> int:
-    from archmind.runner import run_project, run_project_with_fix
+    from archmind.runner import RunConfig, print_run_result, run_pipeline
 
     project_dir = Path(args.path).expanduser().resolve()
     if not project_dir.exists():
         print(f"[ERROR] Path not found: {project_dir}", file=sys.stderr)
-        return 2
+        return 64
     if not project_dir.is_dir():
         print(f"[ERROR] Path is not a directory: {project_dir}", file=sys.stderr)
-        return 2
+        return 64
 
-    if args.fix:
-        return run_project_with_fix(
-            project_dir=project_dir,
-            cmd=args.cmd,
-            pytest_args=args.pytest_args,
-            timeout_s=args.timeout_s,
-            max_iter=args.max_iter,
-            dry_run=args.dry_run,
-            auto_commit=args.auto_commit,
-        )
+    if sum(bool(x) for x in (args.all, args.backend_only, args.frontend_only)) > 1:
+        print("[ERROR] Use only one of --all/--backend-only/--frontend-only.", file=sys.stderr)
+        return 64
 
-    return run_project(
+    if args.log_dir:
+        log_dir = Path(args.log_dir)
+        if not log_dir.is_absolute():
+            log_dir = (project_dir / log_dir).resolve()
+    else:
+        log_dir = project_dir / ".archmind" / "run_logs"
+
+    command = "archmind " + " ".join(getattr(args, "_argv", []))
+    config = RunConfig(
         project_dir=project_dir,
-        cmd=args.cmd,
-        pytest_args=args.pytest_args,
+        run_all=args.all,
+        backend_only=args.backend_only,
+        frontend_only=args.frontend_only,
+        no_install=args.no_install,
         timeout_s=args.timeout_s,
+        log_dir=log_dir,
+        json_summary=args.json_summary,
+        command=command.strip(),
     )
+
+    result = run_pipeline(config)
+    print_run_result(result)
+    return result.overall_exit_code
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -209,6 +219,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     args = parser.parse_args(list(argv))
+    setattr(args, "_argv", list(argv))
 
     if not hasattr(args, "func"):
         parser.print_help()
