@@ -35,6 +35,7 @@ def enforce_fullstack_ddd(_: Dict[str, str], project_name: str) -> Dict[str, str
     files[".env.example"] = (
         f"APP_NAME={project_name}\n"
         "DB_URL=sqlite:///./data/app.db\n"
+        "# ALLOW_ORIGINS='*' is for dev only; set specific origins in production.\n"
         "ALLOW_ORIGINS=*\n"
     )
 
@@ -62,6 +63,7 @@ class Settings(BaseSettings):
 
     app_name: str = "{project_name}"
     db_url: str = "sqlite:///./data/app.db"
+    # NOTE: "*" is for dev convenience; set specific origins in production.
     allow_origins: str = "*"
 
 
@@ -139,7 +141,7 @@ class DefectRepository:
             like = f"%{q}%"
             conditions.append((Defect.note.ilike(like)) | (Defect.defect_type.ilike(like)))
         if defect_type:
-            conditions.append(Defect.defect_type == defect_type)
+            conditions.append(Defect.defect_type.ilike(f"%{defect_type}%"))
 
         query = select(Defect)
         count_query = select(func.count()).select_from(Defect)
@@ -299,7 +301,7 @@ def create_defect(payload: DefectCreate, session: Session = Depends(_session_dep
 def list_defects(
     session: Session = Depends(_session_dep),
     q: str | None = Query(default=None),
-    defect_type: str | None = Query(default=None),
+    defect_type: str | None = Query(default=None, description="Partial match on defect_type"),
     sort: str = Query(default="id", pattern="^(id|created_at)$"),
     order: str = Query(default="desc", pattern="^(asc|desc)$"),
     page: int = Query(default=1, ge=1),
@@ -382,6 +384,7 @@ origins = [x.strip() for x in settings.allow_origins.split(",") if x.strip()]
 if not origins:
     origins = ["*"]
 if origins == ["*"]:
+    # DEV ONLY: allow all origins for convenience. In production, set ALLOW_ORIGINS.
     allow_origins = ["*"]
 else:
     allow_origins = origins
@@ -427,9 +430,11 @@ def test_health():
 from app.main import app
 from app.db.session import engine
 from sqlmodel import SQLModel
+from pathlib import Path
 
 
 def setup_function():
+    Path("./data").mkdir(parents=True, exist_ok=True)
     SQLModel.metadata.drop_all(engine)
     SQLModel.metadata.create_all(engine)
 
@@ -437,7 +442,7 @@ def setup_function():
 def test_defects_crud_and_pagination():
     client = TestClient(app)
     for i in range(5):
-        r = client.post("/defects", json={"defect_type": "HDMI", "note": f"n{i}"})
+        r = client.post("/defects", json={"defect_type": f"HDMI_{i}", "note": f"n{i}"})
         assert r.status_code == 200
 
     r = client.get("/defects", params={"page": 1, "page_size": 2})
@@ -445,6 +450,8 @@ def test_defects_crud_and_pagination():
     data = r.json()
     assert data["total"] == 5
     assert len(data["items"]) == 2
+    assert data["page"] == 1
+    assert data["page_size"] == 2
 
     first_id = data["items"][0]["id"]
     r = client.put(f"/defects/{first_id}", json={"note": "updated"})
@@ -457,6 +464,29 @@ def test_defects_crud_and_pagination():
     r = client.get("/defects", params={"q": "updated"})
     assert r.status_code == 200
     assert r.json()["total"] == 0
+
+
+def test_defects_query_and_sorting():
+    client = TestClient(app)
+    for dtype in ["HDMI_CEC", "HDMI_ARC", "USB_POWER"]:
+        client.post("/defects", json={"defect_type": dtype, "note": f"note {dtype}"})
+
+    # defect_type partial match
+    r = client.get("/defects", params={"defect_type": "HDMI"})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total"] == 2
+
+    # text search (q) across note/defect_type
+    r = client.get("/defects", params={"q": "USB"})
+    assert r.status_code == 200
+    assert r.json()["total"] == 1
+
+    # sort by id asc
+    r = client.get("/defects", params={"sort": "id", "order": "asc"})
+    assert r.status_code == 200
+    ids = [item["id"] for item in r.json()["items"]]
+    assert ids == sorted(ids)
 """
 
     # -------------------------
@@ -645,6 +675,14 @@ export default function DefectsPage() {
 
   const backendUrl = useMemo(() => getBackendUrl(), []);
 
+  function humanizeError(err: unknown) {
+    if (err instanceof TypeError) {
+      return "Network/CORS error. Check backend URL and CORS settings.";
+    }
+    if (err instanceof Error) return err.message;
+    return "Unknown error";
+  }
+
   const api = useMemo(
     () => ({
       async list(params: {
@@ -711,7 +749,7 @@ export default function DefectsPage() {
       setPage(data.page);
       setPageSize(data.page_size);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
+      setError(humanizeError(err));
     } finally {
       setLoading(false);
     }
@@ -743,7 +781,7 @@ export default function DefectsPage() {
       setEditing(null);
       await refresh(1);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
+      setError(humanizeError(err));
     } finally {
       setLoading(false);
     }
@@ -769,7 +807,7 @@ export default function DefectsPage() {
       await api.remove(item.id);
       await refresh(page);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
+      setError(humanizeError(err));
     } finally {
       setLoading(false);
     }
@@ -1030,7 +1068,7 @@ python -m pytest -q
 ## Environment
 - `APP_NAME` (default: {project_name})
 - `DB_URL` (default: sqlite:///./data/app.db)
-- `ALLOW_ORIGINS` (default: *)
+- `ALLOW_ORIGINS` (default: *) (dev only; set specific origins in production)
 - `NEXT_PUBLIC_BACKEND_URL` (optional; defaults to http://{{host}}:8000)
 """
 

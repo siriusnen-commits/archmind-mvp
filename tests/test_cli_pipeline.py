@@ -70,7 +70,7 @@ def test_pipeline_backend_only_smoke(tmp_path: Path) -> None:
 
 
 def test_pipeline_idea_generates_and_runs(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("archmind.pipeline.generate_project", _fake_generate_project)
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project)
 
     exit_code = main(
         [

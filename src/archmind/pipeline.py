@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 from archmind.fixer import run_fix_loop
-from archmind.generator import GenerateOptions, generate_project
 from archmind.runner import RunConfig, RunResult, run_pipeline
 
 
@@ -38,11 +37,65 @@ class PipelineOptions:
     json_summary: bool
 
 
+def _filter_kwargs_for_callable(fn, kwargs: dict[str, Any]) -> dict[str, Any]:
+    sig = inspect.signature(fn)
+    accepted = set(sig.parameters.keys())
+    return {k: v for k, v in kwargs.items() if k in accepted}
+
+
+def _resolve_generator_entry():
+    import archmind.generator as gen  # type: ignore
+
+    candidates = [
+        "generate_project",
+        "generate",
+        "generate_from_idea",
+        "generate_project_from_idea",
+        "run_generate",
+    ]
+    for name in candidates:
+        fn = getattr(gen, name, None)
+        if callable(fn):
+            return fn
+    for name, obj in vars(gen).items():
+        if callable(obj) and name.startswith("generate"):
+            return obj
+    raise RuntimeError(
+        "No generator entrypoint found in archmind.generator. "
+        "Expected one of: generate_project / generate / generate_from_idea / generate_project_from_idea."
+    )
+
+
+def _make_generate_options(opt_kwargs: dict[str, Any]):
+    from archmind.generator import GenerateOptions  # type: ignore
+
+    init = GenerateOptions.__init__  # type: ignore[attr-defined]
+    filtered = _filter_kwargs_for_callable(init, opt_kwargs)
+    return GenerateOptions(**filtered)
+
+
 def _resolve_project_dir(opts: PipelineOptions) -> Optional[Path]:
     if opts.idea:
         opt_kwargs = _build_generate_options_kwargs(opts)
-        opt = GenerateOptions(**opt_kwargs)
-        generated = generate_project(opts.idea, opt)
+        opt = _make_generate_options(opt_kwargs)
+        gen_entry = _resolve_generator_entry()
+
+        # positional-first call attempt
+        try_orders = [
+            (opts.idea, opt),
+            (opts.idea,),
+            (),
+        ]
+        for tup in try_orders:
+            try:
+                generated = gen_entry(*tup)
+                return Path(generated).resolve() if generated else None
+            except TypeError:
+                pass
+
+        call_kwargs = {"idea": opts.idea, "opt": opt, "options": opt}
+        filtered = _filter_kwargs_for_callable(gen_entry, call_kwargs)
+        generated = gen_entry(**filtered)
         return Path(generated).resolve() if generated else None
 
     if opts.path:
@@ -81,6 +134,8 @@ def _add_first_supported(
 
 
 def _build_generate_options_kwargs(opts: PipelineOptions) -> dict[str, Any]:
+    from archmind.generator import GenerateOptions  # type: ignore
+
     supported = _generate_options_supported_fields(GenerateOptions)
     result: dict[str, Any] = {}
     out_value = opts.out or "generated"
