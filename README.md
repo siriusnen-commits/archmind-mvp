@@ -201,5 +201,11 @@ cat /tmp/demo/.archmind/result.json
 - PyPI publish is disabled by default in `.github/workflows/release.yml`
 - Enable by configuring Trusted Publisher or a PyPI token and uncommenting publish step
 
+## Offline install (air-gapped)
+- On an online machine: run `./scripts/wheelhouse_build.sh`
+- Copy `wheelhouse/` + `dist/*.whl` to the offline machine
+- On the offline machine: run `./scripts/offline_install.sh`
+- Verify: `archmind --version` and `archmind --help`
+
 ## License
 TBD
