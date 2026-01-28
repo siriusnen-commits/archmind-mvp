@@ -191,11 +191,15 @@ cat /tmp/demo/.archmind/result.json
 - Optional OpenAI-based fix strategy
 - CI-friendly preset commands
 
-## Release (tag-based)
-- Tag a release: `git tag v0.1.0 && git push origin v0.1.0`
-- GitHub Actions will build sdist+wheel and upload artifacts
-- PyPI publishing is disabled by default in `.github/workflows/release.yml`
-- To enable, configure Trusted Publisher or Twine token and uncomment the publish step
+## Release (maintainers)
+- Bump version in `pyproject.toml`
+- `python -m build --no-isolation` (creates dist/*)
+- `python -m twine check dist/*`
+- `git tag vX.Y.Z`
+- `git push origin vX.Y.Z`
+- GitHub Actions builds sdist+wheel and uploads artifacts
+- PyPI publish is disabled by default in `.github/workflows/release.yml`
+- Enable by configuring Trusted Publisher or a PyPI token and uncommenting publish step
 
 ## License
 TBD

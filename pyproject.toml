@@ -7,7 +7,7 @@ name = "archmind"
 version = "0.1.0"
 description = "ArchMind - Prompt to Architecture Generator"
 readme = "README.md"
-license = {text = "TBD"}
+license = "LicenseRef-Proprietary"
 requires-python = ">=3.11"
 dependencies = ["requests"]
 
