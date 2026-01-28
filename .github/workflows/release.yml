@@ -14,6 +14,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -60,12 +62,40 @@ jobs:
           name: wheelhouse
           path: wheelhouse.zip
 
-      - name: Release assets
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/*
-            wheelhouse.zip
+      - name: Generate release notes
+        run: |
+          set -euo pipefail
+          CUR_TAG="${GITHUB_REF_NAME}"
+          PREV_TAG=$(git tag --sort=-v:refname | grep '^v' | grep -v "^${CUR_TAG}$" | head -n 1 || true)
+
+          if [ -n "${PREV_TAG}" ]; then
+            RANGE="${PREV_TAG}..${CUR_TAG}"
+          else
+            RANGE="${CUR_TAG}"
+          fi
+
+          printf "# ArchMind %s\n\n" "${CUR_TAG}" > notes.md
+          printf "## Highlights\n" >> notes.md
+          git log ${RANGE} --pretty=format:'- %s' | head -n 3 >> notes.md
+          printf "\n\n## Changes\n" >> notes.md
+          git log ${RANGE} --pretty=format:'- %h %s' | head -n 200 >> notes.md
+          printf "\n\n## Install\n" >> notes.md
+          printf "- pip install archmind==%s\n" "${CUR_TAG#v}" >> notes.md
+          printf "- Or download wheelhouse.zip and use offline_install_verify.sh\n" >> notes.md
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          TITLE="${TAG}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TITLE" --notes-file notes.md
+          else
+            gh release create "$TAG" --title "$TITLE" --notes-file notes.md
+          fi
+          gh release upload "$TAG" dist/* wheelhouse.zip --clobber
 
       # PyPI publish (disabled by default)
       # - name: Publish to PyPI
