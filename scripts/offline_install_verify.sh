@@ -11,6 +11,9 @@ Options:
   --venv PATH        Venv directory (default: /tmp/archmind_offline_test)
   --keep             Keep the venv after verification
   -h, --help         Show this help message
+
+Prerequisite:
+  - wheelhouse must be created on an online machine and copied here.
 USAGE
 }
 
@@ -53,7 +56,9 @@ if [ ! -d "$WHEELHOUSE" ]; then
 fi
 
 if ! ls "$WHEELHOUSE"/archmind-*.whl >/dev/null 2>&1; then
-  echo "[ERROR] archmind wheel not found in wheelhouse. Run make_wheelhouse.sh first." >&2
+  echo "[ERROR] archmind wheel not found in wheelhouse." >&2
+  echo "[ERROR] Expected something like: $WHEELHOUSE/archmind-0.1.0-*.whl" >&2
+  echo "[INFO] Run make_wheelhouse.sh on an online machine and copy artifacts." >&2
   exit 2
 fi
 

@@ -5,12 +5,17 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/make_wheelhouse.sh [--clean] [--dev] [--wheelhouse PATH]
 
-Build an offline wheelhouse for ArchMind.
+Build an offline wheelhouse for ArchMind (run on an online machine).
 Options:
   --clean           Remove existing wheelhouse before download
   --dev             Include dev extras in wheelhouse
   --wheelhouse PATH Output directory (default: wheelhouse)
   -h, --help        Show this help message
+
+Notes:
+  - Wheelhouse generation requires network access (online machine).
+  - Copy wheelhouse/ and dist/archmind-*.whl to the offline machine.
+  - Then run: ./scripts/offline_install_verify.sh --wheelhouse wheelhouse
 USAGE
 }
 
@@ -60,16 +65,24 @@ fi
 BASE_DEPS="requests==2.32.5"
 DEV_DEPS="pytest==9.0.2 fastapi==0.115.0 uvicorn[standard]==0.30.6 sqlmodel==0.0.21 pydantic==2.8.2 pydantic-settings==2.4.0 httpx==0.27.0 build==1.2.1 twine==6.2.0"
 
-if ! python -m pip download -d "$WHEELHOUSE" $BASE_DEPS; then
-  echo "[ERROR] Failed to download base dependencies. Run this on an online machine." >&2
+TMP_CHECK=$(mktemp -d)
+trap 'rm -rf "$TMP_CHECK"' EXIT
+
+CHECK_LOG="$TMP_CHECK/pip_check.log"
+if ! python -m pip download -d "$TMP_CHECK" $BASE_DEPS >"$CHECK_LOG" 2>&1; then
+  echo "[ERROR] Network check failed. This appears to be an offline/blocked environment." >&2
+  echo "[INFO] Wheelhouse must be generated on an online machine." >&2
+  echo "[INFO] After generation, copy: wheelhouse/ and dist/archmind-*.whl" >&2
+  echo "[INFO] Offline verification: ./scripts/offline_install_verify.sh --wheelhouse wheelhouse" >&2
+  echo "--- pip output (last 20 lines) ---" >&2
+  tail -n 20 "$CHECK_LOG" >&2
   exit 2
 fi
 
+python -m pip download -d "$WHEELHOUSE" $BASE_DEPS
+
 if [ "$DEV" -eq 1 ]; then
-  if ! python -m pip download -d "$WHEELHOUSE" $DEV_DEPS; then
-    echo "[ERROR] Failed to download dev dependencies. Run this on an online machine." >&2
-    exit 2
-  fi
+  python -m pip download -d "$WHEELHOUSE" $DEV_DEPS
 fi
 
 cp dist/archmind-*.whl "$WHEELHOUSE"/

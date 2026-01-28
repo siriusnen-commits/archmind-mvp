@@ -213,16 +213,16 @@ archmind pipeline --path /path/to/project --all --scope all --max-iterations 2 -
 - Enable by configuring Trusted Publisher or a PyPI token and uncommenting publish step
 
 ## Offline install (air-gapped)
-- On an online machine, run `./scripts/make_wheelhouse.sh`
-- Optional: include dev extras with `./scripts/make_wheelhouse.sh --dev`
-- This creates `wheelhouse/` and ensures `dist/archmind-*.whl` exists
-- Copy `wheelhouse/` and `dist/*.whl` to the offline machine
-- On the offline machine, run `./scripts/offline_install_verify.sh`
+- Step 1 (online machine): `./scripts/make_wheelhouse.sh`
+- Optional dev extras: `./scripts/make_wheelhouse.sh --dev`
+- This creates `wheelhouse/` and `dist/archmind-*.whl`
+- Step 2: copy `wheelhouse/` and `dist/*.whl` to the offline machine
+- Step 3 (offline machine): `./scripts/offline_install_verify.sh`
 - The script installs with `--no-index --find-links wheelhouse`
 - It verifies `archmind --version` and CLI help commands
+- If you run make_wheelhouse.sh offline, failure is expected
 - If dependencies change, regenerate the wheelhouse
-- Use `--wheelhouse PATH` to customize output location
-- Use `--keep` to keep the venv after verification
+- Use `--wheelhouse PATH` or `--keep` to customize output
 
 ## License
 TBD
