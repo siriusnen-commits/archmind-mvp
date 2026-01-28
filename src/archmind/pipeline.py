@@ -166,6 +166,114 @@ def _latest_run_summary(project_dir: Path) -> Optional[str]:
     return summaries[0].read_text(encoding="utf-8", errors="replace")
 
 
+def _latest_path(project_dir: Path, pattern: str) -> Optional[Path]:
+    base = project_dir / ".archmind" / "run_logs"
+    if not base.exists():
+        return None
+    matches = sorted(base.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+    return matches[0] if matches else None
+
+
+def _latest_run_prompt(project_dir: Path) -> Optional[Path]:
+    base = project_dir / ".archmind" / "run_logs"
+    if not base.exists():
+        return None
+    matches = sorted(base.glob("*.prompt.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for path in matches:
+        if not path.name.startswith("fix_"):
+            return path
+    return None
+
+
+def _build_command(opts: PipelineOptions) -> str:
+    parts = ["archmind", "pipeline"]
+    if opts.path:
+        parts += ["--path", str(opts.path)]
+    if opts.idea:
+        parts += ["--idea", opts.idea]
+    if opts.out:
+        parts += ["--out", opts.out]
+    if opts.name:
+        parts += ["--name", opts.name]
+    if opts.template:
+        parts += ["--template", opts.template]
+    if opts.prompt:
+        parts += ["--prompt", opts.prompt]
+    if opts.gen_model:
+        parts += ["--gen-model", opts.gen_model]
+    if opts.gen_ollama_base_url:
+        parts += ["--gen-ollama-base-url", opts.gen_ollama_base_url]
+    parts += ["--gen-max-retries", str(opts.gen_max_retries)]
+    parts += ["--gen-timeout-s", str(opts.gen_timeout_s)]
+    if opts.run_all:
+        parts.append("--all")
+    if opts.backend_only:
+        parts.append("--backend-only")
+    if opts.frontend_only:
+        parts.append("--frontend-only")
+    if opts.no_install:
+        parts.append("--no-install")
+    parts += ["--timeout-s", str(opts.timeout_s)]
+    parts += ["--scope", opts.scope]
+    parts += ["--max-iterations", str(opts.max_iterations)]
+    parts += ["--model", opts.model]
+    if opts.apply:
+        parts.append("--apply")
+    if opts.dry_run:
+        parts.append("--dry-run")
+    if opts.json_summary:
+        parts.append("--json-summary")
+    return " ".join(parts)
+
+
+def compute_status(
+    run_before_ok: bool,
+    fix_exit: Optional[int],
+    run_after_ok: Optional[bool],
+    apply: bool,
+) -> str:
+    if run_before_ok:
+        return "SUCCESS"
+    if fix_exit is None:
+        return "FAIL"
+    if fix_exit != 0:
+        return "PARTIAL" if not apply else "FAIL"
+    if run_after_ok:
+        return "SUCCESS"
+    return "FAIL"
+
+
+def _build_result_text(payload: dict[str, Any]) -> str:
+    lines = [
+        "ArchMind Pipeline Result",
+        f"- status: {payload.get('status')}",
+        f"- project_dir: {payload.get('project_dir')}",
+        f"- timestamp: {payload.get('timestamp')}",
+        f"- command: {payload.get('command')}",
+        "",
+        "Steps:",
+        f"- generate: {payload['steps']['generate']}",
+        f"- run_before_fix: {payload['steps']['run_before_fix']}",
+        f"- fix: {payload['steps']['fix']}",
+        f"- run_after_fix: {payload['steps']['run_after_fix']}",
+        "",
+        "Artifacts:",
+    ]
+    for key, value in payload.get("artifacts", {}).items():
+        lines.append(f"- {key}: {value or 'N/A'}")
+    return "\n".join(lines) + "\n"
+
+
+def write_result(project_dir: Path, payload: dict[str, Any]) -> tuple[Path, Path]:
+    result_dir = project_dir / ".archmind"
+    result_dir.mkdir(parents=True, exist_ok=True)
+    json_path = result_dir / "result.json"
+    txt_path = result_dir / "result.txt"
+    json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    txt_path.write_text(_build_result_text(payload), encoding="utf-8")
+    return json_path, txt_path
+
+
 def _build_run_config(opts: PipelineOptions, project_dir: Path) -> RunConfig:
     if opts.backend_only:
         run_all = False
@@ -283,10 +391,12 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         return 2
 
     run_config = _build_run_config(opts, project_dir)
+    command = _build_command(opts)
 
     final_exit = 1
     fix_exit: Optional[int] = None
     rerun_exit: Optional[int] = None
+    rerun_result: Optional[RunResult] = None
     run_result: Optional[RunResult] = None
 
     for iteration in range(1, opts.max_iterations + 1):
@@ -329,10 +439,65 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         opts.json_summary,
     )
 
-    if final_exit != 0:
+    run_before_ok = run_result.overall_exit_code == 0
+    run_after_ok = None if rerun_result is None else rerun_result.overall_exit_code == 0
+    status = compute_status(run_before_ok, fix_exit, run_after_ok, opts.apply)
+
+    run_prompt = _latest_run_prompt(project_dir)
+    fix_prompt = _latest_path(project_dir, "fix_*.prompt.md")
+    last_run = rerun_result or run_result
+    artifacts = {
+        "run_log": str(last_run.log_path) if last_run else None,
+        "run_summary": str(last_run.summary_path) if last_run else None,
+        "run_prompt": str(run_prompt) if run_prompt else None,
+        "fix_prompt": str(fix_prompt) if fix_prompt else None,
+        "json_summary": str(last_run.json_summary_path) if last_run and last_run.json_summary_path else None,
+    }
+
+    payload = {
+        "status": status,
+        "project_dir": str(project_dir),
+        "timestamp": timestamp,
+        "command": command,
+        "steps": {
+            "generate": {
+                "skipped": opts.idea is None,
+                "ok": opts.idea is None or project_dir.exists(),
+                "detail": "used --path" if opts.idea is None else "generated from idea",
+            },
+            "run_before_fix": {
+                "ok": run_before_ok,
+                "log": str(run_result.log_path),
+                "summary": str(run_result.summary_path),
+            },
+            "fix": {
+                "attempted": fix_exit is not None,
+                "applied": bool(opts.apply),
+                "iterations": opts.max_iterations if fix_exit is not None else 0,
+                "model": opts.model,
+                "scope": _effective_fix_scope(opts),
+                "prompt": str(fix_prompt) if fix_prompt else None,
+            },
+            "run_after_fix": {
+                "ok": bool(run_after_ok) if run_after_ok is not None else False,
+                "log": str(rerun_result.log_path) if rerun_result else None,
+                "summary": str(rerun_result.summary_path) if rerun_result else None,
+            },
+        },
+        "artifacts": artifacts,
+    }
+
+    result_json, _ = write_result(project_dir, payload)
+
+    if status != "SUCCESS":
         summary = _latest_run_summary(project_dir)
         if summary:
             print("[FAIL] 마지막 run 요약:")
             print(summary)
 
-    return final_exit
+    if status == "SUCCESS":
+        print(f"[DONE] SUCCESS. result: {result_json}")
+        return 0
+
+    print(f"[FAIL] {status}. result: {result_json}")
+    return 1

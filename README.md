@@ -142,6 +142,14 @@ Failure prompt (`*.prompt.md`) includes:
 - 수정 지시문
 - 완료 조건 체크리스트
 
+Result files quick check (2 examples):
+```bash
+archmind pipeline --path /path/to/project --backend-only --model none
+cat /path/to/project/.archmind/result.txt
+archmind pipeline --idea "demo" --template fullstack-ddd --out /tmp --name demo --backend-only --model none
+cat /tmp/demo/.archmind/result.json
+```
+
 ## Troubleshooting
 1) CORS/0.0.0.0 vs 127.0.0.1
 - Symptom: frontend fetch fails with CORS or network error.
