@@ -76,9 +76,19 @@ jobs:
 
           printf "# ArchMind %s\n\n" "${CUR_TAG}" > notes.md
           printf "## Highlights\n" >> notes.md
-          git log ${RANGE} --pretty=format:'- %s' | head -n 3 >> notes.md
+          HIGHLIGHTS=$(git log ${RANGE} --pretty=format:'- %s' | head -n 3)
+          if [ -n "${HIGHLIGHTS}" ]; then
+            printf "%s\n" "${HIGHLIGHTS}" >> notes.md
+          else
+            printf "- No changes recorded for this tag.\n" >> notes.md
+          fi
           printf "\n\n## Changes\n" >> notes.md
-          git log ${RANGE} --pretty=format:'- %h %s' | head -n 200 >> notes.md
+          CHANGES=$(git log ${RANGE} --pretty=format:'- %h %s' | head -n 200)
+          if [ -n "${CHANGES}" ]; then
+            printf "%s\n" "${CHANGES}" >> notes.md
+          else
+            printf "- No commits found in range.\n" >> notes.md
+          fi
           printf "\n\n## Install\n" >> notes.md
           printf "- pip install archmind==%s\n" "${CUR_TAG#v}" >> notes.md
           printf "- Or download wheelhouse.zip and use offline_install_verify.sh\n" >> notes.md
@@ -95,7 +105,16 @@ jobs:
           else
             gh release create "$TAG" --title "$TITLE" --notes-file notes.md
           fi
-          gh release upload "$TAG" dist/* wheelhouse.zip --clobber
+          if ls dist/* >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            echo "[WARN] dist/* not found; skipping dist upload."
+          fi
+          if [ -f wheelhouse.zip ]; then
+            gh release upload "$TAG" wheelhouse.zip --clobber
+          else
+            echo "[WARN] wheelhouse.zip not found; skipping wheelhouse upload."
+          fi
 
       # PyPI publish (disabled by default)
       # - name: Publish to PyPI
