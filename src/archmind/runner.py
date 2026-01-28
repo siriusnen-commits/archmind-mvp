@@ -56,6 +56,7 @@ class FrontendStepResult:
     duration_s: float
     stdout: str
     stderr: str
+    summary_lines: list[str]
     timed_out: bool = False
 
 
@@ -328,6 +329,13 @@ def _read_package_scripts(package_json: Path) -> dict[str, str]:
     return {}
 
 
+def _summarize_step_output(stdout: str, stderr: str, max_lines: int = 40) -> list[str]:
+    combined = (stdout + "\n" + stderr).strip()
+    if not combined:
+        return []
+    return _extract_tail_lines(combined, max_lines=max_lines)
+
+
 def run_frontend_pipeline(config: RunConfig) -> FrontendResult:
     frontend_dir = config.project_dir / "frontend"
     package_json = frontend_dir / "package.json"
@@ -369,7 +377,7 @@ def run_frontend_pipeline(config: RunConfig) -> FrontendResult:
             reason="package.json parse error.",
         )
 
-    wanted = [name for name in ("lint", "test", "build") if name in scripts]
+    wanted = [name for name in ("lint", "typecheck", "test", "build") if name in scripts]
     if not wanted:
         return FrontendResult(
             status="SKIPPED",
@@ -397,6 +405,7 @@ def run_frontend_pipeline(config: RunConfig) -> FrontendResult:
                 duration_s=install_result.duration_s,
                 stdout=install_result.stdout,
                 stderr=install_result.stderr,
+                summary_lines=_summarize_step_output(install_result.stdout, install_result.stderr),
                 timed_out=install_result.timed_out,
             )
         )
@@ -411,6 +420,7 @@ def run_frontend_pipeline(config: RunConfig) -> FrontendResult:
                     duration_s=fallback_result.duration_s,
                     stdout=fallback_result.stdout,
                     stderr=fallback_result.stderr,
+                    summary_lines=_summarize_step_output(fallback_result.stdout, fallback_result.stderr),
                     timed_out=fallback_result.timed_out,
                 )
             )
@@ -427,9 +437,17 @@ def run_frontend_pipeline(config: RunConfig) -> FrontendResult:
                     reason="npm install failed.",
                 )
 
+    tsc_path = frontend_dir / "node_modules" / ".bin" / "tsc"
+    if "typecheck" not in wanted and tsc_path.exists():
+        wanted.insert(1, "typecheck")
+
     for script_name in wanted:
-        cmd = ["npm", "run", script_name]
+        if script_name == "typecheck" and script_name not in scripts:
+            cmd = [str(tsc_path), "--noEmit"]
+        else:
+            cmd = ["npm", "run", script_name]
         step_result = run_cmd_capture(cmd, frontend_dir, config.timeout_s)
+        summary = _summarize_step_output(step_result.stdout, step_result.stderr)
         steps.append(
             FrontendStepResult(
                 name=script_name,
@@ -438,6 +456,7 @@ def run_frontend_pipeline(config: RunConfig) -> FrontendResult:
                 duration_s=step_result.duration_s,
                 stdout=step_result.stdout,
                 stderr=step_result.stderr,
+                summary_lines=summary,
                 timed_out=step_result.timed_out,
             )
         )
@@ -612,6 +631,7 @@ def write_log_and_summary(config: RunConfig, backend: BackendResult, frontend: F
                         "cmd": step.cmd,
                         "exit_code": step.exit_code,
                         "duration_s": step.duration_s,
+                        "summary_lines": step.summary_lines,
                     }
                     for step in frontend.steps
                 ],

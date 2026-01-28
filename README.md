@@ -184,6 +184,17 @@ cat /tmp/demo/.archmind/result.json
 - Meaning: `archmind fix` or `pipeline` ran without `--apply`.
 - Fix: rerun with `--apply` to allow file changes.
 
+## Frontend auto-fix usage
+- Use when `archmind run --all` fails at frontend lint/typecheck.
+- Frontend scope only touches files under `frontend/`.
+```bash
+archmind run --path /path/to/project --all
+archmind fix --path /path/to/project --scope frontend --model ollama --apply
+archmind pipeline --path /path/to/project --all --scope all --max-iterations 2 --model ollama --apply
+```
+- Check `.archmind/run_logs/` for fix prompt/patch/summary.
+- If no changes are applied, review the prompt and fix manually.
+
 ## Roadmap
 - Improve rule-based fix coverage
 - Add richer frontend checks

@@ -139,11 +139,29 @@ def _extract_failure_details(text: str) -> dict[str, Optional[str | list[str]]]:
     }
 
 
+def _extract_frontend_error_lines(run_result: RunResult, max_lines: int = 200) -> list[str]:
+    lines: list[str] = []
+    for step in run_result.frontend.steps:
+        if step.exit_code != 0:
+            combined = (step.stdout + "\n" + step.stderr).splitlines()
+            for line in combined:
+                if any(key in line for key in ("error", "ERROR", "Failed", "TypeScript", "TS", "eslint")):
+                    lines.append(line)
+    if not lines:
+        for step in run_result.frontend.steps:
+            if step.exit_code != 0:
+                lines = (step.stdout + "\n" + step.stderr).splitlines()
+                break
+    return lines[-max_lines:]
+
+
 def _build_fix_prompt(
     command: str,
     summary_lines: list[str],
     failure_details: dict[str, Optional[str | list[str]]],
     files_hint: list[str],
+    scope: str,
+    frontend_error_lines: list[str],
 ) -> str:
     test_name = failure_details.get("test_name") or "확인 필요"
     file_path = failure_details.get("file_path") or (files_hint[0] if files_hint else "확인 필요")
@@ -154,12 +172,15 @@ def _build_fix_prompt(
     files_block = file_path if isinstance(file_path, str) else "확인 필요"
     stack_top_block = "\n".join(stack_top) if stack_top else "(스택트레이스 상단 없음)"
     stack_bottom_block = "\n".join(stack_bottom) if stack_bottom else "(스택트레이스 하단 없음)"
+    frontend_block = "\n".join(frontend_error_lines) if frontend_error_lines else "(프론트 오류 요약 없음)"
 
     return (
         "# 재현 커맨드\n"
         f"{command}\n\n"
         "# 실패 요약\n"
         f"{summary_block}\n\n"
+        "# 프론트 오류 요약\n"
+        f"{frontend_block}\n\n"
         "# 실패 지점\n"
         f"- 실패한 테스트: {test_name}\n"
         f"- 파일 경로: {files_block}\n"
@@ -171,6 +192,8 @@ def _build_fix_prompt(
         "- 목표: python -m pytest -q 통과\n"
         f"- 수정 대상: {files_block}\n"
         "- 변경 범위를 최소화하라\n\n"
+        "- 기능 유지, 린트/타입체크 통과를 최우선으로 고려하라\n"
+        f"- scope: {scope}\n\n"
         "# 완료 조건 체크리스트\n"
         "- [ ] python -m pytest -q 통과\n"
         "- [ ] 기존 기능 영향 없음\n"
@@ -183,12 +206,16 @@ def _write_fix_prompt(
     command: str,
     run_result: RunResult,
     log_tail: list[str],
+    scope: str,
 ) -> Path:
     summary_lines = _read_failure_summary_section(run_result.summary_path)
     log_text = "\n".join(log_tail)
     details = _extract_failure_details(log_text)
     files_hint = extract_files_hint(log_tail)
-    prompt_text = _build_fix_prompt(command, summary_lines, details, files_hint)
+    frontend_error_lines: list[str] = []
+    if scope == "frontend":
+        frontend_error_lines = _extract_frontend_error_lines(run_result, max_lines=200)
+    prompt_text = _build_fix_prompt(command, summary_lines, details, files_hint, scope, frontend_error_lines)
     prompt_path = log_dir / f"fix_{timestamp}.prompt.md"
     prompt_path.write_text(prompt_text, encoding="utf-8")
     return prompt_path
@@ -471,6 +498,7 @@ def _make_diff(project_dir: Path, target: Path, new_text: str) -> str:
 def apply_plan(plan: dict[str, Any], project_dir: Path, apply_changes: bool) -> tuple[bool, list[str]]:
     changes = plan.get("changes") or plan.get("actions") or []
     diffs: list[str] = []
+    scope = plan.get("scope") or "all"
 
     for change in changes:
         rule = change.get("rule")
@@ -498,7 +526,14 @@ def apply_plan(plan: dict[str, Any], project_dir: Path, apply_changes: bool) -> 
         if new_text is None or target_path is None:
             continue
 
-        diff = _make_diff(project_dir, Path(target_path), new_text)
+        target_path = Path(target_path)
+        if scope == "frontend":
+            try:
+                target_path.resolve().relative_to((project_dir / "frontend").resolve())
+            except ValueError:
+                continue
+
+        diff = _make_diff(project_dir, target_path, new_text)
         if not diff:
             continue
 
@@ -592,6 +627,7 @@ def fix_loop(
                 command or f"archmind fix --path {project_dir}",
                 run_result,
                 log_tail,
+                scope,
             )
             _write_fix_summary(
                 log_dir,
@@ -613,6 +649,7 @@ def fix_loop(
                 command or f"archmind fix --path {project_dir}",
                 run_result,
                 log_tail,
+                scope,
             )
             _write_fix_summary(
                 log_dir,
@@ -637,6 +674,7 @@ def fix_loop(
                 command or f"archmind fix --path {project_dir}",
                 run_result,
                 log_tail,
+                scope,
             )
             patch_path = log_dir / f"fix_{timestamp}.patch.diff"
             patch_path.write_text("", encoding="utf-8")
@@ -663,6 +701,8 @@ def fix_loop(
         patch_path = log_dir / f"fix_{timestamp}.patch.diff"
         patch_text = "\n".join(diffs)
         patch_path.write_text(patch_text, encoding="utf-8")
+        (log_dir / f"fix_{timestamp}.patch.before.diff").write_text(patch_text, encoding="utf-8")
+        (log_dir / f"fix_{timestamp}.patch.after.diff").write_text(patch_text, encoding="utf-8")
 
         rerun = run_and_collect(project_dir, timeout_s=timeout_s, scope=scope)
         if rerun.overall_exit_code == 0:
@@ -691,6 +731,7 @@ def fix_loop(
             command or f"archmind fix --path {project_dir}",
             last_run_result,
             log_tail,
+            scope,
         )
         _write_fix_summary(
             log_dir,
