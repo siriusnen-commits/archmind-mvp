@@ -80,18 +80,18 @@ jobs:
           if [ -n "${HIGHLIGHTS}" ]; then
             printf -- "%s\n" "${HIGHLIGHTS}" >> notes.md
           else
-            printf "- No changes recorded for this tag.\n" >> notes.md
+            printf -- "- No changes recorded for this tag.\n" >> notes.md
           fi
           printf "\n\n## Changes\n" >> notes.md
           CHANGES=$(git log ${RANGE} --pretty=format:'- %h %s' | head -n 200)
           if [ -n "${CHANGES}" ]; then
             printf -- "%s\n" "${CHANGES}" >> notes.md
           else
-            printf "- No commits found in range.\n" >> notes.md
+            printf -- "- No commits found in range.\n" >> notes.md
           fi
           printf "\n\n## Install\n" >> notes.md
-          printf "- pip install archmind==%s\n" "${CUR_TAG#v}" >> notes.md
-          printf "- Or download wheelhouse.zip and use offline_install_verify.sh\n" >> notes.md
+          printf -- "- pip install archmind==%s\n" "${CUR_TAG#v}" >> notes.md
+          printf -- "- Or download wheelhouse.zip and use offline_install_verify.sh\n" >> notes.md
 
       - name: Create or update GitHub Release
         env:
