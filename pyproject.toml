@@ -6,12 +6,16 @@ build-backend = "setuptools.build_meta"
 name = "archmind"
 version = "0.1.0"
 description = "ArchMind - Prompt to Architecture Generator"
+readme = "README.md"
+license = {text = "TBD"}
 requires-python = ">=3.11"
 dependencies = ["requests"]
 
 [project.optional-dependencies]
 dev = [
   "pytest==9.0.2",
+  "build==1.2.1",
+  "twine==5.1.1",
   "fastapi==0.115.0",
   "uvicorn[standard]==0.30.6",
   "sqlmodel==0.0.21",

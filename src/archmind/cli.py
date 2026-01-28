@@ -7,6 +7,14 @@ import sys
 from dataclasses import is_dataclass
 from typing import Any, Callable, Dict, Optional, Sequence
 from pathlib import Path
+from importlib.metadata import PackageNotFoundError, version
+
+
+def _get_version() -> str:
+    try:
+        return version("archmind")
+    except PackageNotFoundError:
+        return "0.0.0"
 
 def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
     """Pass only kwargs that 'fn' accepts."""
@@ -138,6 +146,7 @@ def run_generate(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="archmind", description="ArchMind CLI")
+    p.add_argument("--version", action="version", version=f"archmind {_get_version()}")
     sub = p.add_subparsers(dest="cmd")
 
     g = sub.add_parser("generate", help="Generate a runnable project from an idea")

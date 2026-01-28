@@ -1,5 +1,14 @@
 # ArchMind
 
+## Quickstart
+```bash
+python -m pip install -e ".[dev]"
+archmind generate --idea "defect tracker" --template fullstack-ddd --out /tmp --name defect_demo
+archmind pipeline --path /tmp/defect_demo --backend-only --model none
+ls /tmp/defect_demo/.archmind/run_logs
+cat /tmp/defect_demo/.archmind/result.txt
+```
+
 ## What is ArchMind?
 ArchMind is a CLI tool that generates runnable project skeletons and then validates/fixes them with a repeatable run -> fix loop.
 
@@ -181,6 +190,12 @@ cat /tmp/demo/.archmind/result.json
 - Expand deterministic templates
 - Optional OpenAI-based fix strategy
 - CI-friendly preset commands
+
+## Release (tag-based)
+- Tag a release: `git tag v0.1.0 && git push origin v0.1.0`
+- GitHub Actions will build sdist+wheel and upload artifacts
+- PyPI publishing is disabled by default in `.github/workflows/release.yml`
+- To enable, configure Trusted Publisher or Twine token and uncomment the publish step
 
 ## License
 TBD
