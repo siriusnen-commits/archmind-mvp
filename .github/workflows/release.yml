@@ -78,14 +78,14 @@ jobs:
           printf "## Highlights\n" >> notes.md
           HIGHLIGHTS=$(git log ${RANGE} --pretty=format:'- %s' | head -n 3)
           if [ -n "${HIGHLIGHTS}" ]; then
-            printf "%s\n" "${HIGHLIGHTS}" >> notes.md
+            printf -- "%s\n" "${HIGHLIGHTS}" >> notes.md
           else
             printf "- No changes recorded for this tag.\n" >> notes.md
           fi
           printf "\n\n## Changes\n" >> notes.md
           CHANGES=$(git log ${RANGE} --pretty=format:'- %h %s' | head -n 200)
           if [ -n "${CHANGES}" ]; then
-            printf "%s\n" "${CHANGES}" >> notes.md
+            printf -- "%s\n" "${CHANGES}" >> notes.md
           else
             printf "- No commits found in range.\n" >> notes.md
           fi
