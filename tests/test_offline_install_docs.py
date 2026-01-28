@@ -23,3 +23,10 @@ def test_offline_install_help_mentions_online(tmp_path: Path) -> None:
 
     assert "online" in make_help.lower()
     assert "offline" in verify_help.lower() or "online" in verify_help.lower()
+
+
+def test_readme_mentions_wheelhouse_zip() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    readme = (repo_root / "README.md").read_text(encoding="utf-8").lower()
+    assert "wheelhouse.zip" in readme
+    assert "offline_install_verify.sh" in readme

@@ -223,6 +223,9 @@ archmind pipeline --path /path/to/project --all --scope all --max-iterations 2 -
 - If you run make_wheelhouse.sh offline, failure is expected
 - If dependencies change, regenerate the wheelhouse
 - Use `--wheelhouse PATH` or `--keep` to customize output
+- GitHub Releases/Actions also publish `wheelhouse.zip` (archmind wheel + runtime deps)
+- Download and unzip `wheelhouse.zip`, then run:
+  `./scripts/offline_install_verify.sh --wheelhouse <unzipped_path>`
 
 ## License
 TBD

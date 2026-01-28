@@ -19,11 +19,48 @@ jobs:
         run: python -m pytest -q
       - name: Build
         run: python -m build
+      - name: Build wheelhouse
+        run: |
+          mkdir -p wheelhouse
+          cp dist/archmind-*.whl wheelhouse/
+          python - <<'PY'
+          import tomllib
+          from pathlib import Path
+
+          data = tomllib.loads(Path("pyproject.toml").read_text())
+          deps = data.get("project", {}).get("dependencies", [])
+          Path("requirements_runtime.txt").write_text("\n".join(deps) + "\n")
+          PY
+          python -m pip download -d wheelhouse -r requirements_runtime.txt
+          python - <<'PY'
+          import zipfile
+          from pathlib import Path
+
+          wheelhouse = Path("wheelhouse")
+          zip_path = Path("wheelhouse.zip")
+          with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for path in wheelhouse.rglob("*"):
+              if path.is_file():
+                rel = path.relative_to(wheelhouse)
+                zf.write(path, str(rel))
+          PY
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/*
+      - name: Upload wheelhouse
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheelhouse
+          path: wheelhouse.zip
+
+      - name: Release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*
+            wheelhouse.zip
 
       # PyPI publish (disabled by default)
       # - name: Publish to PyPI
