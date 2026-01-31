@@ -439,6 +439,25 @@ def _profile_step_skip(name: str, cmd: Optional[str], reason: Optional[str] = No
     )
 
 
+def _profile_step_skip_from_result(
+    name: str,
+    cmd: str,
+    result: CommandResult,
+    reason: Optional[str] = None,
+) -> ProfileStepResult:
+    suffix = f"\n{reason}" if reason else ""
+    return ProfileStepResult(
+        name=name,
+        status="SKIP",
+        cmd=cmd,
+        exit_code=None,
+        duration_s=result.duration_s,
+        stdout=result.stdout,
+        stderr=f"{result.stderr}{suffix}".strip(),
+        timed_out=result.timed_out,
+    )
+
+
 def _failure_summary_from_output(stdout: str, stderr: str, max_lines: int = 5) -> list[str]:
     combined = (stdout + "\n" + stderr).strip()
     if not combined:
@@ -504,13 +523,30 @@ def run_node_vite_profile(config: RunConfig) -> list[ProfileStepResult]:
     if not config.no_install:
         install_cmd = "npm ci"
         install_result = run_shell_capture(install_cmd, work_dir, config.timeout_s)
-        steps.append(_profile_step_from_command("install", install_cmd, install_result))
-        if install_result.exit_code != 0:
+        if install_result.exit_code == 0:
+            steps.append(_profile_step_from_command("install", install_cmd, install_result))
+        else:
+            steps.append(
+                _profile_step_skip_from_result(
+                    "install",
+                    install_cmd,
+                    install_result,
+                    "npm ci failed; skipping install",
+                )
+            )
             fallback_cmd = "npm install"
             fallback_result = run_shell_capture(fallback_cmd, work_dir, config.timeout_s)
-            steps.append(_profile_step_from_command("install-fallback", fallback_cmd, fallback_result))
             if fallback_result.exit_code != 0:
+                steps.append(
+                    _profile_step_skip_from_result(
+                        "install-fallback",
+                        fallback_cmd,
+                        fallback_result,
+                        "npm install failed; skipping node-vite",
+                    )
+                )
                 return steps
+            steps.append(_profile_step_from_command("install-fallback", fallback_cmd, fallback_result))
 
     order = ["lint", "typecheck", "test", "build"]
     for name in order:
