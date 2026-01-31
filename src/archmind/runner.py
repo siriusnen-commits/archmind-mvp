@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 
 @dataclass
@@ -23,6 +23,8 @@ class RunConfig:
     log_dir: Path
     json_summary: bool
     command: str
+    profile: Optional[str] = None
+    cmds: Optional[list[str]] = None
 
 
 @dataclass
@@ -80,6 +82,20 @@ class RunResult:
     summary_path: Path
     json_summary_path: Optional[Path]
     timestamp: str
+    profile: Optional[str] = None
+    profile_steps: Optional[list["ProfileStepResult"]] = None
+
+
+@dataclass
+class ProfileStepResult:
+    name: str
+    status: str
+    cmd: Optional[str]
+    exit_code: Optional[int]
+    duration_s: float
+    stdout: str
+    stderr: str
+    timed_out: bool = False
 
 
 def _normalize_output(output: str | bytes | None) -> str:
@@ -125,6 +141,42 @@ def run_cmd_capture(cmd: list[str], cwd: Path, timeout_s: int) -> CommandResult:
         )
 
 
+def run_shell_capture(command: str, cwd: Path, timeout_s: int) -> CommandResult:
+    start = time.monotonic()
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            shell=True,
+        )
+        duration = time.monotonic() - start
+        return CommandResult(
+            cmd=["sh", "-c", command],
+            cwd=cwd,
+            exit_code=result.returncode,
+            duration_s=duration,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            timed_out=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        duration = time.monotonic() - start
+        stdout = _normalize_output(exc.stdout)
+        stderr = _normalize_output(exc.stderr)
+        return CommandResult(
+            cmd=["sh", "-c", command],
+            cwd=cwd,
+            exit_code=124,
+            duration_s=duration,
+            stdout=stdout,
+            stderr=stderr,
+            timed_out=True,
+        )
+
+
 def _extract_tail_lines(text: str, max_lines: int = 60) -> list[str]:
     lines = text.splitlines()
     if len(lines) <= max_lines:
@@ -149,6 +201,25 @@ def _select_python_executable(project_dir: Path) -> str:
     if venv_python.is_file():
         return str(venv_python)
     return sys.executable
+
+
+def _normalize_profile_name(profile: Optional[str]) -> Optional[str]:
+    if not profile:
+        return None
+    value = profile.strip()
+    if value == "generic":
+        return "generic-shell"
+    return value
+
+
+def _select_frontend_package_json(project_dir: Path) -> Optional[tuple[Path, Path]]:
+    frontend = project_dir / "frontend" / "package.json"
+    if frontend.exists():
+        return frontend, frontend.parent
+    root = project_dir / "package.json"
+    if root.exists():
+        return root, project_dir
+    return None
 
 
 def _extract_failure_summary_lines(summary_path: Path, json_path: Optional[Path]) -> list[str]:
@@ -261,7 +332,11 @@ def write_failure_prompt(
 
     output = ""
     files_hint: list[str] = []
-    if result.backend.status == "FAIL":
+    if result.profile and result.profile_steps:
+        failing = next((step for step in result.profile_steps if step.status == "FAIL"), None)
+        if failing:
+            output = "\n".join([failing.stdout, failing.stderr]).strip()
+    elif result.backend.status == "FAIL":
         output = result.backend.output
     elif result.frontend.status == "FAIL":
         output = "\n".join(
@@ -334,6 +409,135 @@ def _summarize_step_output(stdout: str, stderr: str, max_lines: int = 40) -> lis
     if not combined:
         return []
     return _extract_tail_lines(combined, max_lines=max_lines)
+
+
+def _profile_step_from_command(name: str, cmd: str, result: CommandResult) -> ProfileStepResult:
+    status = "OK" if result.exit_code == 0 else "FAIL"
+    return ProfileStepResult(
+        name=name,
+        status=status,
+        cmd=cmd,
+        exit_code=result.exit_code,
+        duration_s=result.duration_s,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        timed_out=result.timed_out,
+    )
+
+
+def _profile_step_skip(name: str, cmd: Optional[str], reason: Optional[str] = None) -> ProfileStepResult:
+    stdout = reason or ""
+    return ProfileStepResult(
+        name=name,
+        status="SKIP",
+        cmd=cmd,
+        exit_code=None,
+        duration_s=0.0,
+        stdout=stdout,
+        stderr="",
+        timed_out=False,
+    )
+
+
+def _failure_summary_from_output(stdout: str, stderr: str, max_lines: int = 5) -> list[str]:
+    combined = (stdout + "\n" + stderr).strip()
+    if not combined:
+        return []
+    tail = _extract_tail_lines(combined)
+    return _extract_key_lines(tail, max_lines=max_lines)
+
+
+def _collect_failure_summary(steps: Sequence[ProfileStepResult], max_lines: int = 10) -> list[str]:
+    summary: list[str] = []
+    for step in steps:
+        if step.status == "FAIL":
+            summary.extend(_failure_summary_from_output(step.stdout, step.stderr, max_lines=5))
+    if not summary:
+        return []
+    return summary[:max_lines]
+
+
+def run_python_pytest_profile(config: RunConfig) -> list[ProfileStepResult]:
+    pytest_ini = config.project_dir / "pytest.ini"
+    tests_dir = config.project_dir / "tests"
+    python_exec = _select_python_executable(config.project_dir)
+
+    if pytest_ini.exists():
+        cmd = [python_exec, "-m", "pytest", "-c", "./pytest.ini", "-q"]
+    elif tests_dir.exists():
+        cmd = [python_exec, "-m", "pytest", "-q"]
+    else:
+        return [_profile_step_skip("pytest", None, "No pytest.ini or tests/ directory.")]
+
+    result = run_cmd_capture(cmd, config.project_dir, config.timeout_s)
+    return [_profile_step_from_command("pytest", _format_cmd(cmd), result)]
+
+
+def run_node_vite_profile(config: RunConfig) -> list[ProfileStepResult]:
+    selected = _select_frontend_package_json(config.project_dir)
+    if not selected:
+        return [_profile_step_skip("detect", None, "package.json not found.")]
+    package_json, work_dir = selected
+
+    node_detected = shutil.which("node") is not None
+    npm_detected = shutil.which("npm") is not None
+    if not node_detected or not npm_detected:
+        return [_profile_step_skip("detect-tools", "node/npm", "node/npm not available.")]
+
+    try:
+        scripts = _read_package_scripts(package_json)
+    except Exception as exc:
+        step = ProfileStepResult(
+            name="parse",
+            status="FAIL",
+            cmd=f"read {package_json}",
+            exit_code=1,
+            duration_s=0.0,
+            stdout="",
+            stderr=str(exc),
+            timed_out=False,
+        )
+        return [step]
+
+    steps: list[ProfileStepResult] = []
+
+    if not config.no_install:
+        install_cmd = "npm ci"
+        install_result = run_shell_capture(install_cmd, work_dir, config.timeout_s)
+        steps.append(_profile_step_from_command("install", install_cmd, install_result))
+        if install_result.exit_code != 0:
+            fallback_cmd = "npm install"
+            fallback_result = run_shell_capture(fallback_cmd, work_dir, config.timeout_s)
+            steps.append(_profile_step_from_command("install-fallback", fallback_cmd, fallback_result))
+            if fallback_result.exit_code != 0:
+                return steps
+
+    order = ["lint", "typecheck", "test", "build"]
+    for name in order:
+        cmd = f"npm run {name}"
+        if name not in scripts:
+            steps.append(_profile_step_skip(name, cmd, "script not found"))
+            continue
+        result = run_shell_capture(cmd, work_dir, config.timeout_s)
+        steps.append(_profile_step_from_command(name, cmd, result))
+        if result.exit_code != 0:
+            return steps
+
+    return steps
+
+
+def run_generic_shell_profile(config: RunConfig) -> list[ProfileStepResult]:
+    cmds = config.cmds or []
+    if not cmds:
+        return [_profile_step_skip("cmds", None, "No --cmd provided.")]
+    steps: list[ProfileStepResult] = []
+    for idx, cmd in enumerate(cmds, start=1):
+        name = f"cmd-{idx}"
+        result = run_shell_capture(cmd, config.project_dir, config.timeout_s)
+        steps.append(_profile_step_from_command(name, cmd, result))
+        if result.exit_code != 0:
+            break
+    return steps
 
 
 def run_frontend_pipeline(config: RunConfig) -> FrontendResult:
@@ -496,10 +700,279 @@ def _compute_exit_code(config: RunConfig, backend: BackendResult, frontend: Fron
     return 0
 
 
+def _profile_overall_status(steps: Sequence[ProfileStepResult]) -> str:
+    for step in steps:
+        if step.status == "FAIL":
+            return "FAIL"
+    return "SUCCESS"
+
+
+def _build_result_text(
+    status: str,
+    profile: str,
+    project_dir: Path,
+    timestamp: str,
+    steps: Sequence[ProfileStepResult],
+    failure_summary: Sequence[str],
+) -> str:
+    lines = [
+        "ArchMind Run Result",
+        f"- status: {status}",
+        f"- profile: {profile}",
+        f"- project_dir: {project_dir}",
+        f"- timestamp: {timestamp}",
+        "",
+        "Steps:",
+    ]
+    step_lines = [
+        f"- {step.name}: {step.status} ({step.cmd or 'N/A'})" for step in list(steps)[:10]
+    ]
+    lines.extend(step_lines or ["- (none)"])
+
+    lines.extend(
+        [
+            "",
+            "Failure summary:",
+        ]
+    )
+    if failure_summary:
+        lines.extend([f"- {line}" for line in list(failure_summary)[:5]])
+    else:
+        lines.append("- (none)")
+
+    lines.extend(
+        [
+            "",
+            "Next actions:",
+        ]
+    )
+    if status == "SUCCESS":
+        lines.append("- No action required.")
+    else:
+        if failure_summary:
+            lines.append(f"- Investigate: {failure_summary[0]}")
+        lines.append("- Review run_logs for the failing step.")
+
+    return "\n".join(lines).strip() + "\n"
+
+
+def _write_run_result_files(
+    project_dir: Path,
+    status: str,
+    profile: str,
+    timestamp: str,
+    steps: Sequence[ProfileStepResult],
+    failure_summary: Sequence[str],
+) -> tuple[Path, Path]:
+    result_dir = project_dir / ".archmind"
+    result_dir.mkdir(parents=True, exist_ok=True)
+    json_path = result_dir / "result.json"
+    txt_path = result_dir / "result.txt"
+    payload = {
+        "status": status,
+        "profile": profile,
+        "project_dir": str(project_dir),
+        "timestamp": timestamp,
+        "steps": [
+            {
+                "name": step.name,
+                "status": step.status,
+                "cmd": step.cmd,
+                "exit_code": step.exit_code,
+                "duration_s": step.duration_s,
+            }
+            for step in steps
+        ],
+        "failure_summary": list(failure_summary)[:10],
+    }
+    json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    txt_path.write_text(
+        _build_result_text(status, profile, project_dir, timestamp, steps, failure_summary),
+        encoding="utf-8",
+    )
+    return json_path, txt_path
+
+
+def write_profile_log_and_summary(
+    config: RunConfig,
+    profile: str,
+    steps: Sequence[ProfileStepResult],
+) -> RunResult:
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    config.log_dir.mkdir(parents=True, exist_ok=True)
+
+    log_path = config.log_dir / f"run_{timestamp}.log"
+    summary_path = config.log_dir / f"run_{timestamp}.summary.txt"
+    json_path = config.log_dir / f"run_{timestamp}.summary.json" if config.json_summary else None
+
+    log_lines: list[str] = []
+    log_lines.append("== Run Log ==")
+    log_lines.append(f"timestamp: {timestamp}")
+    log_lines.append(f"project_dir: {config.project_dir}")
+    log_lines.append(f"profile: {profile}")
+    log_lines.append("")
+    log_lines.append("== Steps ==")
+    for step in steps:
+        log_lines.append(f"-- step: {step.name}")
+        log_lines.append(f"status: {step.status}")
+        log_lines.append(f"cmd: {step.cmd or 'N/A'}")
+        log_lines.append(f"exit_code: {step.exit_code if step.exit_code is not None else 'N/A'}")
+        log_lines.append(f"duration_s: {step.duration_s:.2f}")
+        if step.stdout:
+            log_lines.append("STDOUT:")
+            log_lines.append(step.stdout)
+        if step.stderr:
+            log_lines.append("STDERR:")
+            log_lines.append(step.stderr)
+    log_path.write_text("\n".join(log_lines).strip() + "\n", encoding="utf-8")
+
+    status = _profile_overall_status(steps)
+    failure_summary = _collect_failure_summary(steps, max_lines=10)
+
+    summary_lines: list[str] = []
+    summary_lines.append("1) Run meta:")
+    summary_lines.append(f"- project_dir: {config.project_dir}")
+    summary_lines.append(f"- timestamp: {timestamp}")
+    summary_lines.append(f"- command: {config.command}")
+    summary_lines.append(f"- profile: {profile}")
+    summary_lines.append("2) Steps:")
+    if steps:
+        for step in steps:
+            summary_lines.append(
+                f"- {step.name}: {step.status} exit_code={step.exit_code if step.exit_code is not None else 'N/A'}"
+            )
+    else:
+        summary_lines.append("- steps: none")
+
+    if status != "SUCCESS":
+        summary_lines.append("4) Failure summary:")
+        for line in failure_summary:
+            summary_lines.append(f"- {line}")
+        summary_lines.append("5) Next actions:")
+        if failure_summary:
+            summary_lines.append(f"- Investigate: {failure_summary[0]}")
+        summary_lines.append("- Check run_logs output for the failing step.")
+
+    summary_path.write_text("\n".join(summary_lines).strip() + "\n", encoding="utf-8")
+
+    if json_path is not None:
+        json_payload = {
+            "meta": {
+                "project_dir": str(config.project_dir),
+                "timestamp": timestamp,
+                "command": config.command,
+                "profile": profile,
+                "log_path": str(log_path),
+                "summary_path": str(summary_path),
+            },
+            "steps": [
+                {
+                    "name": step.name,
+                    "status": step.status,
+                    "cmd": step.cmd,
+                    "exit_code": step.exit_code,
+                    "duration_s": step.duration_s,
+                }
+                for step in steps
+            ],
+            "overall_exit_code": 0 if status == "SUCCESS" else 1,
+            "failure_summary": failure_summary,
+        }
+        json_path.write_text(json.dumps(json_payload, indent=2), encoding="utf-8")
+
+    _write_run_result_files(
+        config.project_dir,
+        status,
+        profile,
+        timestamp,
+        steps,
+        failure_summary,
+    )
+
+    backend = BackendResult(
+        status="SKIPPED",
+        cmd=None,
+        cwd=None,
+        exit_code=None,
+        duration_s=None,
+        output="",
+        summary_lines=[],
+        reason="profile run",
+    )
+    frontend = FrontendResult(
+        status="SKIPPED",
+        node_detected=False,
+        npm_detected=False,
+        install_attempted=False,
+        steps=[],
+        summary_lines=[],
+        reason="profile run",
+    )
+    result = RunResult(
+        backend=backend,
+        frontend=frontend,
+        overall_exit_code=0 if status == "SUCCESS" else 1,
+        log_path=log_path,
+        summary_path=summary_path,
+        json_summary_path=json_path,
+        timestamp=timestamp,
+        profile=profile,
+        profile_steps=list(steps),
+    )
+    if result.overall_exit_code != 0:
+        try:
+            write_failure_prompt(config, result)
+        except Exception:
+            pass
+    return result
+
+
 def _status_line(status: str, reason: Optional[str]) -> str:
     if reason:
         return f"{status} ({reason})"
     return status
+
+
+def _legacy_steps_from_results(
+    backend: BackendResult,
+    frontend: FrontendResult,
+) -> list[ProfileStepResult]:
+    steps: list[ProfileStepResult] = []
+    if backend.status == "SKIPPED":
+        steps.append(_profile_step_skip("backend-pytest", backend.cmd, backend.reason))
+    else:
+        steps.append(
+            ProfileStepResult(
+                name="backend-pytest",
+                status="OK" if backend.status == "PASS" else "FAIL",
+                cmd=backend.cmd,
+                exit_code=backend.exit_code,
+                duration_s=backend.duration_s or 0.0,
+                stdout=backend.output,
+                stderr="",
+                timed_out=False,
+            )
+        )
+
+    if frontend.steps:
+        for step in frontend.steps:
+            steps.append(
+                ProfileStepResult(
+                    name=f"frontend-{step.name}",
+                    status="OK" if step.exit_code == 0 else "FAIL",
+                    cmd=_format_cmd(step.cmd),
+                    exit_code=step.exit_code,
+                    duration_s=step.duration_s,
+                    stdout=step.stdout,
+                    stderr=step.stderr,
+                    timed_out=step.timed_out,
+                )
+            )
+    else:
+        if frontend.status in ("SKIPPED", "ABSENT"):
+            reason = frontend.reason or "frontend not run"
+            steps.append(_profile_step_skip("frontend", None, reason))
+    return steps
 
 
 def write_log_and_summary(config: RunConfig, backend: BackendResult, frontend: FrontendResult) -> RunResult:
@@ -642,6 +1115,21 @@ def write_log_and_summary(config: RunConfig, backend: BackendResult, frontend: F
         }
         json_path.write_text(json.dumps(json_payload, indent=2), encoding="utf-8")
 
+    legacy_steps = _legacy_steps_from_results(backend, frontend)
+    failure_summary: list[str] = []
+    if backend.status == "FAIL":
+        failure_summary.extend(backend.summary_lines)
+    if frontend.status == "FAIL":
+        failure_summary.extend(frontend.summary_lines)
+    _write_run_result_files(
+        config.project_dir,
+        "SUCCESS" if overall_exit_code == 0 else "FAIL",
+        "legacy",
+        timestamp,
+        legacy_steps,
+        failure_summary,
+    )
+
     result = RunResult(
         backend=backend,
         frontend=frontend,
@@ -650,6 +1138,8 @@ def write_log_and_summary(config: RunConfig, backend: BackendResult, frontend: F
         summary_path=summary_path,
         json_summary_path=json_path,
         timestamp=timestamp,
+        profile="legacy",
+        profile_steps=legacy_steps,
     )
     if overall_exit_code != 0:
         try:
@@ -660,6 +1150,24 @@ def write_log_and_summary(config: RunConfig, backend: BackendResult, frontend: F
 
 
 def run_pipeline(config: RunConfig) -> RunResult:
+    profile = _normalize_profile_name(config.profile)
+    if profile:
+        if profile == "python-pytest":
+            steps = run_python_pytest_profile(config)
+        elif profile == "node-vite":
+            steps = run_node_vite_profile(config)
+        elif profile == "generic-shell":
+            steps = run_generic_shell_profile(config)
+        else:
+            steps = [
+                _profile_step_skip(
+                    "profile",
+                    None,
+                    f"Unknown profile: {profile}",
+                )
+            ]
+        return write_profile_log_and_summary(config, profile, steps)
+
     backend = BackendResult(
         status="SKIPPED",
         cmd=None,

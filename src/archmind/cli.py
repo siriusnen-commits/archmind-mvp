@@ -168,6 +168,18 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--all", action="store_true", help="Run backend + frontend checks")
     r.add_argument("--backend-only", action="store_true", help="Run backend checks only")
     r.add_argument("--frontend-only", action="store_true", help="Run frontend checks only")
+    r.add_argument(
+        "--profile",
+        choices=["python-pytest", "node-vite", "generic-shell", "generic"],
+        default=None,
+        help="Run a named profile (overrides legacy backend/frontend flags)",
+    )
+    r.add_argument(
+        "--cmd",
+        action="append",
+        default=[],
+        help="Command for generic-shell profile (can be repeated)",
+    )
     r.add_argument("--no-install", action="store_true", help="Skip frontend install step")
     r.add_argument("--timeout-s", type=int, default=240, help="Timeout per command")
     r.add_argument("--log-dir", default=None, help="Log directory (relative to project or absolute)")
@@ -183,6 +195,18 @@ def build_parser() -> argparse.ArgumentParser:
     f.add_argument("--dry-run", action="store_true", help="Plan only, no changes")
     f.add_argument("--timeout-s", type=int, default=240, help="Timeout per step")
     f.add_argument("--scope", choices=["backend", "frontend", "all"], default="all", help="Fix scope")
+    f.add_argument(
+        "--profile",
+        choices=["python-pytest", "node-vite", "generic-shell", "generic"],
+        default=None,
+        help="Run a named profile during fix loop",
+    )
+    f.add_argument(
+        "--cmd",
+        action="append",
+        default=[],
+        help="Command for generic-shell profile (can be repeated)",
+    )
     f.add_argument("--apply", action="store_true", help="Apply changes (required to modify files)")
     f.set_defaults(func=run_fix)
 
@@ -200,6 +224,18 @@ def build_parser() -> argparse.ArgumentParser:
     ppipe.add_argument("--all", action="store_true", help="Run backend + frontend checks")
     ppipe.add_argument("--backend-only", action="store_true", help="Run backend checks only")
     ppipe.add_argument("--frontend-only", action="store_true", help="Run frontend checks only")
+    ppipe.add_argument(
+        "--profile",
+        choices=["python-pytest", "node-vite", "generic-shell", "generic"],
+        default=None,
+        help="Run a named profile instead of legacy backend/frontend checks",
+    )
+    ppipe.add_argument(
+        "--cmd",
+        action="append",
+        default=[],
+        help="Command for generic-shell profile (can be repeated)",
+    )
     ppipe.add_argument("--no-install", action="store_true", help="Skip frontend install step")
     ppipe.add_argument("--timeout-s", type=int, default=240, help="Timeout per step")
     ppipe.add_argument("--scope", choices=["backend", "frontend", "all"], default="all", help="Fix scope")
@@ -223,8 +259,12 @@ def run_run(args: argparse.Namespace) -> int:
         print(f"[ERROR] Path is not a directory: {project_dir}", file=sys.stderr)
         return 64
 
-    if sum(bool(x) for x in (args.all, args.backend_only, args.frontend_only)) > 1:
+    if not args.profile and sum(bool(x) for x in (args.all, args.backend_only, args.frontend_only)) > 1:
         print("[ERROR] Use only one of --all/--backend-only/--frontend-only.", file=sys.stderr)
+        return 64
+
+    if args.profile in ("generic", "generic-shell") and not args.cmd:
+        print("[ERROR] --profile generic-shell requires at least one --cmd.", file=sys.stderr)
         return 64
 
     if args.log_dir:
@@ -245,6 +285,8 @@ def run_run(args: argparse.Namespace) -> int:
         log_dir=log_dir,
         json_summary=args.json_summary,
         command=command.strip(),
+        profile=args.profile,
+        cmds=args.cmd,
     )
 
     result = run_pipeline(config)
@@ -274,6 +316,10 @@ def run_fix(args: argparse.Namespace) -> int:
         print(f"[ERROR] Path does not look like a project root: {project_dir}", file=sys.stderr)
         return 64
 
+    if args.profile in ("generic", "generic-shell") and not args.cmd:
+        print("[ERROR] --profile generic-shell requires at least one --cmd.", file=sys.stderr)
+        return 64
+
     command = "archmind " + " ".join(getattr(args, "_argv", []))
     try:
         return run_fix_loop(
@@ -285,6 +331,8 @@ def run_fix(args: argparse.Namespace) -> int:
             scope=args.scope,
             apply_changes=args.apply,
             command=command.strip(),
+            profile=args.profile,
+            cmds=args.cmd,
         )
     except Exception as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
@@ -314,6 +362,8 @@ def run_pipeline_cmd(args: argparse.Namespace) -> int:
         backend_only=args.backend_only,
         frontend_only=args.frontend_only,
         no_install=args.no_install,
+        profile=args.profile,
+        cmds=args.cmd,
         timeout_s=args.timeout_s,
         scope=args.scope,
         max_iterations=args.max_iterations,

@@ -60,7 +60,9 @@ def test_fix_adds_cors_middleware(tmp_path: Path, monkeypatch) -> None:
 
     calls = {"count": 0}
 
-    def fake_run_and_collect(project_dir: Path, timeout_s: int, scope: str = "backend") -> RunResult:
+    def fake_run_and_collect(
+        project_dir: Path, timeout_s: int, scope: str = "backend", **_: object
+    ) -> RunResult:
         calls["count"] += 1
         if calls["count"] == 1:
             log = "CORS error detected"

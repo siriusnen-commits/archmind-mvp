@@ -28,6 +28,8 @@ class PipelineOptions:
     backend_only: bool
     frontend_only: bool
     no_install: bool
+    profile: Optional[str]
+    cmds: list[str]
     timeout_s: int
     scope: str
     max_iterations: int
@@ -211,6 +213,10 @@ def _build_command(opts: PipelineOptions) -> str:
         parts.append("--backend-only")
     if opts.frontend_only:
         parts.append("--frontend-only")
+    if opts.profile:
+        parts += ["--profile", opts.profile]
+        for cmd in opts.cmds:
+            parts += ["--cmd", cmd]
     if opts.no_install:
         parts.append("--no-install")
     parts += ["--timeout-s", str(opts.timeout_s)]
@@ -303,6 +309,8 @@ def _build_run_config(opts: PipelineOptions, project_dir: Path) -> RunConfig:
         log_dir=project_dir / ".archmind" / "run_logs",
         json_summary=True,
         command="archmind pipeline run",
+        profile=opts.profile,
+        cmds=opts.cmds,
     )
 
 
@@ -381,6 +389,10 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
             print(f"- {step}")
         return 0
 
+    if opts.profile in ("generic", "generic-shell") and not opts.cmds:
+        print("[ERROR] --profile generic-shell requires at least one --cmd.", file=sys.stderr)
+        return 64
+
     project_dir = _resolve_project_dir(opts)
     if project_dir is None:
         print("[ERROR] Provide --path or --idea for pipeline.", file=sys.stderr)
@@ -413,6 +425,8 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
             timeout_s=opts.timeout_s,
             scope=_effective_fix_scope(opts),
             apply_changes=opts.apply,
+            profile=opts.profile,
+            cmds=opts.cmds,
         )
         if fix_exit != 0:
             final_exit = 1

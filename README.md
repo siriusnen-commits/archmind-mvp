@@ -53,6 +53,24 @@ Run:
 archmind run --path /tmp/defect_demo --backend-only
 ```
 
+## Profiles
+
+ArchMind can run standardized profiles to act as a general automation runner.
+
+Examples:
+```bash
+archmind run --path <proj> --profile python-pytest
+archmind run --path <proj> --profile node-vite
+archmind run --path <proj> --profile generic --cmd "make lint" --cmd "make test"
+```
+
+Priority rules (when mixed with legacy flags):
+- If `--profile` is set, profile execution wins.
+- `--backend-only/--frontend-only/--all` are ignored in profile mode.
+- Without `--profile`, legacy flags behave as before.
+- `--profile generic-shell` requires at least one `--cmd`.
+- `--no-install` still applies to `node-vite`.
+
 Fix (plan only vs apply):
 ```bash
 archmind fix --path /tmp/defect_demo --scope backend --dry-run
@@ -78,7 +96,7 @@ Typical outputs created inside the project directory:
   - `pipeline_YYYYMMDD_HHMMSS.log`
   - `pipeline_YYYYMMDD_HHMMSS.summary.txt`
   - `pipeline_YYYYMMDD_HHMMSS.summary.json` (when `--json-summary`)
-- `.archmind/result.txt` and `.archmind/result.json` (pipeline results)
+- `.archmind/result.txt` and `.archmind/result.json` (latest run/pipeline results)
 - `.archmind/patch_backups/` (timestamped backups for applied patches)
 
 ## Offline install / wheelhouse verification

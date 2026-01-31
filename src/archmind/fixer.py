@@ -40,7 +40,13 @@ class FixPlan:
     plan: dict[str, Any]
 
 
-def run_and_collect(project_dir: Path, timeout_s: int, scope: str = "backend") -> RunResult:
+def run_and_collect(
+    project_dir: Path,
+    timeout_s: int,
+    scope: str = "backend",
+    profile: Optional[str] = None,
+    cmds: Optional[list[str]] = None,
+) -> RunResult:
     config = RunConfig(
         project_dir=project_dir,
         run_all=(scope == "all"),
@@ -50,8 +56,16 @@ def run_and_collect(project_dir: Path, timeout_s: int, scope: str = "backend") -
         timeout_s=timeout_s,
         log_dir=project_dir / ".archmind" / "run_logs",
         json_summary=False,
-        command=f"archmind run --path {project_dir}",
+        command="",
+        profile=profile,
+        cmds=cmds,
     )
+    cmd_parts = ["archmind", "run", "--path", str(project_dir)]
+    if profile:
+        cmd_parts += ["--profile", profile]
+        for cmd in cmds or []:
+            cmd_parts += ["--cmd", cmd]
+    config.command = " ".join(cmd_parts)
     return run_pipeline(config)
 
 
@@ -93,6 +107,16 @@ def _read_summary_lines(summary_path: Optional[Path]) -> list[str]:
 def _read_failure_summary_section(summary_path: Optional[Path]) -> list[str]:
     lines = _read_summary_lines(summary_path)
     if not lines:
+        result_json = None
+        if summary_path is not None:
+            result_json = summary_path.parent.parent / "result.json"
+        if result_json and result_json.exists():
+            try:
+                payload = json.loads(result_json.read_text(encoding="utf-8"))
+                failure_summary = payload.get("failure_summary") or []
+                return [str(line) for line in failure_summary][:10]
+            except Exception:
+                return []
         return []
     start = next((i for i, line in enumerate(lines) if line.startswith("4) Failure summary:")), -1)
     if start == -1:
@@ -561,6 +585,8 @@ def fix_loop(
     timeout_s: int,
     scope: str,
     command: Optional[str],
+    profile: Optional[str],
+    cmds: Optional[list[str]],
 ) -> int:
     log_dir = project_dir / ".archmind" / "run_logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -570,7 +596,13 @@ def fix_loop(
     last_applied = False
 
     for iteration in range(1, max_iterations + 1):
-        run_result = run_and_collect(project_dir, timeout_s=timeout_s, scope=scope)
+        run_result = run_and_collect(
+            project_dir,
+            timeout_s=timeout_s,
+            scope=scope,
+            profile=profile,
+            cmds=cmds,
+        )
         last_run_result = run_result
         last_iteration = iteration
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -704,7 +736,13 @@ def fix_loop(
         (log_dir / f"fix_{timestamp}.patch.before.diff").write_text(patch_text, encoding="utf-8")
         (log_dir / f"fix_{timestamp}.patch.after.diff").write_text(patch_text, encoding="utf-8")
 
-        rerun = run_and_collect(project_dir, timeout_s=timeout_s, scope=scope)
+        rerun = run_and_collect(
+            project_dir,
+            timeout_s=timeout_s,
+            scope=scope,
+            profile=profile,
+            cmds=cmds,
+        )
         if rerun.overall_exit_code == 0:
             _write_fix_summary(
                 log_dir,
@@ -756,6 +794,8 @@ def run_fix_loop(
     scope: str,
     apply_changes: bool,
     command: Optional[str] = None,
+    profile: Optional[str] = None,
+    cmds: Optional[list[str]] = None,
 ) -> int:
     del model
     return fix_loop(
@@ -766,6 +806,8 @@ def run_fix_loop(
         timeout_s=timeout_s,
         scope=scope,
         command=command,
+        profile=profile,
+        cmds=cmds,
     )
 
 

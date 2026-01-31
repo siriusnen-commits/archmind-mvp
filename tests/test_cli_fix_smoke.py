@@ -62,7 +62,9 @@ def test_fix_applies_query_import(tmp_path: Path, monkeypatch) -> None:
 
     calls = {"count": 0}
 
-    def fake_run_and_collect(project_dir: Path, timeout_s: int, scope: str = "backend") -> RunResult:
+    def fake_run_and_collect(
+        project_dir: Path, timeout_s: int, scope: str = "backend", **_: object
+    ) -> RunResult:
         calls["count"] += 1
         if calls["count"] == 1:
             log = f"Traceback:\nFile \"{target}\", line 4\nNameError: name 'Query' is not defined\n"
@@ -83,7 +85,9 @@ def test_fix_dry_run_does_not_modify(tmp_path: Path, monkeypatch) -> None:
     target = _write_defects_file(tmp_path)
     original = target.read_text(encoding="utf-8")
 
-    def fake_run_and_collect(project_dir: Path, timeout_s: int, scope: str = "backend") -> RunResult:
+    def fake_run_and_collect(
+        project_dir: Path, timeout_s: int, scope: str = "backend", **_: object
+    ) -> RunResult:
         log = f"Traceback:\nFile \"{target}\", line 4\nNameError: name 'Query' is not defined\n"
         return _make_run_result(tmp_path, log, ["NameError: name 'Query' is not defined"], 1)
 
