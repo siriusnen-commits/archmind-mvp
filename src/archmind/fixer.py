@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from archmind.patcher import apply_unified_diff
-from archmind.runner import RunConfig, RunResult, run_pipeline
+from archmind.runner import RunConfig, RunResult, compute_run_status, run_pipeline
 
 LOG_PY_TRACE_RE = re.compile(r'File "([^"]+)", line (\d+)')
 LOG_PYTEST_RE = re.compile(r"^(.+?\.py):(\d+):", re.MULTILINE)
@@ -241,6 +241,18 @@ def _write_fix_prompt(
         frontend_error_lines = _extract_frontend_error_lines(run_result, max_lines=200)
     prompt_text = _build_fix_prompt(command, summary_lines, details, files_hint, scope, frontend_error_lines)
     prompt_path = log_dir / f"fix_{timestamp}.prompt.md"
+    prompt_path.write_text(prompt_text, encoding="utf-8")
+    return prompt_path
+
+
+def _write_skip_prompt(log_dir: Path, timestamp: str, command: str, reason: str) -> Path:
+    prompt_path = log_dir / f"fix_{timestamp}.prompt.md"
+    prompt_text = (
+        "# SKIP\n"
+        f"- reason: {reason}\n"
+        "- note: 환경 문제로 SKIP 처리되어 수정 없이 종료합니다.\n"
+        f"- command: {command}\n"
+    )
     prompt_path.write_text(prompt_text, encoding="utf-8")
     return prompt_path
 
@@ -607,6 +619,28 @@ def fix_loop(
         last_iteration = iteration
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         last_timestamp = timestamp
+        run_status, run_reason = compute_run_status(run_result)
+        if run_status == "SKIP":
+            reason = run_reason or "환경 문제로 SKIP"
+            _write_skip_prompt(
+                log_dir,
+                timestamp,
+                command or f"archmind fix --path {project_dir}",
+                reason,
+            )
+            _write_fix_summary(
+                log_dir,
+                timestamp,
+                command or f"archmind fix --path {project_dir}",
+                project_dir,
+                0,
+                run_result,
+                dry_run,
+                False,
+                iteration,
+            )
+            print(f"[SKIP] {reason}")
+            return 0
         if run_result.overall_exit_code == 0:
             _write_fix_summary(
                 log_dir,

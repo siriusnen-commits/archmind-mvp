@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from archmind.cli import main
+
 
 def _write_backend_project(tmp_path: Path, *, failing: bool) -> None:
     tmp_path.joinpath("pytest.ini").write_text("[pytest]\naddopts = -q\n", encoding="utf-8")
@@ -57,3 +59,34 @@ def test_pipeline_writes_result_on_success(tmp_path: Path) -> None:
 
     result_path = tmp_path / ".archmind" / "result.json"
     assert result_path.exists()
+
+
+def test_pipeline_backend_success_frontend_skip(tmp_path: Path, monkeypatch) -> None:
+    _write_backend_project(tmp_path, failing=False)
+    frontend = tmp_path / "frontend"
+    frontend.mkdir(parents=True, exist_ok=True)
+    frontend.joinpath("package.json").write_text(
+        '{\"name\": \"demo\", \"private\": true, \"scripts\": {\"lint\": \"echo lint\"}}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("archmind.runner.shutil.which", lambda _: None)
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--path",
+            str(tmp_path),
+            "--all",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+
+    result_path = tmp_path / ".archmind" / "result.json"
+    payload = json.loads(result_path.read_text(encoding="utf-8"))
+    run_detail = payload["steps"]["run_before_fix"]["detail"]
+    assert run_detail["frontend_status"] == "SKIPPED"

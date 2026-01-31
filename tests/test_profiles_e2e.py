@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from archmind.cli import main
+from archmind.runner import CommandResult
 
 
 def _read_result_payload(project_dir: Path) -> dict[str, object]:
@@ -46,11 +47,44 @@ def test_e2e_node_vite_missing_npm_skips(tmp_path: Path, monkeypatch) -> None:
 
     _assert_result_artifacts(tmp_path)
     payload = _read_result_payload(tmp_path)
-    assert payload["status"] == "SUCCESS"
+    assert payload["status"] == "SKIP"
     assert payload["profile"] == "node-vite"
 
     steps = payload.get("steps") or []
     assert any(step.get("status") == "SKIP" for step in steps)
+
+
+def test_e2e_node_vite_install_failure_marks_skip(tmp_path: Path, monkeypatch) -> None:
+    tmp_path.joinpath("package.json").write_text(
+        '{\"name\": \"demo\", \"private\": true, \"scripts\": {\"lint\": \"echo lint\"}}',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("archmind.runner.shutil.which", lambda _: "/usr/bin/fake")
+
+    def fake_run_shell_capture(command: str, cwd: Path, timeout_s: int) -> CommandResult:
+        cmd = ["sh", "-c", command]
+        if command in ("npm ci", "npm install"):
+            return CommandResult(
+                cmd=cmd,
+                cwd=cwd,
+                exit_code=1,
+                duration_s=0.01,
+                stdout="",
+                stderr="offline",
+            )
+        return CommandResult(cmd=cmd, cwd=cwd, exit_code=0, duration_s=0.01, stdout="", stderr="")
+
+    monkeypatch.setattr("archmind.runner.run_shell_capture", fake_run_shell_capture)
+
+    exit_code = main(["run", "--path", str(tmp_path), "--profile", "node-vite"])
+    assert exit_code == 0
+
+    _assert_result_artifacts(tmp_path)
+    payload = _read_result_payload(tmp_path)
+    assert payload["status"] == "SKIP"
+    assert payload["profile"] == "node-vite"
+    assert payload.get("reason")
 
 
 def test_e2e_generic_shell_failure_summary(tmp_path: Path) -> None:

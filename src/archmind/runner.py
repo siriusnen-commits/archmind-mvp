@@ -736,11 +736,30 @@ def _compute_exit_code(config: RunConfig, backend: BackendResult, frontend: Fron
     return 0
 
 
-def _profile_overall_status(steps: Sequence[ProfileStepResult]) -> str:
+def _profile_overall_status_reason(steps: Sequence[ProfileStepResult]) -> tuple[str, Optional[str]]:
+    has_fail = any(step.status == "FAIL" for step in steps)
+    if has_fail:
+        return "FAIL", None
+    has_ok = any(step.status == "OK" for step in steps)
+    if has_ok:
+        return "SUCCESS", None
+    has_skip = any(step.status == "SKIP" for step in steps)
+    if has_skip:
+        reason = _extract_skip_reason(steps)
+        return "SKIP", reason
+    return "SKIP", "No steps executed."
+
+
+def _extract_skip_reason(steps: Sequence[ProfileStepResult]) -> Optional[str]:
     for step in steps:
-        if step.status == "FAIL":
-            return "FAIL"
-    return "SUCCESS"
+        if step.status != "SKIP":
+            continue
+        for candidate in (step.stderr, step.stdout):
+            if candidate:
+                line = candidate.strip().splitlines()[0].strip()
+                if line:
+                    return line
+    return None
 
 
 def _build_result_text(
@@ -750,7 +769,18 @@ def _build_result_text(
     timestamp: str,
     steps: Sequence[ProfileStepResult],
     failure_summary: Sequence[str],
+    reason: Optional[str],
 ) -> str:
+    if status == "SKIP":
+        lines = [
+            "ArchMind Run Result",
+            "- status: SKIP",
+            f"- profile: {profile}",
+            f"- reason: {reason or 'execution skipped'}",
+            f"- project_dir: {project_dir}",
+        ]
+        return "\n".join(lines).strip() + "\n"
+
     lines = [
         "ArchMind Run Result",
         f"- status: {status}",
@@ -799,6 +829,7 @@ def _write_run_result_files(
     timestamp: str,
     steps: Sequence[ProfileStepResult],
     failure_summary: Sequence[str],
+    reason: Optional[str],
 ) -> tuple[Path, Path]:
     result_dir = project_dir / ".archmind"
     result_dir.mkdir(parents=True, exist_ok=True)
@@ -806,6 +837,7 @@ def _write_run_result_files(
     txt_path = result_dir / "result.txt"
     payload = {
         "status": status,
+        "reason": reason,
         "profile": profile,
         "project_dir": str(project_dir),
         "timestamp": timestamp,
@@ -823,7 +855,7 @@ def _write_run_result_files(
     }
     json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     txt_path.write_text(
-        _build_result_text(status, profile, project_dir, timestamp, steps, failure_summary),
+        _build_result_text(status, profile, project_dir, timestamp, steps, failure_summary, reason),
         encoding="utf-8",
     )
     return json_path, txt_path
@@ -862,7 +894,7 @@ def write_profile_log_and_summary(
             log_lines.append(step.stderr)
     log_path.write_text("\n".join(log_lines).strip() + "\n", encoding="utf-8")
 
-    status = _profile_overall_status(steps)
+    status, reason = _profile_overall_status_reason(steps)
     failure_summary = _collect_failure_summary(steps, max_lines=10)
 
     summary_lines: list[str] = []
@@ -911,7 +943,7 @@ def write_profile_log_and_summary(
                 }
                 for step in steps
             ],
-            "overall_exit_code": 0 if status == "SUCCESS" else 1,
+            "overall_exit_code": 0 if status in ("SUCCESS", "SKIP") else 1,
             "failure_summary": failure_summary,
         }
         json_path.write_text(json.dumps(json_payload, indent=2), encoding="utf-8")
@@ -923,6 +955,7 @@ def write_profile_log_and_summary(
         timestamp,
         steps,
         failure_summary,
+        reason,
     )
 
     backend = BackendResult(
@@ -947,7 +980,7 @@ def write_profile_log_and_summary(
     result = RunResult(
         backend=backend,
         frontend=frontend,
-        overall_exit_code=0 if status == "SUCCESS" else 1,
+        overall_exit_code=0 if status in ("SUCCESS", "SKIP") else 1,
         log_path=log_path,
         summary_path=summary_path,
         json_summary_path=json_path,
@@ -1009,6 +1042,28 @@ def _legacy_steps_from_results(
             reason = frontend.reason or "frontend not run"
             steps.append(_profile_step_skip("frontend", None, reason))
     return steps
+
+
+def _legacy_overall_status_reason(
+    backend: BackendResult,
+    frontend: FrontendResult,
+) -> tuple[str, Optional[str]]:
+    if backend.status == "FAIL" or frontend.status == "FAIL":
+        return "FAIL", None
+    has_pass = backend.status == "PASS" or frontend.status == "PASS"
+    if has_pass:
+        return "SUCCESS", None
+    if frontend.status in ("SKIPPED", "ABSENT") and frontend.reason:
+        reason = frontend.reason
+    else:
+        reason = backend.reason or frontend.reason or "No checks executed."
+    return "SKIP", reason
+
+
+def compute_run_status(result: RunResult) -> tuple[str, Optional[str]]:
+    if result.profile and result.profile != "legacy" and result.profile_steps is not None:
+        return _profile_overall_status_reason(result.profile_steps)
+    return _legacy_overall_status_reason(result.backend, result.frontend)
 
 
 def write_log_and_summary(config: RunConfig, backend: BackendResult, frontend: FrontendResult) -> RunResult:
@@ -1152,6 +1207,7 @@ def write_log_and_summary(config: RunConfig, backend: BackendResult, frontend: F
         json_path.write_text(json.dumps(json_payload, indent=2), encoding="utf-8")
 
     legacy_steps = _legacy_steps_from_results(backend, frontend)
+    status, reason = _legacy_overall_status_reason(backend, frontend)
     failure_summary: list[str] = []
     if backend.status == "FAIL":
         failure_summary.extend(backend.summary_lines)
@@ -1159,11 +1215,12 @@ def write_log_and_summary(config: RunConfig, backend: BackendResult, frontend: F
         failure_summary.extend(frontend.summary_lines)
     _write_run_result_files(
         config.project_dir,
-        "SUCCESS" if overall_exit_code == 0 else "FAIL",
+        status,
         "legacy",
         timestamp,
         legacy_steps,
         failure_summary,
+        reason,
     )
 
     result = RunResult(
@@ -1247,7 +1304,10 @@ def run_pipeline(config: RunConfig) -> RunResult:
 
 
 def print_run_result(result: RunResult) -> None:
-    if result.overall_exit_code == 0:
-        print(f"[OK] Run completed. Log: {result.log_path}")
-    else:
+    status, _ = compute_run_status(result)
+    if status == "FAIL":
         print(f"[ERROR] Run failed. Log: {result.log_path}", file=sys.stderr)
+    elif status == "SKIP":
+        print(f"[SKIP] Run skipped. Log: {result.log_path}")
+    else:
+        print(f"[OK] Run completed. Log: {result.log_path}")

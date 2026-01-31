@@ -52,8 +52,8 @@ def test_node_vite_missing_package_json_skips(tmp_path: Path) -> None:
     assert result_txt.exists()
 
     payload = json.loads(result_path.read_text(encoding="utf-8"))
-    assert payload["status"] == "SUCCESS"
+    assert payload["status"] == "SKIP"
     assert payload["profile"] == "node-vite"
 
     lines = result_txt.read_text(encoding="utf-8").splitlines()
-    assert 10 <= len(lines) <= 30
+    assert 3 <= len(lines) <= 5

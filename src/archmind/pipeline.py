@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from archmind.fixer import run_fix_loop
-from archmind.runner import RunConfig, RunResult, run_pipeline
+from archmind.runner import RunConfig, RunResult, compute_run_status, run_pipeline
 
 
 @dataclass
@@ -376,6 +376,18 @@ def _write_pipeline_logs(
         summary_json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
+def _run_component_statuses(run_result: RunResult) -> dict[str, Any]:
+    if run_result.profile and run_result.profile != "legacy" and run_result.profile_steps is not None:
+        status, reason = compute_run_status(run_result)
+        return {"profile": run_result.profile, "status": status, "reason": reason}
+    return {
+        "backend_status": run_result.backend.status,
+        "frontend_status": run_result.frontend.status,
+        "frontend_reason": run_result.frontend.reason,
+        "backend_reason": run_result.backend.reason,
+    }
+
+
 def run_pipeline_command(opts: PipelineOptions) -> int:
     if opts.dry_run:
         steps = []
@@ -413,7 +425,8 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
 
     for iteration in range(1, opts.max_iterations + 1):
         run_result = run_pipeline(run_config)
-        if run_result.overall_exit_code == 0:
+        run_status, _ = compute_run_status(run_result)
+        if run_status in ("SUCCESS", "SKIP"):
             final_exit = 0
             break
 
@@ -433,7 +446,8 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
             break
 
         rerun_result = run_pipeline(run_config)
-        rerun_exit = rerun_result.overall_exit_code
+        rerun_status, _ = compute_run_status(rerun_result)
+        rerun_exit = 0 if rerun_status in ("SUCCESS", "SKIP") else 1
         if rerun_exit == 0:
             final_exit = 0
             break
@@ -453,8 +467,12 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         opts.json_summary,
     )
 
-    run_before_ok = run_result.overall_exit_code == 0
-    run_after_ok = None if rerun_result is None else rerun_result.overall_exit_code == 0
+    run_status, run_reason = compute_run_status(run_result)
+    run_before_ok = run_status in ("SUCCESS", "SKIP")
+    run_after_ok = None
+    if rerun_result is not None:
+        rerun_status, _ = compute_run_status(rerun_result)
+        run_after_ok = rerun_status in ("SUCCESS", "SKIP")
     status = compute_status(run_before_ok, fix_exit, run_after_ok, opts.apply)
 
     run_prompt = _latest_run_prompt(project_dir)
@@ -481,8 +499,11 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
             },
             "run_before_fix": {
                 "ok": run_before_ok,
+                "status": run_status,
+                "reason": run_reason,
                 "log": str(run_result.log_path),
                 "summary": str(run_result.summary_path),
+                "detail": _run_component_statuses(run_result),
             },
             "fix": {
                 "attempted": fix_exit is not None,
@@ -496,6 +517,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
                 "ok": bool(run_after_ok) if run_after_ok is not None else False,
                 "log": str(rerun_result.log_path) if rerun_result else None,
                 "summary": str(rerun_result.summary_path) if rerun_result else None,
+                "detail": _run_component_statuses(rerun_result) if rerun_result else None,
             },
         },
         "artifacts": artifacts,
