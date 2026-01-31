@@ -16,6 +16,18 @@ What it doesn’t:
 - Run frontend checks without Node.js/npm installed
 - Guarantee OpenAI API availability or quota
 
+## Install (Quick)
+
+```bash
+pip install archmind
+# Generate → run → fix → run (one command)
+archmind pipeline \
+  --idea "defect tracker ui with search filter sort pagination" \
+  --template fullstack-ddd \
+  --apply
+```
+Offline? See Offline install (wheelhouse) below.
+
 ## Quick Start
 
 One command pipeline (fullstack-ddd + Ollama for fixes + apply changes):
