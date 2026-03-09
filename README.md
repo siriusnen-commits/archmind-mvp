@@ -103,6 +103,17 @@ archmind complete --path myproj --id 1
 - `archmind next` 는 첫 `todo`를 출력하고 없으면 `no pending tasks`를 출력
 - `archmind complete` 는 기본 `done`, `--doing`, `--blocked` 상태 전환 지원
 
+Task completion rules:
+- ArchMind는 evaluate 시점에 tasks를 자동 재평가해 `todo -> done`을 동기화한다.
+- 기본 4단계(코드 파악/핵심 수정/회귀 검증/결과 정리)를 실행 결과 기반으로 자동 완료 처리한다.
+- 코드 파악(task1): run/fix 실행 또는 failure classification/repair target 신호가 있으면 완료.
+- 핵심 수정(task2): fix 시도 또는 `last_fix_strategy`/`last_repair_targets` 기록이 있으면 완료.
+- 회귀 검증(task3): 최신 `result.status == SUCCESS` 또는 run/build checks가 SUCCESS면 완료.
+- 결과 정리(task4): state/result/evaluation 아티팩트가 최신으로 갱신되면 완료.
+- 자동 완료 결과는 `tasks.json`에 반영되고, `plan.json.steps[*].status`도 함께 동기화된다.
+- evaluation은 동기화된 tasks 기준으로 `tasks_complete`를 계산한다.
+- 따라서 run/build 성공 + acceptance 충족 + tasks_complete가 true면 `DONE`으로 닫힌다.
+
 Evaluate:
 ```bash
 archmind evaluate --path myproj

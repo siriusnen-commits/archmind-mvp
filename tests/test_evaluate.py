@@ -30,6 +30,25 @@ def _write_plan_with_acceptance(root: Path) -> None:
     )
 
 
+def _write_coarse_plan(root: Path) -> None:
+    archmind_dir = root / ".archmind"
+    archmind_dir.mkdir(parents=True, exist_ok=True)
+    (archmind_dir / "plan.json").write_text(
+        json.dumps(
+            {
+                "acceptance": ["python -m pytest -q passes"],
+                "steps": [
+                    {"title": "현행 코드베이스 파악", "status": "todo"},
+                    {"title": "핵심 수정 구현", "status": "todo"},
+                    {"title": "회귀 검증", "status": "todo"},
+                    {"title": "결과 정리", "status": "todo"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def _write_result(root: Path, status: str) -> None:
     archmind_dir = root / ".archmind"
     archmind_dir.mkdir(parents=True, exist_ok=True)
@@ -240,3 +259,97 @@ def test_evaluate_clears_stuck_when_failure_changes(tmp_path: Path) -> None:
     )
     payload = evaluate_project(tmp_path)
     assert payload["status"] == "NOT_DONE"
+
+
+def test_evaluate_auto_marks_task1_task2_done_after_run_fix_signals(tmp_path: Path) -> None:
+    _write_coarse_plan(tmp_path)
+    _write_tasks(tmp_path, ["todo", "todo", "todo", "todo"])
+    _write_result(tmp_path, "FAIL")
+    _write_state(
+        tmp_path,
+        {
+            "project_dir": str(tmp_path.resolve()),
+            "updated_at": "20260101_000000",
+            "iterations": 1,
+            "fix_attempts": 1,
+            "last_failure_class": "backend-pytest:module-not-found",
+            "last_repair_targets": ["requirements.txt"],
+            "last_status": "FAIL",
+        },
+    )
+    payload = evaluate_project(tmp_path)
+    tasks_payload = json.loads((tmp_path / ".archmind" / "tasks.json").read_text(encoding="utf-8"))
+    statuses = [item["status"] for item in tasks_payload["tasks"]]
+    assert statuses[0] == "done"
+    assert statuses[1] == "done"
+    assert payload["checks"]["tasks_complete"] is False
+
+
+def test_evaluate_auto_marks_regression_task_done_on_success(tmp_path: Path) -> None:
+    _write_coarse_plan(tmp_path)
+    _write_tasks(tmp_path, ["done", "done", "todo", "todo"])
+    _write_result(tmp_path, "SUCCESS")
+    _write_state(
+        tmp_path,
+        {
+            "project_dir": str(tmp_path.resolve()),
+            "updated_at": "20260101_000000",
+            "iterations": 2,
+            "fix_attempts": 1,
+            "last_status": "SUCCESS",
+            "last_failure_class": "backend-pytest:assertion",
+            "last_repair_targets": ["app/main.py"],
+        },
+    )
+    payload = evaluate_project(tmp_path)
+    tasks_payload = json.loads((tmp_path / ".archmind" / "tasks.json").read_text(encoding="utf-8"))
+    statuses = [item["status"] for item in tasks_payload["tasks"]]
+    assert statuses[2] == "done"
+    assert payload["status"] in {"DONE", "NOT_DONE"}
+
+
+def test_evaluate_done_when_all_auto_tasks_done_and_success(tmp_path: Path) -> None:
+    _write_coarse_plan(tmp_path)
+    _write_tasks(tmp_path, ["todo", "todo", "todo", "todo"])
+    _write_result(tmp_path, "SUCCESS")
+    _write_state(
+        tmp_path,
+        {
+            "project_dir": str(tmp_path.resolve()),
+            "updated_at": "20260101_000000",
+            "iterations": 3,
+            "fix_attempts": 2,
+            "last_status": "SUCCESS",
+            "last_failure_class": "backend-pytest:assertion",
+            "last_repair_targets": ["app/main.py"],
+            "next_action": "DONE",
+            "next_action_reason": "evaluation marked project complete",
+        },
+    )
+    payload = evaluate_project(tmp_path)
+    assert payload["checks"]["tasks_complete"] is True
+    assert payload["status"] == "DONE"
+
+
+def test_evaluate_syncs_plan_step_status(tmp_path: Path) -> None:
+    _write_coarse_plan(tmp_path)
+    _write_tasks(tmp_path, ["todo", "todo", "todo", "todo"])
+    _write_result(tmp_path, "FAIL")
+    _write_state(
+        tmp_path,
+        {
+            "project_dir": str(tmp_path.resolve()),
+            "updated_at": "20260101_000000",
+            "iterations": 1,
+            "fix_attempts": 1,
+            "last_status": "FAIL",
+            "last_failure_class": "backend-pytest:module-not-found",
+            "last_repair_targets": ["requirements.txt"],
+        },
+    )
+    evaluate_project(tmp_path)
+    plan_payload = json.loads((tmp_path / ".archmind" / "plan.json").read_text(encoding="utf-8"))
+    steps = plan_payload.get("steps") or []
+    assert isinstance(steps, list)
+    assert steps[0].get("status") == "done"
+    assert steps[1].get("status") == "done"

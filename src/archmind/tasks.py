@@ -209,3 +209,123 @@ def update_task_status(project_dir: Path, task_id: int, status: str) -> Optional
 def format_task_line(task: TaskItem) -> str:
     return f"[{task.id}] {task.status:<7} {task.title}"
 
+
+def tasks_complete(tasks: list[dict[str, Any]]) -> bool:
+    if not tasks:
+        return False
+    return all(str(item.get("status") or "").lower() == "done" for item in tasks if isinstance(item, dict))
+
+
+def _is_success_run(result: dict[str, Any], evaluation: dict[str, Any]) -> bool:
+    result_status = str(result.get("status") or "").upper()
+    if result_status == "SUCCESS":
+        return True
+    checks = evaluation.get("checks")
+    if not isinstance(checks, dict):
+        return False
+    run_status = str(checks.get("run_status") or "").upper()
+    build_status = str(checks.get("build_status") or "").upper()
+    return run_status == "SUCCESS" and build_status == "SUCCESS"
+
+
+def _task_done_by_rule(index: int, title: str, state: dict[str, Any], evaluation: dict[str, Any], result: dict[str, Any]) -> bool:
+    lower = (title or "").strip().lower()
+    iterations = int(state.get("iterations") or 0)
+    fix_attempts = int(state.get("fix_attempts") or 0)
+    has_failure_analysis = bool(state.get("last_failure_class") or state.get("last_failure_signature"))
+    has_fix_structured = bool(state.get("last_fix_strategy")) or bool(state.get("last_repair_targets"))
+    success_run = _is_success_run(result, evaluation)
+    has_artifacts = bool(state) and bool(result)
+
+    is_task1 = index == 1 or ("코드베이스" in title) or ("파악" in title) or ("review" in lower) or ("analy" in lower)
+    is_task2 = index == 2 or ("핵심 수정" in title) or ("구현" in title) or ("implement" in lower) or ("fix" in lower)
+    is_task3 = index == 3 or ("회귀 검증" in title) or ("검증" in title) or ("test" in lower) or ("verify" in lower)
+    is_task4 = index == 4 or ("결과 정리" in title) or ("정리" in title) or ("result" in lower) or ("summary" in lower)
+
+    if is_task1:
+        return iterations > 0 or fix_attempts > 0 or has_failure_analysis
+    if is_task2:
+        return fix_attempts > 0 or has_fix_structured
+    if is_task3:
+        return success_run
+    if is_task4:
+        return has_artifacts and (success_run or bool(evaluation))
+    return False
+
+
+def recalculate_task_completion(
+    tasks: list[dict[str, Any]],
+    state: dict[str, Any],
+    evaluation: dict[str, Any],
+    result: dict[str, Any],
+) -> list[dict[str, Any]]:
+    updated: list[dict[str, Any]] = []
+    for idx, item in enumerate(tasks, start=1):
+        if not isinstance(item, dict):
+            continue
+        copied = dict(item)
+        status = str(copied.get("status") or "todo").lower()
+        title = str(copied.get("title") or "")
+        if status == "todo" and _task_done_by_rule(idx, title, state, evaluation, result):
+            copied["status"] = "done"
+        updated.append(copied)
+    return updated
+
+
+def sync_plan_step_status(plan: dict[str, Any], tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    if not isinstance(plan, dict):
+        return plan
+    steps = plan.get("steps")
+    if not isinstance(steps, list):
+        return plan
+    out_steps: list[Any] = []
+    for idx, step in enumerate(steps, start=1):
+        task_item = next((t for t in tasks if int(t.get("id") or idx) == idx), None)
+        status = str((task_item or {}).get("status") or "")
+        if isinstance(step, dict):
+            copied = dict(step)
+            if status:
+                copied["status"] = status
+            out_steps.append(copied)
+        else:
+            if status:
+                out_steps.append({"title": str(step), "status": status})
+            else:
+                out_steps.append(step)
+    copied_plan = dict(plan)
+    copied_plan["steps"] = out_steps
+    return copied_plan
+
+
+def auto_update_task_completion(
+    project_dir: Path,
+    *,
+    state: Optional[dict[str, Any]] = None,
+    evaluation: Optional[dict[str, Any]] = None,
+    result: Optional[dict[str, Any]] = None,
+) -> Optional[dict[str, Any]]:
+    project_dir = project_dir.expanduser().resolve()
+    payload = load_tasks(project_dir)
+    if not payload:
+        return None
+    raw_tasks = payload.get("tasks")
+    if not isinstance(raw_tasks, list):
+        return payload
+    state_payload = state or {}
+    evaluation_payload = evaluation or {}
+    result_payload = result or {}
+    updated_tasks = recalculate_task_completion(raw_tasks, state_payload, evaluation_payload, result_payload)
+    saved = dict(payload)
+    saved["tasks"] = updated_tasks
+    _tasks_path(project_dir).write_text(json.dumps(saved, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    plan_path = _plan_json_path(project_dir)
+    if plan_path.exists():
+        try:
+            plan_payload = json.loads(plan_path.read_text(encoding="utf-8"))
+        except Exception:
+            plan_payload = None
+        if isinstance(plan_payload, dict):
+            synced = sync_plan_step_status(plan_payload, updated_tasks)
+            plan_path.write_text(json.dumps(synced, indent=2, ensure_ascii=False), encoding="utf-8")
+    return saved

@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 from archmind.state import load_state
 from archmind.state import update_after_evaluation
-from archmind.tasks import load_tasks
+from archmind.tasks import auto_update_task_completion, load_tasks
 
 EVAL_STATUSES = ("DONE", "NOT_DONE", "BLOCKED", "STUCK")
 RUN_STATUSES = ("SUCCESS", "FAIL", "SKIP", "MISSING")
@@ -177,12 +177,19 @@ def detect_stuck(
 def evaluate_project(project_dir: Path) -> dict[str, Any]:
     project_dir = project_dir.expanduser().resolve()
     archmind = _archmind_dir(project_dir)
+    state_payload = load_state(project_dir) or {}
+    result_payload = _load_json(archmind / "result.json")
+    previous_eval = _load_json(archmind / "evaluation.json") or {}
+    auto_update_task_completion(
+        project_dir,
+        state=state_payload,
+        evaluation=previous_eval,
+        result=result_payload or {},
+    )
     tasks_complete, pending_exists, all_blocked = _compute_tasks_flags(project_dir)
     run_status = _extract_run_status(project_dir)
     acceptance_defined = _has_acceptance(project_dir)
     build_status = run_status
-    state_payload = load_state(project_dir) or {}
-    result_payload = _load_json(archmind / "result.json")
 
     reasons: list[str] = []
     next_actions: list[str] = []
