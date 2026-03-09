@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from archmind.fixer import run_fix_loop
+from archmind.evaluator import write_evaluation
 from archmind.planner import write_project_plan
 from archmind.runner import RunConfig, RunResult, compute_run_status, run_pipeline
 from archmind.tasks import current_task, ensure_tasks
@@ -256,9 +257,14 @@ def _build_result_text(payload: dict[str, Any]) -> str:
     current_text = "N/A"
     if isinstance(current, dict) and current.get("id") is not None:
         current_text = f"[{current.get('id')}] {current.get('status')} {current.get('title')}"
+    evaluation = payload.get("evaluation") or {}
+    evaluation_text = "N/A"
+    if isinstance(evaluation, dict) and evaluation.get("status"):
+        evaluation_text = str(evaluation.get("status"))
     lines = [
         "ArchMind Pipeline Result",
         f"- status: {payload.get('status')}",
+        f"- evaluation: {evaluation_text}",
         f"- project_dir: {payload.get('project_dir')}",
         f"- timestamp: {payload.get('timestamp')}",
         f"- command: {payload.get('command')}",
@@ -554,6 +560,23 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         },
         "artifacts": artifacts,
     }
+    evaluation_payload = None
+    evaluation_path: Optional[Path] = None
+    try:
+        evaluation_payload, evaluation_path = write_evaluation(project_dir)
+    except Exception as exc:
+        print(f"[WARN] evaluation failed: {exc}", file=sys.stderr)
+    payload["evaluation"] = (
+        {
+            "status": evaluation_payload.get("status"),
+            "path": str(evaluation_path) if evaluation_path else None,
+            "checks": evaluation_payload.get("checks"),
+        }
+        if evaluation_payload
+        else None
+    )
+    if evaluation_path:
+        artifacts["evaluation"] = str(evaluation_path)
 
     result_json, _ = write_result(project_dir, payload)
 
@@ -565,7 +588,21 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
 
     if status == "SUCCESS":
         print(f"[DONE] SUCCESS. result: {result_json}")
+        if evaluation_payload:
+            if evaluation_payload.get("status") == "DONE":
+                print("[DONE] project complete")
+            elif evaluation_payload.get("status") == "BLOCKED":
+                print("[BLOCKED] manual intervention required")
+            else:
+                print("[INFO] further work remains")
         return 0
 
     print(f"[FAIL] {status}. result: {result_json}")
+    if evaluation_payload:
+        if evaluation_payload.get("status") == "DONE":
+            print("[DONE] project complete")
+        elif evaluation_payload.get("status") == "BLOCKED":
+            print("[BLOCKED] manual intervention required")
+        else:
+            print("[INFO] further work remains")
     return 1

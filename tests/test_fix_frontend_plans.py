@@ -83,6 +83,7 @@ def test_frontend_fix_prompt_contains_error_summary(tmp_path: Path) -> None:
     prompt_text = prompt_path.read_text(encoding="utf-8")
     assert "Plan 요약" in prompt_text
     assert "Current Task" in prompt_text
+    assert "Current Evaluation" in prompt_text
     assert "[2] doing add API endpoints" in prompt_text
     assert "핵심 단계: lint 오류 수정" in prompt_text
     assert "프론트 오류 요약" in prompt_text
@@ -142,3 +143,4 @@ def test_frontend_fix_prompt_marks_missing_plan(tmp_path: Path) -> None:
     )
     prompt_text = prompt_path.read_text(encoding="utf-8")
     assert "plan missing" in prompt_text
+    assert "Current Evaluation" in prompt_text

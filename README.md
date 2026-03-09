@@ -103,6 +103,17 @@ archmind complete --path myproj --id 1
 - `archmind next` 는 첫 `todo`를 출력하고 없으면 `no pending tasks`를 출력
 - `archmind complete` 는 기본 `done`, `--doing`, `--blocked` 상태 전환 지원
 
+Evaluate:
+```bash
+archmind evaluate --path myproj
+```
+- `.archmind/evaluation.json` 에 `DONE/NOT_DONE/BLOCKED` 판정을 저장
+- 입력 소스: `tasks.json`, 최신 `result.json`(또는 run summary), `plan.json/plan.md`
+- `DONE`: tasks 완료 + 최근 실행 성공 + acceptance 정의됨
+- `NOT_DONE`: pending task 존재 또는 최근 실행 실패/누락
+- `BLOCKED`: 모든 task가 `blocked` 상태
+- `pipeline` 종료 시 evaluate가 자동 실행되어 result에 요약 포함
+
 ## Output Artifacts (.archmind/ structure)
 
 Typical outputs created inside the project directory:

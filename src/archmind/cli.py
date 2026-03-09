@@ -265,6 +265,10 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--blocked", action="store_true", help="Mark task as blocked")
     c.add_argument("--doing", action="store_true", help="Mark task as doing")
     c.set_defaults(func=run_complete)
+
+    ev = sub.add_parser("evaluate", help="Evaluate project completion state")
+    ev.add_argument("--path", required=True, help="Project root path")
+    ev.set_defaults(func=run_evaluate)
     return p
 
 
@@ -465,6 +469,20 @@ def run_complete(args: argparse.Namespace) -> int:
         print(f"[ERROR] task id not found: {args.id}", file=sys.stderr)
         return 64
     print(f"UPDATED: [{task.id}] -> {task.status}")
+    return 0
+
+
+def run_evaluate(args: argparse.Namespace) -> int:
+    from archmind.evaluator import format_evaluation_summary, write_evaluation
+
+    project_dir = Path(args.path).expanduser().resolve()
+    if not project_dir.exists() or not project_dir.is_dir():
+        print(f"[ERROR] Path is not a directory: {project_dir}", file=sys.stderr)
+        return 64
+
+    payload, eval_path = write_evaluation(project_dir)
+    print(format_evaluation_summary(payload))
+    print(f"[OK] evaluation: {eval_path}")
     return 0
 
 

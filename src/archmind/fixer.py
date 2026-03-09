@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from archmind.patcher import apply_unified_diff
+from archmind.evaluator import read_evaluation_status
 from archmind.planner import read_plan_summary
 from archmind.runner import RunConfig, RunResult, compute_run_status, run_pipeline
 from archmind.tasks import current_task
@@ -185,6 +186,7 @@ def _build_fix_prompt(
     command: str,
     plan_lines: list[str],
     task_line: str,
+    evaluation_status: str,
     summary_lines: list[str],
     failure_details: dict[str, Optional[str | list[str]]],
     files_hint: list[str],
@@ -210,6 +212,8 @@ def _build_fix_prompt(
         f"{plan_block}\n\n"
         "# Current Task\n"
         f"{task_line}\n\n"
+        "# Current Evaluation\n"
+        f"{evaluation_status}\n\n"
         "# 실패 요약\n"
         f"{summary_block}\n\n"
         "# 프론트 오류 요약\n"
@@ -249,6 +253,7 @@ def _write_fix_prompt(
     plan_lines = read_plan_summary(project_dir, max_lines=200)
     task = current_task(project_dir)
     task_line = f"[{task.id}] {task.status} {task.title}" if task else "task missing"
+    evaluation_status = read_evaluation_status(project_dir)
     frontend_error_lines: list[str] = []
     if scope == "frontend":
         frontend_error_lines = _extract_frontend_error_lines(run_result, max_lines=200)
@@ -256,6 +261,7 @@ def _write_fix_prompt(
         command,
         plan_lines,
         task_line,
+        evaluation_status,
         summary_lines,
         details,
         files_hint,
