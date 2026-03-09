@@ -314,6 +314,59 @@ def test_build_finished_message_hides_internal_dump_and_uses_basename() -> None:
     assert "Frontend lint is still failing" in msg
 
 
+def test_done_finished_message_hides_internal_paths_and_failure_class() -> None:
+    msg = build_finished_message(
+        evaluation={"status": "DONE"},
+        state={
+            "iterations": 2,
+            "fix_attempts": 1,
+            "last_failure_class": "backend-pytest:module-not-found",
+        },
+        result={
+            "status": "SUCCESS",
+            "steps": {
+                "run_before_fix": {
+                    "detail": {
+                        "backend_status": "SUCCESS",
+                        "frontend_status": "SKIPPED",
+                    }
+                }
+            },
+            "artifacts": {
+                "run_summary": "/Users/me/project/.archmind/run_logs/run_20260309.summary.txt",
+                "run_prompt": "/Users/me/project/.archmind/run_logs/run_20260309.prompt.md",
+            },
+        },
+        project_name="archmind_task_auto",
+        status="DONE",
+        fallback_summary_lines=[
+            "run_summary: /Users/me/project/.archmind/run_logs/run_20260309.summary.txt",
+            "fix_prompt: /Users/me/project/.archmind/run_logs/fix_20260309.prompt.md",
+        ],
+    )
+    assert "Status: DONE" in msg
+    assert "Failure class:" not in msg
+    assert "run_summary:" not in msg
+    assert ".archmind/run_logs" not in msg
+    assert "Backend: SUCCESS" in msg
+    assert "Frontend: SKIP" in msg
+    assert "All tasks complete" in msg
+    assert "Evaluation complete" in msg
+
+
+def test_not_done_still_shows_failure_class() -> None:
+    msg = build_finished_message(
+        evaluation={"status": "NOT_DONE"},
+        state={"last_failure_class": "backend-pytest:assertion"},
+        result={"status": "FAIL"},
+        project_name="demo",
+        status="NOT_DONE",
+        fallback_summary_lines=["Backend: FAIL"],
+    )
+    assert "Status: NOT_DONE" in msg
+    assert "Failure class: backend-pytest:assertion" in msg
+
+
 @dataclass
 class DummyMessage:
     sent: list[str] = field(default_factory=list)
@@ -636,6 +689,9 @@ def test_build_completion_message_prefers_latest_evaluation_status(tmp_path: Pat
     assert "Status: DONE" in msg
     assert "Iterations: 3" in msg
     assert "Fix attempts: 2" in msg
+    assert "Summary:" in msg
+    assert "- All tasks complete" in msg
+    assert "- Evaluation complete" in msg
 
 
 def test_watch_retry_reads_latest_state_after_steps(monkeypatch, tmp_path: Path) -> None:

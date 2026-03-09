@@ -240,6 +240,9 @@ Telegram integration (MVP):
 - 기본 finished 메시지는 핵심 상태/요약/다음 액션 중심이며 raw command 문자열은 숨김
 - finished 메시지는 내부 state dump/project 절대경로 대신 프로젝트 이름과 핵심 상태만 표시
 - finished 메시지는 짧게 유지하고, 자세한 실패 근거는 `/logs`로 확인하는 흐름을 권장
+- `Status: DONE`일 때 Summary는 사용자용 성공 요약(예: Backend/Frontend 상태, tasks 완료, evaluation 완료) 위주로 표시
+- DONE 메시지에서는 `run_summary`, `run_prompt`, `fix_prompt`, `.archmind/...` 같은 내부 경로를 기본 출력에서 숨김
+- 상세 artifact 경로는 내부 result/state 파일에 유지되며 디버깅 시 `.archmind` 아티팩트에서 확인 가능
 - 상세 로그와 내부 결과는 `<project>/.archmind/result.json`, `state.json`, `evaluation.json`에서 확인
 - Telegram 알림은 빠른 의사결정용 요약이며, 디버깅은 `.archmind` 아티팩트 기준으로 진행
 - 반복 실패가 누적되면 상태를 `STUCK`으로 승격해 사람이 개입할 시점을 명확히 표시

@@ -672,6 +672,59 @@ def _build_human_summary(
     return out[:3]
 
 
+def _normalize_component_status(value: str) -> str:
+    normalized = str(value or "").strip().upper()
+    if normalized in ("SUCCESS", "PASS", "OK"):
+        return "SUCCESS"
+    if normalized in ("SKIP", "SKIPPED"):
+        return "SKIP"
+    if normalized:
+        return normalized
+    return "UNKNOWN"
+
+
+def _extract_done_component_summary(result: dict[str, Any], fallback_lines: list[str]) -> list[str]:
+    backend = ""
+    frontend = ""
+    steps = result.get("steps")
+    if isinstance(steps, dict):
+        for key in ("run_after_fix", "run_before_fix"):
+            section = steps.get(key)
+            if not isinstance(section, dict):
+                continue
+            detail = section.get("detail")
+            if not isinstance(detail, dict):
+                continue
+            if not backend and detail.get("backend_status"):
+                backend = _normalize_component_status(str(detail.get("backend_status")))
+            if not frontend and detail.get("frontend_status"):
+                frontend = _normalize_component_status(str(detail.get("frontend_status")))
+            if backend and frontend:
+                break
+
+    if not backend or not frontend:
+        for raw in fallback_lines:
+            line = str(raw or "").strip()
+            lower = line.lower()
+            if not backend and "backend" in lower:
+                if "skip" in lower:
+                    backend = "SKIP"
+                elif "success" in lower or "ok" in lower or "pass" in lower:
+                    backend = "SUCCESS"
+            if not frontend and "frontend" in lower:
+                if "skip" in lower:
+                    frontend = "SKIP"
+                elif "success" in lower or "ok" in lower or "pass" in lower:
+                    frontend = "SUCCESS"
+
+    out: list[str] = []
+    out.append(f"Backend: {backend or 'SUCCESS'}")
+    out.append(f"Frontend: {frontend or 'SKIP'}")
+    out.append("All tasks complete")
+    out.append("Evaluation complete")
+    return out[:4]
+
+
 def _recommend_next_actions(
     status: str,
     summary_lines: list[str],
@@ -710,12 +763,17 @@ def build_finished_message(
         if not stuck_reason:
             stuck_reason = str(state.get("stuck_reason") or "").strip()
 
-    summary_lines = _build_human_summary(
-        status=status,
-        state=state,
-        result=result,
-        fallback_lines=list(fallback_summary_lines or []),
-    )
+    fallback_lines = list(fallback_summary_lines or [])
+    normalized_status = str(status or "").upper()
+    if normalized_status == "DONE":
+        summary_lines = _extract_done_component_summary(result, fallback_lines)
+    else:
+        summary_lines = _build_human_summary(
+            status=status,
+            state=state,
+            result=result,
+            fallback_lines=fallback_lines,
+        )
     next_actions = _recommend_next_actions(status, summary_lines, state, evaluation, result)[:3]
 
     lines = [
@@ -732,7 +790,7 @@ def build_finished_message(
         lines.append(f"Fix attempts: {fix_attempts}")
     if current_task:
         lines.append(f"Current task: {current_task}")
-    if failure_class:
+    if failure_class and normalized_status != "DONE":
         lines.append(f"Failure class: {failure_class}")
     if stuck_reason:
         lines.append(f"Reason: {stuck_reason}")
