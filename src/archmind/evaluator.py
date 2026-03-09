@@ -130,40 +130,47 @@ def detect_stuck(
     evaluation: Optional[dict[str, Any]] = None,
     result: Optional[dict[str, Any]] = None,
 ) -> tuple[bool, str]:
-    del evaluation
-    task_fixed = False
+    del evaluation, result
+    if int(state.get("iterations") or 0) < 3:
+        return False, ""
+
     history = state.get("history")
-    if isinstance(history, list) and len(history) >= 3:
-        task_markers = []
-        for item in history[-3:]:
-            if isinstance(item, dict):
-                marker = normalize_failure_summary(str(item.get("summary") or ""))
-                if marker:
-                    task_markers.append(marker)
-        task_fixed = bool(task_markers) and len(set(task_markers)) == 1
+    if not isinstance(history, list):
+        return False, ""
 
-    recent_failures = state.get("recent_failures")
-    normalized_failures: list[str] = []
-    if isinstance(recent_failures, list):
-        normalized_failures = [normalize_failure_summary(str(item)) for item in recent_failures if str(item).strip()]
-    failure_fixed = len(normalized_failures) >= 3 and len(set(normalized_failures[:3])) == 1
+    recent_fail_events: list[dict[str, Any]] = []
+    for item in history[-10:]:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "").upper()
+        signature = str(item.get("failure_signature") or "").strip()
+        if status in ("FAIL", "NOT_DONE") and signature:
+            recent_fail_events.append(item)
+    if len(recent_fail_events) < 3:
+        return False, ""
 
-    if result and isinstance(result, dict):
-        fs = result.get("failure_summary")
-        if isinstance(fs, list) and fs:
-            normalized_result = [normalize_failure_summary(str(x)) for x in fs[:3]]
-            if normalized_result and len(set(normalized_result)) == 1:
-                failure_fixed = True
+    last_three = recent_fail_events[-3:]
+    signatures = [str(event.get("failure_signature") or "").strip() for event in last_three]
+    if not signatures[0] or len(set(signatures)) != 1:
+        return False, ""
 
-    not_done_or_fail = _recent_not_done_or_fail_count(state, max_n=3) >= 3
-    iterations_high = int(state.get("iterations") or 0) >= 3
-    current_task_fixed = state.get("current_task_id") is not None and task_fixed
+    task_markers: list[str] = []
+    for event in last_three:
+        raw_id = str(event.get("current_task_id") or "").strip()
+        if raw_id:
+            task_markers.append(f"id:{raw_id}")
+            continue
+        title = str(event.get("current_task_title") or "").strip()
+        if title:
+            task_markers.append(f"title:{normalize_failure_summary(title)}")
+            continue
+        task_markers.append("")
 
-    checks = [not_done_or_fail, current_task_fixed, failure_fixed, iterations_high]
-    has_repeat_anchor = failure_fixed or current_task_fixed
-    if has_repeat_anchor and sum(1 for c in checks if c) >= 2:
-        reason = "same backend pytest failure repeated 3 times" if failure_fixed else "repeated failures without task progress"
-        return True, reason
+    if not task_markers[0] or len(set(task_markers)) != 1:
+        return False, ""
+
+    reason = f"same failure repeated 3 times: {signatures[0]}"
+    return True, reason
     return False, ""
 
 

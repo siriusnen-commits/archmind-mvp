@@ -117,22 +117,43 @@ def test_evaluate_detects_stuck_on_repeated_failure(tmp_path: Path) -> None:
             "current_task_id": 1,
             "last_action": "archmind continue",
             "last_status": "NOT_DONE",
+            "last_failure_signature": "backend-pytest:FAIL",
             "recent_failures": [
                 "Backend pytest failed: tests/test_api.py::test_create_item",
                 "Backend pytest failed: tests/test_api.py::test_create_item",
                 "Backend pytest failed: tests/test_api.py::test_create_item",
             ],
             "history": [
-                {"timestamp": "20260101_000001", "action": "run", "status": "NOT_DONE", "summary": "backend pytest failed"},
-                {"timestamp": "20260101_000002", "action": "fix", "status": "FAIL", "summary": "backend pytest failed"},
-                {"timestamp": "20260101_000003", "action": "continue", "status": "NOT_DONE", "summary": "backend pytest failed"},
+                {
+                    "timestamp": "20260101_000001",
+                    "action": "run",
+                    "status": "NOT_DONE",
+                    "summary": "backend pytest failed",
+                    "current_task_id": "1",
+                    "failure_signature": "backend-pytest:FAIL",
+                },
+                {
+                    "timestamp": "20260101_000002",
+                    "action": "fix",
+                    "status": "FAIL",
+                    "summary": "backend pytest failed",
+                    "current_task_id": "1",
+                    "failure_signature": "backend-pytest:FAIL",
+                },
+                {
+                    "timestamp": "20260101_000003",
+                    "action": "continue",
+                    "status": "NOT_DONE",
+                    "summary": "backend pytest failed",
+                    "current_task_id": "1",
+                    "failure_signature": "backend-pytest:FAIL",
+                },
             ],
         },
     )
     payload = evaluate_project(tmp_path)
     assert payload["status"] == "STUCK"
-    assert payload["reasons"]
-    assert "repeated" in payload["reasons"][0]
+    assert payload["reasons"][0] == "same failure repeated 3 times: backend-pytest:FAIL"
 
 
 def test_evaluate_not_done_when_repeats_are_few(tmp_path: Path) -> None:
@@ -148,10 +169,25 @@ def test_evaluate_not_done_when_repeats_are_few(tmp_path: Path) -> None:
             "current_task_id": 1,
             "last_action": "continue",
             "last_status": "NOT_DONE",
+            "last_failure_signature": "backend-pytest:FAIL",
             "recent_failures": ["backend pytest failed", "backend pytest failed"],
             "history": [
-                {"timestamp": "20260101_000001", "action": "run", "status": "NOT_DONE", "summary": "backend pytest failed"},
-                {"timestamp": "20260101_000002", "action": "fix", "status": "FAIL", "summary": "backend pytest failed"},
+                {
+                    "timestamp": "20260101_000001",
+                    "action": "run",
+                    "status": "NOT_DONE",
+                    "summary": "backend pytest failed",
+                    "current_task_id": "1",
+                    "failure_signature": "backend-pytest:FAIL",
+                },
+                {
+                    "timestamp": "20260101_000002",
+                    "action": "fix",
+                    "status": "FAIL",
+                    "summary": "backend pytest failed",
+                    "current_task_id": "1",
+                    "failure_signature": "backend-pytest:FAIL",
+                },
             ],
         },
     )
@@ -172,11 +208,33 @@ def test_evaluate_clears_stuck_when_failure_changes(tmp_path: Path) -> None:
             "current_task_id": 1,
             "last_action": "continue",
             "last_status": "NOT_DONE",
+            "last_failure_signature": "frontend-lint:FAIL",
             "recent_failures": ["backend pytest failed", "frontend lint failed", "db migration failed"],
             "history": [
-                {"timestamp": "20260101_000001", "action": "run", "status": "NOT_DONE", "summary": "backend pytest failed"},
-                {"timestamp": "20260101_000002", "action": "fix", "status": "FAIL", "summary": "frontend lint failed"},
-                {"timestamp": "20260101_000003", "action": "continue", "status": "NOT_DONE", "summary": "db migration failed"},
+                {
+                    "timestamp": "20260101_000001",
+                    "action": "run",
+                    "status": "NOT_DONE",
+                    "summary": "backend pytest failed",
+                    "current_task_id": "1",
+                    "failure_signature": "backend-pytest:FAIL",
+                },
+                {
+                    "timestamp": "20260101_000002",
+                    "action": "fix",
+                    "status": "FAIL",
+                    "summary": "frontend lint failed",
+                    "current_task_id": "1",
+                    "failure_signature": "frontend-lint:FAIL",
+                },
+                {
+                    "timestamp": "20260101_000003",
+                    "action": "continue",
+                    "status": "NOT_DONE",
+                    "summary": "db migration failed",
+                    "current_task_id": "1",
+                    "failure_signature": "backend-pytest+frontend-lint:FAIL",
+                },
             ],
         },
     )

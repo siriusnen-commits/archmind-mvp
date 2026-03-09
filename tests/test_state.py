@@ -41,6 +41,19 @@ def test_state_history_added_after_fix(tmp_path: Path, monkeypatch) -> None:
     assert "fix" in history[-1]["action"]
 
 
+def test_state_stores_failure_signature_after_failed_run(tmp_path: Path) -> None:
+    _write_backend_project(tmp_path, failing=True)
+    exit_code = main(["run", "--path", str(tmp_path), "--backend-only"])
+    assert exit_code == 1
+
+    state = load_state(tmp_path)
+    assert state is not None
+    assert state.get("last_failure_signature") == "backend-pytest:FAIL"
+    history = state.get("history") or []
+    assert history
+    assert history[-1].get("failure_signature") == "backend-pytest:FAIL"
+
+
 def test_state_reflects_evaluate_status(tmp_path: Path) -> None:
     archmind = tmp_path / ".archmind"
     archmind.mkdir(parents=True, exist_ok=True)

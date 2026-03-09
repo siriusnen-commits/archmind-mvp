@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -100,6 +101,7 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "blocked_tasks": blocked,
         "stuck": False,
         "stuck_reason": "",
+        "last_failure_signature": "",
         "recent_failures": [],
         "history": [],
     }
@@ -126,6 +128,7 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     payload["project_dir"] = str(project_dir)
     payload["updated_at"] = _now()
     payload["last_status"] = _safe_status(str(payload.get("last_status") or "UNKNOWN"))
+    payload["last_failure_signature"] = str(payload.get("last_failure_signature") or "").strip()[:220]
     history = payload.get("history")
     if not isinstance(history, list):
         payload["history"] = []
@@ -177,6 +180,88 @@ def _collect_result_failures(project_dir: Path, max_items: int = 10) -> list[str
     return out[:max_items]
 
 
+def _normalize_step_name(name: str) -> str:
+    value = (name or "").strip().lower()
+    if not value:
+        return ""
+    value = value.replace("\\", "/")
+    value = re.sub(r"[^a-z0-9_./-]+", "-", value)
+    value = re.sub(r"-+", "-", value).strip("-")
+    value = value.replace("/", "-").replace(".", "-")
+    return value[:80]
+
+
+def _extract_failure_step_names_from_result(payload: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    steps = payload.get("steps")
+    if isinstance(steps, list):
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            status = str(step.get("status") or "").upper()
+            if status in ("FAIL", "ERROR"):
+                name = _normalize_step_name(str(step.get("name") or ""))
+                if name:
+                    names.append(name)
+    elif isinstance(steps, dict):
+        for section_name in ("run_before_fix", "run_after_fix"):
+            section = steps.get(section_name)
+            if not isinstance(section, dict):
+                continue
+            detail = section.get("detail")
+            if isinstance(detail, dict):
+                backend_status = str(detail.get("backend_status") or "").upper()
+                frontend_status = str(detail.get("frontend_status") or "").upper()
+                if backend_status == "FAIL":
+                    names.append("backend-pytest")
+                if frontend_status == "FAIL":
+                    names.append("frontend-lint")
+    return sorted(set(names))
+
+
+def _extract_failure_step_names_from_run_summary(payload: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    backend = payload.get("backend")
+    frontend = payload.get("frontend")
+    if isinstance(backend, dict) and str(backend.get("status") or "").upper() == "FAIL":
+        names.append("backend-pytest")
+    if isinstance(frontend, dict):
+        if str(frontend.get("status") or "").upper() == "FAIL":
+            names.append("frontend-lint")
+        steps = frontend.get("steps")
+        if isinstance(steps, list):
+            for step in steps:
+                if not isinstance(step, dict):
+                    continue
+                exit_code = step.get("exit_code")
+                if isinstance(exit_code, int) and exit_code != 0:
+                    name = _normalize_step_name(f"frontend-{step.get('name') or ''}")
+                    if name:
+                        names.append(name)
+    return sorted(set(names))
+
+
+def _latest_run_summary_json(project_dir: Path) -> Optional[Path]:
+    run_logs = project_dir / ".archmind" / "run_logs"
+    if not run_logs.exists():
+        return None
+    matches = sorted(run_logs.glob("run_*.summary.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return matches[0] if matches else None
+
+
+def _collect_failure_signature(project_dir: Path) -> str:
+    result_payload = _load_json(project_dir / ".archmind" / "result.json") or {}
+    step_names = _extract_failure_step_names_from_result(result_payload)
+    if not step_names:
+        summary_path = _latest_run_summary_json(project_dir)
+        summary_payload = _load_json(summary_path) if summary_path else None
+        if isinstance(summary_payload, dict):
+            step_names = _extract_failure_step_names_from_run_summary(summary_payload)
+    if not step_names:
+        return ""
+    return f"{'+'.join(sorted(step_names))}:FAIL"
+
+
 def update_state_event(
     project_dir: Path,
     action: str,
@@ -185,6 +270,7 @@ def update_state_event(
     *,
     increment_iterations: bool = False,
     recent_failures: Optional[list[str]] = None,
+    failure_signature: Optional[str] = None,
 ) -> dict[str, Any]:
     project_dir = project_dir.expanduser().resolve()
     payload = ensure_state(project_dir)
@@ -199,6 +285,11 @@ def update_state_event(
     payload["current_task_id"] = current_task_id
     payload["completed_tasks"] = completed
     payload["blocked_tasks"] = blocked
+
+    normalized_signature = str(failure_signature or "").strip()
+    if _safe_status(status) in ("FAIL", "NOT_DONE", "BLOCKED", "STUCK") and not normalized_signature:
+        normalized_signature = str(payload.get("last_failure_signature") or "").strip()
+    payload["last_failure_signature"] = normalized_signature[:220]
 
     merged_failures: list[str] = []
     for line in recent_failures or []:
@@ -220,6 +311,9 @@ def update_state_event(
             "action": _sanitize_line(action, project_dir),
             "status": _safe_status(status),
             "summary": _sanitize_line(summary, project_dir)[:160],
+            "current_task_id": str(current_task_id or ""),
+            "current_task_title": _sanitize_line(_task_title(project_dir, current_task_id) or "", project_dir),
+            "failure_signature": normalized_signature[:220],
         },
     )
     write_state(project_dir, payload)
@@ -228,6 +322,7 @@ def update_state_event(
 
 def update_after_run(project_dir: Path, action: str, run_status: str, summary: str) -> dict[str, Any]:
     failures = _collect_result_failures(project_dir, max_items=10)
+    failure_signature = _collect_failure_signature(project_dir)
     return update_state_event(
         project_dir,
         action,
@@ -235,6 +330,7 @@ def update_after_run(project_dir: Path, action: str, run_status: str, summary: s
         summary,
         increment_iterations=True,
         recent_failures=failures,
+        failure_signature=failure_signature,
     )
 
 
@@ -249,7 +345,15 @@ def update_after_fix(project_dir: Path, action: str, exit_code: int) -> dict[str
             status = "SKIP"
             summary = "fix loop skipped"
     failures = _collect_result_failures(project_dir, max_items=10) if status == "FAIL" else []
-    return update_state_event(project_dir, action, status, summary, recent_failures=failures)
+    failure_signature = _collect_failure_signature(project_dir) if status == "FAIL" else ""
+    return update_state_event(
+        project_dir,
+        action,
+        status,
+        summary,
+        recent_failures=failures,
+        failure_signature=failure_signature,
+    )
 
 
 def update_after_evaluation(project_dir: Path, evaluation_status: str, stuck_reason: str = "") -> dict[str, Any]:

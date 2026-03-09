@@ -204,7 +204,7 @@ def test_build_completion_message_includes_stuck_reason_and_next(tmp_path: Path)
         json.dumps(
             {
                 "status": "STUCK",
-                "reasons": ["same backend pytest failure repeated 3 times"],
+                "reasons": ["same failure repeated 3 times: backend-pytest:FAIL"],
                 "next_actions": ["inspect backend failure details"],
             }
         ),
@@ -224,7 +224,7 @@ def test_build_completion_message_includes_stuck_reason_and_next(tmp_path: Path)
     )
     msg = build_completion_message(project_dir, tmp_path / "unused.log")
     assert "Status: STUCK" in msg
-    assert "Reason: same backend pytest failure repeated 3 times" in msg
+    assert "Reason: same failure repeated 3 times: backend-pytest:FAIL" in msg
     assert "Next:" in msg
     assert "inspect backend failure details" in msg
 
