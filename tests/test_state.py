@@ -82,6 +82,85 @@ def test_fix_attempts_recovered_from_history_when_field_missing(tmp_path: Path) 
     assert int(loaded.get("fix_attempts") or 0) == 2
 
 
+def test_fix_attempts_recovered_from_history_when_top_level_is_stale(tmp_path: Path) -> None:
+    _write_backend_project(tmp_path, failing=True)
+    state_path = tmp_path / ".archmind" / "state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "project_dir": str(tmp_path.resolve()),
+                "updated_at": "20260101_000000",
+                "iterations": 5,
+                "fix_attempts": 1,
+                "history": [
+                    {"timestamp": "20260101_000001", "action": "archmind fix --path p --apply", "status": "FAIL"},
+                    {"timestamp": "20260101_000002", "action": "pipeline fix iteration 1", "status": "FAIL"},
+                    {"timestamp": "20260101_000003", "action": "archmind fix --path p --apply", "status": "FAIL"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded = load_state(tmp_path)
+    assert loaded is not None
+    assert int(loaded.get("fix_attempts") or 0) == 3
+
+
+def test_state_syncs_top_level_fix_summary_fields_from_latest_fix_meta(tmp_path: Path) -> None:
+    _write_backend_project(tmp_path, failing=True)
+    archmind = tmp_path / ".archmind"
+    run_logs = archmind / "run_logs"
+    run_logs.mkdir(parents=True, exist_ok=True)
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "project_dir": str(tmp_path.resolve()),
+                "updated_at": "20260101_000000",
+                "iterations": 1,
+                "fix_attempts": 1,
+                "last_failure_class": "unknown",
+                "last_fix_strategy": "",
+                "last_failure_signature_before_fix": "",
+                "last_failure_signature_after_fix": "",
+                "last_repair_targets": [],
+                "history": [
+                    {
+                        "timestamp": "20260101_000001",
+                        "action": "archmind fix --path p --apply",
+                        "status": "FAIL",
+                        "failure_class": "backend-pytest:module-not-found",
+                        "failure_signature": "backend-pytest:FAIL",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_logs / "fix_20260101_000002.summary.json").write_text(
+        json.dumps(
+            {
+                "meta": {
+                    "failure_class": "backend-pytest:module-not-found",
+                    "fix_strategy": "backend-import-resolution",
+                    "failure_signature_before_fix": "backend-pytest:FAIL",
+                    "failure_signature_after_fix": "backend-pytest:FAIL",
+                    "repair_targets": ["requirements.txt", "app/main.py"],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_state(tmp_path)
+    assert loaded is not None
+    assert loaded.get("last_failure_class") == "backend-pytest:module-not-found"
+    assert loaded.get("last_fix_strategy") == "backend-import-resolution"
+    assert loaded.get("last_failure_signature_before_fix") == "backend-pytest:FAIL"
+    assert loaded.get("last_failure_signature_after_fix") == "backend-pytest:FAIL"
+    assert loaded.get("last_repair_targets") == ["requirements.txt", "app/main.py"]
+
+
 def test_state_stores_failure_signature_after_failed_run(tmp_path: Path) -> None:
     _write_backend_project(tmp_path, failing=True)
     exit_code = main(["run", "--path", str(tmp_path), "--backend-only"])

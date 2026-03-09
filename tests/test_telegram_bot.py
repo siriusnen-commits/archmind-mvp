@@ -667,3 +667,26 @@ def test_build_completion_message_recovers_fix_attempts_from_history(tmp_path: P
     )
     msg = build_completion_message(project_dir, tmp_path / "unused.log")
     assert "Fix attempts: 2" in msg
+
+
+def test_build_completion_message_corrects_stale_fix_attempts_from_history(tmp_path: Path) -> None:
+    project_dir = tmp_path / "history_recovery_stale"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "last_status": "NOT_DONE",
+                "iterations": 7,
+                "fix_attempts": 1,
+                "history": [
+                    {"action": "archmind fix --path p --apply", "status": "FAIL"},
+                    {"action": "pipeline fix iteration 1", "status": "FAIL"},
+                    {"action": "archmind fix --path p --apply", "status": "FAIL"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    msg = build_completion_message(project_dir, tmp_path / "unused.log")
+    assert "Fix attempts: 3" in msg

@@ -81,6 +81,15 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _is_fix_action(action: str) -> bool:
+    normalized = (action or "").strip().lower()
+    if not normalized:
+        return False
+    if normalized.startswith("pipeline fix iteration"):
+        return True
+    return bool(re.search(r"\barchmind\s+fix\b", normalized))
+
+
 def _history_fix_attempts(payload: dict[str, Any]) -> int:
     history = payload.get("history")
     if not isinstance(history, list):
@@ -90,9 +99,59 @@ def _history_fix_attempts(payload: dict[str, Any]) -> int:
         if not isinstance(item, dict):
             continue
         action = str(item.get("action") or "").lower()
-        if "fix" in action:
+        if _is_fix_action(action):
             count += 1
     return count
+
+
+def _sync_summary_fields_from_history(payload: dict[str, Any]) -> None:
+    history = payload.get("history")
+    if not isinstance(history, list):
+        return
+    latest_fix: Optional[dict[str, Any]] = None
+    for item in reversed(history):
+        if not isinstance(item, dict):
+            continue
+        action = str(item.get("action") or "")
+        if _is_fix_action(action):
+            latest_fix = item
+            break
+    if not latest_fix:
+        return
+    latest_class = str(latest_fix.get("failure_class") or "").strip()
+    if latest_class:
+        payload["last_failure_class"] = latest_class
+    latest_sig = str(latest_fix.get("failure_signature") or "").strip()
+    if latest_sig:
+        payload["last_failure_signature"] = latest_sig
+        payload["derived_task_label"] = derive_task_label_from_failure_signature(latest_sig)
+
+
+def _sync_summary_fields_from_latest_fix_summary(project_dir: Path, payload: dict[str, Any]) -> None:
+    latest_fix = _latest_fix_summary_json(project_dir)
+    if latest_fix is None:
+        return
+    fix_payload = _load_json(latest_fix)
+    meta = fix_payload.get("meta") if isinstance(fix_payload, dict) else None
+    if not isinstance(meta, dict):
+        return
+    failure_class = str(meta.get("failure_class") or "").strip()
+    if failure_class:
+        payload["last_failure_class"] = failure_class
+    fix_strategy = str(meta.get("fix_strategy") or "").strip()
+    if fix_strategy:
+        payload["last_fix_strategy"] = fix_strategy
+    before = str(meta.get("failure_signature_before_fix") or "").strip()
+    if before:
+        payload["last_failure_signature_before_fix"] = before
+    after = str(meta.get("failure_signature_after_fix") or "").strip()
+    if after:
+        payload["last_failure_signature_after_fix"] = after
+        payload["last_failure_signature"] = after
+        payload["derived_task_label"] = derive_task_label_from_failure_signature(after)
+    targets = meta.get("repair_targets")
+    if isinstance(targets, list):
+        payload["last_repair_targets"] = [str(x)[:120] for x in targets[:5]]
 
 
 def _normalize_loaded_state(project_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
@@ -106,6 +165,8 @@ def _normalize_loaded_state(project_dir: Path, payload: dict[str, Any]) -> dict[
         fix_attempts = 0
     fix_attempts = max(fix_attempts, _history_fix_attempts(normalized))
     normalized["fix_attempts"] = fix_attempts
+    _sync_summary_fields_from_history(normalized)
+    _sync_summary_fields_from_latest_fix_summary(project_dir, normalized)
     return normalized
 
 
