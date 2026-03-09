@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from archmind.failure import classify_failure
 from archmind.state import derive_task_label_from_failure_signature
 
 LAST_PROJECT_PATH_FILE = Path.home() / ".archmind_telegram_last_project"
@@ -340,6 +341,10 @@ def sanitize_log_excerpt(text: str, max_lines: int = 40) -> str:
         lower = line.lower()
         if lower.startswith("command:") or lower.startswith("$ archmind"):
             continue
+        if lower.startswith(("project_dir:", "timestamp:", "cwd:", "duration", "base", "cancel")):
+            continue
+        if lower in ("traceback:", "-----", "=====", "---", "==="):
+            continue
         line = re.sub(r"\s+", " ", line)
         line = re.sub(r"/(?:Users|home)/[^ ]+/([^/ ]+)", r".../\1", line)
         line = re.sub(r"/tmp/[^ ]+/([^/ ]+)", r".../\1", line)
@@ -347,6 +352,86 @@ def sanitize_log_excerpt(text: str, max_lines: int = 40) -> str:
     if not cleaned_lines:
         return ""
     return "\n".join(cleaned_lines[:max_lines])
+
+
+def extract_key_error_lines(text: str, max_lines: int = 6) -> list[str]:
+    lines = sanitize_log_excerpt(text, max_lines=120).splitlines()
+    priority_patterns = [
+        r"AssertionError",
+        r"ModuleNotFoundError",
+        r"ImportError",
+        r"^FAILED ",
+        r"^E\s+",
+        r"\bTS2304\b|\bTS2322\b|is not assignable",
+        r"ESLint|Parsing error|Cannot find module",
+        r"npm ERR!",
+        r"build failed|failed to compile|next build|vite build",
+        r"\.py:\d+|\.tsx?:\d+",
+    ]
+    picked: list[str] = []
+    for pattern in priority_patterns:
+        rx = re.compile(pattern, flags=re.IGNORECASE)
+        for line in lines:
+            if rx.search(line) and line not in picked:
+                picked.append(line)
+                if len(picked) >= max_lines:
+                    return picked
+    for line in lines:
+        if line not in picked:
+            picked.append(line)
+            if len(picked) >= max_lines:
+                break
+    return picked
+
+
+def build_log_focus(log_type: str, failure_class: Optional[str], key_lines: list[str]) -> list[str]:
+    klass = str(failure_class or "").lower()
+    if klass == "backend-pytest:assertion":
+        return ["inspect backend implementation", "compare API response with test expectations"]
+    if klass in ("backend-pytest:import", "backend-pytest:module-not-found"):
+        return ["inspect imports and module paths"]
+    if klass == "frontend-lint":
+        return ["inspect frontend lint config", "inspect failing frontend file"]
+    if klass == "frontend-typescript":
+        return ["inspect type definitions", "inspect failing TS file"]
+    if klass == "frontend-build":
+        return ["inspect build config/import path"]
+    if log_type == "last":
+        has_backend = any("assert" in line.lower() or "pytest" in line.lower() or "failed tests/" in line.lower() for line in key_lines)
+        has_frontend = any("eslint" in line.lower() or "ts" in line.lower() or "frontend" in line.lower() for line in key_lines)
+        if has_backend and has_frontend:
+            return ["inspect backend failure first", "then inspect frontend lint issues"]
+    return ["inspect recent failure details"]
+
+
+def build_logs_message(
+    project_name: str,
+    log_type: str,
+    failure: str,
+    key_lines: list[str],
+    focus: list[str],
+) -> str:
+    lines = [
+        f"Logs: {log_type}",
+        "",
+        "Project:",
+        project_name,
+        "",
+        "Failure:",
+        failure or "unknown failure",
+        "",
+        "Key lines:",
+    ]
+    if key_lines:
+        lines.extend(f"- {line}" for line in key_lines[:6])
+    else:
+        lines.append("- (no key lines found)")
+    lines += ["", "Focus:"]
+    if focus:
+        lines.extend(f"- {item}" for item in focus[:3])
+    else:
+        lines.append("- inspect recent failure details")
+    return "\n".join(lines)
 
 
 def _collect_recent_failures(project_dir: Path, limit: int = 5) -> list[str]:
@@ -416,74 +501,103 @@ def _read_json_clues(project_dir: Path, mode: str) -> list[str]:
     return out[:10]
 
 
-def _build_logs_message(project_dir: Path, mode: str, excerpt: str, fallback_text: str) -> str:
-    lines = [
-        f"Logs: {mode}",
-        "",
-        "Project:",
-        project_dir.name,
-        "",
-    ]
-    if excerpt:
-        lines += ["Excerpt:", excerpt]
-    else:
-        lines.append(fallback_text)
-    failures = _collect_recent_failures(project_dir, limit=4)
-    if failures:
-        lines += ["", "Recent failures:"]
-        lines.extend(f"- {line}" for line in failures)
-    return "\n".join(lines)
+def _failure_class_from_state(project_dir: Path) -> str:
+    state = _load_json(project_dir / ".archmind" / "state.json") or {}
+    return str(state.get("last_failure_class") or "").strip()
+
+
+def _failure_summary_from_class(mode: str, failure_class: str, key_lines: list[str]) -> str:
+    klass = (failure_class or "").lower()
+    if mode == "backend":
+        if klass.startswith("backend-pytest"):
+            return "backend pytest failed"
+        return "backend failure detected"
+    if mode == "frontend":
+        if klass == "frontend-lint":
+            return "frontend lint failed"
+        if klass == "frontend-typescript":
+            return "frontend typescript failed"
+        if klass == "frontend-build":
+            return "frontend build failed"
+        return "frontend failure detected"
+    if mode == "last":
+        has_backend = any("assert" in line.lower() or "pytest" in line.lower() or line.lower().startswith("failed tests/") for line in key_lines)
+        has_frontend = any(
+            token in line.lower() for line in key_lines for token in ("eslint", "ts2304", "ts2322", "is not assignable")
+        )
+        if has_backend and has_frontend:
+            return "backend pytest failed\nfrontend lint failed"
+        if has_backend:
+            return "backend pytest failed"
+        if has_frontend:
+            return "frontend lint failed"
+    return "recent failure detected"
 
 
 def read_recent_backend_logs(project_dir: Path) -> str:
     clues = _read_json_clues(project_dir, "backend")
     files = _latest_run_logs(project_dir)
+    excerpt = ""
     for path in files:
         text = path.read_text(encoding="utf-8", errors="replace")
         candidate = _extract_candidate_lines(text, "backend")
         if candidate:
-            excerpt = sanitize_log_excerpt("\n".join(clues + candidate), max_lines=35)
+            excerpt = sanitize_log_excerpt("\n".join(clues + candidate), max_lines=60)
             if excerpt:
-                return _build_logs_message(project_dir, "backend", excerpt, "No backend logs found.")
+                break
     if clues:
-        excerpt = sanitize_log_excerpt("\n".join(clues), max_lines=25)
-        if excerpt:
-            return _build_logs_message(project_dir, "backend", excerpt, "No backend logs found.")
-    return _build_logs_message(project_dir, "backend", "", "No backend logs found.")
+        excerpt = excerpt or sanitize_log_excerpt("\n".join(clues), max_lines=40)
+    key_lines = extract_key_error_lines(excerpt)
+    if not key_lines:
+        return build_logs_message(project_dir.name, "backend", "No backend logs found.", [], ["inspect recent failure details"])
+    failure_class = _failure_class_from_state(project_dir) or classify_failure(excerpt, "backend-pytest:FAIL")
+    failure = _failure_summary_from_class("backend", failure_class, key_lines)
+    focus = build_log_focus("backend", failure_class, key_lines)
+    return build_logs_message(project_dir.name, "backend", failure, key_lines, focus)
 
 
 def read_recent_frontend_logs(project_dir: Path) -> str:
     clues = _read_json_clues(project_dir, "frontend")
     files = _latest_run_logs(project_dir)
+    excerpt = ""
     for path in files:
         text = path.read_text(encoding="utf-8", errors="replace")
         candidate = _extract_candidate_lines(text, "frontend")
         if candidate:
-            excerpt = sanitize_log_excerpt("\n".join(clues + candidate), max_lines=35)
+            excerpt = sanitize_log_excerpt("\n".join(clues + candidate), max_lines=60)
             if excerpt:
-                return _build_logs_message(project_dir, "frontend", excerpt, "No frontend logs found.")
+                break
     if clues:
-        excerpt = sanitize_log_excerpt("\n".join(clues), max_lines=25)
-        if excerpt:
-            return _build_logs_message(project_dir, "frontend", excerpt, "No frontend logs found.")
-    return _build_logs_message(project_dir, "frontend", "", "No frontend logs found.")
+        excerpt = excerpt or sanitize_log_excerpt("\n".join(clues), max_lines=40)
+    key_lines = extract_key_error_lines(excerpt)
+    if not key_lines:
+        return build_logs_message(project_dir.name, "frontend", "No frontend logs found.", [], ["inspect recent failure details"])
+    failure_class = _failure_class_from_state(project_dir) or classify_failure(excerpt, "frontend-lint:FAIL")
+    failure = _failure_summary_from_class("frontend", failure_class, key_lines)
+    focus = build_log_focus("frontend", failure_class, key_lines)
+    return build_logs_message(project_dir.name, "frontend", failure, key_lines, focus)
 
 
 def read_recent_last_logs(project_dir: Path, temp_log: Optional[Path] = None) -> str:
     files = _latest_run_logs(project_dir)
+    excerpt = ""
     for path in files:
         text = path.read_text(encoding="utf-8", errors="replace")
         candidate = _extract_candidate_lines(text, "last")
         if candidate:
-            excerpt = sanitize_log_excerpt("\n".join(candidate), max_lines=35)
+            excerpt = sanitize_log_excerpt("\n".join(candidate), max_lines=80)
             if excerpt:
-                return _build_logs_message(project_dir, "last", excerpt, "No recent logs found.")
+                break
     if temp_log and temp_log.exists():
         text = temp_log.read_text(encoding="utf-8", errors="replace")
-        excerpt = sanitize_log_excerpt("\n".join(_extract_candidate_lines(text, "last")), max_lines=30)
-        if excerpt:
-            return _build_logs_message(project_dir, "last", excerpt, "No recent logs found.")
-    return _build_logs_message(project_dir, "last", "", "No recent logs found.")
+        excerpt = excerpt or sanitize_log_excerpt("\n".join(_extract_candidate_lines(text, "last")), max_lines=60)
+    key_lines = extract_key_error_lines(excerpt)
+    if not key_lines:
+        return build_logs_message(project_dir.name, "last", "No recent logs found.", [], ["inspect recent failure details"])
+    failure_class = _failure_class_from_state(project_dir) or classify_failure(excerpt, "")
+    failure = _failure_summary_from_class("last", failure_class, key_lines)
+    focus = build_log_focus("last", failure_class, key_lines)
+    return build_logs_message(project_dir.name, "last", failure, key_lines, focus)
 
 
 def _summary_from_failure_signature(signature: str) -> list[str]:
@@ -562,10 +676,10 @@ def _recommend_next_actions(status: str, summary_lines: list[str], state: dict[s
 
     if normalized == "NOT_DONE":
         if has_backend_pytest_fail and not recent_fix:
-            return ["run /fix", "then /continue"]
+            return ["run /logs backend", "run /fix", "then /continue"]
         if recent_fix:
-            return ["run /continue"]
-        return ["run /fix", "then /continue"]
+            return ["run /logs backend", "run /continue"]
+        return ["run /logs backend", "run /fix", "then /continue"]
 
     if normalized in ("FAIL", "SKIP", "UNKNOWN"):
         return ["run /fix", "then /continue"]

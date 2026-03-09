@@ -144,6 +144,10 @@ Telegram integration (MVP):
 - `/logs backend` 는 최근 backend 실패 로그(pytest/traceback 요약)를 보여줌
 - `/logs frontend` 는 최근 frontend 실패 로그(lint/build 요약)를 보여줌
 - `/logs last` 는 최신 run summary/log 기반 최근 실패 로그를 보여줌
+- `/logs` 출력은 메타 정보 나열보다 핵심 에러 라인과 디버깅 포커스를 우선 표시
+- 출력 구조: `Failure`, `Key lines`, `Focus` (짧고 바로 행동 가능한 형태)
+- `project_dir/timestamp/command/cwd/duration` 같은 내부 메타는 기본 `/logs` 출력에서 숨김
+- 전체 raw 로그가 필요하면 `<project>/.archmind/run_logs/*` 파일에서 직접 확인
 - 실패 후 Telegram에서 바로 `/continue` 또는 `/fix`로 복구 루프를 이어갈 수 있음
 - pipeline 종료 후 완료/실패 요약 메시지를 Telegram으로 자동 전송
 - 자동 요약에는 status, iterations, current task, result/state 요약이 포함

@@ -23,6 +23,9 @@ from archmind.telegram_bot import (
     read_recent_backend_logs,
     read_recent_frontend_logs,
     read_recent_last_logs,
+    extract_key_error_lines,
+    build_log_focus,
+    build_logs_message,
     run_state_command,
     sanitize_log_excerpt,
     save_last_project_path,
@@ -377,7 +380,10 @@ def test_read_recent_backend_logs_prefers_backend_excerpt(tmp_path: Path) -> Non
     msg = read_recent_backend_logs(project_dir)
     assert "Logs: backend" in msg
     assert "Project:\nproj" in msg
-    assert "AssertionError" in msg or "backend pytest failed" in msg
+    assert "Failure:" in msg
+    assert "Key lines:" in msg
+    assert "Focus:" in msg
+    assert "AssertionError" in msg or "FAILED" in msg
 
 
 def test_read_recent_frontend_logs_prefers_frontend_excerpt(tmp_path: Path) -> None:
@@ -395,6 +401,9 @@ def test_read_recent_frontend_logs_prefers_frontend_excerpt(tmp_path: Path) -> N
     msg = read_recent_frontend_logs(project_dir)
     assert "Logs: frontend" in msg
     assert "Project:\nproj2" in msg
+    assert "Failure:" in msg
+    assert "Key lines:" in msg
+    assert "Focus:" in msg
     assert "ESLint: Parsing error" in msg or "frontend lint failed" in msg
 
 
@@ -407,6 +416,7 @@ def test_read_recent_logs_fallback_when_missing(tmp_path: Path) -> None:
     assert "No recent logs found." in msg_last
     assert "No backend logs found." in msg_back
     assert "No frontend logs found." in msg_front
+    assert "Focus:" in msg_last
 
 
 def test_logs_command_without_last_project_shows_help(monkeypatch) -> None:
@@ -417,6 +427,89 @@ def test_logs_command_without_last_project_shows_help(monkeypatch) -> None:
     asyncio.run(command_logs(update, ctx))
     assert msg.sent
     assert "No previous project found. Use /idea first." in msg.sent[-1]
+
+
+def test_extract_key_error_lines_backend_priority() -> None:
+    raw = """
+    project_dir: /tmp/demo
+    AssertionError: expected 200 got 500
+    FAILED tests/test_api.py::test_create_todo
+    E   assert 500 == 200
+    """
+    lines = extract_key_error_lines(raw)
+    joined = "\n".join(lines)
+    assert "AssertionError" in joined
+    assert "FAILED tests/test_api.py::test_create_todo" in joined
+
+
+def test_extract_key_error_lines_frontend_priority() -> None:
+    raw = """
+    timestamp: 20260309_120000
+    ESLint: Parsing error ...
+    TS2322: Type 'string' is not assignable to type 'number'
+    app/page.tsx:12
+    """
+    lines = extract_key_error_lines(raw)
+    joined = "\n".join(lines)
+    assert "ESLint: Parsing error" in joined
+    assert "TS2322" in joined
+
+
+def test_sanitize_removes_metadata_noise() -> None:
+    raw = """
+    project_dir: /Users/me/proj
+    timestamp: 20260309_120000
+    command: archmind pipeline --path /Users/me/proj
+    cwd: /Users/me/proj
+    duration_s: 1.2
+    Base
+    Cancel
+    Traceback:
+    AssertionError: expected 200 got 500
+    """
+    cleaned = sanitize_log_excerpt(raw)
+    assert "project_dir" not in cleaned
+    assert "timestamp" not in cleaned
+    assert "command:" not in cleaned.lower()
+    assert "cwd:" not in cleaned.lower()
+    assert "duration" not in cleaned.lower()
+    assert "Base" not in cleaned
+    assert "Cancel" not in cleaned
+    assert "Traceback:" not in cleaned
+    assert "AssertionError" in cleaned
+
+
+def test_build_logs_message_structure() -> None:
+    msg = build_logs_message(
+        project_name="simple_todo_web_app_with_api",
+        log_type="backend",
+        failure="backend pytest failed",
+        key_lines=["AssertionError: expected 200 got 500", "FAILED tests/test_api.py::test_create_todo"],
+        focus=["inspect backend implementation", "compare API response with test expectations"],
+    )
+    assert "Project:\nsimple_todo_web_app_with_api" in msg
+    assert "Failure:" in msg
+    assert "Key lines:" in msg
+    assert "Focus:" in msg
+
+
+def test_read_recent_last_logs_combines_backend_frontend(tmp_path: Path) -> None:
+    project_dir = tmp_path / "combo"
+    run_logs = project_dir / ".archmind" / "run_logs"
+    run_logs.mkdir(parents=True, exist_ok=True)
+    (run_logs / "run_20260309_120000.summary.txt").write_text(
+        "AssertionError: expected 200 got 500\n"
+        "FAILED tests/test_api.py::test_create_todo\n"
+        "ESLint: Parsing error in app/page.tsx:12\n",
+        encoding="utf-8",
+    )
+    msg = read_recent_last_logs(project_dir)
+    assert "Logs: last" in msg
+    assert "Failure:" in msg
+    assert "backend pytest failed" in msg.lower()
+    assert "frontend lint failed" in msg.lower()
+    assert "Key lines:" in msg
+    assert "Focus:" in msg
 
 
 def test_retry_without_last_project_shows_help(monkeypatch) -> None:
