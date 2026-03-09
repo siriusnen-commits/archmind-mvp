@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from archmind.telegram_bot import (
     build_completion_message,
+    build_continue_command,
+    build_fix_command,
     build_pipeline_command,
+    command_continue,
+    command_fix,
     extract_idea,
     load_last_project_path,
     make_project_name,
@@ -71,6 +77,16 @@ def test_run_state_command_uses_safe_list_args(monkeypatch, tmp_path: Path) -> N
     assert output == "STATE: NOT_DONE"
     assert captured["cmd"] == ["archmind", "state", "--path", str(tmp_path)]
     assert captured["kwargs"]["shell"] is False
+
+
+def test_build_continue_command() -> None:
+    path = Path("/tmp/archmind/demo")
+    assert build_continue_command(path) == ["archmind", "pipeline", "--path", str(path.resolve())]
+
+
+def test_build_fix_command() -> None:
+    path = Path("/tmp/archmind/demo")
+    assert build_fix_command(path) == ["archmind", "fix", "--path", str(path.resolve()), "--apply"]
 
 
 def test_start_pipeline_process_writes_temp_log_in_base_dir(monkeypatch, tmp_path: Path) -> None:
@@ -151,3 +167,48 @@ def test_build_completion_message_truncates_to_1200_chars(tmp_path: Path) -> Non
     (archmind / "result.txt").write_text(long_lines, encoding="utf-8")
     msg = build_completion_message(project_dir, tmp_path / "unused.log", max_len=1200)
     assert len(msg) <= 1200
+
+
+@dataclass
+class DummyMessage:
+    sent: list[str] = field(default_factory=list)
+
+    async def reply_text(self, text: str) -> None:
+        self.sent.append(text)
+
+
+@dataclass
+class DummyUpdate:
+    message: DummyMessage
+    effective_chat: object
+
+
+@dataclass
+class DummyChat:
+    id: int = 1
+
+
+@dataclass
+class DummyContext:
+    args: list[str] = field(default_factory=list)
+    application: object = None
+
+
+def test_continue_without_last_project_shows_help(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: None)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    ctx = DummyContext()
+    asyncio.run(command_continue(update, ctx))
+    assert msg.sent
+    assert "No previous project found. Use /idea first." in msg.sent[-1]
+
+
+def test_fix_without_last_project_shows_help(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: None)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    ctx = DummyContext()
+    asyncio.run(command_fix(update, ctx))
+    assert msg.sent
+    assert "No previous project found. Use /idea first." in msg.sent[-1]

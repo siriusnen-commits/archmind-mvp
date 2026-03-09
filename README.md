@@ -133,8 +133,11 @@ Telegram integration (MVP):
 - 실행:
   `python scripts/telegram_bot.py`
 - 지원 명령:
-  `/idea <text>`, `/pipeline <text>`, `/state`, `/help`
+  `/idea <text>`, `/pipeline <text>`, `/continue`, `/fix`, `/state`, `/help`
 - `/idea` 와 `/pipeline` 은 백그라운드로 `archmind pipeline ... --apply` 실행
+- `/continue` 는 마지막 프로젝트에 대해 `archmind pipeline --path <last_project>` 재실행
+- `/fix` 는 마지막 프로젝트에 대해 `archmind fix --path <last_project> --apply` 실행
+- 실패 후 Telegram에서 바로 `/continue` 또는 `/fix`로 복구 루프를 이어갈 수 있음
 - pipeline 종료 후 완료/실패 요약 메시지를 Telegram으로 자동 전송
 - 자동 요약에는 status, iterations, current task, result/state 요약이 포함
 - 생성 로그는 우선 `<base_dir>/<project_name>.telegram.log` 임시 로그로 기록

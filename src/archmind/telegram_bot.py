@@ -76,6 +76,14 @@ def build_pipeline_command(idea: str, template: str, base_dir: Path, project_nam
     ]
 
 
+def build_continue_command(project_dir: Path) -> list[str]:
+    return ["archmind", "pipeline", "--path", str(project_dir.expanduser().resolve())]
+
+
+def build_fix_command(project_dir: Path) -> list[str]:
+    return ["archmind", "fix", "--path", str(project_dir.expanduser().resolve()), "--apply"]
+
+
 def start_pipeline_process(cmd: list[str], base_dir: Path, project_name: str) -> tuple[subprocess.Popen[str], Path]:
     base = base_dir.expanduser().resolve()
     base.mkdir(parents=True, exist_ok=True)
@@ -94,6 +102,23 @@ def start_pipeline_process(cmd: list[str], base_dir: Path, project_name: str) ->
     finally:
         log_handle.close()
     return proc, log_path
+
+
+def start_background_process(cmd: list[str], temp_log: Path) -> subprocess.Popen[str]:
+    temp_log.parent.mkdir(parents=True, exist_ok=True)
+    log_handle = open(temp_log, "a", encoding="utf-8")
+    try:
+        proc = subprocess.Popen(  # noqa: S603
+            cmd,
+            stdout=log_handle,
+            stderr=log_handle,
+            text=True,
+            shell=False,
+            start_new_session=True,
+        )
+    finally:
+        log_handle.close()
+    return proc
 
 
 def run_state_command(project_dir: Path, timeout_s: int = 30) -> tuple[bool, str]:
@@ -120,6 +145,8 @@ def _help_text() -> str:
         "Commands:\n"
         "/idea <text> - run archmind pipeline from an idea\n"
         "/pipeline <text> - alias of /idea\n"
+        "/continue - continue the last project with pipeline\n"
+        "/fix - run fix on the last project\n"
         "/state - show latest project state\n"
         "/help - show this message"
     )
@@ -204,6 +231,17 @@ def _result_summary_lines(project_dir: Path, temp_log: Path) -> list[str]:
             picked = [str(item).strip() for item in failures if str(item).strip()]
             if picked:
                 return picked[:8]
+    evaluation = _load_json(archmind_dir / "evaluation.json")
+    if evaluation:
+        reasons = evaluation.get("reasons")
+        actions = evaluation.get("next_actions")
+        lines: list[str] = []
+        if isinstance(reasons, list):
+            lines.extend(str(item).strip() for item in reasons if str(item).strip())
+        if isinstance(actions, list):
+            lines.extend(f"next: {str(item).strip()}" for item in actions if str(item).strip())
+        if lines:
+            return lines[:8]
 
     if temp_log.exists():
         lines = temp_log.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -270,6 +308,15 @@ async def watch_pipeline_and_notify(
         pass
 
 
+def _missing_project_message() -> str:
+    return "No previous project found. Use /idea first."
+
+
+def _temp_log_for_project(project_dir: Path) -> Path:
+    root = project_dir.expanduser().resolve().parent
+    return root / f"{project_dir.name}.telegram.log"
+
+
 async def _handle_idea_like(update: Any, context: Any, cmd_name: str) -> None:
     idea = extract_idea(getattr(context, "args", []))
     if not idea:
@@ -313,12 +360,80 @@ async def _handle_idea_like(update: Any, context: Any, cmd_name: str) -> None:
     )
 
 
+async def _handle_continue(update: Any, context: Any) -> None:
+    project_dir = load_last_project_path()
+    if project_dir is None:
+        await update.message.reply_text(_missing_project_message())
+        return
+
+    command = build_continue_command(project_dir)
+    temp_log = _temp_log_for_project(project_dir)
+    try:
+        proc = start_background_process(command, temp_log=temp_log)
+    except Exception as exc:
+        await update.message.reply_text(f"Failed to continue pipeline: {exc}")
+        return
+
+    application = getattr(context, "application", None)
+    chat = getattr(update, "effective_chat", None)
+    chat_id = getattr(chat, "id", None)
+    if application is not None and chat_id is not None:
+        asyncio.create_task(
+            watch_pipeline_and_notify(
+                proc=proc,
+                project_dir=project_dir,
+                temp_log=temp_log,
+                chat_id=int(chat_id),
+                application=application,
+            )
+        )
+    await update.message.reply_text(f"continuing: pid={proc.pid}\nproject={project_dir}")
+
+
+async def _handle_fix(update: Any, context: Any) -> None:
+    project_dir = load_last_project_path()
+    if project_dir is None:
+        await update.message.reply_text(_missing_project_message())
+        return
+
+    command = build_fix_command(project_dir)
+    temp_log = _temp_log_for_project(project_dir)
+    try:
+        proc = start_background_process(command, temp_log=temp_log)
+    except Exception as exc:
+        await update.message.reply_text(f"Failed to start fix: {exc}")
+        return
+
+    application = getattr(context, "application", None)
+    chat = getattr(update, "effective_chat", None)
+    chat_id = getattr(chat, "id", None)
+    if application is not None and chat_id is not None:
+        asyncio.create_task(
+            watch_pipeline_and_notify(
+                proc=proc,
+                project_dir=project_dir,
+                temp_log=temp_log,
+                chat_id=int(chat_id),
+                application=application,
+            )
+        )
+    await update.message.reply_text(f"fix started: pid={proc.pid}\nproject={project_dir}")
+
+
 async def command_idea(update: Any, context: Any) -> None:
     await _handle_idea_like(update, context, "idea")
 
 
 async def command_pipeline(update: Any, context: Any) -> None:
     await _handle_idea_like(update, context, "pipeline")
+
+
+async def command_continue(update: Any, context: Any) -> None:
+    await _handle_continue(update, context)
+
+
+async def command_fix(update: Any, context: Any) -> None:
+    await _handle_fix(update, context)
 
 
 async def command_state(update: Any, context: Any) -> None:
@@ -352,6 +467,8 @@ def run_bot() -> None:
     app = ApplicationBuilder().token(token).build()
     app.add_handler(CommandHandler("idea", command_idea))
     app.add_handler(CommandHandler("pipeline", command_pipeline))
+    app.add_handler(CommandHandler("continue", command_continue))
+    app.add_handler(CommandHandler("fix", command_fix))
     app.add_handler(CommandHandler("state", command_state))
     app.add_handler(CommandHandler("help", command_help))
     app.run_polling()
