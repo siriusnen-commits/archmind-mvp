@@ -11,13 +11,18 @@ from archmind.telegram_bot import (
     build_continue_command,
     build_fix_command,
     build_pipeline_command,
+    command_logs,
     command_continue,
     command_fix,
     extract_idea,
     load_last_project_path,
     make_project_name,
     planned_project_dir,
+    read_recent_backend_logs,
+    read_recent_frontend_logs,
+    read_recent_last_logs,
     run_state_command,
+    sanitize_log_excerpt,
     save_last_project_path,
     start_pipeline_process,
 )
@@ -332,5 +337,74 @@ def test_fix_without_last_project_shows_help(monkeypatch) -> None:
     update = DummyUpdate(message=msg, effective_chat=DummyChat())
     ctx = DummyContext()
     asyncio.run(command_fix(update, ctx))
+    assert msg.sent
+    assert "No previous project found. Use /idea first." in msg.sent[-1]
+
+
+def test_sanitize_log_excerpt_removes_ansi_path_command() -> None:
+    raw = (
+        "\x1b[31mcommand: archmind pipeline --path /Users/me/proj\x1b[0m\n"
+        "/Users/me/proj/tests/test_api.py::test_create_todo E   AssertionError\n"
+        "   \n"
+    )
+    cleaned = sanitize_log_excerpt(raw)
+    assert "command:" not in cleaned.lower()
+    assert "/Users/me/proj" not in cleaned
+    assert "AssertionError" in cleaned
+
+
+def test_read_recent_backend_logs_prefers_backend_excerpt(tmp_path: Path) -> None:
+    project_dir = tmp_path / "proj"
+    run_logs = project_dir / ".archmind" / "run_logs"
+    run_logs.mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "result.json").write_text(
+        json.dumps({"failure_summary": ["backend pytest failed: test_create_todo"]}),
+        encoding="utf-8",
+    )
+    (run_logs / "run_20260309_120000.summary.txt").write_text(
+        "backend: FAIL\nE   AssertionError: expected 200 got 500\nfrontend: SKIPPED\n",
+        encoding="utf-8",
+    )
+    msg = read_recent_backend_logs(project_dir)
+    assert "Logs: backend" in msg
+    assert "Project:\nproj" in msg
+    assert "AssertionError" in msg or "backend pytest failed" in msg
+
+
+def test_read_recent_frontend_logs_prefers_frontend_excerpt(tmp_path: Path) -> None:
+    project_dir = tmp_path / "proj2"
+    run_logs = project_dir / ".archmind" / "run_logs"
+    run_logs.mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "result.json").write_text(
+        json.dumps({"failure_summary": ["frontend lint failed: app/page.tsx:12"]}),
+        encoding="utf-8",
+    )
+    (run_logs / "run_20260309_120000.summary.txt").write_text(
+        "frontend lint: FAIL\nESLint: Parsing error\napp/page.tsx:12:1\n",
+        encoding="utf-8",
+    )
+    msg = read_recent_frontend_logs(project_dir)
+    assert "Logs: frontend" in msg
+    assert "Project:\nproj2" in msg
+    assert "ESLint: Parsing error" in msg or "frontend lint failed" in msg
+
+
+def test_read_recent_logs_fallback_when_missing(tmp_path: Path) -> None:
+    project_dir = tmp_path / "none"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    msg_last = read_recent_last_logs(project_dir, temp_log=None)
+    msg_back = read_recent_backend_logs(project_dir)
+    msg_front = read_recent_frontend_logs(project_dir)
+    assert "No recent logs found." in msg_last
+    assert "No backend logs found." in msg_back
+    assert "No frontend logs found." in msg_front
+
+
+def test_logs_command_without_last_project_shows_help(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: None)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    ctx = DummyContext(args=["backend"])
+    asyncio.run(command_logs(update, ctx))
     assert msg.sent
     assert "No previous project found. Use /idea first." in msg.sent[-1]

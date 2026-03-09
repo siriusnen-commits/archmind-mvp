@@ -149,6 +149,7 @@ def _help_text() -> str:
         "/pipeline <text> - alias of /idea\n"
         "/continue - continue the last project with pipeline\n"
         "/fix - run fix on the last project\n"
+        "/logs [backend|frontend|last] - show recent failure logs\n"
         "/state - show latest project state\n"
         "/help - show this message"
     )
@@ -319,6 +320,164 @@ def _result_summary_lines(project_dir: Path, temp_log: Path) -> list[str]:
     return ["no summary available"]
 
 
+def sanitize_log_excerpt(text: str, max_lines: int = 40) -> str:
+    if not text:
+        return ""
+    ansi_escape = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+    cleaned_lines: list[str] = []
+    for raw in text.splitlines():
+        line = ansi_escape.sub("", raw).strip()
+        if not line:
+            continue
+        lower = line.lower()
+        if lower.startswith("command:") or lower.startswith("$ archmind"):
+            continue
+        line = re.sub(r"\s+", " ", line)
+        line = re.sub(r"/(?:Users|home)/[^ ]+/([^/ ]+)", r".../\1", line)
+        line = re.sub(r"/tmp/[^ ]+/([^/ ]+)", r".../\1", line)
+        cleaned_lines.append(line)
+    if not cleaned_lines:
+        return ""
+    return "\n".join(cleaned_lines[:max_lines])
+
+
+def _collect_recent_failures(project_dir: Path, limit: int = 5) -> list[str]:
+    state = _load_json(project_dir / ".archmind" / "state.json") or {}
+    failures = state.get("recent_failures")
+    if not isinstance(failures, list):
+        return []
+    out: list[str] = []
+    for line in failures:
+        item = sanitize_log_excerpt(str(line), max_lines=1).strip()
+        if item and item not in out:
+            out.append(item)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _latest_run_logs(project_dir: Path) -> list[Path]:
+    run_logs = project_dir / ".archmind" / "run_logs"
+    if not run_logs.exists():
+        return []
+    candidates: list[Path] = []
+    for pattern in ("run_*.summary.txt", "run_*.summary.json", "run_*.log"):
+        candidates.extend(run_logs.glob(pattern))
+    return sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def _extract_candidate_lines(text: str, mode: str) -> list[str]:
+    keywords_backend = ("backend", "pytest", "assert", "traceback", "failed", "error", "e ")
+    keywords_frontend = ("frontend", "eslint", "lint", "build", "tsc", "npm", "failed", "error")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if mode == "backend":
+        picked = [line for line in lines if any(k in line.lower() for k in keywords_backend)]
+    elif mode == "frontend":
+        picked = [line for line in lines if any(k in line.lower() for k in keywords_frontend)]
+    else:
+        picked = lines[-30:]
+    if not picked:
+        picked = lines[-20:]
+    return picked[:30]
+
+
+def _read_json_clues(project_dir: Path, mode: str) -> list[str]:
+    archmind_dir = project_dir / ".archmind"
+    result_payload = _load_json(archmind_dir / "result.json") or {}
+    out: list[str] = []
+    failure_summary = result_payload.get("failure_summary")
+    if isinstance(failure_summary, list):
+        for item in failure_summary:
+            line = str(item).strip()
+            lower = line.lower()
+            if mode == "backend" and "backend" not in lower and "pytest" not in lower:
+                continue
+            if mode == "frontend" and all(k not in lower for k in ("frontend", "lint", "build", "eslint")):
+                continue
+            out.append(line)
+    if mode == "backend":
+        step = ((result_payload.get("steps") or {}).get("run_before_fix") or {})
+        detail = step.get("detail") if isinstance(step, dict) else {}
+        if isinstance(detail, dict) and str(detail.get("backend_status") or "").upper() == "FAIL":
+            out.append("Backend tests are still failing")
+    if mode == "frontend":
+        step = ((result_payload.get("steps") or {}).get("run_before_fix") or {})
+        detail = step.get("detail") if isinstance(step, dict) else {}
+        if isinstance(detail, dict) and str(detail.get("frontend_status") or "").upper() == "FAIL":
+            out.append("Frontend checks are still failing")
+    return out[:10]
+
+
+def _build_logs_message(project_dir: Path, mode: str, excerpt: str, fallback_text: str) -> str:
+    lines = [
+        f"Logs: {mode}",
+        "",
+        "Project:",
+        project_dir.name,
+        "",
+    ]
+    if excerpt:
+        lines += ["Excerpt:", excerpt]
+    else:
+        lines.append(fallback_text)
+    failures = _collect_recent_failures(project_dir, limit=4)
+    if failures:
+        lines += ["", "Recent failures:"]
+        lines.extend(f"- {line}" for line in failures)
+    return "\n".join(lines)
+
+
+def read_recent_backend_logs(project_dir: Path) -> str:
+    clues = _read_json_clues(project_dir, "backend")
+    files = _latest_run_logs(project_dir)
+    for path in files:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        candidate = _extract_candidate_lines(text, "backend")
+        if candidate:
+            excerpt = sanitize_log_excerpt("\n".join(clues + candidate), max_lines=35)
+            if excerpt:
+                return _build_logs_message(project_dir, "backend", excerpt, "No backend logs found.")
+    if clues:
+        excerpt = sanitize_log_excerpt("\n".join(clues), max_lines=25)
+        if excerpt:
+            return _build_logs_message(project_dir, "backend", excerpt, "No backend logs found.")
+    return _build_logs_message(project_dir, "backend", "", "No backend logs found.")
+
+
+def read_recent_frontend_logs(project_dir: Path) -> str:
+    clues = _read_json_clues(project_dir, "frontend")
+    files = _latest_run_logs(project_dir)
+    for path in files:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        candidate = _extract_candidate_lines(text, "frontend")
+        if candidate:
+            excerpt = sanitize_log_excerpt("\n".join(clues + candidate), max_lines=35)
+            if excerpt:
+                return _build_logs_message(project_dir, "frontend", excerpt, "No frontend logs found.")
+    if clues:
+        excerpt = sanitize_log_excerpt("\n".join(clues), max_lines=25)
+        if excerpt:
+            return _build_logs_message(project_dir, "frontend", excerpt, "No frontend logs found.")
+    return _build_logs_message(project_dir, "frontend", "", "No frontend logs found.")
+
+
+def read_recent_last_logs(project_dir: Path, temp_log: Optional[Path] = None) -> str:
+    files = _latest_run_logs(project_dir)
+    for path in files:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        candidate = _extract_candidate_lines(text, "last")
+        if candidate:
+            excerpt = sanitize_log_excerpt("\n".join(candidate), max_lines=35)
+            if excerpt:
+                return _build_logs_message(project_dir, "last", excerpt, "No recent logs found.")
+    if temp_log and temp_log.exists():
+        text = temp_log.read_text(encoding="utf-8", errors="replace")
+        excerpt = sanitize_log_excerpt("\n".join(_extract_candidate_lines(text, "last")), max_lines=30)
+        if excerpt:
+            return _build_logs_message(project_dir, "last", excerpt, "No recent logs found.")
+    return _build_logs_message(project_dir, "last", "", "No recent logs found.")
+
+
 def _summary_from_failure_signature(signature: str) -> list[str]:
     raw = (signature or "").strip().lower()
     if not raw:
@@ -380,6 +539,7 @@ def _recommend_next_actions(status: str, summary_lines: list[str], state: dict[s
 
     if normalized == "STUCK":
         return [
+            "run /logs backend",
             "inspect backend failure details",
             "revise current task",
             "then run /fix or /continue",
@@ -653,6 +813,28 @@ async def command_state(update: Any, context: Any) -> None:
     await update.message.reply_text(_truncate_message(output))
 
 
+async def command_logs(update: Any, context: Any) -> None:
+    project_path = load_last_project_path()
+    if project_path is None:
+        await update.message.reply_text(_missing_project_message())
+        return
+
+    args = [str(x).strip().lower() for x in getattr(context, "args", []) if str(x).strip()]
+    mode = args[0] if args else "last"
+    if mode not in ("backend", "frontend", "last"):
+        await update.message.reply_text("Usage: /logs [backend|frontend|last]")
+        return
+
+    if mode == "backend":
+        msg = read_recent_backend_logs(project_path)
+    elif mode == "frontend":
+        msg = read_recent_frontend_logs(project_path)
+    else:
+        msg = read_recent_last_logs(project_path, temp_log=_temp_log_for_project(project_path))
+
+    await update.message.reply_text(_truncate_message(msg, limit=1500))
+
+
 async def command_help(update: Any, context: Any) -> None:
     del context
     await update.message.reply_text(_help_text())
@@ -673,6 +855,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("pipeline", command_pipeline))
     app.add_handler(CommandHandler("continue", command_continue))
     app.add_handler(CommandHandler("fix", command_fix))
+    app.add_handler(CommandHandler("logs", command_logs))
     app.add_handler(CommandHandler("state", command_state))
     app.add_handler(CommandHandler("help", command_help))
     app.run_polling()

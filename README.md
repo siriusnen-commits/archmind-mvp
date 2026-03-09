@@ -133,10 +133,13 @@ Telegram integration (MVP):
 - 실행:
   `python scripts/telegram_bot.py`
 - 지원 명령:
-  `/idea <text>`, `/pipeline <text>`, `/continue`, `/fix`, `/state`, `/help`
+  `/idea <text>`, `/pipeline <text>`, `/continue`, `/fix`, `/logs [backend|frontend|last]`, `/state`, `/help`
 - `/idea` 와 `/pipeline` 은 백그라운드로 `archmind pipeline ... --apply` 실행
 - `/continue` 는 마지막 프로젝트에 대해 `archmind pipeline --path <last_project>` 재실행
 - `/fix` 는 마지막 프로젝트에 대해 `archmind fix --path <last_project> --apply` 실행
+- `/logs backend` 는 최근 backend 실패 로그(pytest/traceback 요약)를 보여줌
+- `/logs frontend` 는 최근 frontend 실패 로그(lint/build 요약)를 보여줌
+- `/logs last` 는 최신 run summary/log 기반 최근 실패 로그를 보여줌
 - 실패 후 Telegram에서 바로 `/continue` 또는 `/fix`로 복구 루프를 이어갈 수 있음
 - pipeline 종료 후 완료/실패 요약 메시지를 Telegram으로 자동 전송
 - 자동 요약에는 status, iterations, current task, result/state 요약이 포함
@@ -146,6 +149,7 @@ Telegram integration (MVP):
 - 완료 메시지에는 `Next:` 추천 액션(예: `/fix`, `/continue`)이 함께 포함됨
 - 기본 finished 메시지는 핵심 상태/요약/다음 액션 중심이며 raw command 문자열은 숨김
 - finished 메시지는 내부 state dump/project 절대경로 대신 프로젝트 이름과 핵심 상태만 표시
+- finished 메시지는 짧게 유지하고, 자세한 실패 근거는 `/logs`로 확인하는 흐름을 권장
 - 상세 로그와 내부 결과는 `<project>/.archmind/result.json`, `state.json`, `evaluation.json`에서 확인
 - Telegram 알림은 빠른 의사결정용 요약이며, 디버깅은 `.archmind` 아티팩트 기준으로 진행
 - 반복 실패가 누적되면 상태를 `STUCK`으로 승격해 사람이 개입할 시점을 명확히 표시
