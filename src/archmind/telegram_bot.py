@@ -251,6 +251,31 @@ def _result_summary_lines(project_dir: Path, temp_log: Path) -> list[str]:
     return ["no summary available"]
 
 
+def _recommend_next_actions(status: str, summary_lines: list[str], state: dict[str, Any]) -> list[str]:
+    normalized = (status or "UNKNOWN").upper()
+    text = "\n".join(summary_lines).lower()
+    last_action = str(state.get("last_action") or "").lower()
+
+    if normalized == "BLOCKED":
+        return ["inspect logs with /state and review backend/frontend failures"]
+    if normalized in ("DONE", "SUCCESS"):
+        return ["review project artifacts"]
+
+    has_backend_pytest_fail = "backend" in text and ("fail" in text or "pytest" in text)
+    recent_fix = "fix" in last_action
+
+    if normalized == "NOT_DONE":
+        if has_backend_pytest_fail and not recent_fix:
+            return ["run /fix", "then /continue"]
+        if recent_fix:
+            return ["run /continue"]
+        return ["run /fix", "then /continue"]
+
+    if normalized in ("FAIL", "SKIP", "UNKNOWN"):
+        return ["run /fix", "then /continue"]
+    return ["run /state"]
+
+
 def build_completion_message(
     project_dir: Path,
     temp_log: Path,
@@ -280,11 +305,18 @@ def build_completion_message(
         lines.append(f"Current task: {current_task}")
     if exit_code is not None:
         lines.append(f"Exit code: {exit_code}")
+    next_actions = _recommend_next_actions(status, summary_lines, state)
     lines += [
         "",
         "Summary:",
     ]
-    lines.extend(f"- {line}" for line in summary_lines[:10])
+    lines.extend(f"- {line}" for line in summary_lines[-6:])
+    if next_actions:
+        lines += [
+            "",
+            "Next:",
+        ]
+        lines.extend(f"- {line}" for line in next_actions[:2])
     return _truncate_message("\n".join(lines), limit=max_len)
 
 

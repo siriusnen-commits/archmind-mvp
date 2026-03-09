@@ -146,6 +146,9 @@ def test_build_completion_message_reads_result_state_json(tmp_path: Path) -> Non
     assert "Iterations: 2" in message
     assert "Current task: add API endpoints" in message
     assert "- - Backend: FAIL" in message
+    assert "Next:" in message
+    assert "- run /fix" in message
+    assert "- then /continue" in message
 
 
 def test_build_completion_message_fallbacks_to_temp_log(tmp_path: Path) -> None:
@@ -167,6 +170,30 @@ def test_build_completion_message_truncates_to_1200_chars(tmp_path: Path) -> Non
     (archmind / "result.txt").write_text(long_lines, encoding="utf-8")
     msg = build_completion_message(project_dir, tmp_path / "unused.log", max_len=1200)
     assert len(msg) <= 1200
+
+
+def test_build_completion_message_not_done_after_fix_recommends_continue(tmp_path: Path) -> None:
+    project_dir = tmp_path / "p4"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "last_status": "NOT_DONE",
+                "iterations": 3,
+                "last_action": "archmind fix --path <project> --apply",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "result.txt").write_text(
+        "ArchMind Pipeline Result\n- Backend: FAIL\n- further work remains\n",
+        encoding="utf-8",
+    )
+    msg = build_completion_message(project_dir, tmp_path / "unused.log")
+    assert "Status: NOT_DONE" in msg
+    assert "Next:" in msg
+    assert "- run /continue" in msg
 
 
 @dataclass
