@@ -86,6 +86,13 @@ def build_fix_command(project_dir: Path) -> list[str]:
     return ["archmind", "fix", "--path", str(project_dir.expanduser().resolve()), "--apply"]
 
 
+def build_retry_commands(project_dir: Path) -> list[list[str]]:
+    return [
+        build_fix_command(project_dir),
+        build_continue_command(project_dir),
+    ]
+
+
 def start_pipeline_process(cmd: list[str], base_dir: Path, project_name: str) -> tuple[subprocess.Popen[str], Path]:
     base = base_dir.expanduser().resolve()
     base.mkdir(parents=True, exist_ok=True)
@@ -149,6 +156,7 @@ def _help_text() -> str:
         "/pipeline <text> - alias of /idea\n"
         "/continue - continue the last project with pipeline\n"
         "/fix - run fix on the last project\n"
+        "/retry - run fix and then continue on the last project\n"
         "/logs [backend|frontend|last] - show recent failure logs\n"
         "/state - show latest project state\n"
         "/help - show this message"
@@ -675,6 +683,42 @@ async def watch_pipeline_and_notify(
         pass
 
 
+def _run_command_to_log(cmd: list[str], temp_log: Path) -> int:
+    temp_log.parent.mkdir(parents=True, exist_ok=True)
+    with open(temp_log, "a", encoding="utf-8") as handle:
+        proc = subprocess.Popen(  # noqa: S603
+            cmd,
+            stdout=handle,
+            stderr=handle,
+            text=True,
+            shell=False,
+            start_new_session=True,
+        )
+        return proc.wait()
+
+
+async def watch_retry_and_notify(
+    project_dir: Path,
+    temp_log: Path,
+    chat_id: int,
+    application: Any,
+) -> None:
+    try:
+        commands = build_retry_commands(project_dir)
+        last_exit = 0
+        for cmd in commands:
+            last_exit = await asyncio.to_thread(_run_command_to_log, cmd, temp_log)
+            if last_exit != 0 and cmd[:2] == ["archmind", "fix"]:
+                break
+        message = build_completion_message(project_dir, temp_log, max_len=1200, exit_code=last_exit)
+    except Exception as exc:
+        message = f"ArchMind finished with notification error: {exc}"
+    try:
+        await application.bot.send_message(chat_id=chat_id, text=message)
+    except Exception:
+        pass
+
+
 def _missing_project_message() -> str:
     return "No previous project found. Use /idea first."
 
@@ -787,6 +831,39 @@ async def _handle_fix(update: Any, context: Any) -> None:
     await update.message.reply_text(f"fix started: pid={proc.pid}\nproject={project_dir}")
 
 
+async def _handle_retry(update: Any, context: Any) -> None:
+    project_dir = load_last_project_path()
+    if project_dir is None:
+        await update.message.reply_text(_missing_project_message())
+        return
+
+    status = _status_from_sources(project_dir).upper()
+    if status in ("DONE", "SUCCESS"):
+        await update.message.reply_text("Project already complete.")
+        return
+
+    warn = ""
+    if status == "STUCK":
+        warn = "\nwarning=Project is currently STUCK; retry may repeat the same failure."
+
+    application = getattr(context, "application", None)
+    chat = getattr(update, "effective_chat", None)
+    chat_id = getattr(chat, "id", None)
+    if application is not None and chat_id is not None:
+        asyncio.create_task(
+            watch_retry_and_notify(
+                project_dir=project_dir,
+                temp_log=_temp_log_for_project(project_dir),
+                chat_id=int(chat_id),
+                application=application,
+            )
+        )
+
+    await update.message.reply_text(
+        f"retry started\nproject={project_dir}\nmode=fix -> continue{warn}"
+    )
+
+
 async def command_idea(update: Any, context: Any) -> None:
     await _handle_idea_like(update, context, "idea")
 
@@ -801,6 +878,10 @@ async def command_continue(update: Any, context: Any) -> None:
 
 async def command_fix(update: Any, context: Any) -> None:
     await _handle_fix(update, context)
+
+
+async def command_retry(update: Any, context: Any) -> None:
+    await _handle_retry(update, context)
 
 
 async def command_state(update: Any, context: Any) -> None:
@@ -858,6 +939,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("pipeline", command_pipeline))
     app.add_handler(CommandHandler("continue", command_continue))
     app.add_handler(CommandHandler("fix", command_fix))
+    app.add_handler(CommandHandler("retry", command_retry))
     app.add_handler(CommandHandler("logs", command_logs))
     app.add_handler(CommandHandler("state", command_state))
     app.add_handler(CommandHandler("help", command_help))

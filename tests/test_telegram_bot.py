@@ -11,9 +11,11 @@ from archmind.telegram_bot import (
     build_continue_command,
     build_fix_command,
     build_pipeline_command,
+    build_retry_commands,
     command_logs,
     command_continue,
     command_fix,
+    command_retry,
     extract_idea,
     load_last_project_path,
     make_project_name,
@@ -93,6 +95,13 @@ def test_build_continue_command() -> None:
 def test_build_fix_command() -> None:
     path = Path("/tmp/archmind/demo")
     assert build_fix_command(path) == ["archmind", "fix", "--path", str(path.resolve()), "--apply"]
+
+
+def test_build_retry_commands_order() -> None:
+    path = Path("/tmp/archmind/demo")
+    cmds = build_retry_commands(path)
+    assert cmds[0] == ["archmind", "fix", "--path", str(path.resolve()), "--apply"]
+    assert cmds[1] == ["archmind", "pipeline", "--path", str(path.resolve())]
 
 
 def test_start_pipeline_process_writes_temp_log_in_base_dir(monkeypatch, tmp_path: Path) -> None:
@@ -408,3 +417,26 @@ def test_logs_command_without_last_project_shows_help(monkeypatch) -> None:
     asyncio.run(command_logs(update, ctx))
     assert msg.sent
     assert "No previous project found. Use /idea first." in msg.sent[-1]
+
+
+def test_retry_without_last_project_shows_help(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: None)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    ctx = DummyContext()
+    asyncio.run(command_retry(update, ctx))
+    assert msg.sent
+    assert "No previous project found. Use /idea first." in msg.sent[-1]
+
+
+def test_retry_done_status_is_blocked_with_message(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "done_proj"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project_dir)
+    monkeypatch.setattr("archmind.telegram_bot._status_from_sources", lambda _p: "DONE")
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    ctx = DummyContext(application=object())
+    asyncio.run(command_retry(update, ctx))
+    assert msg.sent
+    assert "Project already complete." in msg.sent[-1]

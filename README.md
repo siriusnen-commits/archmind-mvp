@@ -133,10 +133,14 @@ Telegram integration (MVP):
 - 실행:
   `python scripts/telegram_bot.py`
 - 지원 명령:
-  `/idea <text>`, `/pipeline <text>`, `/continue`, `/fix`, `/logs [backend|frontend|last]`, `/state`, `/help`
+  `/idea <text>`, `/pipeline <text>`, `/continue`, `/fix`, `/retry`, `/logs [backend|frontend|last]`, `/state`, `/help`
 - `/idea` 와 `/pipeline` 은 백그라운드로 `archmind pipeline ... --apply` 실행
 - `/continue` 는 마지막 프로젝트에 대해 `archmind pipeline --path <last_project>` 재실행
 - `/fix` 는 마지막 프로젝트에 대해 `archmind fix --path <last_project> --apply` 실행
+- `/retry` 는 실패 복구 루프를 한 번에 실행:
+  `archmind fix --path <last_project> --apply` 후 `archmind pipeline --path <last_project>`
+- `/retry` 시작 시 프로젝트가 이미 `DONE/SUCCESS` 상태면 실행하지 않고 완료 안내 메시지를 반환
+- `STUCK` 상태에서는 경고를 보여주되 `/retry` 실행은 허용
 - `/logs backend` 는 최근 backend 실패 로그(pytest/traceback 요약)를 보여줌
 - `/logs frontend` 는 최근 frontend 실패 로그(lint/build 요약)를 보여줌
 - `/logs last` 는 최신 run summary/log 기반 최근 실패 로그를 보여줌
