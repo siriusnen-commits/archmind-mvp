@@ -12,6 +12,7 @@ from typing import Any, Optional
 from archmind.failure import (
     classify_failure,
     extract_failure_excerpt,
+    extract_failure_location_context,
     failure_signature_from_run_result,
     fix_strategy_for_class,
     select_primary_failure_class,
@@ -139,13 +140,14 @@ def _read_failure_summary_section(summary_path: Optional[Path]) -> list[str]:
     return section or [line for line in lines[-10:] if line.strip()]
 
 
-def _extract_failure_details(text: str) -> dict[str, Optional[str | list[str]]]:
+def _extract_failure_details(text: str, failure_class: str = "") -> dict[str, Optional[str | list[str]]]:
     lines = text.splitlines()
     test_name: Optional[str] = None
     file_path: Optional[str] = None
+    is_frontend = (failure_class or "").lower().startswith("frontend")
 
     for line in lines:
-        if line.startswith("FAILED ") or line.startswith("ERROR "):
+        if not is_frontend and (line.startswith("FAILED ") or line.startswith("ERROR ")):
             candidate = line.split(" ", 1)[1]
             test_id = candidate.split(" - ", 1)[0].strip()
             test_name = test_id
@@ -154,6 +156,11 @@ def _extract_failure_details(text: str) -> dict[str, Optional[str | list[str]]]:
             else:
                 file_path = test_id
             break
+        if is_frontend:
+            match_front = re.search(r"(frontend/[^\s:]+\.(?:tsx?|jsx?))(?::\d+)?", line)
+            if match_front:
+                file_path = match_front.group(1)
+                break
 
     if file_path is None:
         match = re.search(r'File "([^"]+)"', text)
@@ -164,9 +171,8 @@ def _extract_failure_details(text: str) -> dict[str, Optional[str | list[str]]]:
             if match:
                 file_path = match.group(1)
 
-    trace_idx = next((i for i, line in enumerate(lines) if "Traceback" in line), -1)
-    stack_top = lines[trace_idx : trace_idx + 6] if trace_idx != -1 else []
-    stack_bottom = lines[-6:] if lines else []
+    stack_top = extract_failure_location_context(text, failure_class=failure_class, max_lines=8)
+    stack_bottom: list[str] = []
 
     return {
         "test_name": test_name,
@@ -211,13 +217,10 @@ def _build_fix_prompt(
     test_name = failure_details.get("test_name") or "확인 필요"
     file_path = failure_details.get("file_path") or (files_hint[0] if files_hint else "확인 필요")
     stack_top = failure_details.get("stack_top") or []
-    stack_bottom = failure_details.get("stack_bottom") or []
 
     plan_block = "\n".join(plan_lines) if plan_lines else "plan missing"
     summary_block = "\n".join(f"- {line}" for line in summary_lines) if summary_lines else "- (요약 없음)"
     files_block = file_path if isinstance(file_path, str) else "확인 필요"
-    stack_top_block = "\n".join(stack_top) if stack_top else "(스택트레이스 상단 없음)"
-    stack_bottom_block = "\n".join(stack_bottom) if stack_bottom else "(스택트레이스 하단 없음)"
     frontend_block = "\n".join(frontend_error_lines) if frontend_error_lines else "(프론트 오류 요약 없음)"
     state_block = "\n".join(state_lines) if state_lines else "- (state missing)"
     strategy_lines = strategy_instructions(failure_class)
@@ -225,6 +228,21 @@ def _build_fix_prompt(
     excerpt_block = failure_excerpt or "(excerpt 없음)"
     repair_targets = repair_targets or []
     repair_targets_block = ", ".join(repair_targets) if repair_targets else "확인 필요"
+    is_frontend = (failure_class or "").lower().startswith("frontend")
+    failure_location_block = "\n".join(stack_top) if stack_top else "(핵심 실패 지점 없음)"
+    if is_frontend:
+        failure_location_section = (
+            f"- 실패한 파일: {files_block}\n"
+            "- 오류 위치:\n"
+            f"{failure_location_block}\n\n"
+        )
+    else:
+        failure_location_section = (
+            f"- 실패한 테스트: {test_name}\n"
+            f"- 파일 경로: {files_block}\n"
+            "- 스택트레이스(상단):\n"
+            f"{failure_location_block}\n\n"
+        )
 
     return (
         "# 재현 커맨드\n"
@@ -249,12 +267,7 @@ def _build_fix_prompt(
         "# Repair Targets\n"
         f"- Repair targets: {repair_targets_block}\n\n"
         "# 실패 지점\n"
-        f"- 실패한 테스트: {test_name}\n"
-        f"- 파일 경로: {files_block}\n"
-        "- 스택트레이스(상단):\n"
-        f"{stack_top_block}\n"
-        "- 스택트레이스(하단):\n"
-        f"{stack_bottom_block}\n\n"
+        f"{failure_location_section}"
         "# 수정 지시문\n"
         "- 목표: python -m pytest -q 통과\n"
         f"- 수정 대상: {repair_targets_block}\n"
@@ -279,7 +292,6 @@ def _write_fix_prompt(
 ) -> Path:
     summary_lines = _read_failure_summary_section(run_result.summary_path)
     log_text = "\n".join(log_tail)
-    details = _extract_failure_details(log_text)
     files_hint = extract_files_hint(log_tail)
     project_dir = log_dir.parent.parent
     plan_lines = read_plan_summary(project_dir, max_lines=200)
@@ -301,6 +313,8 @@ def _write_fix_prompt(
         max_lines=6,
         failure_class=failure_class,
     )
+    location_text = "\n".join(summary_lines + log_tail + frontend_error_lines)
+    details = _extract_failure_details(location_text, failure_class=failure_class)
     fix_strategy = fix_strategy_for_class(failure_class)
     repair_targets = select_repair_targets(
         failure_class,

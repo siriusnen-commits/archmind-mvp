@@ -119,6 +119,78 @@ def filter_noise_lines(lines: list[str], failure_class: str | None = None) -> li
     return out
 
 
+def filter_secondary_noise(lines: list[str], failure_class: str | None = None) -> list[str]:
+    filtered = filter_noise_lines(lines, failure_class=failure_class)
+    klass = (failure_class or "").lower()
+    is_backend = klass.startswith("backend-pytest")
+    is_frontend = klass.startswith("frontend")
+    out: list[str] = []
+    for line in filtered:
+        lower = line.lower()
+        if is_backend and any(
+            token in lower
+            for token in (
+                "eslint interactive",
+                "strict (recommended)",
+                "next.js eslint plugin",
+                "how would you like to configure eslint",
+            )
+        ):
+            continue
+        if is_frontend and any(
+            token in lower
+            for token in (
+                "short test summary info",
+                "importlib",
+                "pytest collection",
+                "in <module>",
+                "from fastapi.testclient",
+            )
+        ):
+            continue
+        out.append(line)
+    return out
+
+
+def extract_failure_location_context(text: str, failure_class: str | None = None, max_lines: int = 8) -> list[str]:
+    klass = (failure_class or "").lower()
+    is_frontend = klass.startswith("frontend")
+    lines = filter_secondary_noise(text.splitlines(), failure_class=failure_class)
+
+    if is_frontend:
+        patterns = [
+            r"ESLint|Parsing error|Cannot find module|npm ERR!",
+            r"\bTS2304\b|\bTS2322\b|is not assignable",
+            r"build failed|failed to compile|next build|vite build",
+            r"frontend/[^\s:]+\.(?:tsx?|jsx?)(?::\d+)?",
+        ]
+    else:
+        patterns = [
+            r"ModuleNotFoundError|ImportError|AssertionError",
+            r"^E\s+",
+            r"^FAILED ",
+            r"tests/.+\.py:\d+|tests/.+\.py::",
+            r"in <module>|from .+ import .+",
+            r"File \"[^\"]+\.py\", line \d+",
+        ]
+
+    picked: list[str] = []
+    for pat in patterns:
+        rx = re.compile(pat, re.IGNORECASE)
+        for line in lines:
+            if rx.search(line) and line not in picked:
+                picked.append(line)
+            if len(picked) >= max_lines:
+                return picked[:max_lines]
+
+    for line in lines:
+        if line not in picked:
+            picked.append(line)
+        if len(picked) >= max_lines:
+            break
+    return picked[:max_lines]
+
+
 def extract_core_failure_lines(text: str, failure_class: str | None = None, max_lines: int = 4) -> list[str]:
     del failure_class
     lines = [line.strip() for line in text.splitlines() if line.strip()]

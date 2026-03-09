@@ -4,8 +4,10 @@ from pathlib import Path
 
 from archmind.failure import (
     classify_failure,
+    extract_failure_location_context,
     extract_core_failure_lines,
     extract_failure_excerpt,
+    filter_secondary_noise,
     filter_noise_lines,
     fix_strategy_for_class,
     is_safe_repair_target,
@@ -276,3 +278,89 @@ def test_filter_noise_lines_removes_frontend_prompt_for_backend() -> None:
     assert "How would you like to configure ESLint?" not in joined
     assert "Base" not in joined
     assert "Cancel" not in joined
+
+
+def test_extract_failure_location_context_backend_removes_frontend_noise() -> None:
+    text = "\n".join(
+        [
+            "E   ModuleNotFoundError: No module named 'fastapi'",
+            "tests/test_defects.py:1: in <module>",
+            "from fastapi.testclient import TestClient",
+            "? How would you like to configure ESLint?",
+            "Strict (recommended)",
+            "Base",
+            "Cancel",
+            "If you set up ESLint yourself, we recommend adding the Next.js ESLint plugin",
+        ]
+    )
+    lines = extract_failure_location_context(text, failure_class="backend-pytest:module-not-found", max_lines=8)
+    joined = "\n".join(lines)
+    assert "ModuleNotFoundError" in joined
+    assert "tests/test_defects.py:1: in <module>" in joined
+    assert "How would you like to configure ESLint" not in joined
+    assert "Base" not in joined
+    assert "Cancel" not in joined
+
+
+def test_extract_failure_location_context_backend_assertion_compact() -> None:
+    text = "\n".join(
+        [
+            "Traceback:",
+            "E   AssertionError: expected 200 got 500",
+            "FAILED tests/test_api.py::test_create_todo - assert 500 == 200",
+            "=========================== short test summary info ============================",
+        ]
+    )
+    lines = extract_failure_location_context(text, failure_class="backend-pytest:assertion", max_lines=6)
+    joined = "\n".join(lines)
+    assert "AssertionError" in joined
+    assert "FAILED tests/test_api.py::test_create_todo" in joined
+    assert "short test summary info" not in joined.lower()
+
+
+def test_extract_failure_location_context_frontend_removes_backend_trace() -> None:
+    text = "\n".join(
+        [
+            "Traceback:",
+            "E   ModuleNotFoundError: No module named 'fastapi'",
+            "tests/test_defects.py:1: in <module>",
+            "ESLint: Parsing error ...",
+            "frontend/app/page.tsx:12:1",
+        ]
+    )
+    lines = extract_failure_location_context(text, failure_class="frontend-lint", max_lines=6)
+    joined = "\n".join(lines)
+    assert "ESLint: Parsing error" in joined
+    assert "frontend/app/page.tsx:12:1" in joined
+    assert "ModuleNotFoundError" not in joined
+
+
+def test_fix_prompt_failure_location_section_is_primary_specific() -> None:
+    prompt = _build_fix_prompt(
+        command="archmind fix --path /tmp/project --scope backend",
+        plan_lines=["- step: fix import"],
+        task_line="[1] doing API test fix",
+        evaluation_status="NOT_DONE",
+        state_lines=["- last_status: FAIL"],
+        summary_lines=["- backend pytest failed"],
+        failure_details={
+            "test_name": "tests/test_defects.py",
+            "file_path": "tests/test_defects.py",
+            "stack_top": [
+                "tests/test_defects.py:1: in <module>",
+                "E   ModuleNotFoundError: No module named 'fastapi'",
+            ],
+            "stack_bottom": [],
+        },
+        files_hint=["tests/test_defects.py"],
+        scope="backend",
+        frontend_error_lines=[],
+        failure_class="backend-pytest:module-not-found",
+        fix_strategy="backend-import-resolution",
+        failure_excerpt="E ModuleNotFoundError: No module named 'fastapi'",
+        repair_targets=["requirements.txt"],
+    )
+    assert "# 실패 지점" in prompt
+    assert "실패한 테스트: tests/test_defects.py" in prompt
+    assert "ModuleNotFoundError: No module named 'fastapi'" in prompt
+    assert "How would you like to configure ESLint" not in prompt
