@@ -685,8 +685,31 @@ def format_state_text(project_dir: Path) -> str:
     derived_label = str(payload.get("derived_task_label") or "").strip()
     task_title = _task_title(project_dir, int(current_task_id)) if current_task_id else None
     task_title = derived_label or task_title
-    current_line = f"[{current_task_id}] {task_title}" if current_task_id and task_title else "none"
+    current_line = task_title or "none"
+
+    project_status = "NOT_DONE"
+    if bool(payload.get("stuck")):
+        project_status = "STUCK"
+    elif str(status).upper() in ("SUCCESS", "DONE"):
+        project_status = "DONE"
+
+    def _is_failure_noise(text: str) -> bool:
+        line = str(text or "").strip()
+        if not line:
+            return True
+        lower = line.lower()
+        if lower.startswith("traceback"):
+            return True
+        if "========================" in line:
+            return True
+        if lower in ("base", "cancel"):
+            return True
+        if "stacktrace" in lower and "header" in lower:
+            return True
+        return False
+
     lines = [
+        f"Project status: {project_status}",
         f"Agent state: {agent_state}",
         f"Last status: {status}",
         f"Iterations: {iterations}",
@@ -697,8 +720,16 @@ def format_state_text(project_dir: Path) -> str:
     ]
     failures = payload.get("recent_failures") or []
     if failures:
-        for line in failures[:3]:
+        shown = 0
+        for line in failures:
+            if _is_failure_noise(str(line)):
+                continue
             lines.append(f"- {line}")
+            shown += 1
+            if shown >= 3:
+                break
+        if shown == 0:
+            lines.append("- (none)")
     else:
         lines.append("- (none)")
     return "\n".join(lines)

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from archmind.cli import main
 from archmind.state import derive_task_label_from_failure_signature
-from archmind.state import ensure_state, load_state, update_after_fix, update_state_event
+from archmind.state import ensure_state, format_state_text, load_state, update_after_fix, update_state_event
 
 
 def _write_backend_project(root: Path, *, failing: bool = False) -> None:
@@ -215,11 +215,88 @@ def test_state_cli_output(tmp_path: Path, capsys) -> None:
     exit_code = main(["state", "--path", str(tmp_path)])
     assert exit_code == 0
     output = capsys.readouterr().out
+    assert "Project status:" in output
     assert "Agent state:" in output
     assert "Last status:" in output
     assert "Iterations:" in output
     assert "Fix attempts:" in output
     assert "Recent failures:" in output
+
+
+def test_state_project_status_stuck(tmp_path: Path) -> None:
+    archmind = tmp_path / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "project_dir": str(tmp_path.resolve()),
+                "updated_at": "20260101_000000",
+                "agent_state": "IDLE",
+                "last_status": "FAIL",
+                "stuck": True,
+                "iterations": 14,
+                "fix_attempts": 17,
+                "recent_failures": ["Traceback:", "ModuleNotFoundError: No module named 'fastapi'"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = format_state_text(tmp_path)
+    assert "Project status: STUCK" in output
+
+
+def test_state_project_status_done(tmp_path: Path) -> None:
+    archmind = tmp_path / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "project_dir": str(tmp_path.resolve()),
+                "updated_at": "20260101_000000",
+                "agent_state": "IDLE",
+                "last_status": "SUCCESS",
+                "stuck": False,
+                "iterations": 3,
+                "fix_attempts": 1,
+                "recent_failures": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = format_state_text(tmp_path)
+    assert "Project status: DONE" in output
+
+
+def test_state_project_status_not_done_and_failure_noise_filtered(tmp_path: Path) -> None:
+    archmind = tmp_path / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "project_dir": str(tmp_path.resolve()),
+                "updated_at": "20260101_000000",
+                "agent_state": "IDLE",
+                "last_status": "FAIL",
+                "stuck": False,
+                "iterations": 3,
+                "fix_attempts": 2,
+                "recent_failures": [
+                    "Traceback:",
+                    "========================",
+                    "Base",
+                    "Cancel",
+                    "frontend lint failed",
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    output = format_state_text(tmp_path)
+    assert "Project status: NOT_DONE" in output
+    assert "Traceback:" not in output
+    assert "Base" not in output
+    assert "Cancel" not in output
+    assert "frontend lint failed" in output
 
 
 def test_pipeline_path_increments_iterations(tmp_path: Path) -> None:
