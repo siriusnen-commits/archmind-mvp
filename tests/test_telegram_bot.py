@@ -605,3 +605,65 @@ def test_watch_retry_reads_latest_state_after_steps(monkeypatch, tmp_path: Path)
     assert "Status: DONE" in final_msg
     assert "Iterations: 2" in final_msg
     assert "Fix attempts: 1" in final_msg
+
+
+def test_watch_retry_accumulates_existing_fix_attempts(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "retry_project_existing_fix"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    temp_log = tmp_path / "retry_existing.log"
+
+    (archmind / "state.json").write_text(
+        json.dumps({"last_status": "NOT_DONE", "iterations": 4, "fix_attempts": 2}),
+        encoding="utf-8",
+    )
+    (archmind / "evaluation.json").write_text(json.dumps({"status": "NOT_DONE"}), encoding="utf-8")
+
+    def fake_run_command(cmd, _temp_log):  # type: ignore[no-untyped-def]
+        state_payload = json.loads((archmind / "state.json").read_text(encoding="utf-8"))
+        if cmd[:2] == ["archmind", "fix"]:
+            state_payload["fix_attempts"] = int(state_payload.get("fix_attempts") or 0) + 1
+        if cmd[:2] == ["archmind", "pipeline"]:
+            state_payload["iterations"] = int(state_payload.get("iterations") or 0) + 1
+        (archmind / "state.json").write_text(json.dumps(state_payload), encoding="utf-8")
+        return 0
+
+    monkeypatch.setattr("archmind.telegram_bot._run_command_to_log", fake_run_command)
+
+    class DummyBot:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def send_message(self, chat_id: int, text: str) -> None:  # noqa: ARG002
+            self.sent.append(text)
+
+    class DummyApp:
+        def __init__(self) -> None:
+            self.bot = DummyBot()
+
+    app = DummyApp()
+    asyncio.run(watch_retry_and_notify(project_dir=project_dir, temp_log=temp_log, chat_id=1, application=app))
+    final_msg = app.bot.sent[-1]
+    assert "Iterations: 5" in final_msg
+    assert "Fix attempts: 3" in final_msg
+
+
+def test_build_completion_message_recovers_fix_attempts_from_history(tmp_path: Path) -> None:
+    project_dir = tmp_path / "history_recovery"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "last_status": "NOT_DONE",
+                "iterations": 3,
+                "history": [
+                    {"action": "archmind fix --path p --apply", "status": "FAIL"},
+                    {"action": "pipeline fix iteration 1", "status": "FAIL"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    msg = build_completion_message(project_dir, tmp_path / "unused.log")
+    assert "Fix attempts: 2" in msg

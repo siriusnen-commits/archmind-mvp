@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from archmind.failure import classify_failure
-from archmind.state import derive_task_label_from_failure_signature
+from archmind.state import derive_task_label_from_failure_signature, load_state
 
 LAST_PROJECT_PATH_FILE = Path.home() / ".archmind_telegram_last_project"
 DEFAULT_BASE_DIR = Path.home() / "archmind-telegram-projects"
@@ -763,7 +763,7 @@ def build_completion_message(
     project_dir = project_dir.expanduser().resolve()
     archmind_dir = project_dir / ".archmind"
     evaluation = _load_json(archmind_dir / "evaluation.json") or {}
-    state = _load_json(archmind_dir / "state.json") or {}
+    state = load_state(project_dir) or {}
     result = _load_json(archmind_dir / "result.json") or {}
     status = _status_from_sources(project_dir)
     fallback_summary = _result_summary_lines(project_dir, temp_log)

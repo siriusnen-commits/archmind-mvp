@@ -5,7 +5,7 @@ from pathlib import Path
 
 from archmind.cli import main
 from archmind.state import derive_task_label_from_failure_signature
-from archmind.state import ensure_state, load_state, update_state_event
+from archmind.state import ensure_state, load_state, update_after_fix, update_state_event
 
 
 def _write_backend_project(root: Path, *, failing: bool = False) -> None:
@@ -47,6 +47,39 @@ def test_state_history_added_after_fix(tmp_path: Path, monkeypatch) -> None:
     assert "fix" in history[-1]["action"]
     assert int(state.get("iterations") or 0) == before_iterations
     assert int(state.get("fix_attempts") or 0) == before_fix_attempts + 1
+
+
+def test_fix_attempts_are_cumulative_across_multiple_fix_updates(tmp_path: Path) -> None:
+    _write_backend_project(tmp_path, failing=True)
+    ensure_state(tmp_path)
+    update_after_fix(tmp_path, action="archmind fix --path p --apply", exit_code=1)
+    update_after_fix(tmp_path, action="archmind fix --path p --apply", exit_code=1)
+    state = load_state(tmp_path)
+    assert state is not None
+    assert int(state.get("fix_attempts") or 0) == 2
+
+
+def test_fix_attempts_recovered_from_history_when_field_missing(tmp_path: Path) -> None:
+    _write_backend_project(tmp_path, failing=True)
+    state_path = tmp_path / ".archmind" / "state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "project_dir": str(tmp_path.resolve()),
+                "updated_at": "20260101_000000",
+                "iterations": 0,
+                "history": [
+                    {"timestamp": "20260101_000001", "action": "archmind fix --path p --apply", "status": "FAIL"},
+                    {"timestamp": "20260101_000002", "action": "pipeline fix iteration 1", "status": "FAIL"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded = load_state(tmp_path)
+    assert loaded is not None
+    assert int(loaded.get("fix_attempts") or 0) == 2
 
 
 def test_state_stores_failure_signature_after_failed_run(tmp_path: Path) -> None:

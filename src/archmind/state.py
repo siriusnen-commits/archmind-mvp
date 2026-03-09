@@ -74,6 +74,41 @@ def _load_json(path: Path) -> Optional[dict[str, Any]]:
     return payload if isinstance(payload, dict) else None
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _history_fix_attempts(payload: dict[str, Any]) -> int:
+    history = payload.get("history")
+    if not isinstance(history, list):
+        return 0
+    count = 0
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        action = str(item.get("action") or "").lower()
+        if "fix" in action:
+            count += 1
+    return count
+
+
+def _normalize_loaded_state(project_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    base = _default_state(project_dir)
+    normalized = dict(base)
+    normalized.update(payload)
+    normalized["iterations"] = _safe_int(normalized.get("iterations"), 0)
+    fix_attempts_raw = normalized.get("fix_attempts")
+    fix_attempts = _safe_int(fix_attempts_raw, -1)
+    if fix_attempts < 0:
+        fix_attempts = 0
+    fix_attempts = max(fix_attempts, _history_fix_attempts(normalized))
+    normalized["fix_attempts"] = fix_attempts
+    return normalized
+
+
 def _tasks_snapshot(project_dir: Path) -> tuple[Optional[int], list[int], list[int]]:
     tasks_payload = _load_json(project_dir / ".archmind" / "tasks.json")
     if not tasks_payload:
@@ -135,7 +170,11 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
 
 
 def load_state(project_dir: Path) -> Optional[dict[str, Any]]:
-    return _load_json(_state_path(project_dir))
+    project_dir = project_dir.expanduser().resolve()
+    payload = _load_json(_state_path(project_dir))
+    if payload is None:
+        return None
+    return _normalize_loaded_state(project_dir, payload)
 
 
 def ensure_state(project_dir: Path) -> dict[str, Any]:
@@ -155,8 +194,8 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     payload["project_dir"] = str(project_dir)
     payload["updated_at"] = _now()
     payload["last_status"] = _safe_status(str(payload.get("last_status") or "UNKNOWN"))
-    payload["iterations"] = int(payload.get("iterations") or 0)
-    payload["fix_attempts"] = int(payload.get("fix_attempts") or 0)
+    payload["iterations"] = _safe_int(payload.get("iterations"), 0)
+    payload["fix_attempts"] = max(_safe_int(payload.get("fix_attempts"), 0), _history_fix_attempts(payload))
     payload["last_failure_signature"] = str(payload.get("last_failure_signature") or "").strip()[:220]
     payload["last_failure_class"] = str(payload.get("last_failure_class") or "").strip()[:80]
     payload["last_fix_strategy"] = str(payload.get("last_fix_strategy") or "").strip()[:80]
@@ -334,9 +373,9 @@ def update_state_event(
     payload = ensure_state(project_dir)
 
     if increment_iterations:
-        payload["iterations"] = int(payload.get("iterations") or 0) + 1
+        payload["iterations"] = _safe_int(payload.get("iterations"), 0) + 1
     if increment_fix_attempts:
-        payload["fix_attempts"] = int(payload.get("fix_attempts") or 0) + 1
+        payload["fix_attempts"] = _safe_int(payload.get("fix_attempts"), 0) + 1
 
     payload["last_action"] = _sanitize_line(action, project_dir)
     payload["last_status"] = _safe_status(status)
