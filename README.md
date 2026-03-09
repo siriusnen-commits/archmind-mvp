@@ -165,6 +165,11 @@ Action Decision Layer:
 - state.json에는 `next_action`, `next_action_reason`이 기록된다.
 - `/state` 출력과 Telegram finished `Next:` 추천은 같은 decision 로직을 공유한다.
 
+Stabilization:
+- 신규 기능 추가 전, `docs/stabilization_checklist.md`의 시나리오를 우선 점검한다.
+- 핵심 회귀 포인트: state/evaluation/result/Telegram 일관성, fix prompt 품질, relevant file safety.
+- 특히 module-not-found, backend assertion, frontend lint, repeated failure(STUCK), retry 루프를 반복 검증한다.
+
 Telegram integration (MVP):
 - BotFather에서 Telegram 봇을 만들고 `TELEGRAM_BOT_TOKEN` 발급
 - 환경변수 설정:

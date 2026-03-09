@@ -239,6 +239,16 @@ def _humanize_summary_line(line: str) -> str:
         return ""
     if lower.startswith("task queue:"):
         return ""
+    if lower.startswith("cwd:"):
+        return ""
+    if lower.startswith("duration"):
+        return ""
+    if "strict (recommended)" in lower:
+        return ""
+    if "how would you like to configure eslint" in lower:
+        return ""
+    if lower.startswith("base") or lower.startswith("cancel"):
+        return ""
     if "{" in text and "}" in text:
         return ""
     if "backend" in lower and ("fail" in lower or "failed" in lower):
@@ -344,6 +354,12 @@ def sanitize_log_excerpt(text: str, max_lines: int = 40) -> str:
         if lower.startswith("command:") or lower.startswith("$ archmind"):
             continue
         if lower.startswith(("project_dir:", "timestamp:", "cwd:", "duration", "base", "cancel")):
+            continue
+        if "strict (recommended)" in lower:
+            continue
+        if "how would you like to configure eslint" in lower:
+            continue
+        if "if you set up eslint yourself" in lower:
             continue
         if lower in ("traceback:", "-----", "=====", "---", "==="):
             continue
@@ -764,17 +780,17 @@ def build_completion_message(
 
 def _wait_for_latest_artifacts(project_dir: Path, started_at: float, attempts: int = 6, sleep_s: float = 0.15) -> None:
     archmind_dir = project_dir / ".archmind"
-    targets = [
-        archmind_dir / "state.json",
-        archmind_dir / "evaluation.json",
-        archmind_dir / "result.json",
-    ]
+    state_path = archmind_dir / "state.json"
+    optional_targets = [archmind_dir / "evaluation.json", archmind_dir / "result.json"]
     for _ in range(attempts):
-        newest = 0.0
-        for path in targets:
-            if path.exists():
-                newest = max(newest, path.stat().st_mtime)
-        if newest >= started_at:
+        if state_path.exists() and state_path.stat().st_mtime >= started_at:
+            return
+        optional_newer = False
+        for path in optional_targets:
+            if path.exists() and path.stat().st_mtime >= started_at:
+                optional_newer = True
+                break
+        if optional_newer and not state_path.exists():
             return
         time.sleep(sleep_s)
 

@@ -155,6 +155,27 @@ def test_relevant_files_section_includes_file_blocks(tmp_path: Path) -> None:
     assert "fastapi==0.111.0" in section
 
 
+def test_select_relevant_files_deduplicates_and_caps_to_four(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (tmp_path / "app").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "app" / "main.py").write_text("x=1\n", encoding="utf-8")
+    (tmp_path / "tests").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "tests" / "test_api.py").write_text("def test_x(): pass\n", encoding="utf-8")
+    (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "frontend" / "package.json").write_text("{}", encoding="utf-8")
+    files = select_relevant_files(
+        project_dir=tmp_path,
+        failure_class="unknown",
+        failure_excerpt="FAILED tests/test_api.py::test_x\napp/main.py\napp/main.py",
+        repair_targets=["requirements.txt", "requirements.txt", "app/main.py"],
+        state={"recent_failures": ["tests/test_api.py"]},
+        result={"files_hint": ["frontend/package.json", "frontend/package.json"]},
+    )
+    rel = [p.resolve().relative_to(tmp_path.resolve()).as_posix() for p in files]
+    assert len(rel) <= 4
+    assert len(rel) == len(set(rel))
+
+
 def test_module_not_found_excerpt_removes_frontend_noise_and_targets_requirements() -> None:
     excerpt = extract_failure_excerpt(
         [

@@ -698,7 +698,11 @@ def format_state_text(project_dir: Path) -> str:
     current_line = task_title or "none"
 
     project_status = "NOT_DONE"
-    if bool(payload.get("stuck")):
+    evaluation_payload = _load_json(project_dir / ".archmind" / "evaluation.json") or {}
+    evaluation_status = str(evaluation_payload.get("status") or "").upper()
+    if evaluation_status in ("DONE", "STUCK", "BLOCKED", "NOT_DONE"):
+        project_status = evaluation_status
+    elif bool(payload.get("stuck")):
         project_status = "STUCK"
     elif str(status).upper() in ("SUCCESS", "DONE"):
         project_status = "DONE"
@@ -714,11 +718,22 @@ def format_state_text(project_dir: Path) -> str:
             return True
         if lower in ("base", "cancel"):
             return True
+        if lower.startswith("command:"):
+            return True
+        if lower.startswith("cwd:"):
+            return True
+        if lower.startswith("duration"):
+            return True
+        if lower.startswith("timestamp:"):
+            return True
+        if "how would you like to configure eslint" in lower:
+            return True
+        if "strict (recommended)" in lower:
+            return True
         if "stacktrace" in lower and "header" in lower:
             return True
         return False
 
-    evaluation_payload = _load_json(project_dir / ".archmind" / "evaluation.json") or {}
     result_payload = _load_json(project_dir / ".archmind" / "result.json") or {}
     decision = decide_next_action(payload, evaluation_payload, result_payload)
     next_action = str(decision.get("action") or payload.get("next_action") or "STOP")
