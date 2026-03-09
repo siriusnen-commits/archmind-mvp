@@ -124,6 +124,28 @@ archmind state --path myproj
 - `history` 는 최근 20개 이벤트만, `recent_failures` 는 최근 10개만 유지한다.
 - fix prompt에는 state 요약(현재 task, 최근 실패, last_status)이 함께 포함된다.
 
+ArchMind Agent State Machine:
+- 공식 상태: `IDLE`, `PLANNING`, `RUNNING`, `FIXING`, `RETRYING`, `NOT_DONE`, `STUCK`, `DONE`, `FAILED`
+- `agent_state`는 현재 에이전트 phase/state를 나타내고, `last_status`는 최근 액션 결과를 나타낸다.
+- `evaluation.status`는 완료 판정(`DONE/NOT_DONE/STUCK/BLOCKED`)에 집중하고, finished 메시지는 이를 우선 표시한다.
+- `/state` 출력은 `agent_state + last_status + iterations + fix_attempts`를 함께 보여준다.
+- 주요 전이:
+  `/idea`: `IDLE -> PLANNING -> RUNNING`
+- run/pipeline 성공 후 evaluate가 완료 조건을 만족하면:
+  `RUNNING -> DONE`
+- run/pipeline 실패 또는 추가 작업 필요:
+  `RUNNING -> NOT_DONE`
+- `/fix`:
+  `NOT_DONE/STUCK -> FIXING -> NOT_DONE` (반복 실패 시 evaluate에서 `STUCK`)
+- `/continue`:
+  `NOT_DONE/STUCK -> RUNNING -> DONE/NOT_DONE/STUCK`
+- `/retry`:
+  `NOT_DONE/STUCK -> RETRYING -> FIXING -> RUNNING -> DONE/NOT_DONE/STUCK`
+- 반복 동일 실패(서명 반복 + 동일 task + iteration 임계치) 감지 시:
+  `NOT_DONE -> STUCK`
+- 치명적 예외가 발생하면:
+  `* -> FAILED` (복구 전까지 수동 개입 필요)
+
 Telegram integration (MVP):
 - BotFather에서 Telegram 봇을 만들고 `TELEGRAM_BOT_TOKEN` 발급
 - 환경변수 설정:

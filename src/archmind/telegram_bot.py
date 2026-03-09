@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from archmind.failure import classify_failure
-from archmind.state import derive_task_label_from_failure_signature, load_state
+from archmind.state import derive_task_label_from_failure_signature, load_state, set_agent_state
 
 LAST_PROJECT_PATH_FILE = Path.home() / ".archmind_telegram_last_project"
 DEFAULT_BASE_DIR = Path.home() / "archmind-telegram-projects"
@@ -845,6 +845,18 @@ async def watch_retry_and_notify(
         commands = build_retry_commands(project_dir)
         last_exit = 0
         for cmd in commands:
+            if cmd[:2] == ["archmind", "fix"]:
+                await asyncio.to_thread(
+                    set_agent_state, project_dir, "FIXING", action="telegram retry fix", summary="retry fix step started"
+                )
+            elif cmd[:2] == ["archmind", "pipeline"]:
+                await asyncio.to_thread(
+                    set_agent_state,
+                    project_dir,
+                    "RUNNING",
+                    action="telegram retry continue",
+                    summary="retry continue step started",
+                )
             last_exit = await asyncio.to_thread(_run_command_to_log, cmd, temp_log)
             if last_exit != 0 and cmd[:2] == ["archmind", "fix"]:
                 break
@@ -908,7 +920,7 @@ async def _handle_idea_like(update: Any, context: Any, cmd_name: str) -> None:
         )
 
     await update.message.reply_text(
-        f"started: pid={proc.pid}\nproject={project_dir}\nlog={log_path}"
+        f"started: pid={proc.pid}\nproject={project_dir}\nstate=RUNNING\nlog={log_path}"
     )
 
 
@@ -921,6 +933,7 @@ async def _handle_continue(update: Any, context: Any) -> None:
     command = build_continue_command(project_dir)
     temp_log = _temp_log_for_project(project_dir)
     try:
+        set_agent_state(project_dir, "RUNNING", action="telegram /continue", summary="continue started")
         proc = start_background_process(command, temp_log=temp_log)
     except Exception as exc:
         await update.message.reply_text(f"Failed to continue pipeline: {exc}")
@@ -941,7 +954,7 @@ async def _handle_continue(update: Any, context: Any) -> None:
                 started_at=started_at,
             )
         )
-    await update.message.reply_text(f"continuing: pid={proc.pid}\nproject={project_dir}")
+    await update.message.reply_text(f"continuing: pid={proc.pid}\nproject={project_dir}\nstate=RUNNING")
 
 
 async def _handle_fix(update: Any, context: Any) -> None:
@@ -953,6 +966,7 @@ async def _handle_fix(update: Any, context: Any) -> None:
     command = build_fix_command(project_dir)
     temp_log = _temp_log_for_project(project_dir)
     try:
+        set_agent_state(project_dir, "FIXING", action="telegram /fix", summary="fix started")
         proc = start_background_process(command, temp_log=temp_log)
     except Exception as exc:
         await update.message.reply_text(f"Failed to start fix: {exc}")
@@ -973,7 +987,7 @@ async def _handle_fix(update: Any, context: Any) -> None:
                 started_at=started_at,
             )
         )
-    await update.message.reply_text(f"fix started: pid={proc.pid}\nproject={project_dir}")
+    await update.message.reply_text(f"fix started: pid={proc.pid}\nproject={project_dir}\nstate=FIXING")
 
 
 async def _handle_retry(update: Any, context: Any) -> None:
@@ -990,6 +1004,7 @@ async def _handle_retry(update: Any, context: Any) -> None:
     warn = ""
     if status == "STUCK":
         warn = "\nwarning=Project is currently STUCK; retry may repeat the same failure."
+    set_agent_state(project_dir, "RETRYING", action="telegram /retry", summary="retry orchestration started")
 
     application = getattr(context, "application", None)
     chat = getattr(update, "effective_chat", None)
@@ -1007,7 +1022,7 @@ async def _handle_retry(update: Any, context: Any) -> None:
         )
 
     await update.message.reply_text(
-        f"retry started\nproject={project_dir}\nmode=fix -> continue{warn}"
+        f"retry started\nproject={project_dir}\nmode=fix -> continue\nstate=RETRYING{warn}"
     )
 
 

@@ -358,6 +358,30 @@ def test_fix_without_last_project_shows_help(monkeypatch) -> None:
     assert "No previous project found. Use /idea first." in msg.sent[-1]
 
 
+def test_fix_command_sets_fixing_state(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "proj_fix"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project_dir)
+    captured_states: list[str] = []
+
+    def fake_set_agent_state(project_dir_arg, state, **kwargs):  # type: ignore[no-untyped-def]
+        assert project_dir_arg == project_dir
+        captured_states.append(state)
+        return {}
+
+    class DummyProc:
+        pid = 321
+
+    monkeypatch.setattr("archmind.telegram_bot.set_agent_state", fake_set_agent_state)
+    monkeypatch.setattr("archmind.telegram_bot.start_background_process", lambda *a, **k: DummyProc())
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    ctx = DummyContext(application=None)
+    asyncio.run(command_fix(update, ctx))
+    assert captured_states and captured_states[-1] == "FIXING"
+    assert any("state=FIXING" in text for text in msg.sent)
+
+
 def test_sanitize_log_excerpt_removes_ansi_path_command() -> None:
     raw = (
         "\x1b[31mcommand: archmind pipeline --path /Users/me/proj\x1b[0m\n"
@@ -534,10 +558,31 @@ def test_retry_done_status_is_blocked_with_message(monkeypatch, tmp_path: Path) 
     monkeypatch.setattr("archmind.telegram_bot._status_from_sources", lambda _p: "DONE")
     msg = DummyMessage()
     update = DummyUpdate(message=msg, effective_chat=DummyChat())
-    ctx = DummyContext(application=object())
+    ctx = DummyContext(application=None)
     asyncio.run(command_retry(update, ctx))
     assert msg.sent
     assert "Project already complete." in msg.sent[-1]
+
+
+def test_retry_sets_retrying_state_on_start(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "retry_proj"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project_dir)
+    monkeypatch.setattr("archmind.telegram_bot._status_from_sources", lambda _p: "NOT_DONE")
+    states: list[str] = []
+
+    def fake_set_agent_state(project_dir_arg, state, **kwargs):  # type: ignore[no-untyped-def]
+        assert project_dir_arg == project_dir
+        states.append(state)
+        return {}
+
+    monkeypatch.setattr("archmind.telegram_bot.set_agent_state", fake_set_agent_state)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    ctx = DummyContext(application=object())
+    asyncio.run(command_retry(update, ctx))
+    assert "RETRYING" in states
+    assert any("state=RETRYING" in text for text in msg.sent)
 
 
 def test_build_completion_message_prefers_latest_evaluation_status(tmp_path: Path) -> None:
@@ -646,6 +691,34 @@ def test_watch_retry_accumulates_existing_fix_attempts(monkeypatch, tmp_path: Pa
     final_msg = app.bot.sent[-1]
     assert "Iterations: 5" in final_msg
     assert "Fix attempts: 3" in final_msg
+
+
+def test_watch_retry_records_fixing_and_running_states(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "retry_states"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    temp_log = tmp_path / "retry_states.log"
+    (archmind / "state.json").write_text(json.dumps({"iterations": 0, "fix_attempts": 0}), encoding="utf-8")
+    states: list[str] = []
+
+    def fake_set_agent_state(_project_dir, state, **kwargs):  # type: ignore[no-untyped-def]
+        states.append(state)
+        return {}
+
+    monkeypatch.setattr("archmind.telegram_bot.set_agent_state", fake_set_agent_state)
+    monkeypatch.setattr("archmind.telegram_bot._run_command_to_log", lambda cmd, _log: 0)
+
+    class DummyBot:
+        async def send_message(self, chat_id: int, text: str) -> None:  # noqa: ARG002
+            return None
+
+    class DummyApp:
+        def __init__(self) -> None:
+            self.bot = DummyBot()
+
+    asyncio.run(watch_retry_and_notify(project_dir=project_dir, temp_log=temp_log, chat_id=1, application=DummyApp()))
+    assert "FIXING" in states
+    assert "RUNNING" in states
 
 
 def test_build_completion_message_recovers_fix_attempts_from_history(tmp_path: Path) -> None:

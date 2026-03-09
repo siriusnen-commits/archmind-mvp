@@ -12,7 +12,7 @@ from archmind.fixer import run_fix_loop
 from archmind.evaluator import write_evaluation
 from archmind.planner import write_project_plan
 from archmind.runner import RunConfig, RunResult, compute_run_status, run_pipeline
-from archmind.state import ensure_state, load_state, update_after_fix, update_after_run
+from archmind.state import ensure_state, load_state, set_agent_state, update_after_fix, update_after_run
 from archmind.tasks import current_task, ensure_tasks
 
 
@@ -448,6 +448,9 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         print(f"[WARN] tasks initialization failed: {exc}", file=sys.stderr)
     try:
         ensure_state(project_dir)
+        if opts.idea:
+            set_agent_state(project_dir, "PLANNING", action="pipeline planning", summary="idea to project planning")
+        set_agent_state(project_dir, "RUNNING", action="pipeline run", summary="pipeline execution started")
     except Exception as exc:
         print(f"[WARN] state initialization failed: {exc}", file=sys.stderr)
 
@@ -476,6 +479,15 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
             final_exit = 0
             break
 
+        try:
+            set_agent_state(
+                project_dir,
+                "FIXING",
+                action=f"pipeline fix iteration {iteration}",
+                summary=f"pipeline fix iteration {iteration} started",
+            )
+        except Exception as exc:
+            print(f"[WARN] state phase(FIXING) failed: {exc}", file=sys.stderr)
         fix_exit = run_fix_loop(
             project_dir=project_dir,
             max_iterations=opts.max_iterations,
@@ -499,6 +511,15 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
             final_exit = 1
             break
 
+        try:
+            set_agent_state(
+                project_dir,
+                "RUNNING",
+                action=f"pipeline rerun iteration {iteration}",
+                summary=f"pipeline rerun iteration {iteration} started",
+            )
+        except Exception as exc:
+            print(f"[WARN] state phase(RUNNING) failed: {exc}", file=sys.stderr)
         rerun_result = run_pipeline(run_config)
         rerun_status, _ = compute_run_status(rerun_result)
         try:

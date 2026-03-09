@@ -197,6 +197,7 @@ def test_state_reflects_evaluate_status(tmp_path: Path) -> None:
     state = load_state(tmp_path)
     assert state is not None
     assert state["last_status"] == "DONE"
+    assert state["agent_state"] == "DONE"
 
 
 def test_state_history_is_capped_at_20(tmp_path: Path) -> None:
@@ -214,7 +215,8 @@ def test_state_cli_output(tmp_path: Path, capsys) -> None:
     exit_code = main(["state", "--path", str(tmp_path)])
     assert exit_code == 0
     output = capsys.readouterr().out
-    assert "STATE:" in output
+    assert "Agent state:" in output
+    assert "Last status:" in output
     assert "Iterations:" in output
     assert "Fix attempts:" in output
     assert "Recent failures:" in output

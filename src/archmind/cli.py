@@ -280,7 +280,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run_run(args: argparse.Namespace) -> int:
     from archmind.runner import RunConfig, compute_run_status, print_run_result, run_pipeline
-    from archmind.state import update_after_run
+    from archmind.state import set_agent_state, update_after_run
 
     project_dir = Path(args.path).expanduser().resolve()
     if not project_dir.exists():
@@ -306,6 +306,7 @@ def run_run(args: argparse.Namespace) -> int:
         log_dir = project_dir / ".archmind" / "run_logs"
 
     command = "archmind " + " ".join(getattr(args, "_argv", []))
+    set_agent_state(project_dir, "RUNNING", action=command.strip(), summary="run started")
     config = RunConfig(
         project_dir=project_dir,
         run_all=args.all,
@@ -334,7 +335,7 @@ def run_run(args: argparse.Namespace) -> int:
 
 def run_fix(args: argparse.Namespace) -> int:
     from archmind.fixer import run_fix_loop
-    from archmind.state import update_after_fix
+    from archmind.state import set_agent_state, update_after_fix
 
     project_dir = Path(args.path).expanduser().resolve()
     if not project_dir.exists():
@@ -361,6 +362,7 @@ def run_fix(args: argparse.Namespace) -> int:
 
     command = "archmind " + " ".join(getattr(args, "_argv", []))
     try:
+        set_agent_state(project_dir, "FIXING", action=command.strip(), summary="fix started")
         exit_code = run_fix_loop(
             project_dir=project_dir,
             max_iterations=args.max_iterations,
@@ -376,6 +378,7 @@ def run_fix(args: argparse.Namespace) -> int:
         update_after_fix(project_dir, action=command.strip(), exit_code=exit_code)
         return exit_code
     except Exception as exc:
+        set_agent_state(project_dir, "FAILED", action=command.strip(), summary=f"fix failed: {exc}", record_history=True)
         print(f"[ERROR] {exc}", file=sys.stderr)
         return 70
 

@@ -100,6 +100,11 @@ def test_pipeline_idea_generates_and_runs(tmp_path: Path, monkeypatch) -> None:
     log_dir = project_dir / ".archmind" / "run_logs"
     assert log_dir.exists()
     assert list(log_dir.glob("run_*.summary.txt"))
+    state_payload = json.loads((project_dir / ".archmind" / "state.json").read_text(encoding="utf-8"))
+    assert state_payload.get("agent_state") in {"DONE", "NOT_DONE", "STUCK", "BLOCKED"}
+    history = state_payload.get("history") or []
+    assert any("pipeline planning" in str(item.get("action") or "") for item in history if isinstance(item, dict))
+    assert any("pipeline run" in str(item.get("action") or "") for item in history if isinstance(item, dict))
 
 
 def test_pipeline_path_runs_backend_only(tmp_path: Path) -> None:

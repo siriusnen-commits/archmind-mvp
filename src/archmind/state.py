@@ -19,6 +19,20 @@ LAST_STATUSES = (
     "UNKNOWN",
 )
 
+AGENT_STATES = (
+    "IDLE",
+    "PLANNING",
+    "RUNNING",
+    "FIXING",
+    "RETRYING",
+    "NOT_DONE",
+    "STUCK",
+    "DONE",
+    "FAILED",
+    "BLOCKED",
+    "UNKNOWN",
+)
+
 
 def derive_task_label_from_failure_signature(signature: str) -> str:
     raw = (signature or "").strip().lower()
@@ -53,6 +67,24 @@ def _now() -> str:
 def _safe_status(value: str) -> str:
     status = (value or "").upper()
     return status if status in LAST_STATUSES else "UNKNOWN"
+
+
+def _safe_agent_state(value: str) -> str:
+    state = (value or "").upper()
+    return state if state in AGENT_STATES else "UNKNOWN"
+
+
+def _agent_state_from_eval_status(value: str) -> str:
+    status = _safe_status(value)
+    if status == "DONE":
+        return "DONE"
+    if status == "STUCK":
+        return "STUCK"
+    if status == "BLOCKED":
+        return "BLOCKED"
+    if status == "NOT_DONE":
+        return "NOT_DONE"
+    return "UNKNOWN"
 
 
 def _sanitize_line(text: str, project_dir: Path) -> str:
@@ -90,6 +122,19 @@ def _is_fix_action(action: str) -> bool:
     return bool(re.search(r"\barchmind\s+fix\b", normalized))
 
 
+def _is_countable_fix_history_event(item: dict[str, Any]) -> bool:
+    action = str(item.get("action") or "")
+    if not _is_fix_action(action):
+        return False
+    status = _safe_status(str(item.get("status") or "UNKNOWN"))
+    if status not in ("SUCCESS", "FAIL", "SKIP"):
+        return False
+    summary = str(item.get("summary") or "").lower()
+    if "started" in summary:
+        return False
+    return True
+
+
 def _history_fix_attempts(payload: dict[str, Any]) -> int:
     history = payload.get("history")
     if not isinstance(history, list):
@@ -98,8 +143,7 @@ def _history_fix_attempts(payload: dict[str, Any]) -> int:
     for item in history:
         if not isinstance(item, dict):
             continue
-        action = str(item.get("action") or "").lower()
-        if _is_fix_action(action):
+        if _is_countable_fix_history_event(item):
             count += 1
     return count
 
@@ -112,8 +156,7 @@ def _sync_summary_fields_from_history(payload: dict[str, Any]) -> None:
     for item in reversed(history):
         if not isinstance(item, dict):
             continue
-        action = str(item.get("action") or "")
-        if _is_fix_action(action):
+        if _is_countable_fix_history_event(item):
             latest_fix = item
             break
     if not latest_fix:
@@ -165,6 +208,7 @@ def _normalize_loaded_state(project_dir: Path, payload: dict[str, Any]) -> dict[
         fix_attempts = 0
     fix_attempts = max(fix_attempts, _history_fix_attempts(normalized))
     normalized["fix_attempts"] = fix_attempts
+    normalized["agent_state"] = _safe_agent_state(str(normalized.get("agent_state") or "IDLE"))
     _sync_summary_fields_from_history(normalized)
     _sync_summary_fields_from_latest_fix_summary(project_dir, normalized)
     return normalized
@@ -212,6 +256,7 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "iterations": 0,
         "fix_attempts": 0,
         "current_task_id": current_task_id,
+        "agent_state": "IDLE",
         "last_action": "",
         "last_status": "UNKNOWN",
         "completed_tasks": completed,
@@ -252,9 +297,12 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     project_dir = project_dir.expanduser().resolve()
     path = _state_path(project_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
+    _sync_summary_fields_from_history(payload)
+    _sync_summary_fields_from_latest_fix_summary(project_dir, payload)
     payload["project_dir"] = str(project_dir)
     payload["updated_at"] = _now()
     payload["last_status"] = _safe_status(str(payload.get("last_status") or "UNKNOWN"))
+    payload["agent_state"] = _safe_agent_state(str(payload.get("agent_state") or "IDLE"))
     payload["iterations"] = _safe_int(payload.get("iterations"), 0)
     payload["fix_attempts"] = max(_safe_int(payload.get("fix_attempts"), 0), _history_fix_attempts(payload))
     payload["last_failure_signature"] = str(payload.get("last_failure_signature") or "").strip()[:220]
@@ -280,6 +328,11 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
         payload["recent_failures"] = payload["recent_failures"][:10]
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return path
+
+
+def load_agent_state(project_dir: Path) -> str:
+    payload = ensure_state(project_dir.expanduser().resolve())
+    return _safe_agent_state(str(payload.get("agent_state") or "UNKNOWN"))
 
 
 def _append_history(payload: dict[str, Any], event: dict[str, str]) -> None:
@@ -475,6 +528,7 @@ def update_state_event(
             "timestamp": _now(),
             "action": _sanitize_line(action, project_dir),
             "status": _safe_status(status),
+            "agent_state": _safe_agent_state(str(payload.get("agent_state") or "UNKNOWN")),
             "summary": _sanitize_line(summary, project_dir)[:160],
             "current_task_id": str(current_task_id or ""),
             "current_task_title": _sanitize_line(_task_title(project_dir, current_task_id) or "", project_dir),
@@ -486,11 +540,48 @@ def update_state_event(
     return payload
 
 
+def set_agent_state(
+    project_dir: Path,
+    agent_state: str,
+    *,
+    action: str = "",
+    summary: str = "",
+    record_history: bool = True,
+) -> dict[str, Any]:
+    project_dir = project_dir.expanduser().resolve()
+    payload = ensure_state(project_dir)
+    payload["agent_state"] = _safe_agent_state(agent_state)
+    if action:
+        payload["last_action"] = _sanitize_line(action, project_dir)
+    if record_history:
+        _append_history(
+            payload,
+            {
+                "timestamp": _now(),
+                "action": _sanitize_line(action or f"set agent state {agent_state}", project_dir),
+                "status": _safe_status(str(payload.get("last_status") or "UNKNOWN")),
+                "agent_state": _safe_agent_state(agent_state),
+                "summary": _sanitize_line(summary or f"agent state -> {agent_state}", project_dir)[:160],
+                "current_task_id": str(payload.get("current_task_id") or ""),
+                "current_task_title": _sanitize_line(
+                    _task_title(project_dir, _safe_int(payload.get("current_task_id"), 0))
+                    if _safe_int(payload.get("current_task_id"), 0) > 0
+                    else "",
+                    project_dir,
+                ),
+                "failure_signature": str(payload.get("last_failure_signature") or "")[:220],
+                "failure_class": str(payload.get("last_failure_class") or "")[:80],
+            },
+        )
+    write_state(project_dir, payload)
+    return payload
+
+
 def update_after_run(project_dir: Path, action: str, run_status: str, summary: str) -> dict[str, Any]:
     failures = _collect_result_failures(project_dir, max_items=10)
     failure_signature = _collect_failure_signature(project_dir)
     failure_class = _collect_failure_class(project_dir, failure_signature)
-    return update_state_event(
+    payload = update_state_event(
         project_dir,
         action,
         run_status,
@@ -500,6 +591,9 @@ def update_after_run(project_dir: Path, action: str, run_status: str, summary: s
         failure_signature=failure_signature,
         failure_class=failure_class,
     )
+    payload["agent_state"] = "NOT_DONE" if run_status in ("FAIL", "SKIP", "SUCCESS") else "UNKNOWN"
+    write_state(project_dir, payload)
+    return payload
 
 
 def update_after_fix(project_dir: Path, action: str, exit_code: int) -> dict[str, Any]:
@@ -544,6 +638,7 @@ def update_after_fix(project_dir: Path, action: str, exit_code: int) -> dict[str
             failures_now = payload.get("recent_failures")
             if isinstance(failures_now, list) and hint not in failures_now:
                 payload["recent_failures"] = [hint] + failures_now[:9]
+    payload["agent_state"] = "NOT_DONE"
     write_state(project_dir, payload)
     return payload
 
@@ -551,6 +646,7 @@ def update_after_fix(project_dir: Path, action: str, exit_code: int) -> dict[str
 def update_after_evaluation(project_dir: Path, evaluation_status: str, stuck_reason: str = "") -> dict[str, Any]:
     status = _safe_status(evaluation_status)
     payload = update_state_event(project_dir, "evaluate", status, f"evaluation status {status}")
+    payload["agent_state"] = _agent_state_from_eval_status(status)
     payload["stuck"] = status == "STUCK"
     payload["stuck_reason"] = stuck_reason if status == "STUCK" else ""
     write_state(project_dir, payload)
@@ -582,6 +678,7 @@ def format_state_text(project_dir: Path) -> str:
     project_dir = project_dir.expanduser().resolve()
     payload = ensure_state(project_dir)
     status = payload.get("last_status", "UNKNOWN")
+    agent_state = payload.get("agent_state", "UNKNOWN")
     iterations = int(payload.get("iterations") or 0)
     fix_attempts = int(payload.get("fix_attempts") or 0)
     current_task_id = payload.get("current_task_id")
@@ -590,7 +687,8 @@ def format_state_text(project_dir: Path) -> str:
     task_title = derived_label or task_title
     current_line = f"[{current_task_id}] {task_title}" if current_task_id and task_title else "none"
     lines = [
-        f"STATE: {status}",
+        f"Agent state: {agent_state}",
+        f"Last status: {status}",
         f"Iterations: {iterations}",
         f"Fix attempts: {fix_attempts}",
         f"Current task: {current_line}",
@@ -616,6 +714,7 @@ def state_prompt_summary(project_dir: Path) -> list[str]:
     current_line = f"[{current_task_id}] {task_title}" if current_task_id and task_title else "none"
     failures = payload.get("recent_failures") or []
     lines = [
+        f"- agent_state: {payload.get('agent_state', 'UNKNOWN')}",
         f"- last_status: {payload.get('last_status', 'UNKNOWN')}",
         f"- fix_attempts: {payload.get('fix_attempts', 0)}",
         f"- current_task: {current_line}",
