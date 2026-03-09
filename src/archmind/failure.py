@@ -4,7 +4,22 @@ import re
 from typing import Any, Iterable
 
 
-def extract_failure_excerpt(*sources: Any, max_lines: int = 40) -> str:
+def _extract_path_like_lines(text: str) -> list[str]:
+    out: list[str] = []
+    for pat in (
+        r"(frontend/[^\s:]+\.(?:tsx?|jsx?))(?::\d+)?",
+        r"(app/[^\s:]+\.py)(?::\d+)?",
+        r"(tests/[^\s:]+\.py)(?::\d+)?",
+        r"File \"([^\"]+\.py)\"",
+    ):
+        for match in re.findall(pat, text):
+            val = str(match).strip()
+            if val and val not in out:
+                out.append(val)
+    return out
+
+
+def extract_failure_excerpt(*sources: Any, max_lines: int = 6, failure_class: str = "") -> str:
     lines: list[str] = []
     for source in sources:
         if source is None:
@@ -18,18 +33,69 @@ def extract_failure_excerpt(*sources: Any, max_lines: int = 40) -> str:
             lines.extend(str(source).splitlines())
 
     ansi_escape = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
+    klass = (failure_class or "").lower()
+    is_backend = klass.startswith("backend-pytest")
+    is_frontend = klass.startswith("frontend")
     out: list[str] = []
+    seen: set[str] = set()
     for raw in lines:
         line = ansi_escape.sub("", str(raw)).strip()
         if not line:
             continue
-        if line.lower().startswith(("command:", "$ archmind")):
+        lower = line.lower()
+        if lower.startswith(("command:", "$ archmind")):
+            continue
+        if lower.startswith(
+            (
+                "project_dir:",
+                "timestamp:",
+                "cwd:",
+                "duration",
+                "base",
+                "cancel",
+                "traceback:",
+            )
+        ):
             continue
         line = re.sub(r"\s+", " ", line)
+        if is_backend and any(tok in lower for tok in ("eslint", "frontend", "ts2304", "ts2322", "is not assignable", "npm err", "next build", "vite build", "lint ")):
+            continue
+        if is_frontend and any(tok in lower for tok in ("pytest", "assertionerror", "modulenotfounderror", "importerror", "e   ", "failed tests/", "traceback")):
+            continue
+        if line in seen:
+            continue
+        seen.add(line)
         out.append(line[:220])
         if len(out) >= max_lines:
             break
-    return "\n".join(out)
+    if not out:
+        return ""
+
+    priority_patterns = [
+        r"AssertionError",
+        r"ModuleNotFoundError",
+        r"ImportError",
+        r"^FAILED ",
+        r"^E\s+",
+        r"\bTS2304\b|\bTS2322\b|is not assignable",
+        r"ESLint|Parsing error|Cannot find module|npm ERR!",
+        r"build failed|failed to compile|next build|vite build",
+    ]
+    picked: list[str] = []
+    for pattern in priority_patterns:
+        rx = re.compile(pattern, re.IGNORECASE)
+        for line in out:
+            if rx.search(line) and line not in picked:
+                picked.append(line)
+            if len(picked) >= max_lines:
+                return "\n".join(picked[:max_lines])
+    if len(picked) < max_lines:
+        for line in out:
+            if line not in picked:
+                picked.append(line)
+            if len(picked) >= max_lines:
+                break
+    return "\n".join(picked[:max_lines])
 
 
 def classify_failure(excerpt: str, failure_signature: str = "") -> str:
@@ -88,6 +154,28 @@ def fix_strategy_for_class(failure_class: str) -> str:
     return "generic"
 
 
+def select_primary_failure_class(failure_signature: str, classified_failure_class: str) -> str:
+    klass = (classified_failure_class or "").strip().lower()
+    sig = (failure_signature or "").lower()
+    if klass and klass != "unknown":
+        return klass
+    has_backend = "backend-pytest" in sig
+    has_frontend = any(tok in sig for tok in ("frontend-lint", "frontend-build", "frontend-typescript", "frontend-test"))
+    if has_backend:
+        return "backend-pytest:other"
+    if has_frontend:
+        if "frontend-lint" in sig:
+            return "frontend-lint"
+        if "frontend-typescript" in sig:
+            return "frontend-typescript"
+        if "frontend-build" in sig:
+            return "frontend-build"
+        if "frontend-test" in sig:
+            return "frontend-test"
+        return "frontend-other"
+    return "unknown"
+
+
 def strategy_instructions(failure_class: str) -> list[str]:
     klass = (failure_class or "unknown").lower()
     if klass == "backend-pytest:assertion":
@@ -123,6 +211,83 @@ def strategy_instructions(failure_class: str) -> list[str]:
             "코드 수정보다 설치/설정 문제를 우선 의심하라.",
         ]
     return ["generic repair prompt를 적용하고 변경 범위를 최소화하라."]
+
+
+def select_repair_targets(
+    failure_class: str,
+    excerpt: str,
+    project_dir: Any,
+    *,
+    files_hint: list[str] | None = None,
+    failure_file: str | None = None,
+) -> list[str]:
+    del project_dir
+    klass = (failure_class or "unknown").lower()
+    text = (excerpt or "")
+    found_paths = _extract_path_like_lines(text)
+    if failure_file:
+        found_paths.insert(0, str(failure_file))
+    for hint in files_hint or []:
+        h = str(hint).strip()
+        if h and h not in found_paths:
+            found_paths.append(h)
+
+    cleaned: list[str] = []
+    for path in found_paths:
+        p = path.replace("\\", "/")
+        if p.startswith("/"):
+            p = p.split("/archmind-mvp/")[-1] if "/archmind-mvp/" in p else p.split("/")[-1]
+        if p not in cleaned:
+            cleaned.append(p)
+
+    if klass == "backend-pytest:module-not-found":
+        targets = ["requirements.txt"]
+        for path in cleaned:
+            if path.endswith(".py") and "/tests/" not in f"/{path}" and not path.startswith("tests/"):
+                targets.append(path)
+                break
+        return list(dict.fromkeys(targets))
+
+    if klass == "backend-pytest:import":
+        targets = []
+        for path in cleaned:
+            if path.endswith(".py") and "/tests/" not in f"/{path}" and not path.startswith("tests/"):
+                targets.append(path)
+        targets.append("requirements.txt")
+        return list(dict.fromkeys(targets))[:3]
+
+    if klass in ("backend-pytest:assertion", "backend-pytest:api-response", "backend-pytest:other"):
+        targets = []
+        for path in cleaned:
+            if path.endswith(".py") and "/tests/" not in f"/{path}" and not path.startswith("tests/"):
+                targets.append(path)
+        if not targets:
+            targets = ["app/main.py"]
+        return list(dict.fromkeys(targets))[:3]
+
+    if klass == "frontend-lint":
+        targets = [p for p in cleaned if p.startswith("frontend/") and p.endswith((".ts", ".tsx", ".js", ".jsx"))]
+        if not targets:
+            targets = ["frontend/eslint.config.js"]
+        else:
+            targets.append("frontend/eslint.config.js")
+        return list(dict.fromkeys(targets))[:3]
+
+    if klass == "frontend-typescript":
+        targets = [p for p in cleaned if p.startswith("frontend/") and p.endswith((".ts", ".tsx"))]
+        targets.extend(["frontend/tsconfig.json", "frontend/types.d.ts"])
+        return list(dict.fromkeys(targets))[:3]
+
+    if klass == "frontend-build":
+        targets = [p for p in cleaned if p.startswith("frontend/")]
+        targets.extend(["frontend/next.config.js", "frontend/package.json"])
+        return list(dict.fromkeys(targets))[:3]
+
+    if klass in ("frontend-dependency", "env-dependency"):
+        targets = ["frontend/package.json", "requirements.txt", ".env.example"]
+        return list(dict.fromkeys(targets))[:3]
+
+    return cleaned[:2] or ["inspect recent failure details"]
 
 
 def failure_signature_from_run_result(run_result: Any) -> str:

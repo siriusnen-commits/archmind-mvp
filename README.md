@@ -167,6 +167,9 @@ Telegram integration (MVP):
   (예: `backend-pytest:assertion`, `backend-pytest:module-not-found`, `frontend-lint`, `frontend-typescript`)
 - backend assertion 실패는 구현 수정 중심, import/module 실패는 의존성/경로 해결 중심으로 유도
 - frontend lint/typescript/build 실패는 각 목적(린트 통과/타입 안정성/build 복구)에 맞춰 prompt를 분기
+- fix prompt는 failure class와 함께 `Repair targets`를 계산해 우선 수정 대상을 명시함
+- dependency/import 계열(`module-not-found`, `env-dependency`)은 코드보다 `requirements.txt`/`package.json`/config를 먼저 점검
+- backend assertion 계열은 테스트 파일보다 구현 파일(endpoint/service/serializer)을 우선 대상으로 선택
 - state에는 `last_failure_class`, `last_fix_strategy`, fix 전/후 failure signature가 기록됨
 - 생성 로그는 우선 `<base_dir>/<project_name>.telegram.log` 임시 로그로 기록
 - 마지막 프로젝트 경로는 `~/.archmind_telegram_last_project` 로 관리

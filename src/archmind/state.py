@@ -126,6 +126,7 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "last_fix_strategy": "",
         "last_failure_signature_before_fix": "",
         "last_failure_signature_after_fix": "",
+        "last_repair_targets": [],
         "derived_task_label": "",
         "recent_failures": [],
         "history": [],
@@ -158,6 +159,11 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     payload["last_fix_strategy"] = str(payload.get("last_fix_strategy") or "").strip()[:80]
     payload["last_failure_signature_before_fix"] = str(payload.get("last_failure_signature_before_fix") or "").strip()[:220]
     payload["last_failure_signature_after_fix"] = str(payload.get("last_failure_signature_after_fix") or "").strip()[:220]
+    repair_targets = payload.get("last_repair_targets")
+    if not isinstance(repair_targets, list):
+        payload["last_repair_targets"] = []
+    else:
+        payload["last_repair_targets"] = [str(x)[:120] for x in repair_targets[:5]]
     payload["derived_task_label"] = str(payload.get("derived_task_label") or "").strip()[:120]
     history = payload.get("history")
     if not isinstance(history, list):
@@ -419,6 +425,9 @@ def update_after_fix(project_dir: Path, action: str, exit_code: int) -> dict[str
         payload["last_fix_strategy"] = str(meta.get("fix_strategy") or payload.get("last_fix_strategy") or "")
         payload["last_failure_signature_before_fix"] = str(meta.get("failure_signature_before_fix") or "")
         payload["last_failure_signature_after_fix"] = str(meta.get("failure_signature_after_fix") or "")
+        targets = meta.get("repair_targets")
+        if isinstance(targets, list):
+            payload["last_repair_targets"] = [str(x)[:120] for x in targets[:5]]
         if meta.get("failure_class"):
             payload["last_failure_class"] = str(meta.get("failure_class"))
         before = str(payload.get("last_failure_signature_before_fix") or "")

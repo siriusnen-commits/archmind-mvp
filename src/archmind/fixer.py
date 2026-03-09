@@ -14,6 +14,8 @@ from archmind.failure import (
     extract_failure_excerpt,
     failure_signature_from_run_result,
     fix_strategy_for_class,
+    select_primary_failure_class,
+    select_repair_targets,
     strategy_instructions,
 )
 from archmind.patcher import apply_unified_diff
@@ -204,6 +206,7 @@ def _build_fix_prompt(
     failure_class: str = "unknown",
     fix_strategy: str = "generic",
     failure_excerpt: str = "",
+    repair_targets: Optional[list[str]] = None,
 ) -> str:
     test_name = failure_details.get("test_name") or "확인 필요"
     file_path = failure_details.get("file_path") or (files_hint[0] if files_hint else "확인 필요")
@@ -220,6 +223,8 @@ def _build_fix_prompt(
     strategy_lines = strategy_instructions(failure_class)
     strategy_block = "\n".join(f"- {line}" for line in strategy_lines)
     excerpt_block = failure_excerpt or "(excerpt 없음)"
+    repair_targets = repair_targets or []
+    repair_targets_block = ", ".join(repair_targets) if repair_targets else "확인 필요"
 
     return (
         "# 재현 커맨드\n"
@@ -241,6 +246,8 @@ def _build_fix_prompt(
         f"- strategy: {fix_strategy}\n\n"
         "# Failure Excerpt\n"
         f"{excerpt_block}\n\n"
+        "# Repair Targets\n"
+        f"- Repair targets: {repair_targets_block}\n\n"
         "# 실패 지점\n"
         f"- 실패한 테스트: {test_name}\n"
         f"- 파일 경로: {files_block}\n"
@@ -250,7 +257,7 @@ def _build_fix_prompt(
         f"{stack_bottom_block}\n\n"
         "# 수정 지시문\n"
         "- 목표: python -m pytest -q 통과\n"
-        f"- 수정 대상: {files_block}\n"
+        f"- 수정 대상: {repair_targets_block}\n"
         "- 변경 범위를 최소화하라\n\n"
         "- 기능 유지, 린트/타입체크 통과를 최우선으로 고려하라\n"
         f"- scope: {scope}\n\n"
@@ -283,9 +290,24 @@ def _write_fix_prompt(
     if scope == "frontend":
         frontend_error_lines = _extract_frontend_error_lines(run_result, max_lines=200)
     failure_signature = failure_signature_from_run_result(run_result)
-    failure_excerpt = extract_failure_excerpt(summary_lines, log_tail, frontend_error_lines)
-    failure_class = classify_failure(failure_excerpt, failure_signature)
+    rough_excerpt = extract_failure_excerpt(summary_lines, log_tail, frontend_error_lines, max_lines=20)
+    classified = classify_failure(rough_excerpt, failure_signature)
+    failure_class = select_primary_failure_class(failure_signature, classified)
+    failure_excerpt = extract_failure_excerpt(
+        summary_lines,
+        log_tail,
+        frontend_error_lines,
+        max_lines=6,
+        failure_class=failure_class,
+    )
     fix_strategy = fix_strategy_for_class(failure_class)
+    repair_targets = select_repair_targets(
+        failure_class,
+        failure_excerpt,
+        project_dir,
+        files_hint=files_hint,
+        failure_file=str(details.get("file_path") or ""),
+    )
     prompt_text = _build_fix_prompt(
         command,
         plan_lines,
@@ -300,6 +322,7 @@ def _write_fix_prompt(
         failure_class=failure_class,
         fix_strategy=fix_strategy,
         failure_excerpt=failure_excerpt,
+        repair_targets=repair_targets,
     )
     prompt_path = log_dir / f"fix_{timestamp}.prompt.md"
     prompt_path.write_text(prompt_text, encoding="utf-8")
@@ -337,6 +360,7 @@ def _write_fix_summary(
     fix_strategy: str = "generic",
     failure_signature_before_fix: str = "",
     failure_signature_after_fix: str = "",
+    repair_targets: Optional[list[str]] = None,
 ) -> None:
     summary_path = log_dir / f"fix_{timestamp}.summary.txt"
     json_path = log_dir / f"fix_{timestamp}.summary.json"
@@ -354,6 +378,7 @@ def _write_fix_summary(
         f"- fix_strategy: {fix_strategy}",
         f"- failure_signature_before_fix: {failure_signature_before_fix}",
         f"- failure_signature_after_fix: {failure_signature_after_fix}",
+        f"- repair_targets: {', '.join(repair_targets or [])}",
         "2) Run summary:",
         f"- run_exit_code: {run_result.overall_exit_code}",
         f"- run_log: {run_result.log_path}",
@@ -374,6 +399,7 @@ def _write_fix_summary(
             "fix_strategy": fix_strategy,
             "failure_signature_before_fix": failure_signature_before_fix,
             "failure_signature_after_fix": failure_signature_after_fix,
+            "repair_targets": list(repair_targets or [])[:5],
             "fix_signature_changed": bool(
                 failure_signature_before_fix
                 and failure_signature_after_fix
@@ -708,13 +734,23 @@ def fix_loop(
         current_signature = failure_signature_from_run_result(run_result)
         if not signature_before:
             signature_before = current_signature
+        rough_excerpt = extract_failure_excerpt(
+            _read_failure_summary_section(run_result.summary_path),
+            read_tail(run_result.log_path, n=120),
+            _extract_frontend_error_lines(run_result, max_lines=200),
+            max_lines=20,
+        )
+        classified = classify_failure(rough_excerpt, current_signature)
+        failure_class = select_primary_failure_class(current_signature, classified)
         failure_excerpt = extract_failure_excerpt(
             _read_failure_summary_section(run_result.summary_path),
             read_tail(run_result.log_path, n=120),
             _extract_frontend_error_lines(run_result, max_lines=200),
+            max_lines=6,
+            failure_class=failure_class,
         )
-        failure_class = classify_failure(failure_excerpt, current_signature)
         fix_strategy = fix_strategy_for_class(failure_class)
+        repair_targets = select_repair_targets(failure_class, failure_excerpt, project_dir)
         if run_status == "SKIP":
             reason = run_reason or "환경 문제로 SKIP"
             _write_skip_prompt(
@@ -737,6 +773,7 @@ def fix_loop(
                 fix_strategy=fix_strategy,
                 failure_signature_before_fix=signature_before,
                 failure_signature_after_fix=current_signature,
+                repair_targets=repair_targets,
             )
             print(f"[SKIP] {reason}")
             return 0
@@ -755,6 +792,7 @@ def fix_loop(
                 fix_strategy=fix_strategy,
                 failure_signature_before_fix=signature_before,
                 failure_signature_after_fix="",
+                repair_targets=repair_targets,
             )
             print(f"[OK] fixed in {iteration - 1} iterations")
             return 0
@@ -812,6 +850,7 @@ def fix_loop(
                 fix_strategy=fix_strategy,
                 failure_signature_before_fix=signature_before,
                 failure_signature_after_fix=current_signature,
+                repair_targets=repair_targets,
             )
             return 2
         if not apply_changes:
@@ -838,6 +877,7 @@ def fix_loop(
                 fix_strategy=fix_strategy,
                 failure_signature_before_fix=signature_before,
                 failure_signature_after_fix=current_signature,
+                repair_targets=repair_targets,
             )
             return 1
 
@@ -869,6 +909,7 @@ def fix_loop(
                 fix_strategy=fix_strategy,
                 failure_signature_before_fix=signature_before,
                 failure_signature_after_fix=current_signature,
+                repair_targets=repair_targets,
             )
             return 1
 
@@ -907,6 +948,7 @@ def fix_loop(
                 fix_strategy=fix_strategy,
                 failure_signature_before_fix=signature_before,
                 failure_signature_after_fix="",
+                repair_targets=repair_targets,
             )
             print(f"[OK] fixed in {iteration} iterations")
             return 0
@@ -938,6 +980,7 @@ def fix_loop(
             fix_strategy="generic",
             failure_signature_before_fix=str((load_state(project_dir) or {}).get("last_failure_signature") or ""),
             failure_signature_after_fix=failure_signature_from_run_result(last_run_result),
+            repair_targets=[],
         )
     return 1
 
