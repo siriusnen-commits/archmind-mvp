@@ -196,6 +196,39 @@ def test_build_completion_message_not_done_after_fix_recommends_continue(tmp_pat
     assert "- run /continue" in msg
 
 
+def test_build_completion_message_includes_stuck_reason_and_next(tmp_path: Path) -> None:
+    project_dir = tmp_path / "p5"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "evaluation.json").write_text(
+        json.dumps(
+            {
+                "status": "STUCK",
+                "reasons": ["same backend pytest failure repeated 3 times"],
+                "next_actions": ["inspect backend failure details"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps({"last_status": "STUCK", "iterations": 4, "current_task_id": 3}),
+        encoding="utf-8",
+    )
+    (archmind / "tasks.json").write_text(
+        json.dumps({"tasks": [{"id": 3, "title": "backend pytest failure 분석", "status": "doing"}]}),
+        encoding="utf-8",
+    )
+    (archmind / "result.txt").write_text(
+        "ArchMind Pipeline Result\n- Backend tests still failing\n- Same failure repeated across retries\n",
+        encoding="utf-8",
+    )
+    msg = build_completion_message(project_dir, tmp_path / "unused.log")
+    assert "Status: STUCK" in msg
+    assert "Reason: same backend pytest failure repeated 3 times" in msg
+    assert "Next:" in msg
+    assert "inspect backend failure details" in msg
+
+
 @dataclass
 class DummyMessage:
     sent: list[str] = field(default_factory=list)

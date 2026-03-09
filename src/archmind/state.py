@@ -12,6 +12,7 @@ LAST_STATUSES = (
     "DONE",
     "NOT_DONE",
     "BLOCKED",
+    "STUCK",
     "UNKNOWN",
 )
 
@@ -97,6 +98,8 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "last_status": "UNKNOWN",
         "completed_tasks": completed,
         "blocked_tasks": blocked,
+        "stuck": False,
+        "stuck_reason": "",
         "recent_failures": [],
         "history": [],
     }
@@ -249,9 +252,13 @@ def update_after_fix(project_dir: Path, action: str, exit_code: int) -> dict[str
     return update_state_event(project_dir, action, status, summary, recent_failures=failures)
 
 
-def update_after_evaluation(project_dir: Path, evaluation_status: str) -> dict[str, Any]:
+def update_after_evaluation(project_dir: Path, evaluation_status: str, stuck_reason: str = "") -> dict[str, Any]:
     status = _safe_status(evaluation_status)
-    return update_state_event(project_dir, "evaluate", status, f"evaluation status {status}")
+    payload = update_state_event(project_dir, "evaluate", status, f"evaluation status {status}")
+    payload["stuck"] = status == "STUCK"
+    payload["stuck_reason"] = stuck_reason if status == "STUCK" else ""
+    write_state(project_dir, payload)
+    return payload
 
 
 def sync_from_tasks(project_dir: Path, action: str = "tasks update", status: str = "UNKNOWN") -> dict[str, Any]:

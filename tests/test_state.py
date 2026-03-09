@@ -24,7 +24,7 @@ def test_state_created_and_updated_after_run(tmp_path: Path) -> None:
     assert state is not None
     assert state["iterations"] >= 1
     assert "archmind run" in state["last_action"]
-    assert state["last_status"] in {"SUCCESS", "SKIP", "FAIL"}
+    assert state["last_status"] in {"SUCCESS", "SKIP", "FAIL", "STUCK"}
 
 
 def test_state_history_added_after_fix(tmp_path: Path, monkeypatch) -> None:

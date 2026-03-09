@@ -141,6 +141,9 @@ Telegram integration (MVP):
 - pipeline 종료 후 완료/실패 요약 메시지를 Telegram으로 자동 전송
 - 자동 요약에는 status, iterations, current task, result/state 요약이 포함
 - 완료 메시지에는 `Next:` 추천 액션(예: `/fix`, `/continue`)이 함께 포함됨
+- 반복 실패가 누적되면 상태를 `STUCK`으로 승격해 사람이 개입할 시점을 명확히 표시
+- `STUCK`은 자동 반복만으로 돌파가 어려운 상태를 의미하며 failure details 검토가 필요
+- `STUCK`일 때는 `/state`로 원인 확인 후 task/plan을 조정한 뒤 `/fix` 또는 `/continue` 권장
 - 생성 로그는 우선 `<base_dir>/<project_name>.telegram.log` 임시 로그로 기록
 - 마지막 프로젝트 경로는 `~/.archmind_telegram_last_project` 로 관리
 - `/state` 는 마지막 프로젝트를 수동 확인할 때 사용하는 명령

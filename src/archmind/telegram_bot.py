@@ -256,6 +256,12 @@ def _recommend_next_actions(status: str, summary_lines: list[str], state: dict[s
     text = "\n".join(summary_lines).lower()
     last_action = str(state.get("last_action") or "").lower()
 
+    if normalized == "STUCK":
+        return [
+            "inspect backend failure details",
+            "revise current task",
+            "then run /fix or /continue",
+        ]
     if normalized == "BLOCKED":
         return ["inspect logs with /state and review backend/frontend failures"]
     if normalized in ("DONE", "SUCCESS"):
@@ -290,6 +296,14 @@ def build_completion_message(
     iterations = state.get("iterations")
     current_task = _current_task_label(project_dir)
     summary_lines = _result_summary_lines(project_dir, temp_log)
+    evaluation = _load_json(archmind_dir / "evaluation.json") or {}
+    stuck_reason = ""
+    if str(status).upper() == "STUCK":
+        reasons = evaluation.get("reasons")
+        if isinstance(reasons, list) and reasons:
+            stuck_reason = str(reasons[0]).strip()
+        if not stuck_reason:
+            stuck_reason = str(state.get("stuck_reason") or "").strip()
 
     lines = [
         "ArchMind finished",
@@ -303,6 +317,8 @@ def build_completion_message(
         lines.append(f"Iterations: {iterations}")
     if current_task:
         lines.append(f"Current task: {current_task}")
+    if stuck_reason:
+        lines.append(f"Reason: {stuck_reason}")
     if exit_code is not None:
         lines.append(f"Exit code: {exit_code}")
     next_actions = _recommend_next_actions(status, summary_lines, state)
