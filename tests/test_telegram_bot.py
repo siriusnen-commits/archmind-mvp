@@ -30,6 +30,7 @@ from archmind.telegram_bot import (
     sanitize_log_excerpt,
     save_last_project_path,
     start_pipeline_process,
+    watch_retry_and_notify,
 )
 
 
@@ -144,6 +145,7 @@ def test_build_completion_message_reads_result_state_json(tmp_path: Path) -> Non
             {
                 "last_status": "NOT_DONE",
                 "iterations": 2,
+                "fix_attempts": 1,
                 "current_task_id": 2,
                 "last_failure_signature": "backend-pytest:FAIL",
                 "derived_task_label": "backend pytest failure 분석",
@@ -172,6 +174,7 @@ def test_build_completion_message_reads_result_state_json(tmp_path: Path) -> Non
     assert str(project_dir) not in message
     assert "Status: NOT_DONE" in message
     assert "Iterations: 2" in message
+    assert "Fix attempts: 1" in message
     assert "Current task: backend pytest failure 분석" in message
     assert "Backend tests are still failing" in message
     assert "Further work remains" in message
@@ -257,6 +260,7 @@ def test_build_completion_message_includes_stuck_reason_and_next(tmp_path: Path)
             {
                 "last_status": "STUCK",
                 "iterations": 4,
+                "fix_attempts": 6,
                 "current_task_id": 3,
                 "last_failure_signature": "backend-pytest:FAIL",
                 "derived_task_label": "backend pytest failure 분석",
@@ -274,6 +278,7 @@ def test_build_completion_message_includes_stuck_reason_and_next(tmp_path: Path)
     )
     msg = build_completion_message(project_dir, tmp_path / "unused.log")
     assert "Status: STUCK" in msg
+    assert "Fix attempts: 6" in msg
     assert "Current task: backend pytest failure 분석" in msg
     assert "Reason: same failure repeated 3 times: backend-pytest:FAIL" in msg
     assert "Automatic retries are no longer making progress" in msg
@@ -533,3 +538,70 @@ def test_retry_done_status_is_blocked_with_message(monkeypatch, tmp_path: Path) 
     asyncio.run(command_retry(update, ctx))
     assert msg.sent
     assert "Project already complete." in msg.sent[-1]
+
+
+def test_build_completion_message_prefers_latest_evaluation_status(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fresh"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "state.json").write_text(
+        json.dumps({"last_status": "NOT_DONE", "iterations": 3, "fix_attempts": 2}),
+        encoding="utf-8",
+    )
+    (archmind / "evaluation.json").write_text(
+        json.dumps({"status": "DONE", "reasons": ["all tasks complete"]}),
+        encoding="utf-8",
+    )
+    msg = build_completion_message(project_dir, tmp_path / "unused.log")
+    assert "Status: DONE" in msg
+    assert "Iterations: 3" in msg
+    assert "Fix attempts: 2" in msg
+
+
+def test_watch_retry_reads_latest_state_after_steps(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "retry_project"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    temp_log = tmp_path / "retry.log"
+
+    (archmind / "state.json").write_text(
+        json.dumps({"last_status": "NOT_DONE", "iterations": 1, "fix_attempts": 0}),
+        encoding="utf-8",
+    )
+    (archmind / "evaluation.json").write_text(json.dumps({"status": "NOT_DONE"}), encoding="utf-8")
+
+    calls = {"n": 0}
+
+    def fake_run_command(cmd, _temp_log):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        state_payload = json.loads((archmind / "state.json").read_text(encoding="utf-8"))
+        if cmd[:2] == ["archmind", "fix"]:
+            state_payload["fix_attempts"] = int(state_payload.get("fix_attempts") or 0) + 1
+        if cmd[:2] == ["archmind", "pipeline"]:
+            state_payload["iterations"] = int(state_payload.get("iterations") or 0) + 1
+            state_payload["last_status"] = "DONE"
+            (archmind / "evaluation.json").write_text(json.dumps({"status": "DONE"}), encoding="utf-8")
+        (archmind / "state.json").write_text(json.dumps(state_payload), encoding="utf-8")
+        return 0
+
+    monkeypatch.setattr("archmind.telegram_bot._run_command_to_log", fake_run_command)
+
+    class DummyBot:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def send_message(self, chat_id: int, text: str) -> None:  # noqa: ARG002
+            self.sent.append(text)
+
+    class DummyApp:
+        def __init__(self) -> None:
+            self.bot = DummyBot()
+
+    app = DummyApp()
+    asyncio.run(watch_retry_and_notify(project_dir=project_dir, temp_log=temp_log, chat_id=1, application=app))
+    assert calls["n"] == 2
+    assert app.bot.sent
+    final_msg = app.bot.sent[-1]
+    assert "Status: DONE" in final_msg
+    assert "Iterations: 2" in final_msg
+    assert "Fix attempts: 1" in final_msg

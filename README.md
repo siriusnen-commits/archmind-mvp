@@ -139,6 +139,10 @@ Telegram integration (MVP):
 - `/fix` 는 마지막 프로젝트에 대해 `archmind fix --path <last_project> --apply` 실행
 - `/retry` 는 실패 복구 루프를 한 번에 실행:
   `archmind fix --path <last_project> --apply` 후 `archmind pipeline --path <last_project>`
+- 상태 카운팅 규칙:
+  `iterations` 는 run/pipeline 사이클 횟수, `fix_attempts` 는 fix 실행 횟수로 분리 추적
+- `/fix` 는 `fix_attempts`만 증가시키고, `/continue` 는 `iterations`를 증가시킴
+- `/retry` 는 내부적으로 `fix_attempts` +1 과 `iterations` +1 이 함께 반영됨
 - `/retry` 시작 시 프로젝트가 이미 `DONE/SUCCESS` 상태면 실행하지 않고 완료 안내 메시지를 반환
 - `STUCK` 상태에서는 경고를 보여주되 `/retry` 실행은 허용
 - `/logs backend` 는 최근 backend 실패 로그(pytest/traceback 요약)를 보여줌

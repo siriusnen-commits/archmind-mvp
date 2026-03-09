@@ -31,6 +31,11 @@ def test_state_created_and_updated_after_run(tmp_path: Path) -> None:
 def test_state_history_added_after_fix(tmp_path: Path, monkeypatch) -> None:
     _write_backend_project(tmp_path, failing=True)
     monkeypatch.setattr("archmind.fixer.run_fix_loop", lambda **_: 1)
+    ensure_state(tmp_path)
+    before = load_state(tmp_path)
+    assert before is not None
+    before_iterations = int(before.get("iterations") or 0)
+    before_fix_attempts = int(before.get("fix_attempts") or 0)
 
     exit_code = main(["fix", "--path", str(tmp_path), "--scope", "backend", "--model", "none"])
     assert exit_code == 1
@@ -40,6 +45,8 @@ def test_state_history_added_after_fix(tmp_path: Path, monkeypatch) -> None:
     history = state.get("history") or []
     assert history
     assert "fix" in history[-1]["action"]
+    assert int(state.get("iterations") or 0) == before_iterations
+    assert int(state.get("fix_attempts") or 0) == before_fix_attempts + 1
 
 
 def test_state_stores_failure_signature_after_failed_run(tmp_path: Path) -> None:
@@ -97,7 +104,22 @@ def test_state_cli_output(tmp_path: Path, capsys) -> None:
     output = capsys.readouterr().out
     assert "STATE:" in output
     assert "Iterations:" in output
+    assert "Fix attempts:" in output
     assert "Recent failures:" in output
+
+
+def test_pipeline_path_increments_iterations(tmp_path: Path) -> None:
+    _write_backend_project(tmp_path, failing=False)
+    ensure_state(tmp_path)
+    s0 = load_state(tmp_path)
+    assert s0 is not None
+    i0 = int(s0.get("iterations") or 0)
+
+    assert main(["pipeline", "--path", str(tmp_path), "--backend-only", "--max-iterations", "1", "--model", "none"]) == 0
+    s1 = load_state(tmp_path)
+    assert s1 is not None
+    i1 = int(s1.get("iterations") or 0)
+    assert i1 >= i0 + 1
 
 
 def test_derive_task_label_from_failure_signature_mapping() -> None:

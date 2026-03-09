@@ -114,6 +114,7 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "project_dir": str(project_dir.expanduser().resolve()),
         "updated_at": _now(),
         "iterations": 0,
+        "fix_attempts": 0,
         "current_task_id": current_task_id,
         "last_action": "",
         "last_status": "UNKNOWN",
@@ -154,6 +155,8 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     payload["project_dir"] = str(project_dir)
     payload["updated_at"] = _now()
     payload["last_status"] = _safe_status(str(payload.get("last_status") or "UNKNOWN"))
+    payload["iterations"] = int(payload.get("iterations") or 0)
+    payload["fix_attempts"] = int(payload.get("fix_attempts") or 0)
     payload["last_failure_signature"] = str(payload.get("last_failure_signature") or "").strip()[:220]
     payload["last_failure_class"] = str(payload.get("last_failure_class") or "").strip()[:80]
     payload["last_fix_strategy"] = str(payload.get("last_fix_strategy") or "").strip()[:80]
@@ -322,6 +325,7 @@ def update_state_event(
     summary: str,
     *,
     increment_iterations: bool = False,
+    increment_fix_attempts: bool = False,
     recent_failures: Optional[list[str]] = None,
     failure_signature: Optional[str] = None,
     failure_class: Optional[str] = None,
@@ -331,6 +335,8 @@ def update_state_event(
 
     if increment_iterations:
         payload["iterations"] = int(payload.get("iterations") or 0) + 1
+    if increment_fix_attempts:
+        payload["fix_attempts"] = int(payload.get("fix_attempts") or 0) + 1
 
     payload["last_action"] = _sanitize_line(action, project_dir)
     payload["last_status"] = _safe_status(status)
@@ -414,6 +420,7 @@ def update_after_fix(project_dir: Path, action: str, exit_code: int) -> dict[str
         action,
         status,
         summary,
+        increment_fix_attempts=True,
         recent_failures=failures,
         failure_signature=failure_signature,
         failure_class=failure_class,
@@ -476,6 +483,7 @@ def format_state_text(project_dir: Path) -> str:
     payload = ensure_state(project_dir)
     status = payload.get("last_status", "UNKNOWN")
     iterations = int(payload.get("iterations") or 0)
+    fix_attempts = int(payload.get("fix_attempts") or 0)
     current_task_id = payload.get("current_task_id")
     derived_label = str(payload.get("derived_task_label") or "").strip()
     task_title = _task_title(project_dir, int(current_task_id)) if current_task_id else None
@@ -484,6 +492,7 @@ def format_state_text(project_dir: Path) -> str:
     lines = [
         f"STATE: {status}",
         f"Iterations: {iterations}",
+        f"Fix attempts: {fix_attempts}",
         f"Current task: {current_line}",
         f"Failure class: {payload.get('last_failure_class') or 'unknown'}",
         "Recent failures:",
@@ -508,6 +517,7 @@ def state_prompt_summary(project_dir: Path) -> list[str]:
     failures = payload.get("recent_failures") or []
     lines = [
         f"- last_status: {payload.get('last_status', 'UNKNOWN')}",
+        f"- fix_attempts: {payload.get('fix_attempts', 0)}",
         f"- current_task: {current_line}",
         f"- failure_class: {payload.get('last_failure_class', 'unknown')}",
         "- recent_failures:",

@@ -5,6 +5,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -697,6 +698,7 @@ def build_finished_message(
     max_len: int = 1200,
 ) -> str:
     iterations = state.get("iterations")
+    fix_attempts = state.get("fix_attempts")
     signature = str(state.get("last_failure_signature") or "").strip()
     failure_class = str(state.get("last_failure_class") or "").strip()
     current_task = str(state.get("derived_task_label") or "").strip() or derive_task_label_from_failure_signature(signature)
@@ -729,6 +731,8 @@ def build_finished_message(
     ]
     if iterations is not None:
         lines.append(f"Iterations: {iterations}")
+    if fix_attempts is not None:
+        lines.append(f"Fix attempts: {fix_attempts}")
     if current_task:
         lines.append(f"Current task: {current_task}")
     if failure_class:
@@ -777,15 +781,34 @@ def build_completion_message(
     return message
 
 
+def _wait_for_latest_artifacts(project_dir: Path, started_at: float, attempts: int = 6, sleep_s: float = 0.15) -> None:
+    archmind_dir = project_dir / ".archmind"
+    targets = [
+        archmind_dir / "state.json",
+        archmind_dir / "evaluation.json",
+        archmind_dir / "result.json",
+    ]
+    for _ in range(attempts):
+        newest = 0.0
+        for path in targets:
+            if path.exists():
+                newest = max(newest, path.stat().st_mtime)
+        if newest >= started_at:
+            return
+        time.sleep(sleep_s)
+
+
 async def watch_pipeline_and_notify(
     proc: subprocess.Popen[str],
     project_dir: Path,
     temp_log: Path,
     chat_id: int,
     application: Any,
+    started_at: Optional[float] = None,
 ) -> None:
     try:
         exit_code = await asyncio.to_thread(proc.wait)
+        await asyncio.to_thread(_wait_for_latest_artifacts, project_dir, started_at or time.time())
         message = build_completion_message(project_dir, temp_log, max_len=1200, exit_code=exit_code)
     except Exception as exc:
         message = f"ArchMind finished with notification error: {exc}"
@@ -816,6 +839,7 @@ async def watch_retry_and_notify(
     temp_log: Path,
     chat_id: int,
     application: Any,
+    started_at: Optional[float] = None,
 ) -> None:
     try:
         commands = build_retry_commands(project_dir)
@@ -824,6 +848,7 @@ async def watch_retry_and_notify(
             last_exit = await asyncio.to_thread(_run_command_to_log, cmd, temp_log)
             if last_exit != 0 and cmd[:2] == ["archmind", "fix"]:
                 break
+        await asyncio.to_thread(_wait_for_latest_artifacts, project_dir, started_at or time.time())
         message = build_completion_message(project_dir, temp_log, max_len=1200, exit_code=last_exit)
     except Exception as exc:
         message = f"ArchMind finished with notification error: {exc}"
@@ -870,6 +895,7 @@ async def _handle_idea_like(update: Any, context: Any, cmd_name: str) -> None:
     chat = getattr(update, "effective_chat", None)
     chat_id = getattr(chat, "id", None)
     if application is not None and chat_id is not None:
+        started_at = time.time()
         asyncio.create_task(
             watch_pipeline_and_notify(
                 proc=proc,
@@ -877,6 +903,7 @@ async def _handle_idea_like(update: Any, context: Any, cmd_name: str) -> None:
                 temp_log=log_path,
                 chat_id=int(chat_id),
                 application=application,
+                started_at=started_at,
             )
         )
 
@@ -903,6 +930,7 @@ async def _handle_continue(update: Any, context: Any) -> None:
     chat = getattr(update, "effective_chat", None)
     chat_id = getattr(chat, "id", None)
     if application is not None and chat_id is not None:
+        started_at = time.time()
         asyncio.create_task(
             watch_pipeline_and_notify(
                 proc=proc,
@@ -910,6 +938,7 @@ async def _handle_continue(update: Any, context: Any) -> None:
                 temp_log=temp_log,
                 chat_id=int(chat_id),
                 application=application,
+                started_at=started_at,
             )
         )
     await update.message.reply_text(f"continuing: pid={proc.pid}\nproject={project_dir}")
@@ -933,6 +962,7 @@ async def _handle_fix(update: Any, context: Any) -> None:
     chat = getattr(update, "effective_chat", None)
     chat_id = getattr(chat, "id", None)
     if application is not None and chat_id is not None:
+        started_at = time.time()
         asyncio.create_task(
             watch_pipeline_and_notify(
                 proc=proc,
@@ -940,6 +970,7 @@ async def _handle_fix(update: Any, context: Any) -> None:
                 temp_log=temp_log,
                 chat_id=int(chat_id),
                 application=application,
+                started_at=started_at,
             )
         )
     await update.message.reply_text(f"fix started: pid={proc.pid}\nproject={project_dir}")
@@ -964,12 +995,14 @@ async def _handle_retry(update: Any, context: Any) -> None:
     chat = getattr(update, "effective_chat", None)
     chat_id = getattr(chat, "id", None)
     if application is not None and chat_id is not None:
+        started_at = time.time()
         asyncio.create_task(
             watch_retry_and_notify(
                 project_dir=project_dir,
                 temp_log=_temp_log_for_project(project_dir),
                 chat_id=int(chat_id),
                 application=application,
+                started_at=started_at,
             )
         )
 
