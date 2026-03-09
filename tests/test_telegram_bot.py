@@ -180,7 +180,7 @@ def test_build_completion_message_reads_result_state_json(tmp_path: Path) -> Non
     assert "Further work remains" in message
     assert "Next:" in message
     assert "- run /fix" in message
-    assert "- then /continue" in message
+    assert "- run /logs backend" in message
 
 
 def test_build_completion_message_fallbacks_to_temp_log(tmp_path: Path) -> None:

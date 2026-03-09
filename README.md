@@ -146,6 +146,25 @@ ArchMind Agent State Machine:
 - 치명적 예외가 발생하면:
   `* -> FAILED` (복구 전까지 수동 개입 필요)
 
+Action Decision Layer:
+- ArchMind는 state/evaluation/result를 함께 읽어 다음 행동을 추론한다.
+- 공식 next action: `DONE`, `FIX`, `RUN`, `RETRY`, `STUCK`, `STOP`
+- `DONE`: 완료 판정이 확정되어 추가 자동 작업이 불필요한 상태
+- `STUCK`: 반복 실패로 자동 루프보다 사람 개입이 우선인 상태
+- `FIX`: 최신 run 실패가 있고 아직 fix 시도가 충분하지 않은 상태
+- `RUN`: fix 이후 재검증(run/pipeline)이 필요한 상태
+- `RETRY`: fix+run 루프를 한 번 더 돌릴 가치가 있는 상태
+- `STOP`: 신호가 부족하거나 자동 진행 의미가 낮은 상태
+- 기본 규칙:
+  - `evaluation.status == DONE` -> `DONE`
+  - `state.stuck` 또는 `evaluation.status == STUCK` -> `STUCK`
+  - run 실패 + not stuck -> `FIX`
+  - fix 전/후 failure signature 변경 -> `RUN`
+  - fix 전/후 failure signature 동일 -> `RETRY` (임계 반복 시 `STUCK`)
+  - 판단 신호 부족 -> `STOP`
+- state.json에는 `next_action`, `next_action_reason`이 기록된다.
+- `/state` 출력과 Telegram finished `Next:` 추천은 같은 decision 로직을 공유한다.
+
 Telegram integration (MVP):
 - BotFather에서 Telegram 봇을 만들고 `TELEGRAM_BOT_TOKEN` 발급
 - 환경변수 설정:

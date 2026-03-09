@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from archmind.decision import decide_next_action
 from archmind.failure import classify_failure, extract_failure_excerpt
 
 LAST_STATUSES = (
@@ -269,6 +270,8 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "last_failure_signature_before_fix": "",
         "last_failure_signature_after_fix": "",
         "last_repair_targets": [],
+        "next_action": "STOP",
+        "next_action_reason": "",
         "derived_task_label": "",
         "recent_failures": [],
         "history": [],
@@ -299,6 +302,11 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     _sync_summary_fields_from_history(payload)
     _sync_summary_fields_from_latest_fix_summary(project_dir, payload)
+    evaluation_payload = _load_json(project_dir / ".archmind" / "evaluation.json") or {}
+    result_payload = _load_json(project_dir / ".archmind" / "result.json") or {}
+    decision = decide_next_action(payload, evaluation_payload, result_payload)
+    payload["next_action"] = str(decision.get("action") or "STOP").strip()[:20]
+    payload["next_action_reason"] = str(decision.get("reason") or "").strip()[:220]
     payload["project_dir"] = str(project_dir)
     payload["updated_at"] = _now()
     payload["last_status"] = _safe_status(str(payload.get("last_status") or "UNKNOWN"))
@@ -316,6 +324,8 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     else:
         payload["last_repair_targets"] = [str(x)[:120] for x in repair_targets[:5]]
     payload["derived_task_label"] = str(payload.get("derived_task_label") or "").strip()[:120]
+    payload["next_action"] = str(payload.get("next_action") or "STOP").strip()[:20]
+    payload["next_action_reason"] = str(payload.get("next_action_reason") or "").strip()[:220]
     history = payload.get("history")
     if not isinstance(history, list):
         payload["history"] = []
@@ -708,6 +718,12 @@ def format_state_text(project_dir: Path) -> str:
             return True
         return False
 
+    evaluation_payload = _load_json(project_dir / ".archmind" / "evaluation.json") or {}
+    result_payload = _load_json(project_dir / ".archmind" / "result.json") or {}
+    decision = decide_next_action(payload, evaluation_payload, result_payload)
+    next_action = str(decision.get("action") or payload.get("next_action") or "STOP")
+    next_reason = str(decision.get("reason") or payload.get("next_action_reason") or "")
+
     lines = [
         f"Project status: {project_status}",
         f"Agent state: {agent_state}",
@@ -716,6 +732,8 @@ def format_state_text(project_dir: Path) -> str:
         f"Fix attempts: {fix_attempts}",
         f"Current task: {current_line}",
         f"Failure class: {payload.get('last_failure_class') or 'unknown'}",
+        f"Next action: {next_action}",
+        f"Reason: {next_reason or '(none)'}",
         "Recent failures:",
     ]
     failures = payload.get("recent_failures") or []
@@ -744,12 +762,17 @@ def state_prompt_summary(project_dir: Path) -> list[str]:
     task_title = derived_label or task_title
     current_line = f"[{current_task_id}] {task_title}" if current_task_id and task_title else "none"
     failures = payload.get("recent_failures") or []
+    evaluation_payload = _load_json(project_dir / ".archmind" / "evaluation.json") or {}
+    result_payload = _load_json(project_dir / ".archmind" / "result.json") or {}
+    decision = decide_next_action(payload, evaluation_payload, result_payload)
     lines = [
         f"- agent_state: {payload.get('agent_state', 'UNKNOWN')}",
         f"- last_status: {payload.get('last_status', 'UNKNOWN')}",
         f"- fix_attempts: {payload.get('fix_attempts', 0)}",
         f"- current_task: {current_line}",
         f"- failure_class: {payload.get('last_failure_class', 'unknown')}",
+        f"- next_action: {decision.get('action', payload.get('next_action', 'STOP'))}",
+        f"- next_action_reason: {decision.get('reason', payload.get('next_action_reason', ''))}",
         "- recent_failures:",
     ]
     if failures:

@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from archmind.decision import decide_next_action, next_action_suggestions
 from archmind.failure import classify_failure
 from archmind.state import derive_task_label_from_failure_signature, load_state, set_agent_state
 
@@ -655,36 +656,16 @@ def _build_human_summary(
     return out[:3]
 
 
-def _recommend_next_actions(status: str, summary_lines: list[str], state: dict[str, Any]) -> list[str]:
-    normalized = (status or "UNKNOWN").upper()
-    text = "\n".join(summary_lines).lower()
-    last_action = str(state.get("last_action") or "").lower()
-
-    if normalized == "STUCK":
-        return [
-            "run /logs backend",
-            "inspect backend failure details",
-            "revise current task",
-            "then run /fix or /continue",
-        ]
-    if normalized == "BLOCKED":
-        return ["inspect logs with /state and review backend/frontend failures"]
-    if normalized in ("DONE", "SUCCESS"):
-        return ["review project artifacts"]
-
-    has_backend_pytest_fail = "backend" in text and ("fail" in text or "pytest" in text)
-    recent_fix = "fix" in last_action
-
-    if normalized == "NOT_DONE":
-        if has_backend_pytest_fail and not recent_fix:
-            return ["run /logs backend", "run /fix", "then /continue"]
-        if recent_fix:
-            return ["run /logs backend", "run /continue"]
-        return ["run /logs backend", "run /fix", "then /continue"]
-
-    if normalized in ("FAIL", "SKIP", "UNKNOWN"):
-        return ["run /fix", "then /continue"]
-    return ["run /state"]
+def _recommend_next_actions(
+    status: str,
+    summary_lines: list[str],
+    state: dict[str, Any],
+    evaluation: dict[str, Any],
+    result: dict[str, Any],
+) -> list[str]:
+    del status, summary_lines
+    decision = decide_next_action(state, evaluation, result)
+    return next_action_suggestions(str(decision.get("action") or "STOP"))
 
 
 def build_finished_message(
@@ -719,7 +700,7 @@ def build_finished_message(
         result=result,
         fallback_lines=list(fallback_summary_lines or []),
     )
-    next_actions = _recommend_next_actions(status, summary_lines, state)[:3]
+    next_actions = _recommend_next_actions(status, summary_lines, state, evaluation, result)[:3]
 
     lines = [
         "ArchMind finished",

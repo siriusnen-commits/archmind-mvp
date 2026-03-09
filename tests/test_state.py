@@ -220,6 +220,8 @@ def test_state_cli_output(tmp_path: Path, capsys) -> None:
     assert "Last status:" in output
     assert "Iterations:" in output
     assert "Fix attempts:" in output
+    assert "Next action:" in output
+    assert "Reason:" in output
     assert "Recent failures:" in output
 
 
