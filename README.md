@@ -124,6 +124,21 @@ archmind state --path myproj
 - `history` 는 최근 20개 이벤트만, `recent_failures` 는 최근 10개만 유지한다.
 - fix prompt에는 state 요약(현재 task, 최근 실패, last_status)이 함께 포함된다.
 
+Telegram integration (MVP):
+- BotFather에서 Telegram 봇을 만들고 `TELEGRAM_BOT_TOKEN` 발급
+- 환경변수 설정:
+  `export TELEGRAM_BOT_TOKEN=...`
+  `export ARCHMIND_BASE_DIR=~/archmind-telegram-projects` (선택)
+  `export ARCHMIND_DEFAULT_TEMPLATE=fullstack-ddd` (선택)
+- 실행:
+  `python scripts/telegram_bot.py`
+- 지원 명령:
+  `/idea <text>`, `/pipeline <text>`, `/state`, `/help`
+- `/idea` 와 `/pipeline` 은 백그라운드로 `archmind pipeline ... --apply` 실행
+- 생성 프로젝트 로그는 `<project>/.archmind/telegram.log` 에 저장
+- 마지막 프로젝트 경로는 `~/.archmind_telegram_last_project` 로 관리
+- `/state` 는 마지막 프로젝트에 대해 `archmind state --path ...` 결과를 반환
+
 ## Output Artifacts (.archmind/ structure)
 
 Typical outputs created inside the project directory:
