@@ -114,6 +114,16 @@ archmind evaluate --path myproj
 - `BLOCKED`: 모든 task가 `blocked` 상태
 - `pipeline` 종료 시 evaluate가 자동 실행되어 result에 요약 포함
 
+State:
+```bash
+archmind state --path myproj
+```
+- `.archmind/state.json` 은 반복 실행의 메모리 계층으로 동작한다.
+- 저장 항목: `iterations`, `current_task_id`, `last_action`, `last_status`, `recent_failures`, `history`.
+- `run/fix/evaluate/complete/pipeline` 실행 시 자동 갱신되어 현재 진행 상황을 복원 가능하게 유지한다.
+- `history` 는 최근 20개 이벤트만, `recent_failures` 는 최근 10개만 유지한다.
+- fix prompt에는 state 요약(현재 task, 최근 실패, last_status)이 함께 포함된다.
+
 ## Output Artifacts (.archmind/ structure)
 
 Typical outputs created inside the project directory:
@@ -129,6 +139,7 @@ Typical outputs created inside the project directory:
   - `pipeline_YYYYMMDD_HHMMSS.summary.txt`
   - `pipeline_YYYYMMDD_HHMMSS.summary.json` (when `--json-summary`)
 - `.archmind/result.txt` and `.archmind/result.json` (latest run/pipeline results)
+- `.archmind/state.json` (iterative execution memory snapshot)
 - `.archmind/patch_backups/` (timestamped backups for applied patches)
 
 ## Offline install / wheelhouse verification

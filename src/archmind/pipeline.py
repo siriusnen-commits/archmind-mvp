@@ -12,6 +12,7 @@ from archmind.fixer import run_fix_loop
 from archmind.evaluator import write_evaluation
 from archmind.planner import write_project_plan
 from archmind.runner import RunConfig, RunResult, compute_run_status, run_pipeline
+from archmind.state import ensure_state, load_state, update_after_fix, update_after_run
 from archmind.tasks import current_task, ensure_tasks
 
 
@@ -261,10 +262,15 @@ def _build_result_text(payload: dict[str, Any]) -> str:
     evaluation_text = "N/A"
     if isinstance(evaluation, dict) and evaluation.get("status"):
         evaluation_text = str(evaluation.get("status"))
+    state_info = payload.get("state") or {}
+    state_text = "N/A"
+    if isinstance(state_info, dict) and state_info.get("last_status"):
+        state_text = f"{state_info.get('last_status')} iter={state_info.get('iterations', 'N/A')}"
     lines = [
         "ArchMind Pipeline Result",
         f"- status: {payload.get('status')}",
         f"- evaluation: {evaluation_text}",
+        f"- state: {state_text}",
         f"- project_dir: {payload.get('project_dir')}",
         f"- timestamp: {payload.get('timestamp')}",
         f"- command: {payload.get('command')}",
@@ -440,6 +446,10 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         ensure_tasks(project_dir)
     except Exception as exc:
         print(f"[WARN] tasks initialization failed: {exc}", file=sys.stderr)
+    try:
+        ensure_state(project_dir)
+    except Exception as exc:
+        print(f"[WARN] state initialization failed: {exc}", file=sys.stderr)
 
     run_config = _build_run_config(opts, project_dir)
     command = _build_command(opts)
@@ -453,6 +463,15 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
     for iteration in range(1, opts.max_iterations + 1):
         run_result = run_pipeline(run_config)
         run_status, _ = compute_run_status(run_result)
+        try:
+            update_after_run(
+                project_dir,
+                action=f"pipeline run iteration {iteration}",
+                run_status=run_status,
+                summary=f"pipeline run iteration {iteration} -> {run_status}",
+            )
+        except Exception as exc:
+            print(f"[WARN] state update(run) failed: {exc}", file=sys.stderr)
         if run_status in ("SUCCESS", "SKIP"):
             final_exit = 0
             break
@@ -468,12 +487,29 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
             profile=opts.profile,
             cmds=opts.cmds,
         )
+        try:
+            update_after_fix(
+                project_dir,
+                action=f"pipeline fix iteration {iteration}",
+                exit_code=fix_exit,
+            )
+        except Exception as exc:
+            print(f"[WARN] state update(fix) failed: {exc}", file=sys.stderr)
         if fix_exit != 0:
             final_exit = 1
             break
 
         rerun_result = run_pipeline(run_config)
         rerun_status, _ = compute_run_status(rerun_result)
+        try:
+            update_after_run(
+                project_dir,
+                action=f"pipeline rerun iteration {iteration}",
+                run_status=rerun_status,
+                summary=f"pipeline rerun iteration {iteration} -> {rerun_status}",
+            )
+        except Exception as exc:
+            print(f"[WARN] state update(rerun) failed: {exc}", file=sys.stderr)
         rerun_exit = 0 if rerun_status in ("SUCCESS", "SKIP") else 1
         if rerun_exit == 0:
             final_exit = 0
@@ -577,6 +613,14 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
     )
     if evaluation_path:
         artifacts["evaluation"] = str(evaluation_path)
+    state_payload = load_state(project_dir)
+    if state_payload:
+        payload["state"] = {
+            "last_status": state_payload.get("last_status"),
+            "iterations": state_payload.get("iterations"),
+            "current_task_id": state_payload.get("current_task_id"),
+        }
+        artifacts["state"] = str(project_dir / ".archmind" / "state.json")
 
     result_json, _ = write_result(project_dir, payload)
 
@@ -588,6 +632,8 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
 
     if status == "SUCCESS":
         print(f"[DONE] SUCCESS. result: {result_json}")
+        if state_payload:
+            print(f"[STATE] {state_payload.get('last_status')} iterations={state_payload.get('iterations')}")
         if evaluation_payload:
             if evaluation_payload.get("status") == "DONE":
                 print("[DONE] project complete")
@@ -598,6 +644,8 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         return 0
 
     print(f"[FAIL] {status}. result: {result_json}")
+    if state_payload:
+        print(f"[STATE] {state_payload.get('last_status')} iterations={state_payload.get('iterations')}")
     if evaluation_payload:
         if evaluation_payload.get("status") == "DONE":
             print("[DONE] project complete")

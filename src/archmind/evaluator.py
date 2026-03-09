@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from archmind.state import update_after_evaluation
 from archmind.tasks import load_tasks
 
 EVAL_STATUSES = ("DONE", "NOT_DONE", "BLOCKED")
@@ -156,6 +157,7 @@ def write_evaluation(project_dir: Path) -> tuple[dict[str, Any], Path]:
     path = _evaluation_path(project_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    update_after_evaluation(project_dir, str(payload.get("status") or "UNKNOWN"))
     return payload, path
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import inspect
+import json
 import sys
 from dataclasses import is_dataclass
 from typing import Any, Callable, Dict, Optional, Sequence
@@ -269,11 +270,17 @@ def build_parser() -> argparse.ArgumentParser:
     ev = sub.add_parser("evaluate", help="Evaluate project completion state")
     ev.add_argument("--path", required=True, help="Project root path")
     ev.set_defaults(func=run_evaluate)
+
+    st = sub.add_parser("state", help="Show state memory summary")
+    st.add_argument("--path", required=True, help="Project root path")
+    st.add_argument("--json", action="store_true", help="Print raw state.json")
+    st.set_defaults(func=run_state)
     return p
 
 
 def run_run(args: argparse.Namespace) -> int:
-    from archmind.runner import RunConfig, print_run_result, run_pipeline
+    from archmind.runner import RunConfig, compute_run_status, print_run_result, run_pipeline
+    from archmind.state import update_after_run
 
     project_dir = Path(args.path).expanduser().resolve()
     if not project_dir.exists():
@@ -315,11 +322,19 @@ def run_run(args: argparse.Namespace) -> int:
 
     result = run_pipeline(config)
     print_run_result(result)
+    run_status, run_reason = compute_run_status(result)
+    update_after_run(
+        project_dir,
+        action=command.strip(),
+        run_status=run_status,
+        summary=run_reason or f"run finished with {run_status}",
+    )
     return result.overall_exit_code
 
 
 def run_fix(args: argparse.Namespace) -> int:
     from archmind.fixer import run_fix_loop
+    from archmind.state import update_after_fix
 
     project_dir = Path(args.path).expanduser().resolve()
     if not project_dir.exists():
@@ -346,7 +361,7 @@ def run_fix(args: argparse.Namespace) -> int:
 
     command = "archmind " + " ".join(getattr(args, "_argv", []))
     try:
-        return run_fix_loop(
+        exit_code = run_fix_loop(
             project_dir=project_dir,
             max_iterations=args.max_iterations,
             model=args.model,
@@ -358,6 +373,8 @@ def run_fix(args: argparse.Namespace) -> int:
             profile=args.profile,
             cmds=args.cmd,
         )
+        update_after_fix(project_dir, action=command.strip(), exit_code=exit_code)
+        return exit_code
     except Exception as exc:
         print(f"[ERROR] {exc}", file=sys.stderr)
         return 70
@@ -452,6 +469,7 @@ def run_next(args: argparse.Namespace) -> int:
 
 def run_complete(args: argparse.Namespace) -> int:
     from archmind.tasks import update_task_status
+    from archmind.state import sync_from_tasks
 
     project_dir = Path(args.path).expanduser().resolve()
     if not project_dir.exists() or not project_dir.is_dir():
@@ -468,6 +486,7 @@ def run_complete(args: argparse.Namespace) -> int:
     if task is None:
         print(f"[ERROR] task id not found: {args.id}", file=sys.stderr)
         return 64
+    sync_from_tasks(project_dir, action=f"complete --id {task.id}", status="UNKNOWN")
     print(f"UPDATED: [{task.id}] -> {task.status}")
     return 0
 
@@ -483,6 +502,22 @@ def run_evaluate(args: argparse.Namespace) -> int:
     payload, eval_path = write_evaluation(project_dir)
     print(format_evaluation_summary(payload))
     print(f"[OK] evaluation: {eval_path}")
+    return 0
+
+
+def run_state(args: argparse.Namespace) -> int:
+    from archmind.state import ensure_state, format_state_text, state_path
+
+    project_dir = Path(args.path).expanduser().resolve()
+    if not project_dir.exists() or not project_dir.is_dir():
+        print(f"[ERROR] Path is not a directory: {project_dir}", file=sys.stderr)
+        return 64
+    payload = ensure_state(project_dir)
+    if args.json:
+        print(json.dumps(payload, indent=2))
+        return 0
+    print(format_state_text(project_dir))
+    print(f"[OK] state: {state_path(project_dir)}")
     return 0
 
 

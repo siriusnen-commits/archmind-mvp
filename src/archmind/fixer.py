@@ -13,6 +13,7 @@ from archmind.patcher import apply_unified_diff
 from archmind.evaluator import read_evaluation_status
 from archmind.planner import read_plan_summary
 from archmind.runner import RunConfig, RunResult, compute_run_status, run_pipeline
+from archmind.state import state_prompt_summary
 from archmind.tasks import current_task
 
 LOG_PY_TRACE_RE = re.compile(r'File "([^"]+)", line (\d+)')
@@ -187,6 +188,7 @@ def _build_fix_prompt(
     plan_lines: list[str],
     task_line: str,
     evaluation_status: str,
+    state_lines: list[str],
     summary_lines: list[str],
     failure_details: dict[str, Optional[str | list[str]]],
     files_hint: list[str],
@@ -204,6 +206,7 @@ def _build_fix_prompt(
     stack_top_block = "\n".join(stack_top) if stack_top else "(스택트레이스 상단 없음)"
     stack_bottom_block = "\n".join(stack_bottom) if stack_bottom else "(스택트레이스 하단 없음)"
     frontend_block = "\n".join(frontend_error_lines) if frontend_error_lines else "(프론트 오류 요약 없음)"
+    state_block = "\n".join(state_lines) if state_lines else "- (state missing)"
 
     return (
         "# 재현 커맨드\n"
@@ -214,6 +217,8 @@ def _build_fix_prompt(
         f"{task_line}\n\n"
         "# Current Evaluation\n"
         f"{evaluation_status}\n\n"
+        "# State Summary\n"
+        f"{state_block}\n\n"
         "# 실패 요약\n"
         f"{summary_block}\n\n"
         "# 프론트 오류 요약\n"
@@ -254,6 +259,7 @@ def _write_fix_prompt(
     task = current_task(project_dir)
     task_line = f"[{task.id}] {task.status} {task.title}" if task else "task missing"
     evaluation_status = read_evaluation_status(project_dir)
+    state_lines = state_prompt_summary(project_dir)
     frontend_error_lines: list[str] = []
     if scope == "frontend":
         frontend_error_lines = _extract_frontend_error_lines(run_result, max_lines=200)
@@ -262,6 +268,7 @@ def _write_fix_prompt(
         plan_lines,
         task_line,
         evaluation_status,
+        state_lines,
         summary_lines,
         details,
         files_hint,
