@@ -82,6 +82,16 @@ Pipeline:
 archmind pipeline --path /tmp/defect_demo --backend-only --max-iterations 1 --model none
 ```
 
+Plan:
+```bash
+archmind plan --idea "stabilize failing tests and define fix steps" --path /tmp/defect_demo
+cat /tmp/defect_demo/.archmind/plan.md
+cat /tmp/defect_demo/.archmind/plan.json
+```
+- `plan.md`: 목표/범위, 작업 단계, 테스트 전략, Done 정의 (20~60줄)
+- `plan.json`: `steps`, `risks`, `acceptance` 기반 구조화 산출물
+- `pipeline` 실행 시 현재 프로젝트의 `.archmind/plan.*`가 자동 생성/갱신됨
+
 ## Output Artifacts (.archmind/ structure)
 
 Typical outputs created inside the project directory:

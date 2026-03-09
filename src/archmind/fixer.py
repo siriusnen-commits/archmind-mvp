@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from archmind.patcher import apply_unified_diff
+from archmind.planner import read_plan_summary
 from archmind.runner import RunConfig, RunResult, compute_run_status, run_pipeline
 
 LOG_PY_TRACE_RE = re.compile(r'File "([^"]+)", line (\d+)')
@@ -181,6 +182,7 @@ def _extract_frontend_error_lines(run_result: RunResult, max_lines: int = 200) -
 
 def _build_fix_prompt(
     command: str,
+    plan_lines: list[str],
     summary_lines: list[str],
     failure_details: dict[str, Optional[str | list[str]]],
     files_hint: list[str],
@@ -192,6 +194,7 @@ def _build_fix_prompt(
     stack_top = failure_details.get("stack_top") or []
     stack_bottom = failure_details.get("stack_bottom") or []
 
+    plan_block = "\n".join(plan_lines) if plan_lines else "plan missing"
     summary_block = "\n".join(f"- {line}" for line in summary_lines) if summary_lines else "- (요약 없음)"
     files_block = file_path if isinstance(file_path, str) else "확인 필요"
     stack_top_block = "\n".join(stack_top) if stack_top else "(스택트레이스 상단 없음)"
@@ -201,6 +204,8 @@ def _build_fix_prompt(
     return (
         "# 재현 커맨드\n"
         f"{command}\n\n"
+        "# Plan 요약\n"
+        f"{plan_block}\n\n"
         "# 실패 요약\n"
         f"{summary_block}\n\n"
         "# 프론트 오류 요약\n"
@@ -236,10 +241,20 @@ def _write_fix_prompt(
     log_text = "\n".join(log_tail)
     details = _extract_failure_details(log_text)
     files_hint = extract_files_hint(log_tail)
+    project_dir = log_dir.parent.parent
+    plan_lines = read_plan_summary(project_dir, max_lines=200)
     frontend_error_lines: list[str] = []
     if scope == "frontend":
         frontend_error_lines = _extract_frontend_error_lines(run_result, max_lines=200)
-    prompt_text = _build_fix_prompt(command, summary_lines, details, files_hint, scope, frontend_error_lines)
+    prompt_text = _build_fix_prompt(
+        command,
+        plan_lines,
+        summary_lines,
+        details,
+        files_hint,
+        scope,
+        frontend_error_lines,
+    )
     prompt_path = log_dir / f"fix_{timestamp}.prompt.md"
     prompt_path.write_text(prompt_text, encoding="utf-8")
     return prompt_path
@@ -247,11 +262,16 @@ def _write_fix_prompt(
 
 def _write_skip_prompt(log_dir: Path, timestamp: str, command: str, reason: str) -> Path:
     prompt_path = log_dir / f"fix_{timestamp}.prompt.md"
+    project_dir = log_dir.parent.parent
+    plan_lines = read_plan_summary(project_dir, max_lines=200)
+    plan_block = "\n".join(plan_lines) if plan_lines else "plan missing"
     prompt_text = (
         "# SKIP\n"
         f"- reason: {reason}\n"
         "- note: 환경 문제로 SKIP 처리되어 수정 없이 종료합니다.\n"
         f"- command: {command}\n"
+        "# Plan 요약\n"
+        f"{plan_block}\n"
     )
     prompt_path.write_text(prompt_text, encoding="utf-8")
     return prompt_path

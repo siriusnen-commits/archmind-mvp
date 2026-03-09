@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from archmind.fixer import run_fix_loop
+from archmind.planner import write_project_plan
 from archmind.runner import RunConfig, RunResult, compute_run_status, run_pipeline
 
 
@@ -414,6 +415,16 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         print(f"[ERROR] Path is not a directory: {project_dir}", file=sys.stderr)
         return 2
 
+    plan_md_path: Optional[Path] = None
+    plan_json_path: Optional[Path] = None
+    plan_idea = (opts.idea or "").strip() or f"{project_dir.name} 안정화 및 개선"
+    try:
+        plan_artifacts = write_project_plan(project_dir, plan_idea)
+        plan_md_path = plan_artifacts.plan_md_path
+        plan_json_path = plan_artifacts.plan_json_path
+    except Exception as exc:
+        print(f"[WARN] plan generation failed: {exc}", file=sys.stderr)
+
     run_config = _build_run_config(opts, project_dir)
     command = _build_command(opts)
 
@@ -484,6 +495,8 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         "run_prompt": str(run_prompt) if run_prompt else None,
         "fix_prompt": str(fix_prompt) if fix_prompt else None,
         "json_summary": str(last_run.json_summary_path) if last_run and last_run.json_summary_path else None,
+        "plan_md": str(plan_md_path) if plan_md_path else None,
+        "plan_json": str(plan_json_path) if plan_json_path else None,
     }
 
     payload = {

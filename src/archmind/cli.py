@@ -245,6 +245,11 @@ def build_parser() -> argparse.ArgumentParser:
     ppipe.add_argument("--dry-run", action="store_true", help="Plan only, no execution")
     ppipe.add_argument("--json-summary", action="store_true", help="Write pipeline summary.json")
     ppipe.set_defaults(func=run_pipeline_cmd)
+
+    pl = sub.add_parser("plan", help="Generate project plan artifacts")
+    pl.add_argument("--idea", required=True, help="Plan idea / goal")
+    pl.add_argument("--path", default=".", help="Existing project path")
+    pl.set_defaults(func=run_plan)
     return p
 
 
@@ -374,6 +379,23 @@ def run_pipeline_cmd(args: argparse.Namespace) -> int:
     )
 
     return run_pipeline_command(opts)
+
+
+def run_plan(args: argparse.Namespace) -> int:
+    from archmind.planner import write_project_plan
+
+    project_dir = Path(args.path).expanduser().resolve()
+    if not project_dir.exists():
+        print(f"[ERROR] Path not found: {project_dir}", file=sys.stderr)
+        return 64
+    if not project_dir.is_dir():
+        print(f"[ERROR] Path is not a directory: {project_dir}", file=sys.stderr)
+        return 64
+
+    artifacts = write_project_plan(project_dir, args.idea)
+    print(f"[OK] plan markdown: {artifacts.plan_md_path}")
+    print(f"[OK] plan json: {artifacts.plan_json_path}")
+    return 0
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

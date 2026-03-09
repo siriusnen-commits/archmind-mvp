@@ -94,6 +94,8 @@ def test_pipeline_idea_generates_and_runs(tmp_path: Path, monkeypatch) -> None:
 
     project_dir = tmp_path / "demo_proj"
     assert project_dir.exists()
+    assert (project_dir / ".archmind" / "plan.md").exists()
+    assert (project_dir / ".archmind" / "plan.json").exists()
     log_dir = project_dir / ".archmind" / "run_logs"
     assert log_dir.exists()
     assert list(log_dir.glob("run_*.summary.txt"))
@@ -117,6 +119,8 @@ def test_pipeline_path_runs_backend_only(tmp_path: Path) -> None:
     assert exit_code == 0
 
     log_dir = tmp_path / ".archmind" / "run_logs"
+    assert (tmp_path / ".archmind" / "plan.md").exists()
+    assert (tmp_path / ".archmind" / "plan.json").exists()
     assert list(log_dir.glob("run_*.summary.txt"))
 
 
@@ -139,7 +143,10 @@ def test_pipeline_failure_creates_prompt_and_summary(tmp_path: Path) -> None:
 
     log_dir = tmp_path / ".archmind" / "run_logs"
     assert list(log_dir.glob("run_*.summary.txt"))
-    assert list(log_dir.glob("*.prompt.md"))
+    prompts = list(log_dir.glob("fix_*.prompt.md"))
+    assert prompts
+    prompt_text = prompts[-1].read_text(encoding="utf-8")
+    assert "Plan 요약" in prompt_text
 
 
 def test_pipeline_frontend_only_skips_backend(tmp_path: Path) -> None:
