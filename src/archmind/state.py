@@ -18,6 +18,24 @@ LAST_STATUSES = (
 )
 
 
+def derive_task_label_from_failure_signature(signature: str) -> str:
+    raw = (signature or "").strip().lower()
+    if not raw:
+        return ""
+    head = raw.split(":", 1)[0]
+    parts = [item.strip() for item in head.split("+") if item.strip()]
+    key = "+".join(sorted(set(parts)))
+    if key == "backend-pytest":
+        return "backend pytest failure 분석"
+    if key == "frontend-lint":
+        return "frontend lint failure 수정"
+    if key == "frontend-build":
+        return "frontend build failure 수정"
+    if key == "backend-pytest+frontend-lint":
+        return "backend pytest / frontend lint failure 분석"
+    return "반복 실패 원인 분석"
+
+
 def _state_path(project_dir: Path) -> Path:
     return project_dir.expanduser().resolve() / ".archmind" / "state.json"
 
@@ -102,6 +120,7 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "stuck": False,
         "stuck_reason": "",
         "last_failure_signature": "",
+        "derived_task_label": "",
         "recent_failures": [],
         "history": [],
     }
@@ -129,6 +148,7 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     payload["updated_at"] = _now()
     payload["last_status"] = _safe_status(str(payload.get("last_status") or "UNKNOWN"))
     payload["last_failure_signature"] = str(payload.get("last_failure_signature") or "").strip()[:220]
+    payload["derived_task_label"] = str(payload.get("derived_task_label") or "").strip()[:120]
     history = payload.get("history")
     if not isinstance(history, list):
         payload["history"] = []
@@ -290,6 +310,7 @@ def update_state_event(
     if _safe_status(status) in ("FAIL", "NOT_DONE", "BLOCKED", "STUCK") and not normalized_signature:
         normalized_signature = str(payload.get("last_failure_signature") or "").strip()
     payload["last_failure_signature"] = normalized_signature[:220]
+    payload["derived_task_label"] = derive_task_label_from_failure_signature(normalized_signature)
 
     merged_failures: list[str] = []
     for line in recent_failures or []:
@@ -392,7 +413,9 @@ def format_state_text(project_dir: Path) -> str:
     status = payload.get("last_status", "UNKNOWN")
     iterations = int(payload.get("iterations") or 0)
     current_task_id = payload.get("current_task_id")
+    derived_label = str(payload.get("derived_task_label") or "").strip()
     task_title = _task_title(project_dir, int(current_task_id)) if current_task_id else None
+    task_title = derived_label or task_title
     current_line = f"[{current_task_id}] {task_title}" if current_task_id and task_title else "none"
     lines = [
         f"STATE: {status}",
@@ -413,7 +436,9 @@ def state_prompt_summary(project_dir: Path) -> list[str]:
     project_dir = project_dir.expanduser().resolve()
     payload = ensure_state(project_dir)
     current_task_id = payload.get("current_task_id")
+    derived_label = str(payload.get("derived_task_label") or "").strip()
     task_title = _task_title(project_dir, int(current_task_id)) if current_task_id else None
+    task_title = derived_label or task_title
     current_line = f"[{current_task_id}] {task_title}" if current_task_id and task_title else "none"
     failures = payload.get("recent_failures") or []
     lines = [

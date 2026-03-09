@@ -140,7 +140,11 @@ Telegram integration (MVP):
 - 실패 후 Telegram에서 바로 `/continue` 또는 `/fix`로 복구 루프를 이어갈 수 있음
 - pipeline 종료 후 완료/실패 요약 메시지를 Telegram으로 자동 전송
 - 자동 요약에는 status, iterations, current task, result/state 요약이 포함
+- current task는 `failure_signature`를 기반으로 사람이 읽기 쉬운 라벨로 보정될 수 있음
+  (예: `backend pytest failure 분석`, `frontend lint failure 수정`)
+- 특히 `STUCK` 상태에서는 failure 기반 current task 라벨을 우선 표시
 - 완료 메시지에는 `Next:` 추천 액션(예: `/fix`, `/continue`)이 함께 포함됨
+- 기본 finished 메시지는 핵심 상태/요약/다음 액션 중심이며 raw command 문자열은 숨김
 - 반복 실패가 누적되면 상태를 `STUCK`으로 승격해 사람이 개입할 시점을 명확히 표시
 - `STUCK`은 자동 반복만으로 돌파가 어려운 상태를 의미하며 failure details 검토가 필요
 - `STUCK`일 때는 `/state`로 원인 확인 후 task/plan을 조정한 뒤 `/fix` 또는 `/continue` 권장

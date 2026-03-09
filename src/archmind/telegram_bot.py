@@ -9,6 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from archmind.state import derive_task_label_from_failure_signature
+
 LAST_PROJECT_PATH_FILE = Path.home() / ".archmind_telegram_last_project"
 DEFAULT_BASE_DIR = Path.home() / "archmind-telegram-projects"
 DEFAULT_TEMPLATE = "fullstack-ddd"
@@ -182,9 +184,15 @@ def _status_from_sources(project_dir: Path) -> str:
     return "UNKNOWN"
 
 
-def _current_task_label(project_dir: Path) -> Optional[str]:
+def _current_task_label(project_dir: Path, status: str) -> Optional[str]:
     archmind_dir = project_dir / ".archmind"
     state = _load_json(archmind_dir / "state.json") or {}
+    signature = str(state.get("last_failure_signature") or "").strip()
+    derived_label = str(state.get("derived_task_label") or "").strip() or derive_task_label_from_failure_signature(signature)
+    if derived_label and str(status).upper() == "STUCK":
+        return derived_label
+    if derived_label:
+        return derived_label
     task_id = state.get("current_task_id")
     if task_id is None:
         return None
@@ -199,30 +207,66 @@ def _current_task_label(project_dir: Path) -> Optional[str]:
     return f"task {task_id}"
 
 
+def _humanize_summary_line(line: str) -> str:
+    text = str(line or "").strip()
+    if not text:
+        return ""
+    text = text.lstrip("-").strip()
+    lower = text.lower()
+    if lower.startswith("command:"):
+        return ""
+    if "backend" in lower and ("fail" in lower or "failed" in lower):
+        if "pytest" in lower or "test" in lower:
+            return "Backend tests still failing"
+        return "Backend step still failing"
+    if "frontend" in lower and "lint" in lower and ("fail" in lower or "failed" in lower):
+        return "Frontend lint still failing"
+    if "frontend" in lower and "build" in lower and ("fail" in lower or "failed" in lower):
+        return "Frontend build still failing"
+    if "further work remains" in lower:
+        return "Further work remains"
+    if "latest run failed" in lower:
+        return "Latest run failed"
+    if "status:" in lower:
+        value = text.split(":", 1)[1].strip() if ":" in text else text
+        return f"Status detail: {value}"
+    return text[:140]
+
+
 def _result_summary_lines(project_dir: Path, temp_log: Path) -> list[str]:
     archmind_dir = project_dir / ".archmind"
     result_txt = archmind_dir / "result.txt"
     if result_txt.exists():
         lines = [line.strip() for line in result_txt.read_text(encoding="utf-8", errors="replace").splitlines()]
         lines = [line for line in lines if line and not line.startswith("ArchMind Pipeline Result")]
-        return lines[:8]
+        out: list[str] = []
+        for line in lines:
+            cleaned = _humanize_summary_line(line)
+            if cleaned and cleaned not in out:
+                out.append(cleaned)
+        return out[:8]
 
     result_json = _load_json(archmind_dir / "result.json")
     if result_json:
         lines: list[str] = []
         if result_json.get("status"):
-            lines.append(f"status: {result_json.get('status')}")
+            lines.append(f"Status detail: {result_json.get('status')}")
         evaluation = result_json.get("evaluation")
         if isinstance(evaluation, dict) and evaluation.get("status"):
-            lines.append(f"evaluation: {evaluation.get('status')}")
+            lines.append(f"Evaluation status: {evaluation.get('status')}")
         steps = result_json.get("steps")
         if isinstance(steps, dict):
             run_before = steps.get("run_before_fix")
             if isinstance(run_before, dict):
                 step_status = run_before.get("status")
                 if step_status:
-                    lines.append(f"run_before_fix: {step_status}")
-        return lines[:8]
+                    lines.append(f"Run before fix: {step_status}")
+        out: list[str] = []
+        for line in lines:
+            cleaned = _humanize_summary_line(line)
+            if cleaned and cleaned not in out:
+                out.append(cleaned)
+        return out[:8]
 
     state = _load_json(archmind_dir / "state.json")
     if state:
@@ -241,12 +285,22 @@ def _result_summary_lines(project_dir: Path, temp_log: Path) -> list[str]:
         if isinstance(actions, list):
             lines.extend(f"next: {str(item).strip()}" for item in actions if str(item).strip())
         if lines:
-            return lines[:8]
+            out: list[str] = []
+            for line in lines:
+                cleaned = _humanize_summary_line(line)
+                if cleaned and cleaned not in out:
+                    out.append(cleaned)
+            return out[:8]
 
     if temp_log.exists():
         lines = temp_log.read_text(encoding="utf-8", errors="replace").splitlines()
         tail = [line.strip() for line in lines[-20:] if line.strip()]
-        return tail[-8:]
+        out: list[str] = []
+        for line in tail:
+            cleaned = _humanize_summary_line(line)
+            if cleaned and cleaned not in out:
+                out.append(cleaned)
+        return out[-8:]
 
     return ["no summary available"]
 
@@ -294,7 +348,7 @@ def build_completion_message(
     state = _load_json(archmind_dir / "state.json") or {}
     status = _status_from_sources(project_dir)
     iterations = state.get("iterations")
-    current_task = _current_task_label(project_dir)
+    current_task = _current_task_label(project_dir, status)
     summary_lines = _result_summary_lines(project_dir, temp_log)
     evaluation = _load_json(archmind_dir / "evaluation.json") or {}
     stuck_reason = ""
@@ -326,7 +380,7 @@ def build_completion_message(
         "",
         "Summary:",
     ]
-    lines.extend(f"- {line}" for line in summary_lines[-6:])
+    lines.extend(f"- {line}" for line in summary_lines[-5:])
     if next_actions:
         lines += [
             "",

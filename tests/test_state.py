@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from archmind.cli import main
+from archmind.state import derive_task_label_from_failure_signature
 from archmind.state import ensure_state, load_state, update_state_event
 
 
@@ -97,3 +98,14 @@ def test_state_cli_output(tmp_path: Path, capsys) -> None:
     assert "STATE:" in output
     assert "Iterations:" in output
     assert "Recent failures:" in output
+
+
+def test_derive_task_label_from_failure_signature_mapping() -> None:
+    assert derive_task_label_from_failure_signature("backend-pytest:FAIL") == "backend pytest failure 분석"
+    assert derive_task_label_from_failure_signature("frontend-lint:FAIL") == "frontend lint failure 수정"
+    assert derive_task_label_from_failure_signature("frontend-build:FAIL") == "frontend build failure 수정"
+    assert (
+        derive_task_label_from_failure_signature("backend-pytest+frontend-lint:FAIL")
+        == "backend pytest / frontend lint failure 분석"
+    )
+    assert derive_task_label_from_failure_signature("unknown-step:FAIL") == "반복 실패 원인 분석"

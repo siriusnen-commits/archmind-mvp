@@ -122,7 +122,15 @@ def test_build_completion_message_reads_result_state_json(tmp_path: Path) -> Non
     archmind.mkdir(parents=True, exist_ok=True)
     (archmind / "result.json").write_text(json.dumps({"status": "FAIL"}), encoding="utf-8")
     (archmind / "state.json").write_text(
-        json.dumps({"last_status": "NOT_DONE", "iterations": 2, "current_task_id": 2}),
+        json.dumps(
+            {
+                "last_status": "NOT_DONE",
+                "iterations": 2,
+                "current_task_id": 2,
+                "last_failure_signature": "backend-pytest:FAIL",
+                "derived_task_label": "backend pytest failure 분석",
+            }
+        ),
         encoding="utf-8",
     )
     (archmind / "tasks.json").write_text(
@@ -144,8 +152,8 @@ def test_build_completion_message_reads_result_state_json(tmp_path: Path) -> Non
     assert "ArchMind finished" in message
     assert "Status: NOT_DONE" in message
     assert "Iterations: 2" in message
-    assert "Current task: add API endpoints" in message
-    assert "- - Backend: FAIL" in message
+    assert "Current task: backend pytest failure 분석" in message
+    assert "Backend step still failing" in message
     assert "Next:" in message
     assert "- run /fix" in message
     assert "- then /continue" in message
@@ -160,6 +168,18 @@ def test_build_completion_message_fallbacks_to_temp_log(tmp_path: Path) -> None:
     assert "Status: UNKNOWN" in message
     assert "Summary:" in message
     assert "log line 29" in message
+
+
+def test_build_completion_message_hides_raw_command_lines(tmp_path: Path) -> None:
+    project_dir = tmp_path / "pcmd"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "result.txt").write_text(
+        "ArchMind Pipeline Result\n- command: archmind pipeline --path /tmp/demo\n- Backend: FAIL\n",
+        encoding="utf-8",
+    )
+    msg = build_completion_message(project_dir, tmp_path / "unused.log")
+    assert "command:" not in msg.lower()
 
 
 def test_build_completion_message_truncates_to_1200_chars(tmp_path: Path) -> None:
@@ -211,7 +231,15 @@ def test_build_completion_message_includes_stuck_reason_and_next(tmp_path: Path)
         encoding="utf-8",
     )
     (archmind / "state.json").write_text(
-        json.dumps({"last_status": "STUCK", "iterations": 4, "current_task_id": 3}),
+        json.dumps(
+            {
+                "last_status": "STUCK",
+                "iterations": 4,
+                "current_task_id": 3,
+                "last_failure_signature": "backend-pytest:FAIL",
+                "derived_task_label": "backend pytest failure 분석",
+            }
+        ),
         encoding="utf-8",
     )
     (archmind / "tasks.json").write_text(
@@ -224,6 +252,7 @@ def test_build_completion_message_includes_stuck_reason_and_next(tmp_path: Path)
     )
     msg = build_completion_message(project_dir, tmp_path / "unused.log")
     assert "Status: STUCK" in msg
+    assert "Current task: backend pytest failure 분석" in msg
     assert "Reason: same failure repeated 3 times: backend-pytest:FAIL" in msg
     assert "Next:" in msg
     assert "inspect backend failure details" in msg
