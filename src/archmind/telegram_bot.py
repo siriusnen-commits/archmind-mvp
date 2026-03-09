@@ -215,6 +215,20 @@ def _humanize_summary_line(line: str) -> str:
     lower = text.lower()
     if lower.startswith("command:"):
         return ""
+    if lower.startswith("project_dir:"):
+        return ""
+    if lower.startswith("timestamp:"):
+        return ""
+    if lower.startswith("current_task:"):
+        return ""
+    if lower.startswith("generate:"):
+        return ""
+    if lower.startswith("state:"):
+        return ""
+    if lower.startswith("task queue:"):
+        return ""
+    if "{" in text and "}" in text:
+        return ""
     if "backend" in lower and ("fail" in lower or "failed" in lower):
         if "pytest" in lower or "test" in lower:
             return "Backend tests still failing"
@@ -305,6 +319,60 @@ def _result_summary_lines(project_dir: Path, temp_log: Path) -> list[str]:
     return ["no summary available"]
 
 
+def _summary_from_failure_signature(signature: str) -> list[str]:
+    raw = (signature or "").strip().lower()
+    if not raw:
+        return []
+    head = raw.split(":", 1)[0]
+    parts = [item.strip() for item in head.split("+") if item.strip()]
+    out: list[str] = []
+    if "backend-pytest" in parts:
+        out.append("Backend tests are still failing")
+    if "frontend-lint" in parts:
+        out.append("Frontend lint is still failing")
+    if "frontend-build" in parts:
+        out.append("Frontend build is still failing")
+    return out
+
+
+def _build_human_summary(
+    status: str,
+    state: dict[str, Any],
+    result: dict[str, Any],
+    fallback_lines: list[str],
+) -> list[str]:
+    out: list[str] = []
+    normalized = str(status or "UNKNOWN").upper()
+    signature = str(state.get("last_failure_signature") or "").strip()
+    for line in _summary_from_failure_signature(signature):
+        if line not in out:
+            out.append(line)
+
+    if normalized == "STUCK" and "Automatic retries are no longer making progress" not in out:
+        out.append("Automatic retries are no longer making progress")
+    elif normalized in ("NOT_DONE", "FAIL", "BLOCKED") and "Further work remains" not in out:
+        out.append("Further work remains")
+
+    fallback_cleaned: list[str] = []
+    for line in fallback_lines[-8:]:
+        cleaned = _humanize_summary_line(line)
+        if cleaned and cleaned not in fallback_cleaned:
+            fallback_cleaned.append(cleaned)
+    for line in fallback_cleaned[-3:]:
+        if line and line not in out:
+            out.append(line)
+
+    if not out and isinstance(result, dict):
+        failure_summary = result.get("failure_summary")
+        if isinstance(failure_summary, list):
+            for item in failure_summary[:5]:
+                cleaned = _humanize_summary_line(str(item))
+                if cleaned and cleaned not in out:
+                    out.append(cleaned)
+
+    return out[:3]
+
+
 def _recommend_next_actions(status: str, summary_lines: list[str], state: dict[str, Any]) -> list[str]:
     normalized = (status or "UNKNOWN").upper()
     text = "\n".join(summary_lines).lower()
@@ -336,21 +404,22 @@ def _recommend_next_actions(status: str, summary_lines: list[str], state: dict[s
     return ["run /state"]
 
 
-def build_completion_message(
-    project_dir: Path,
-    temp_log: Path,
+def build_finished_message(
+    evaluation: dict[str, Any],
+    state: dict[str, Any],
+    result: dict[str, Any],
     *,
+    project_name: str,
+    status: str,
+    fallback_summary_lines: Optional[list[str]] = None,
     max_len: int = 1200,
-    exit_code: Optional[int] = None,
 ) -> str:
-    project_dir = project_dir.expanduser().resolve()
-    archmind_dir = project_dir / ".archmind"
-    state = _load_json(archmind_dir / "state.json") or {}
-    status = _status_from_sources(project_dir)
     iterations = state.get("iterations")
-    current_task = _current_task_label(project_dir, status)
-    summary_lines = _result_summary_lines(project_dir, temp_log)
-    evaluation = _load_json(archmind_dir / "evaluation.json") or {}
+    signature = str(state.get("last_failure_signature") or "").strip()
+    current_task = str(state.get("derived_task_label") or "").strip() or derive_task_label_from_failure_signature(signature)
+    if not current_task:
+        current_task = str(state.get("current_task_label") or "").strip()
+
     stuck_reason = ""
     if str(status).upper() == "STUCK":
         reasons = evaluation.get("reasons")
@@ -359,11 +428,19 @@ def build_completion_message(
         if not stuck_reason:
             stuck_reason = str(state.get("stuck_reason") or "").strip()
 
+    summary_lines = _build_human_summary(
+        status=status,
+        state=state,
+        result=result,
+        fallback_lines=list(fallback_summary_lines or []),
+    )
+    next_actions = _recommend_next_actions(status, summary_lines, state)[:3]
+
     lines = [
         "ArchMind finished",
         "",
         "Project:",
-        str(project_dir),
+        project_name,
         "",
         f"Status: {status}",
     ]
@@ -373,21 +450,46 @@ def build_completion_message(
         lines.append(f"Current task: {current_task}")
     if stuck_reason:
         lines.append(f"Reason: {stuck_reason}")
-    if exit_code is not None:
-        lines.append(f"Exit code: {exit_code}")
-    next_actions = _recommend_next_actions(status, summary_lines, state)
     lines += [
         "",
         "Summary:",
     ]
-    lines.extend(f"- {line}" for line in summary_lines[-5:])
+    lines.extend(f"- {line}" for line in summary_lines[:5])
     if next_actions:
         lines += [
             "",
             "Next:",
         ]
-        lines.extend(f"- {line}" for line in next_actions[:2])
+        lines.extend(f"- {line}" for line in next_actions[:3])
     return _truncate_message("\n".join(lines), limit=max_len)
+
+
+def build_completion_message(
+    project_dir: Path,
+    temp_log: Path,
+    *,
+    max_len: int = 1200,
+    exit_code: Optional[int] = None,
+) -> str:
+    project_dir = project_dir.expanduser().resolve()
+    archmind_dir = project_dir / ".archmind"
+    evaluation = _load_json(archmind_dir / "evaluation.json") or {}
+    state = _load_json(archmind_dir / "state.json") or {}
+    result = _load_json(archmind_dir / "result.json") or {}
+    status = _status_from_sources(project_dir)
+    fallback_summary = _result_summary_lines(project_dir, temp_log)
+    message = build_finished_message(
+        evaluation=evaluation,
+        state=state,
+        result=result,
+        project_name=project_dir.name,
+        status=status,
+        fallback_summary_lines=fallback_summary,
+        max_len=max_len,
+    )
+    if exit_code is not None and str(status).upper() == "UNKNOWN":
+        message = _truncate_message(f"{message}\n(exit code: {exit_code})", limit=max_len)
+    return message
 
 
 async def watch_pipeline_and_notify(

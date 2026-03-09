@@ -7,6 +7,7 @@ from pathlib import Path
 
 from archmind.telegram_bot import (
     build_completion_message,
+    build_finished_message,
     build_continue_command,
     build_fix_command,
     build_pipeline_command,
@@ -150,10 +151,13 @@ def test_build_completion_message_reads_result_state_json(tmp_path: Path) -> Non
     temp_log = tmp_path / "fallback.telegram.log"
     message = build_completion_message(project_dir, temp_log)
     assert "ArchMind finished" in message
+    assert f"Project:\n{project_dir.name}" in message
+    assert str(project_dir) not in message
     assert "Status: NOT_DONE" in message
     assert "Iterations: 2" in message
     assert "Current task: backend pytest failure 분석" in message
-    assert "Backend step still failing" in message
+    assert "Backend tests are still failing" in message
+    assert "Further work remains" in message
     assert "Next:" in message
     assert "- run /fix" in message
     assert "- then /continue" in message
@@ -180,6 +184,7 @@ def test_build_completion_message_hides_raw_command_lines(tmp_path: Path) -> Non
     )
     msg = build_completion_message(project_dir, tmp_path / "unused.log")
     assert "command:" not in msg.lower()
+    assert "/tmp/demo" not in msg
 
 
 def test_build_completion_message_truncates_to_1200_chars(tmp_path: Path) -> None:
@@ -254,8 +259,36 @@ def test_build_completion_message_includes_stuck_reason_and_next(tmp_path: Path)
     assert "Status: STUCK" in msg
     assert "Current task: backend pytest failure 분석" in msg
     assert "Reason: same failure repeated 3 times: backend-pytest:FAIL" in msg
+    assert "Automatic retries are no longer making progress" in msg
     assert "Next:" in msg
     assert "inspect backend failure details" in msg
+
+
+def test_build_finished_message_hides_internal_dump_and_uses_basename() -> None:
+    msg = build_finished_message(
+        evaluation={"status": "NOT_DONE"},
+        state={
+            "iterations": 3,
+            "last_failure_signature": "backend-pytest+frontend-lint:FAIL",
+            "last_action": "archmind fix --path /tmp/sample",
+        },
+        result={
+            "status": "FAIL",
+            "failure_summary": [
+                "project_dir: /Users/user/proj",
+                "timestamp: 20260309_120001",
+                "command: archmind pipeline --path /Users/user/proj",
+            ],
+        },
+        project_name="simple_todo_web_app_with_api",
+        status="NOT_DONE",
+        fallback_summary_lines=["project_dir: /Users/user/proj", "generate: {'skipped': True}"],
+    )
+    assert "Project:\nsimple_todo_web_app_with_api" in msg
+    assert "project_dir:" not in msg
+    assert "command:" not in msg.lower()
+    assert "Backend tests are still failing" in msg
+    assert "Frontend lint is still failing" in msg
 
 
 @dataclass
