@@ -34,7 +34,8 @@ def test_build_pipeline_command() -> None:
         base_dir=Path("/tmp/projects"),
         project_name="20260309_notes_app",
     )
-    assert cmd[:3] == ["archmind", "pipeline", "--idea"]
+    assert cmd[:2] == ["archmind", "pipeline"]
+    assert "--force" in cmd
     assert "--apply" in cmd
     assert cmd[cmd.index("--template") + 1] == "fullstack-ddd"
 
