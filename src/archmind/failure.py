@@ -20,19 +20,23 @@ def _extract_path_like_lines(text: str) -> list[str]:
     return out
 
 
-def extract_failure_excerpt(*sources: Any, max_lines: int = 6, failure_class: str = "") -> str:
+def _flatten_lines(*sources: Any) -> list[str]:
     lines: list[str] = []
     for source in sources:
         if source is None:
             continue
         if isinstance(source, str):
             lines.extend(source.splitlines())
-        elif isinstance(source, Iterable):
+            continue
+        if isinstance(source, Iterable):
             for item in source:
                 lines.extend(str(item).splitlines())
-        else:
-            lines.extend(str(source).splitlines())
+            continue
+        lines.extend(str(source).splitlines())
+    return lines
 
+
+def filter_noise_lines(lines: list[str], failure_class: str | None = None) -> list[str]:
     ansi_escape = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
     klass = (failure_class or "").lower()
     is_backend = klass.startswith("backend-pytest")
@@ -87,6 +91,8 @@ def extract_failure_excerpt(*sources: Any, max_lines: int = 6, failure_class: st
                 "plugin",
                 "base",
                 "cancel",
+                "next.js",
+                "how would you like",
             )
         ):
             continue
@@ -101,6 +107,8 @@ def extract_failure_excerpt(*sources: Any, max_lines: int = 6, failure_class: st
                 "failed tests/",
                 "traceback",
                 "short test summary info",
+                "modulenotfounderror",
+                "importerror",
             )
         ):
             continue
@@ -108,36 +116,47 @@ def extract_failure_excerpt(*sources: Any, max_lines: int = 6, failure_class: st
             continue
         seen.add(line)
         out.append(line[:220])
-        if len(out) >= max_lines:
-            break
-    if not out:
-        return ""
+    return out
 
+
+def extract_core_failure_lines(text: str, failure_class: str | None = None, max_lines: int = 4) -> list[str]:
+    del failure_class
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return []
     priority_patterns = [
-        r"AssertionError",
         r"ModuleNotFoundError",
         r"ImportError",
-        r"^FAILED ",
+        r"AssertionError",
         r"^E\s+",
+        r"^FAILED ",
         r"\bTS2304\b|\bTS2322\b|is not assignable",
         r"ESLint|Parsing error|Cannot find module|npm ERR!",
         r"build failed|failed to compile|next build|vite build",
+        r"tests/.+\.py:\d+|frontend/.+\.(?:tsx?|jsx?):\d+",
     ]
     picked: list[str] = []
     for pattern in priority_patterns:
         rx = re.compile(pattern, re.IGNORECASE)
-        for line in out:
+        for line in lines:
             if rx.search(line) and line not in picked:
                 picked.append(line)
             if len(picked) >= max_lines:
-                return "\n".join(picked[:max_lines])
+                return picked[:max_lines]
     if len(picked) < max_lines:
-        for line in out:
+        for line in lines:
             if line not in picked:
                 picked.append(line)
             if len(picked) >= max_lines:
                 break
-    return "\n".join(picked[:max_lines])
+    return picked[:max_lines]
+
+
+def extract_failure_excerpt(*sources: Any, max_lines: int = 6, failure_class: str = "") -> str:
+    raw_lines = _flatten_lines(*sources)
+    filtered = filter_noise_lines(raw_lines, failure_class=failure_class)
+    core = extract_core_failure_lines("\n".join(filtered), failure_class=failure_class, max_lines=max_lines)
+    return "\n".join(core)
 
 
 def classify_failure(excerpt: str, failure_signature: str = "") -> str:

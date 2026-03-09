@@ -4,7 +4,9 @@ from pathlib import Path
 
 from archmind.failure import (
     classify_failure,
+    extract_core_failure_lines,
     extract_failure_excerpt,
+    filter_noise_lines,
     fix_strategy_for_class,
     is_safe_repair_target,
     select_primary_failure_class,
@@ -215,3 +217,62 @@ def test_frontend_failure_excerpt_drops_backend_traceback_noise() -> None:
     assert "ESLint: Parsing error" in excerpt
     assert "AssertionError" not in excerpt
     assert "Traceback:" not in excerpt
+
+
+def test_assertion_excerpt_keeps_assertion_and_failed_lines() -> None:
+    excerpt = extract_failure_excerpt(
+        [
+            "Traceback:",
+            "E AssertionError: expected 200 got 500",
+            "FAILED tests/test_api.py::test_create_todo - assert 500 == 200",
+            "=========================== short test summary info ============================",
+        ],
+        failure_class="backend-pytest:assertion",
+        max_lines=4,
+    )
+    assert "AssertionError" in excerpt
+    assert "FAILED tests/test_api.py::test_create_todo" in excerpt
+
+
+def test_frontend_typescript_excerpt_drops_backend_noise() -> None:
+    excerpt = extract_failure_excerpt(
+        [
+            "Traceback:",
+            "ModuleNotFoundError: No module named 'fastapi'",
+            "TS2322: Type 'string' is not assignable to type 'number'",
+            "frontend/app/page.tsx:18:5",
+        ],
+        failure_class="frontend-typescript",
+        max_lines=4,
+    )
+    assert "TS2322" in excerpt
+    assert "frontend/app/page.tsx:18:5" in excerpt
+    assert "ModuleNotFoundError" not in excerpt
+
+
+def test_core_line_extractor_prefers_real_errors() -> None:
+    lines = extract_core_failure_lines(
+        "Traceback:\nE ModuleNotFoundError: No module named 'fastapi'\nFAILED tests/test_defects.py::test_x\n",
+        failure_class="backend-pytest:module-not-found",
+        max_lines=3,
+    )
+    joined = "\n".join(lines)
+    assert "ModuleNotFoundError" in joined
+    assert "FAILED tests/test_defects.py::test_x" in joined
+
+
+def test_filter_noise_lines_removes_frontend_prompt_for_backend() -> None:
+    lines = filter_noise_lines(
+        [
+            "How would you like to configure ESLint?",
+            "Base",
+            "Cancel",
+            "E ModuleNotFoundError: No module named 'fastapi'",
+        ],
+        failure_class="backend-pytest:module-not-found",
+    )
+    joined = "\n".join(lines)
+    assert "ModuleNotFoundError" in joined
+    assert "How would you like to configure ESLint?" not in joined
+    assert "Base" not in joined
+    assert "Cancel" not in joined

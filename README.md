@@ -173,6 +173,8 @@ Telegram integration (MVP):
 - repair target 선택은 project-local 파일을 기본 원칙으로 하며, 시스템/외부 경로는 제외함
 - `.venv/.pyenv/site-packages/usr/lib/opt/homebrew` 등 외부 런타임 파일은 수정 대상으로 잡지 않음
 - failure excerpt는 Traceback 메타보다 핵심 에러 본문(`ModuleNotFoundError`, `AssertionError` 등)을 우선 압축해 제공
+- Failure Excerpt는 핵심 에러 본문 1~3줄 + 실패 파일/테스트 라인 중심으로 압축됨
+- backend primary failure에서는 frontend lint/interactive prompt 노이즈를 제거하고, frontend primary failure에서는 backend traceback 노이즈를 제거함
 - state에는 `last_failure_class`, `last_fix_strategy`, fix 전/후 failure signature가 기록됨
 - 생성 로그는 우선 `<base_dir>/<project_name>.telegram.log` 임시 로그로 기록
 - 마지막 프로젝트 경로는 `~/.archmind_telegram_last_project` 로 관리
