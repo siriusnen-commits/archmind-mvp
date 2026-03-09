@@ -78,6 +78,7 @@ def build_pipeline_command(idea: str, template: str, base_dir: Path, project_nam
 def start_pipeline_process(cmd: list[str], base_dir: Path, project_name: str) -> tuple[subprocess.Popen[str], Path]:
     base = base_dir.expanduser().resolve()
     base.mkdir(parents=True, exist_ok=True)
+    _project_dir = base / project_name  # compute only: pipeline must create this directory
     log_path = base / f"{project_name}.telegram.log"
     log_handle = open(log_path, "a", encoding="utf-8")
     try:

@@ -95,4 +95,5 @@ def test_start_pipeline_process_writes_temp_log_in_base_dir(monkeypatch, tmp_pat
     assert proc.pid == 1234
     assert log_path == (tmp_path / "20260309_notes.telegram.log")
     assert log_path.exists()
+    assert not (tmp_path / "20260309_notes").exists()
     assert captured["kwargs"]["shell"] is False
