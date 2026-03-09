@@ -37,7 +37,6 @@ def test_build_pipeline_command() -> None:
         project_name=project_name,
     )
     assert cmd[:2] == ["archmind", "pipeline"]
-    assert "--force" in cmd
     assert "--apply" in cmd
     assert cmd[cmd.index("--out") + 1] == str(base_dir)
     assert cmd[cmd.index("--name") + 1] == project_name

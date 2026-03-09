@@ -62,7 +62,6 @@ def build_pipeline_command(idea: str, template: str, base_dir: Path, project_nam
     return [
         "archmind",
         "pipeline",
-        "--force",
         "--idea",
         idea,
         "--template",
