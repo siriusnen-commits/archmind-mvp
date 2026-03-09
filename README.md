@@ -181,6 +181,25 @@ Stabilization:
 - 핵심 회귀 포인트: state/evaluation/result/Telegram 일관성, fix prompt 품질, relevant file safety.
 - 특히 module-not-found, backend assertion, frontend lint, repeated failure(STUCK), retry 루프를 반복 검증한다.
 
+Environment Readiness / Bootstrap:
+- ArchMind는 코드 수정 전에 환경/설정 이슈를 감지하는 readiness check를 수행한다.
+- 감지되는 이슈 예:
+  - `backend-dependency-missing`
+  - `frontend-eslint-bootstrap-needed`
+  - `frontend-config-missing`
+  - `env-readiness-ok`
+- `frontend-eslint-bootstrap-needed`일 때는 안전한 bootstrap으로 `frontend/.eslintrc.json`을 자동 생성할 수 있다.
+- 생성 기본값:
+  `{ "extends": ["next/core-web-vitals", "next/typescript"] }`
+- 기존 config 파일이 있으면 덮어쓰지 않는다.
+- `backend-dependency-missing`은 기본적으로 자동 설치를 하지 않고 guidance/상태 기록 중심으로 처리한다.
+- 위험한 자동화(`pip install`, `npm install`)는 기본 경로에서 수행하지 않는다.
+- readiness 결과는 state에 기록된다:
+  - `environment_issue`
+  - `environment_issue_reason`
+  - `last_bootstrap_actions`
+- `/state` 출력에서 환경 이슈와 bootstrap actions를 함께 확인할 수 있다.
+
 Telegram integration (MVP):
 - BotFather에서 Telegram 봇을 만들고 `TELEGRAM_BOT_TOKEN` 발급
 - 환경변수 설정:

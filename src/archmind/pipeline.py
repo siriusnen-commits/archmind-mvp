@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from archmind.fixer import run_fix_loop
+from archmind.environment import ensure_environment_readiness
 from archmind.evaluator import write_evaluation
 from archmind.planner import write_project_plan
 from archmind.runner import RunConfig, RunResult, compute_run_status, run_pipeline
@@ -448,6 +449,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         print(f"[WARN] tasks initialization failed: {exc}", file=sys.stderr)
     try:
         ensure_state(project_dir)
+        ensure_environment_readiness(project_dir)
         if opts.idea:
             set_agent_state(project_dir, "PLANNING", action="pipeline planning", summary="idea to project planning")
         set_agent_state(project_dir, "RUNNING", action="pipeline run", summary="pipeline execution started")

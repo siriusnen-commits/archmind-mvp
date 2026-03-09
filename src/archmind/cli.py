@@ -279,6 +279,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_run(args: argparse.Namespace) -> int:
+    from archmind.environment import ensure_environment_readiness
     from archmind.runner import RunConfig, compute_run_status, print_run_result, run_pipeline
     from archmind.state import set_agent_state, update_after_run
 
@@ -306,6 +307,7 @@ def run_run(args: argparse.Namespace) -> int:
         log_dir = project_dir / ".archmind" / "run_logs"
 
     command = "archmind " + " ".join(getattr(args, "_argv", []))
+    ensure_environment_readiness(project_dir)
     set_agent_state(project_dir, "RUNNING", action=command.strip(), summary="run started")
     config = RunConfig(
         project_dir=project_dir,

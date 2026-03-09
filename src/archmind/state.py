@@ -270,6 +270,9 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "last_failure_signature_before_fix": "",
         "last_failure_signature_after_fix": "",
         "last_repair_targets": [],
+        "environment_issue": "env-readiness-ok",
+        "environment_issue_reason": "",
+        "last_bootstrap_actions": [],
         "next_action": "STOP",
         "next_action_reason": "",
         "derived_task_label": "",
@@ -323,6 +326,13 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
         payload["last_repair_targets"] = []
     else:
         payload["last_repair_targets"] = [str(x)[:120] for x in repair_targets[:5]]
+    payload["environment_issue"] = str(payload.get("environment_issue") or "env-readiness-ok").strip()[:80]
+    payload["environment_issue_reason"] = str(payload.get("environment_issue_reason") or "").strip()[:220]
+    bootstrap_actions = payload.get("last_bootstrap_actions")
+    if not isinstance(bootstrap_actions, list):
+        payload["last_bootstrap_actions"] = []
+    else:
+        payload["last_bootstrap_actions"] = [str(x)[:160] for x in bootstrap_actions[:5]]
     payload["derived_task_label"] = str(payload.get("derived_task_label") or "").strip()[:120]
     payload["next_action"] = str(payload.get("next_action") or "STOP").strip()[:20]
     payload["next_action_reason"] = str(payload.get("next_action_reason") or "").strip()[:220]
@@ -587,6 +597,43 @@ def set_agent_state(
     return payload
 
 
+def update_environment_readiness(
+    project_dir: Path,
+    *,
+    issue: str,
+    reason: str,
+    bootstrap_actions: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    project_dir = project_dir.expanduser().resolve()
+    payload = ensure_state(project_dir)
+    payload["environment_issue"] = str(issue or "unknown-environment-issue").strip()
+    payload["environment_issue_reason"] = _sanitize_line(reason or "", project_dir)
+    actions = [str(x).strip() for x in (bootstrap_actions or []) if str(x).strip()]
+    payload["last_bootstrap_actions"] = actions[:5]
+    if actions:
+        _append_history(
+            payload,
+            {
+                "timestamp": _now(),
+                "action": "bootstrap environment readiness",
+                "status": "SUCCESS",
+                "agent_state": _safe_agent_state(str(payload.get("agent_state") or "UNKNOWN")),
+                "summary": _sanitize_line("; ".join(actions), project_dir)[:160],
+                "current_task_id": str(payload.get("current_task_id") or ""),
+                "current_task_title": _sanitize_line(
+                    _task_title(project_dir, _safe_int(payload.get("current_task_id"), 0))
+                    if _safe_int(payload.get("current_task_id"), 0) > 0
+                    else "",
+                    project_dir,
+                ),
+                "failure_signature": str(payload.get("last_failure_signature") or "")[:220],
+                "failure_class": str(payload.get("last_failure_class") or "")[:80],
+            },
+        )
+    write_state(project_dir, payload)
+    return payload
+
+
 def update_after_run(project_dir: Path, action: str, run_status: str, summary: str) -> dict[str, Any]:
     failures = _collect_result_failures(project_dir, max_items=10)
     failure_signature = _collect_failure_signature(project_dir)
@@ -738,6 +785,11 @@ def format_state_text(project_dir: Path) -> str:
     decision = decide_next_action(payload, evaluation_payload, result_payload)
     next_action = str(decision.get("action") or payload.get("next_action") or "STOP")
     next_reason = str(decision.get("reason") or payload.get("next_action_reason") or "")
+    env_issue = str(payload.get("environment_issue") or "env-readiness-ok")
+    env_reason = str(payload.get("environment_issue_reason") or "").strip()
+    bootstrap_actions = payload.get("last_bootstrap_actions")
+    if not isinstance(bootstrap_actions, list):
+        bootstrap_actions = []
 
     lines = [
         f"Project status: {project_status}",
@@ -747,10 +799,22 @@ def format_state_text(project_dir: Path) -> str:
         f"Fix attempts: {fix_attempts}",
         f"Current task: {current_line}",
         f"Failure class: {payload.get('last_failure_class') or 'unknown'}",
+        f"Environment issue: {env_issue}",
+        f"Environment reason: {env_reason or '(none)'}",
         f"Next action: {next_action}",
         f"Reason: {next_reason or '(none)'}",
-        "Recent failures:",
+        "Bootstrap actions:",
     ]
+    if bootstrap_actions:
+        for action in bootstrap_actions[:3]:
+            lines.append(f"- {action}")
+    else:
+        lines.append("- (none)")
+    lines.extend(
+        [
+        "Recent failures:",
+        ]
+    )
     failures = payload.get("recent_failures") or []
     if failures:
         shown = 0
@@ -786,6 +850,7 @@ def state_prompt_summary(project_dir: Path) -> list[str]:
         f"- fix_attempts: {payload.get('fix_attempts', 0)}",
         f"- current_task: {current_line}",
         f"- failure_class: {payload.get('last_failure_class', 'unknown')}",
+        f"- environment_issue: {payload.get('environment_issue', 'env-readiness-ok')}",
         f"- next_action: {decision.get('action', payload.get('next_action', 'STOP'))}",
         f"- next_action_reason: {decision.get('reason', payload.get('next_action_reason', ''))}",
         "- recent_failures:",

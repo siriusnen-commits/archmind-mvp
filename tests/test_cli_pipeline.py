@@ -70,6 +70,32 @@ def test_pipeline_backend_only_smoke(tmp_path: Path) -> None:
     assert exit_code in (0, 1)
 
 
+def test_pipeline_invokes_environment_readiness_check(tmp_path: Path, monkeypatch) -> None:
+    _write_backend_project(tmp_path)
+    calls = {"n": 0}
+
+    def fake_readiness(project_dir):  # type: ignore[no-untyped-def]
+        assert project_dir == tmp_path.resolve()
+        calls["n"] += 1
+        return {"issue": "env-readiness-ok", "reason": "ok", "actions": []}
+
+    monkeypatch.setattr("archmind.pipeline.ensure_environment_readiness", fake_readiness)
+    exit_code = main(
+        [
+            "pipeline",
+            "--path",
+            str(tmp_path),
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code in (0, 1)
+    assert calls["n"] >= 1
+
+
 def test_pipeline_idea_generates_and_runs(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project)
 

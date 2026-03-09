@@ -28,6 +28,21 @@ def test_state_created_and_updated_after_run(tmp_path: Path) -> None:
     assert state["last_status"] in {"SUCCESS", "SKIP", "FAIL", "STUCK"}
 
 
+def test_run_invokes_environment_readiness_check(tmp_path: Path, monkeypatch) -> None:
+    _write_backend_project(tmp_path, failing=False)
+    calls = {"n": 0}
+
+    def fake_readiness(project_dir):  # type: ignore[no-untyped-def]
+        assert project_dir == tmp_path.resolve()
+        calls["n"] += 1
+        return {"issue": "env-readiness-ok", "reason": "ok", "actions": []}
+
+    monkeypatch.setattr("archmind.environment.ensure_environment_readiness", fake_readiness)
+    exit_code = main(["run", "--path", str(tmp_path), "--backend-only"])
+    assert exit_code == 0
+    assert calls["n"] >= 1
+
+
 def test_state_history_added_after_fix(tmp_path: Path, monkeypatch) -> None:
     _write_backend_project(tmp_path, failing=True)
     monkeypatch.setattr("archmind.fixer.run_fix_loop", lambda **_: 1)
@@ -220,6 +235,8 @@ def test_state_cli_output(tmp_path: Path, capsys) -> None:
     assert "Last status:" in output
     assert "Iterations:" in output
     assert "Fix attempts:" in output
+    assert "Environment issue:" in output
+    assert "Bootstrap actions:" in output
     assert "Next action:" in output
     assert "Reason:" in output
     assert "Recent failures:" in output
