@@ -28,15 +28,19 @@ def test_last_project_path_save_and_load(tmp_path: Path) -> None:
 
 
 def test_build_pipeline_command() -> None:
+    base_dir = Path("/tmp/projects")
+    project_name = "20260309_notes_app"
     cmd = build_pipeline_command(
         idea="notes app",
         template="fullstack-ddd",
-        base_dir=Path("/tmp/projects"),
-        project_name="20260309_notes_app",
+        base_dir=base_dir,
+        project_name=project_name,
     )
     assert cmd[:2] == ["archmind", "pipeline"]
     assert "--force" in cmd
     assert "--apply" in cmd
+    assert cmd[cmd.index("--out") + 1] == str(base_dir)
+    assert cmd[cmd.index("--name") + 1] == project_name
     assert cmd[cmd.index("--template") + 1] == "fullstack-ddd"
 
 
