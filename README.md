@@ -92,6 +92,17 @@ cat /tmp/defect_demo/.archmind/plan.json
 - `plan.json`: `steps`, `risks`, `acceptance` 기반 구조화 산출물
 - `pipeline` 실행 시 현재 프로젝트의 `.archmind/plan.*`가 자동 생성/갱신됨
 
+Tasks:
+```bash
+archmind tasks --path myproj
+archmind next --path myproj
+archmind complete --path myproj --id 1
+```
+- `.archmind/tasks.json` 에 `todo/doing/done/blocked` 상태의 task queue를 저장
+- `archmind tasks` 는 tasks가 없으면 `plan.json` 또는 `plan.md`에서 초기 task를 생성
+- `archmind next` 는 첫 `todo`를 출력하고 없으면 `no pending tasks`를 출력
+- `archmind complete` 는 기본 `done`, `--doing`, `--blocked` 상태 전환 지원
+
 ## Output Artifacts (.archmind/ structure)
 
 Typical outputs created inside the project directory:

@@ -250,6 +250,21 @@ def build_parser() -> argparse.ArgumentParser:
     pl.add_argument("--idea", required=True, help="Plan idea / goal")
     pl.add_argument("--path", default=".", help="Existing project path")
     pl.set_defaults(func=run_plan)
+
+    t = sub.add_parser("tasks", help="List tasks and initialize from plan when missing")
+    t.add_argument("--path", required=True, help="Project root path")
+    t.set_defaults(func=run_tasks)
+
+    n = sub.add_parser("next", help="Show next pending task")
+    n.add_argument("--path", required=True, help="Project root path")
+    n.set_defaults(func=run_next)
+
+    c = sub.add_parser("complete", help="Update task status")
+    c.add_argument("--path", required=True, help="Project root path")
+    c.add_argument("--id", required=True, type=int, help="Task id")
+    c.add_argument("--blocked", action="store_true", help="Mark task as blocked")
+    c.add_argument("--doing", action="store_true", help="Mark task as doing")
+    c.set_defaults(func=run_complete)
     return p
 
 
@@ -395,6 +410,61 @@ def run_plan(args: argparse.Namespace) -> int:
     artifacts = write_project_plan(project_dir, args.idea)
     print(f"[OK] plan markdown: {artifacts.plan_md_path}")
     print(f"[OK] plan json: {artifacts.plan_json_path}")
+    return 0
+
+
+def run_tasks(args: argparse.Namespace) -> int:
+    from archmind.tasks import format_task_line, list_tasks
+
+    project_dir = Path(args.path).expanduser().resolve()
+    if not project_dir.exists() or not project_dir.is_dir():
+        print(f"[ERROR] Path is not a directory: {project_dir}", file=sys.stderr)
+        return 64
+
+    tasks = list_tasks(project_dir)
+    if not tasks:
+        print("no tasks")
+        return 0
+    for task in tasks:
+        print(format_task_line(task))
+    return 0
+
+
+def run_next(args: argparse.Namespace) -> int:
+    from archmind.tasks import next_task
+
+    project_dir = Path(args.path).expanduser().resolve()
+    if not project_dir.exists() or not project_dir.is_dir():
+        print(f"[ERROR] Path is not a directory: {project_dir}", file=sys.stderr)
+        return 64
+
+    task = next_task(project_dir)
+    if task is None:
+        print("no pending tasks")
+        return 0
+    print(f"NEXT: [{task.id}] {task.title}")
+    return 0
+
+
+def run_complete(args: argparse.Namespace) -> int:
+    from archmind.tasks import update_task_status
+
+    project_dir = Path(args.path).expanduser().resolve()
+    if not project_dir.exists() or not project_dir.is_dir():
+        print(f"[ERROR] Path is not a directory: {project_dir}", file=sys.stderr)
+        return 64
+
+    selected = "done"
+    if args.blocked:
+        selected = "blocked"
+    elif args.doing:
+        selected = "doing"
+
+    task = update_task_status(project_dir, args.id, selected)
+    if task is None:
+        print(f"[ERROR] task id not found: {args.id}", file=sys.stderr)
+        return 64
+    print(f"UPDATED: [{task.id}] -> {task.status}")
     return 0
 
 

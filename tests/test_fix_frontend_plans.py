@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from archmind.fixer import _write_fix_prompt
@@ -10,6 +11,19 @@ def test_frontend_fix_prompt_contains_error_summary(tmp_path: Path) -> None:
     plan_path = tmp_path / ".archmind" / "plan.md"
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     plan_path.write_text("# ArchMind Plan\n- 핵심 단계: lint 오류 수정\n", encoding="utf-8")
+    (tmp_path / ".archmind" / "tasks.json").write_text(
+        json.dumps(
+            {
+                "project_dir": str(tmp_path.resolve()),
+                "created_at": "20260101_000000",
+                "tasks": [
+                    {"id": 1, "title": "create backend skeleton", "status": "todo", "source": "plan", "notes": ""},
+                    {"id": 2, "title": "add API endpoints", "status": "doing", "source": "plan", "notes": ""},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
 
     log_dir = tmp_path / ".archmind" / "run_logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -68,6 +82,8 @@ def test_frontend_fix_prompt_contains_error_summary(tmp_path: Path) -> None:
 
     prompt_text = prompt_path.read_text(encoding="utf-8")
     assert "Plan 요약" in prompt_text
+    assert "Current Task" in prompt_text
+    assert "[2] doing add API endpoints" in prompt_text
     assert "핵심 단계: lint 오류 수정" in prompt_text
     assert "프론트 오류 요약" in prompt_text
     assert "no-unused-vars" in prompt_text

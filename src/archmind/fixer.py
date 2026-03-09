@@ -12,6 +12,7 @@ from typing import Any, Optional
 from archmind.patcher import apply_unified_diff
 from archmind.planner import read_plan_summary
 from archmind.runner import RunConfig, RunResult, compute_run_status, run_pipeline
+from archmind.tasks import current_task
 
 LOG_PY_TRACE_RE = re.compile(r'File "([^"]+)", line (\d+)')
 LOG_PYTEST_RE = re.compile(r"^(.+?\.py):(\d+):", re.MULTILINE)
@@ -183,6 +184,7 @@ def _extract_frontend_error_lines(run_result: RunResult, max_lines: int = 200) -
 def _build_fix_prompt(
     command: str,
     plan_lines: list[str],
+    task_line: str,
     summary_lines: list[str],
     failure_details: dict[str, Optional[str | list[str]]],
     files_hint: list[str],
@@ -206,6 +208,8 @@ def _build_fix_prompt(
         f"{command}\n\n"
         "# Plan 요약\n"
         f"{plan_block}\n\n"
+        "# Current Task\n"
+        f"{task_line}\n\n"
         "# 실패 요약\n"
         f"{summary_block}\n\n"
         "# 프론트 오류 요약\n"
@@ -243,12 +247,15 @@ def _write_fix_prompt(
     files_hint = extract_files_hint(log_tail)
     project_dir = log_dir.parent.parent
     plan_lines = read_plan_summary(project_dir, max_lines=200)
+    task = current_task(project_dir)
+    task_line = f"[{task.id}] {task.status} {task.title}" if task else "task missing"
     frontend_error_lines: list[str] = []
     if scope == "frontend":
         frontend_error_lines = _extract_frontend_error_lines(run_result, max_lines=200)
     prompt_text = _build_fix_prompt(
         command,
         plan_lines,
+        task_line,
         summary_lines,
         details,
         files_hint,

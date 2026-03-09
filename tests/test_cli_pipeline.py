@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from archmind.cli import main
+import json
 import subprocess
 import sys
 
@@ -121,6 +122,9 @@ def test_pipeline_path_runs_backend_only(tmp_path: Path) -> None:
     log_dir = tmp_path / ".archmind" / "run_logs"
     assert (tmp_path / ".archmind" / "plan.md").exists()
     assert (tmp_path / ".archmind" / "plan.json").exists()
+    assert (tmp_path / ".archmind" / "tasks.json").exists()
+    result_payload = json.loads((tmp_path / ".archmind" / "result.json").read_text(encoding="utf-8"))
+    assert "current_task" in result_payload
     assert list(log_dir.glob("run_*.summary.txt"))
 
 

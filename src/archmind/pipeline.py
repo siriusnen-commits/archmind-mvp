@@ -11,6 +11,7 @@ from typing import Any, Optional
 from archmind.fixer import run_fix_loop
 from archmind.planner import write_project_plan
 from archmind.runner import RunConfig, RunResult, compute_run_status, run_pipeline
+from archmind.tasks import current_task, ensure_tasks
 
 
 @dataclass
@@ -251,12 +252,17 @@ def compute_status(
 
 
 def _build_result_text(payload: dict[str, Any]) -> str:
+    current = payload.get("current_task") or {}
+    current_text = "N/A"
+    if isinstance(current, dict) and current.get("id") is not None:
+        current_text = f"[{current.get('id')}] {current.get('status')} {current.get('title')}"
     lines = [
         "ArchMind Pipeline Result",
         f"- status: {payload.get('status')}",
         f"- project_dir: {payload.get('project_dir')}",
         f"- timestamp: {payload.get('timestamp')}",
         f"- command: {payload.get('command')}",
+        f"- current_task: {current_text}",
         "",
         "Steps:",
         f"- generate: {payload['steps']['generate']}",
@@ -424,6 +430,10 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         plan_json_path = plan_artifacts.plan_json_path
     except Exception as exc:
         print(f"[WARN] plan generation failed: {exc}", file=sys.stderr)
+    try:
+        ensure_tasks(project_dir)
+    except Exception as exc:
+        print(f"[WARN] tasks initialization failed: {exc}", file=sys.stderr)
 
     run_config = _build_run_config(opts, project_dir)
     command = _build_command(opts)
@@ -504,6 +514,15 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         "project_dir": str(project_dir),
         "timestamp": timestamp,
         "command": command,
+        "current_task": (
+            {
+                "id": task.id,
+                "title": task.title,
+                "status": task.status,
+            }
+            if (task := current_task(project_dir)) is not None
+            else None
+        ),
         "steps": {
             "generate": {
                 "skipped": opts.idea is None,
