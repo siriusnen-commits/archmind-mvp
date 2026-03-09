@@ -9,11 +9,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from archmind.failure import (
+    classify_failure,
+    extract_failure_excerpt,
+    failure_signature_from_run_result,
+    fix_strategy_for_class,
+    strategy_instructions,
+)
 from archmind.patcher import apply_unified_diff
 from archmind.evaluator import read_evaluation_status
 from archmind.planner import read_plan_summary
 from archmind.runner import RunConfig, RunResult, compute_run_status, run_pipeline
-from archmind.state import state_prompt_summary
+from archmind.state import load_state, state_prompt_summary
 from archmind.tasks import current_task
 
 LOG_PY_TRACE_RE = re.compile(r'File "([^"]+)", line (\d+)')
@@ -194,6 +201,9 @@ def _build_fix_prompt(
     files_hint: list[str],
     scope: str,
     frontend_error_lines: list[str],
+    failure_class: str = "unknown",
+    fix_strategy: str = "generic",
+    failure_excerpt: str = "",
 ) -> str:
     test_name = failure_details.get("test_name") or "확인 필요"
     file_path = failure_details.get("file_path") or (files_hint[0] if files_hint else "확인 필요")
@@ -207,6 +217,9 @@ def _build_fix_prompt(
     stack_bottom_block = "\n".join(stack_bottom) if stack_bottom else "(스택트레이스 하단 없음)"
     frontend_block = "\n".join(frontend_error_lines) if frontend_error_lines else "(프론트 오류 요약 없음)"
     state_block = "\n".join(state_lines) if state_lines else "- (state missing)"
+    strategy_lines = strategy_instructions(failure_class)
+    strategy_block = "\n".join(f"- {line}" for line in strategy_lines)
+    excerpt_block = failure_excerpt or "(excerpt 없음)"
 
     return (
         "# 재현 커맨드\n"
@@ -223,6 +236,11 @@ def _build_fix_prompt(
         f"{summary_block}\n\n"
         "# 프론트 오류 요약\n"
         f"{frontend_block}\n\n"
+        "# Failure Classification\n"
+        f"- class: {failure_class}\n"
+        f"- strategy: {fix_strategy}\n\n"
+        "# Failure Excerpt\n"
+        f"{excerpt_block}\n\n"
         "# 실패 지점\n"
         f"- 실패한 테스트: {test_name}\n"
         f"- 파일 경로: {files_block}\n"
@@ -236,6 +254,7 @@ def _build_fix_prompt(
         "- 변경 범위를 최소화하라\n\n"
         "- 기능 유지, 린트/타입체크 통과를 최우선으로 고려하라\n"
         f"- scope: {scope}\n\n"
+        f"{strategy_block}\n\n"
         "# 완료 조건 체크리스트\n"
         "- [ ] python -m pytest -q 통과\n"
         "- [ ] 기존 기능 영향 없음\n"
@@ -263,6 +282,10 @@ def _write_fix_prompt(
     frontend_error_lines: list[str] = []
     if scope == "frontend":
         frontend_error_lines = _extract_frontend_error_lines(run_result, max_lines=200)
+    failure_signature = failure_signature_from_run_result(run_result)
+    failure_excerpt = extract_failure_excerpt(summary_lines, log_tail, frontend_error_lines)
+    failure_class = classify_failure(failure_excerpt, failure_signature)
+    fix_strategy = fix_strategy_for_class(failure_class)
     prompt_text = _build_fix_prompt(
         command,
         plan_lines,
@@ -274,6 +297,9 @@ def _write_fix_prompt(
         files_hint,
         scope,
         frontend_error_lines,
+        failure_class=failure_class,
+        fix_strategy=fix_strategy,
+        failure_excerpt=failure_excerpt,
     )
     prompt_path = log_dir / f"fix_{timestamp}.prompt.md"
     prompt_path.write_text(prompt_text, encoding="utf-8")
@@ -307,6 +333,10 @@ def _write_fix_summary(
     dry_run: bool,
     applied: bool,
     iteration: int,
+    failure_class: str = "unknown",
+    fix_strategy: str = "generic",
+    failure_signature_before_fix: str = "",
+    failure_signature_after_fix: str = "",
 ) -> None:
     summary_path = log_dir / f"fix_{timestamp}.summary.txt"
     json_path = log_dir / f"fix_{timestamp}.summary.json"
@@ -320,6 +350,10 @@ def _write_fix_summary(
         f"- iteration: {iteration}",
         f"- dry_run: {dry_run}",
         f"- applied: {applied}",
+        f"- failure_class: {failure_class}",
+        f"- fix_strategy: {fix_strategy}",
+        f"- failure_signature_before_fix: {failure_signature_before_fix}",
+        f"- failure_signature_after_fix: {failure_signature_after_fix}",
         "2) Run summary:",
         f"- run_exit_code: {run_result.overall_exit_code}",
         f"- run_log: {run_result.log_path}",
@@ -336,6 +370,15 @@ def _write_fix_summary(
             "iteration": iteration,
             "dry_run": dry_run,
             "applied": applied,
+            "failure_class": failure_class,
+            "fix_strategy": fix_strategy,
+            "failure_signature_before_fix": failure_signature_before_fix,
+            "failure_signature_after_fix": failure_signature_after_fix,
+            "fix_signature_changed": bool(
+                failure_signature_before_fix
+                and failure_signature_after_fix
+                and failure_signature_before_fix != failure_signature_after_fix
+            ),
         },
         "run": {
             "exit_code": run_result.overall_exit_code,
@@ -648,6 +691,8 @@ def fix_loop(
     last_applied = False
 
     for iteration in range(1, max_iterations + 1):
+        state_before = load_state(project_dir) or {}
+        signature_before = str(state_before.get("last_failure_signature") or "").strip()
         run_result = run_and_collect(
             project_dir,
             timeout_s=timeout_s,
@@ -660,6 +705,16 @@ def fix_loop(
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         last_timestamp = timestamp
         run_status, run_reason = compute_run_status(run_result)
+        current_signature = failure_signature_from_run_result(run_result)
+        if not signature_before:
+            signature_before = current_signature
+        failure_excerpt = extract_failure_excerpt(
+            _read_failure_summary_section(run_result.summary_path),
+            read_tail(run_result.log_path, n=120),
+            _extract_frontend_error_lines(run_result, max_lines=200),
+        )
+        failure_class = classify_failure(failure_excerpt, current_signature)
+        fix_strategy = fix_strategy_for_class(failure_class)
         if run_status == "SKIP":
             reason = run_reason or "환경 문제로 SKIP"
             _write_skip_prompt(
@@ -678,6 +733,10 @@ def fix_loop(
                 dry_run,
                 False,
                 iteration,
+                failure_class=failure_class,
+                fix_strategy=fix_strategy,
+                failure_signature_before_fix=signature_before,
+                failure_signature_after_fix=current_signature,
             )
             print(f"[SKIP] {reason}")
             return 0
@@ -692,6 +751,10 @@ def fix_loop(
                 dry_run,
                 False,
                 iteration,
+                failure_class=failure_class,
+                fix_strategy=fix_strategy,
+                failure_signature_before_fix=signature_before,
+                failure_signature_after_fix="",
             )
             print(f"[OK] fixed in {iteration - 1} iterations")
             return 0
@@ -745,6 +808,10 @@ def fix_loop(
                 dry_run,
                 False,
                 iteration,
+                failure_class=failure_class,
+                fix_strategy=fix_strategy,
+                failure_signature_before_fix=signature_before,
+                failure_signature_after_fix=current_signature,
             )
             return 2
         if not apply_changes:
@@ -767,6 +834,10 @@ def fix_loop(
                 dry_run,
                 False,
                 iteration,
+                failure_class=failure_class,
+                fix_strategy=fix_strategy,
+                failure_signature_before_fix=signature_before,
+                failure_signature_after_fix=current_signature,
             )
             return 1
 
@@ -794,6 +865,10 @@ def fix_loop(
                 dry_run,
                 False,
                 iteration,
+                failure_class=failure_class,
+                fix_strategy=fix_strategy,
+                failure_signature_before_fix=signature_before,
+                failure_signature_after_fix=current_signature,
             )
             return 1
 
@@ -828,6 +903,10 @@ def fix_loop(
                 dry_run,
                 True,
                 iteration,
+                failure_class=failure_class,
+                fix_strategy=fix_strategy,
+                failure_signature_before_fix=signature_before,
+                failure_signature_after_fix="",
             )
             print(f"[OK] fixed in {iteration} iterations")
             return 0
@@ -855,6 +934,10 @@ def fix_loop(
             dry_run,
             last_applied,
             last_iteration,
+            failure_class="unknown",
+            fix_strategy="generic",
+            failure_signature_before_fix=str((load_state(project_dir) or {}).get("last_failure_signature") or ""),
+            failure_signature_after_fix=failure_signature_from_run_result(last_run_result),
         )
     return 1
 

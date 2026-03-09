@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from archmind.failure import classify_failure, extract_failure_excerpt
+
 LAST_STATUSES = (
     "SUCCESS",
     "FAIL",
@@ -120,6 +122,10 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "stuck": False,
         "stuck_reason": "",
         "last_failure_signature": "",
+        "last_failure_class": "",
+        "last_fix_strategy": "",
+        "last_failure_signature_before_fix": "",
+        "last_failure_signature_after_fix": "",
         "derived_task_label": "",
         "recent_failures": [],
         "history": [],
@@ -148,6 +154,10 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     payload["updated_at"] = _now()
     payload["last_status"] = _safe_status(str(payload.get("last_status") or "UNKNOWN"))
     payload["last_failure_signature"] = str(payload.get("last_failure_signature") or "").strip()[:220]
+    payload["last_failure_class"] = str(payload.get("last_failure_class") or "").strip()[:80]
+    payload["last_fix_strategy"] = str(payload.get("last_fix_strategy") or "").strip()[:80]
+    payload["last_failure_signature_before_fix"] = str(payload.get("last_failure_signature_before_fix") or "").strip()[:220]
+    payload["last_failure_signature_after_fix"] = str(payload.get("last_failure_signature_after_fix") or "").strip()[:220]
     payload["derived_task_label"] = str(payload.get("derived_task_label") or "").strip()[:120]
     history = payload.get("history")
     if not isinstance(history, list):
@@ -282,6 +292,23 @@ def _collect_failure_signature(project_dir: Path) -> str:
     return f"{'+'.join(sorted(step_names))}:FAIL"
 
 
+def _collect_failure_class(project_dir: Path, failure_signature: str) -> str:
+    result_payload = _load_json(project_dir / ".archmind" / "result.json") or {}
+    lines = result_payload.get("failure_summary")
+    excerpt = extract_failure_excerpt(lines if isinstance(lines, list) else [])
+    if not excerpt:
+        excerpt = extract_failure_excerpt(_collect_result_failures(project_dir, max_items=10))
+    return classify_failure(excerpt, failure_signature)
+
+
+def _latest_fix_summary_json(project_dir: Path) -> Optional[Path]:
+    run_logs = project_dir / ".archmind" / "run_logs"
+    if not run_logs.exists():
+        return None
+    matches = sorted(run_logs.glob("fix_*.summary.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return matches[0] if matches else None
+
+
 def update_state_event(
     project_dir: Path,
     action: str,
@@ -291,6 +318,7 @@ def update_state_event(
     increment_iterations: bool = False,
     recent_failures: Optional[list[str]] = None,
     failure_signature: Optional[str] = None,
+    failure_class: Optional[str] = None,
 ) -> dict[str, Any]:
     project_dir = project_dir.expanduser().resolve()
     payload = ensure_state(project_dir)
@@ -310,6 +338,10 @@ def update_state_event(
     if _safe_status(status) in ("FAIL", "NOT_DONE", "BLOCKED", "STUCK") and not normalized_signature:
         normalized_signature = str(payload.get("last_failure_signature") or "").strip()
     payload["last_failure_signature"] = normalized_signature[:220]
+    normalized_class = str(failure_class or "").strip()[:80]
+    if not normalized_class and normalized_signature:
+        normalized_class = str(payload.get("last_failure_class") or "").strip()[:80]
+    payload["last_failure_class"] = normalized_class
     payload["derived_task_label"] = derive_task_label_from_failure_signature(normalized_signature)
 
     merged_failures: list[str] = []
@@ -335,6 +367,7 @@ def update_state_event(
             "current_task_id": str(current_task_id or ""),
             "current_task_title": _sanitize_line(_task_title(project_dir, current_task_id) or "", project_dir),
             "failure_signature": normalized_signature[:220],
+            "failure_class": normalized_class,
         },
     )
     write_state(project_dir, payload)
@@ -344,6 +377,7 @@ def update_state_event(
 def update_after_run(project_dir: Path, action: str, run_status: str, summary: str) -> dict[str, Any]:
     failures = _collect_result_failures(project_dir, max_items=10)
     failure_signature = _collect_failure_signature(project_dir)
+    failure_class = _collect_failure_class(project_dir, failure_signature)
     return update_state_event(
         project_dir,
         action,
@@ -352,6 +386,7 @@ def update_after_run(project_dir: Path, action: str, run_status: str, summary: s
         increment_iterations=True,
         recent_failures=failures,
         failure_signature=failure_signature,
+        failure_class=failure_class,
     )
 
 
@@ -367,14 +402,34 @@ def update_after_fix(project_dir: Path, action: str, exit_code: int) -> dict[str
             summary = "fix loop skipped"
     failures = _collect_result_failures(project_dir, max_items=10) if status == "FAIL" else []
     failure_signature = _collect_failure_signature(project_dir) if status == "FAIL" else ""
-    return update_state_event(
+    failure_class = _collect_failure_class(project_dir, failure_signature) if status == "FAIL" else ""
+    payload = update_state_event(
         project_dir,
         action,
         status,
         summary,
         recent_failures=failures,
         failure_signature=failure_signature,
+        failure_class=failure_class,
     )
+    latest_fix = _latest_fix_summary_json(project_dir)
+    fix_payload = _load_json(latest_fix) if latest_fix else None
+    meta = fix_payload.get("meta") if isinstance(fix_payload, dict) else None
+    if isinstance(meta, dict):
+        payload["last_fix_strategy"] = str(meta.get("fix_strategy") or payload.get("last_fix_strategy") or "")
+        payload["last_failure_signature_before_fix"] = str(meta.get("failure_signature_before_fix") or "")
+        payload["last_failure_signature_after_fix"] = str(meta.get("failure_signature_after_fix") or "")
+        if meta.get("failure_class"):
+            payload["last_failure_class"] = str(meta.get("failure_class"))
+        before = str(payload.get("last_failure_signature_before_fix") or "")
+        after = str(payload.get("last_failure_signature_after_fix") or "")
+        if before and after and before == after:
+            hint = "fix did not change the failure signature"
+            failures_now = payload.get("recent_failures")
+            if isinstance(failures_now, list) and hint not in failures_now:
+                payload["recent_failures"] = [hint] + failures_now[:9]
+    write_state(project_dir, payload)
+    return payload
 
 
 def update_after_evaluation(project_dir: Path, evaluation_status: str, stuck_reason: str = "") -> dict[str, Any]:
@@ -421,6 +476,7 @@ def format_state_text(project_dir: Path) -> str:
         f"STATE: {status}",
         f"Iterations: {iterations}",
         f"Current task: {current_line}",
+        f"Failure class: {payload.get('last_failure_class') or 'unknown'}",
         "Recent failures:",
     ]
     failures = payload.get("recent_failures") or []
@@ -444,6 +500,7 @@ def state_prompt_summary(project_dir: Path) -> list[str]:
     lines = [
         f"- last_status: {payload.get('last_status', 'UNKNOWN')}",
         f"- current_task: {current_line}",
+        f"- failure_class: {payload.get('last_failure_class', 'unknown')}",
         "- recent_failures:",
     ]
     if failures:

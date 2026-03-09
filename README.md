@@ -155,6 +155,11 @@ Telegram integration (MVP):
 - 반복 실패가 누적되면 상태를 `STUCK`으로 승격해 사람이 개입할 시점을 명확히 표시
 - `STUCK`은 자동 반복만으로 돌파가 어려운 상태를 의미하며 failure details 검토가 필요
 - `STUCK`일 때는 `/state`로 원인 확인 후 task/plan을 조정한 뒤 `/fix` 또는 `/continue` 권장
+- fix 단계는 failure class 기반으로 수리 전략을 다르게 선택함
+  (예: `backend-pytest:assertion`, `backend-pytest:module-not-found`, `frontend-lint`, `frontend-typescript`)
+- backend assertion 실패는 구현 수정 중심, import/module 실패는 의존성/경로 해결 중심으로 유도
+- frontend lint/typescript/build 실패는 각 목적(린트 통과/타입 안정성/build 복구)에 맞춰 prompt를 분기
+- state에는 `last_failure_class`, `last_fix_strategy`, fix 전/후 failure signature가 기록됨
 - 생성 로그는 우선 `<base_dir>/<project_name>.telegram.log` 임시 로그로 기록
 - 마지막 프로젝트 경로는 `~/.archmind_telegram_last_project` 로 관리
 - `/state` 는 마지막 프로젝트를 수동 확인할 때 사용하는 명령

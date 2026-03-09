@@ -576,6 +576,7 @@ def build_finished_message(
 ) -> str:
     iterations = state.get("iterations")
     signature = str(state.get("last_failure_signature") or "").strip()
+    failure_class = str(state.get("last_failure_class") or "").strip()
     current_task = str(state.get("derived_task_label") or "").strip() or derive_task_label_from_failure_signature(signature)
     if not current_task:
         current_task = str(state.get("current_task_label") or "").strip()
@@ -608,6 +609,8 @@ def build_finished_message(
         lines.append(f"Iterations: {iterations}")
     if current_task:
         lines.append(f"Current task: {current_task}")
+    if failure_class:
+        lines.append(f"Failure class: {failure_class}")
     if stuck_reason:
         lines.append(f"Reason: {stuck_reason}")
     lines += [
