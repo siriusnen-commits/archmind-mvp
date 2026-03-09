@@ -135,9 +135,11 @@ Telegram integration (MVP):
 - 지원 명령:
   `/idea <text>`, `/pipeline <text>`, `/state`, `/help`
 - `/idea` 와 `/pipeline` 은 백그라운드로 `archmind pipeline ... --apply` 실행
-- 생성 프로젝트 로그는 `<project>/.archmind/telegram.log` 에 저장
+- pipeline 종료 후 완료/실패 요약 메시지를 Telegram으로 자동 전송
+- 자동 요약에는 status, iterations, current task, result/state 요약이 포함
+- 생성 로그는 우선 `<base_dir>/<project_name>.telegram.log` 임시 로그로 기록
 - 마지막 프로젝트 경로는 `~/.archmind_telegram_last_project` 로 관리
-- `/state` 는 마지막 프로젝트에 대해 `archmind state --path ...` 결과를 반환
+- `/state` 는 마지막 프로젝트를 수동 확인할 때 사용하는 명령
 
 ## Output Artifacts (.archmind/ structure)
 

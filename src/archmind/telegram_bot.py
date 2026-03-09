@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import re
 import subprocess
@@ -129,6 +131,145 @@ def _truncate_message(text: str, limit: int = 3900) -> str:
     return text[: limit - 3] + "..."
 
 
+def _load_json(path: Path) -> Optional[dict[str, Any]]:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _status_from_sources(project_dir: Path) -> str:
+    archmind_dir = project_dir / ".archmind"
+    evaluation = _load_json(archmind_dir / "evaluation.json")
+    if evaluation and evaluation.get("status"):
+        return str(evaluation.get("status"))
+    state = _load_json(archmind_dir / "state.json")
+    if state and state.get("last_status"):
+        return str(state.get("last_status"))
+    result = _load_json(archmind_dir / "result.json")
+    if result and result.get("status"):
+        return str(result.get("status"))
+    return "UNKNOWN"
+
+
+def _current_task_label(project_dir: Path) -> Optional[str]:
+    archmind_dir = project_dir / ".archmind"
+    state = _load_json(archmind_dir / "state.json") or {}
+    task_id = state.get("current_task_id")
+    if task_id is None:
+        return None
+    tasks = _load_json(archmind_dir / "tasks.json") or {}
+    raw = tasks.get("tasks")
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict) and int(item.get("id") or -1) == int(task_id):
+                title = str(item.get("title") or "").strip()
+                if title:
+                    return title
+    return f"task {task_id}"
+
+
+def _result_summary_lines(project_dir: Path, temp_log: Path) -> list[str]:
+    archmind_dir = project_dir / ".archmind"
+    result_txt = archmind_dir / "result.txt"
+    if result_txt.exists():
+        lines = [line.strip() for line in result_txt.read_text(encoding="utf-8", errors="replace").splitlines()]
+        lines = [line for line in lines if line and not line.startswith("ArchMind Pipeline Result")]
+        return lines[:8]
+
+    result_json = _load_json(archmind_dir / "result.json")
+    if result_json:
+        lines: list[str] = []
+        if result_json.get("status"):
+            lines.append(f"status: {result_json.get('status')}")
+        evaluation = result_json.get("evaluation")
+        if isinstance(evaluation, dict) and evaluation.get("status"):
+            lines.append(f"evaluation: {evaluation.get('status')}")
+        steps = result_json.get("steps")
+        if isinstance(steps, dict):
+            run_before = steps.get("run_before_fix")
+            if isinstance(run_before, dict):
+                step_status = run_before.get("status")
+                if step_status:
+                    lines.append(f"run_before_fix: {step_status}")
+        return lines[:8]
+
+    state = _load_json(archmind_dir / "state.json")
+    if state:
+        failures = state.get("recent_failures")
+        if isinstance(failures, list):
+            picked = [str(item).strip() for item in failures if str(item).strip()]
+            if picked:
+                return picked[:8]
+
+    if temp_log.exists():
+        lines = temp_log.read_text(encoding="utf-8", errors="replace").splitlines()
+        tail = [line.strip() for line in lines[-20:] if line.strip()]
+        return tail[-8:]
+
+    return ["no summary available"]
+
+
+def build_completion_message(
+    project_dir: Path,
+    temp_log: Path,
+    *,
+    max_len: int = 1200,
+    exit_code: Optional[int] = None,
+) -> str:
+    project_dir = project_dir.expanduser().resolve()
+    archmind_dir = project_dir / ".archmind"
+    state = _load_json(archmind_dir / "state.json") or {}
+    status = _status_from_sources(project_dir)
+    iterations = state.get("iterations")
+    current_task = _current_task_label(project_dir)
+    summary_lines = _result_summary_lines(project_dir, temp_log)
+
+    lines = [
+        "ArchMind finished",
+        "",
+        "Project:",
+        str(project_dir),
+        "",
+        f"Status: {status}",
+    ]
+    if iterations is not None:
+        lines.append(f"Iterations: {iterations}")
+    if current_task:
+        lines.append(f"Current task: {current_task}")
+    if exit_code is not None:
+        lines.append(f"Exit code: {exit_code}")
+    lines += [
+        "",
+        "Summary:",
+    ]
+    lines.extend(f"- {line}" for line in summary_lines[:10])
+    return _truncate_message("\n".join(lines), limit=max_len)
+
+
+async def watch_pipeline_and_notify(
+    proc: subprocess.Popen[str],
+    project_dir: Path,
+    temp_log: Path,
+    chat_id: int,
+    application: Any,
+) -> None:
+    try:
+        exit_code = await asyncio.to_thread(proc.wait)
+        message = build_completion_message(project_dir, temp_log, max_len=1200, exit_code=exit_code)
+    except Exception as exc:
+        message = f"ArchMind finished with notification error: {exc}"
+
+    try:
+        await application.bot.send_message(chat_id=chat_id, text=message)
+    except Exception:
+        # Notification errors should never crash the bot loop.
+        pass
+
+
 async def _handle_idea_like(update: Any, context: Any, cmd_name: str) -> None:
     idea = extract_idea(getattr(context, "args", []))
     if not idea:
@@ -152,6 +293,20 @@ async def _handle_idea_like(update: Any, context: Any, cmd_name: str) -> None:
     except Exception as exc:
         await update.message.reply_text(f"Failed to start pipeline: {exc}")
         return
+
+    application = getattr(context, "application", None)
+    chat = getattr(update, "effective_chat", None)
+    chat_id = getattr(chat, "id", None)
+    if application is not None and chat_id is not None:
+        asyncio.create_task(
+            watch_pipeline_and_notify(
+                proc=proc,
+                project_dir=project_dir,
+                temp_log=log_path,
+                chat_id=int(chat_id),
+                application=application,
+            )
+        )
 
     await update.message.reply_text(
         f"started: pid={proc.pid}\nproject={project_dir}\nlog={log_path}"

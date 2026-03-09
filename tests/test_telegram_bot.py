@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from archmind.telegram_bot import (
+    build_completion_message,
     build_pipeline_command,
     extract_idea,
     load_last_project_path,
@@ -96,3 +98,56 @@ def test_start_pipeline_process_writes_temp_log_in_base_dir(monkeypatch, tmp_pat
     assert log_path.exists()
     assert not (tmp_path / "20260309_notes").exists()
     assert captured["kwargs"]["shell"] is False
+
+
+def test_build_completion_message_reads_result_state_json(tmp_path: Path) -> None:
+    project_dir = tmp_path / "p1"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "result.json").write_text(json.dumps({"status": "FAIL"}), encoding="utf-8")
+    (archmind / "state.json").write_text(
+        json.dumps({"last_status": "NOT_DONE", "iterations": 2, "current_task_id": 2}),
+        encoding="utf-8",
+    )
+    (archmind / "tasks.json").write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {"id": 2, "title": "add API endpoints", "status": "doing", "source": "plan", "notes": ""}
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "result.txt").write_text(
+        "ArchMind Pipeline Result\n- Backend: FAIL\n- Frontend: FAIL\n- further work remains\n",
+        encoding="utf-8",
+    )
+    temp_log = tmp_path / "fallback.telegram.log"
+    message = build_completion_message(project_dir, temp_log)
+    assert "ArchMind finished" in message
+    assert "Status: NOT_DONE" in message
+    assert "Iterations: 2" in message
+    assert "Current task: add API endpoints" in message
+    assert "- - Backend: FAIL" in message
+
+
+def test_build_completion_message_fallbacks_to_temp_log(tmp_path: Path) -> None:
+    project_dir = tmp_path / "p2"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    temp_log = tmp_path / "p2.telegram.log"
+    temp_log.write_text("\n".join([f"log line {i}" for i in range(30)]), encoding="utf-8")
+    message = build_completion_message(project_dir, temp_log)
+    assert "Status: UNKNOWN" in message
+    assert "Summary:" in message
+    assert "log line 29" in message
+
+
+def test_build_completion_message_truncates_to_1200_chars(tmp_path: Path) -> None:
+    project_dir = tmp_path / "p3"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    long_lines = "\n".join([f"- detail {i} " + ("x" * 80) for i in range(40)])
+    (archmind / "result.txt").write_text(long_lines, encoding="utf-8")
+    msg = build_completion_message(project_dir, tmp_path / "unused.log", max_len=1200)
+    assert len(msg) <= 1200
