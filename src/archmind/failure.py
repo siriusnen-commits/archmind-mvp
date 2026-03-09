@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any, Iterable
 
 
@@ -54,13 +55,54 @@ def extract_failure_excerpt(*sources: Any, max_lines: int = 6, failure_class: st
                 "base",
                 "cancel",
                 "traceback:",
+                "short test summary info",
+            )
+        ):
+            continue
+        if "short test summary info" in lower:
+            continue
+        if any(
+            token in lower
+            for token in (
+                "how would you like to configure eslint",
+                "would you like to install",
+                "press enter to continue",
+                "learn more",
             )
         ):
             continue
         line = re.sub(r"\s+", " ", line)
-        if is_backend and any(tok in lower for tok in ("eslint", "frontend", "ts2304", "ts2322", "is not assignable", "npm err", "next build", "vite build", "lint ")):
+        if is_backend and any(
+            tok in lower
+            for tok in (
+                "eslint",
+                "frontend",
+                "ts2304",
+                "ts2322",
+                "is not assignable",
+                "npm err",
+                "next build",
+                "vite build",
+                "lint ",
+                "plugin",
+                "base",
+                "cancel",
+            )
+        ):
             continue
-        if is_frontend and any(tok in lower for tok in ("pytest", "assertionerror", "modulenotfounderror", "importerror", "e   ", "failed tests/", "traceback")):
+        if is_frontend and any(
+            tok in lower
+            for tok in (
+                "pytest",
+                "assertionerror",
+                "modulenotfounderror",
+                "importerror",
+                "e   ",
+                "failed tests/",
+                "traceback",
+                "short test summary info",
+            )
+        ):
             continue
         if line in seen:
             continue
@@ -213,6 +255,59 @@ def strategy_instructions(failure_class: str) -> list[str]:
     return ["generic repair prompt를 적용하고 변경 범위를 최소화하라."]
 
 
+def is_safe_repair_target(path: str, project_dir: Path) -> bool:
+    raw = (path or "").strip()
+    if not raw:
+        return False
+    lowered = raw.replace("\\", "/").lower()
+    blocked_tokens = (
+        ".venv/",
+        ".pyenv/",
+        "site-packages/",
+        "/usr/lib/",
+        "/opt/homebrew/",
+        "/system/library/",
+        "/library/frameworks/",
+        "/python.framework/",
+        "/importlib/",
+    )
+    if any(token in lowered for token in blocked_tokens):
+        return False
+
+    allow_non_project = {
+        "requirements.txt",
+        "package.json",
+        "pyproject.toml",
+        "poetry.lock",
+        "pipfile",
+        "pipfile.lock",
+        ".env.example",
+        ".env.sample",
+        "frontend/package.json",
+        "frontend/tsconfig.json",
+        "frontend/eslint.config.js",
+        "frontend/next.config.js",
+    }
+    if lowered in allow_non_project:
+        return True
+
+    p = Path(raw)
+    try:
+        project_root = project_dir.expanduser().resolve()
+    except Exception:
+        project_root = Path(project_dir)
+    if p.is_absolute():
+        try:
+            p.resolve().relative_to(project_root)
+            return True
+        except Exception:
+            return False
+
+    if lowered.startswith("../"):
+        return False
+    return True
+
+
 def select_repair_targets(
     failure_class: str,
     excerpt: str,
@@ -221,7 +316,6 @@ def select_repair_targets(
     files_hint: list[str] | None = None,
     failure_file: str | None = None,
 ) -> list[str]:
-    del project_dir
     klass = (failure_class or "unknown").lower()
     text = (excerpt or "")
     found_paths = _extract_path_like_lines(text)
@@ -236,8 +330,12 @@ def select_repair_targets(
     for path in found_paths:
         p = path.replace("\\", "/")
         if p.startswith("/"):
-            p = p.split("/archmind-mvp/")[-1] if "/archmind-mvp/" in p else p.split("/")[-1]
-        if p not in cleaned:
+            try:
+                rel = str(Path(p).resolve().relative_to(project_dir.expanduser().resolve())).replace("\\", "/")
+                p = rel
+            except Exception:
+                pass
+        if is_safe_repair_target(p, Path(project_dir)) and p not in cleaned:
             cleaned.append(p)
 
     if klass == "backend-pytest:module-not-found":
@@ -246,7 +344,7 @@ def select_repair_targets(
             if path.endswith(".py") and "/tests/" not in f"/{path}" and not path.startswith("tests/"):
                 targets.append(path)
                 break
-        return list(dict.fromkeys(targets))
+        return [t for t in list(dict.fromkeys(targets)) if is_safe_repair_target(t, Path(project_dir))]
 
     if klass == "backend-pytest:import":
         targets = []
@@ -254,7 +352,7 @@ def select_repair_targets(
             if path.endswith(".py") and "/tests/" not in f"/{path}" and not path.startswith("tests/"):
                 targets.append(path)
         targets.append("requirements.txt")
-        return list(dict.fromkeys(targets))[:3]
+        return [t for t in list(dict.fromkeys(targets)) if is_safe_repair_target(t, Path(project_dir))][:3]
 
     if klass in ("backend-pytest:assertion", "backend-pytest:api-response", "backend-pytest:other"):
         targets = []
@@ -263,7 +361,7 @@ def select_repair_targets(
                 targets.append(path)
         if not targets:
             targets = ["app/main.py"]
-        return list(dict.fromkeys(targets))[:3]
+        return [t for t in list(dict.fromkeys(targets)) if is_safe_repair_target(t, Path(project_dir))][:3]
 
     if klass == "frontend-lint":
         targets = [p for p in cleaned if p.startswith("frontend/") and p.endswith((".ts", ".tsx", ".js", ".jsx"))]
@@ -271,21 +369,21 @@ def select_repair_targets(
             targets = ["frontend/eslint.config.js"]
         else:
             targets.append("frontend/eslint.config.js")
-        return list(dict.fromkeys(targets))[:3]
+        return [t for t in list(dict.fromkeys(targets)) if is_safe_repair_target(t, Path(project_dir))][:3]
 
     if klass == "frontend-typescript":
         targets = [p for p in cleaned if p.startswith("frontend/") and p.endswith((".ts", ".tsx"))]
         targets.extend(["frontend/tsconfig.json", "frontend/types.d.ts"])
-        return list(dict.fromkeys(targets))[:3]
+        return [t for t in list(dict.fromkeys(targets)) if is_safe_repair_target(t, Path(project_dir))][:3]
 
     if klass == "frontend-build":
         targets = [p for p in cleaned if p.startswith("frontend/")]
         targets.extend(["frontend/next.config.js", "frontend/package.json"])
-        return list(dict.fromkeys(targets))[:3]
+        return [t for t in list(dict.fromkeys(targets)) if is_safe_repair_target(t, Path(project_dir))][:3]
 
     if klass in ("frontend-dependency", "env-dependency"):
         targets = ["frontend/package.json", "requirements.txt", ".env.example"]
-        return list(dict.fromkeys(targets))[:3]
+        return [t for t in list(dict.fromkeys(targets)) if is_safe_repair_target(t, Path(project_dir))][:3]
 
     return cleaned[:2] or ["inspect recent failure details"]
 

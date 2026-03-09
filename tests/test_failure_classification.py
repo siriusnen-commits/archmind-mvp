@@ -6,6 +6,7 @@ from archmind.failure import (
     classify_failure,
     extract_failure_excerpt,
     fix_strategy_for_class,
+    is_safe_repair_target,
     select_primary_failure_class,
     select_repair_targets,
 )
@@ -67,6 +68,7 @@ def test_fix_prompt_specializes_by_failure_class() -> None:
     assert "class: backend-pytest:module-not-found" in prompt
     assert "누락된 import/module/dependency를 먼저 해결하라" in prompt
     assert "Repair targets: requirements.txt" in prompt
+    assert "표준 라이브러리/외부 환경 파일은 수정하지 말라." in prompt
 
 
 def test_module_not_found_excerpt_removes_frontend_noise_and_targets_requirements() -> None:
@@ -85,6 +87,7 @@ def test_module_not_found_excerpt_removes_frontend_noise_and_targets_requirement
     assert "ModuleNotFoundError: No module named 'fastapi'" in excerpt
     assert "ESLint" not in excerpt
     assert "Base" not in excerpt
+    assert "Traceback:" not in excerpt
     targets = select_repair_targets(
         "backend-pytest:module-not-found",
         excerpt,
@@ -135,3 +138,80 @@ def test_primary_failure_class_prefers_backend_when_mixed_signature() -> None:
         "unknown",
     )
     assert primary == "backend-pytest:other"
+
+
+def test_excerpt_keeps_core_error_body_for_fastapi_module_not_found() -> None:
+    excerpt = extract_failure_excerpt(
+        [
+            "Traceback:",
+            "=========================== short test summary info ============================",
+            "E ModuleNotFoundError: No module named 'fastapi'",
+            "tests/test_defects.py:1: in <module>",
+            "from fastapi.testclient import TestClient",
+            "Base",
+            "Cancel",
+        ],
+        failure_class="backend-pytest:module-not-found",
+        max_lines=6,
+    )
+    assert "E ModuleNotFoundError: No module named 'fastapi'" in excerpt
+    assert "tests/test_defects.py:1: in <module>" in excerpt
+    assert "short test summary info" not in excerpt.lower()
+    assert "Traceback:" not in excerpt
+
+
+def test_is_safe_repair_target_blocks_external_system_paths() -> None:
+    root = Path("/tmp/project")
+    assert is_safe_repair_target("requirements.txt", root) is True
+    assert is_safe_repair_target("../../.pyenv/versions/3.11.7/lib/python3.11/importlib/__init__.py", root) is False
+    assert is_safe_repair_target("/usr/lib/python3.11/importlib/__init__.py", root) is False
+    assert is_safe_repair_target("/opt/homebrew/lib/python3.11/site-packages/fastapi/__init__.py", root) is False
+
+
+def test_select_repair_targets_excludes_pyenv_path() -> None:
+    targets = select_repair_targets(
+        "backend-pytest:import",
+        "ImportError: cannot import name Query",
+        Path("/tmp/project"),
+        files_hint=[
+            "../../.pyenv/versions/3.11.7/lib/python3.11/importlib/__init__.py",
+            "app/main.py",
+        ],
+    )
+    assert "app/main.py" in targets
+    assert "requirements.txt" in targets
+    assert not any(".pyenv" in t for t in targets)
+
+
+def test_backend_failure_excerpt_drops_frontend_base_cancel_noise() -> None:
+    excerpt = extract_failure_excerpt(
+        [
+            "E ModuleNotFoundError: No module named 'fastapi'",
+            "Base",
+            "Cancel",
+            "How would you like to configure ESLint?",
+            "ESLint: Parsing error ...",
+        ],
+        failure_class="backend-pytest:module-not-found",
+        max_lines=6,
+    )
+    assert "ModuleNotFoundError" in excerpt
+    assert "ESLint" not in excerpt
+    assert "Base" not in excerpt
+    assert "Cancel" not in excerpt
+
+
+def test_frontend_failure_excerpt_drops_backend_traceback_noise() -> None:
+    excerpt = extract_failure_excerpt(
+        [
+            "Traceback:",
+            "AssertionError: expected 200 got 500",
+            "ESLint: Parsing error ...",
+            "frontend/app/page.tsx:12:1",
+        ],
+        failure_class="frontend-lint",
+        max_lines=6,
+    )
+    assert "ESLint: Parsing error" in excerpt
+    assert "AssertionError" not in excerpt
+    assert "Traceback:" not in excerpt

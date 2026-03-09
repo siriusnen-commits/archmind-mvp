@@ -258,6 +258,7 @@ def _build_fix_prompt(
         "# 수정 지시문\n"
         "- 목표: python -m pytest -q 통과\n"
         f"- 수정 대상: {repair_targets_block}\n"
+        "- 표준 라이브러리/외부 환경 파일은 수정하지 말라.\n"
         "- 변경 범위를 최소화하라\n\n"
         "- 기능 유지, 린트/타입체크 통과를 최우선으로 고려하라\n"
         f"- scope: {scope}\n\n"

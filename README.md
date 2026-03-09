@@ -170,6 +170,9 @@ Telegram integration (MVP):
 - fix prompt는 failure class와 함께 `Repair targets`를 계산해 우선 수정 대상을 명시함
 - dependency/import 계열(`module-not-found`, `env-dependency`)은 코드보다 `requirements.txt`/`package.json`/config를 먼저 점검
 - backend assertion 계열은 테스트 파일보다 구현 파일(endpoint/service/serializer)을 우선 대상으로 선택
+- repair target 선택은 project-local 파일을 기본 원칙으로 하며, 시스템/외부 경로는 제외함
+- `.venv/.pyenv/site-packages/usr/lib/opt/homebrew` 등 외부 런타임 파일은 수정 대상으로 잡지 않음
+- failure excerpt는 Traceback 메타보다 핵심 에러 본문(`ModuleNotFoundError`, `AssertionError` 등)을 우선 압축해 제공
 - state에는 `last_failure_class`, `last_fix_strategy`, fix 전/후 failure signature가 기록됨
 - 생성 로그는 우선 `<base_dir>/<project_name>.telegram.log` 임시 로그로 기록
 - 마지막 프로젝트 경로는 `~/.archmind_telegram_last_project` 로 관리
