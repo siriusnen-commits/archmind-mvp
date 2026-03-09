@@ -15,6 +15,7 @@ from archmind.failure import (
     extract_failure_location_context,
     failure_signature_from_run_result,
     fix_strategy_for_class,
+    is_safe_repair_target,
     select_primary_failure_class,
     select_repair_targets,
     strategy_instructions,
@@ -198,6 +199,148 @@ def _extract_frontend_error_lines(run_result: RunResult, max_lines: int = 200) -
     return lines[-max_lines:]
 
 
+def _extract_file_candidates_from_text(text: str) -> list[str]:
+    if not text:
+        return []
+    patterns = [
+        r"([A-Za-z0-9_./-]+\.(?:py|tsx?|jsx?|json|ya?ml|ini|toml|cfg|conf|md|env))(?::\d+)?",
+        r"\b(requirements\.txt|package\.json|pyproject\.toml|poetry\.lock|pipfile(?:\.lock)?|"
+        r"frontend/package\.json|frontend/tsconfig\.json|frontend/eslint\.config\.(?:js|cjs|mjs)|"
+        r"frontend/next\.config\.js|\.env(?:\.example|\.sample)?)\b",
+    ]
+    out: list[str] = []
+    for pattern in patterns:
+        for match in re.findall(pattern, text):
+            item = str(match).strip().strip("'\"").strip()
+            if item and item not in out:
+                out.append(item)
+    return out
+
+
+def _normalize_relevant_candidate(project_dir: Path, candidate: str) -> Optional[Path]:
+    raw = (candidate or "").strip().strip("'\"").strip()
+    if not raw:
+        return None
+    normalized = raw.replace("\\", "/")
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    if normalized.startswith("../"):
+        return None
+    if not is_safe_repair_target(normalized, project_dir):
+        return None
+    p = Path(normalized)
+    if p.is_absolute():
+        try:
+            resolved = p.expanduser().resolve()
+            resolved.relative_to(project_dir)
+        except Exception:
+            return None
+    else:
+        resolved = (project_dir / p).resolve()
+        try:
+            resolved.relative_to(project_dir)
+        except Exception:
+            return None
+    if not resolved.exists() or not resolved.is_file():
+        return None
+    return resolved
+
+
+def select_relevant_files(
+    project_dir: Path,
+    failure_class: str,
+    failure_excerpt: str,
+    repair_targets: list[str],
+    state: Optional[dict[str, Any]],
+    result: Optional[dict[str, Any]],
+) -> list[Path]:
+    project_dir = project_dir.expanduser().resolve()
+    klass = (failure_class or "unknown").lower()
+
+    ordered_candidates: list[str] = []
+
+    def add_candidates(items: list[str]) -> None:
+        for item in items:
+            value = str(item or "").strip()
+            if value and value not in ordered_candidates:
+                ordered_candidates.append(value)
+
+    add_candidates([str(x) for x in (repair_targets or [])])
+    add_candidates(_extract_file_candidates_from_text(failure_excerpt))
+
+    state_payload = state or {}
+    recent_failures = state_payload.get("recent_failures")
+    if isinstance(recent_failures, list):
+        add_candidates(_extract_file_candidates_from_text("\n".join(str(x) for x in recent_failures)))
+
+    result_payload = result or {}
+    for key in ("failure_file",):
+        value = result_payload.get(key)
+        if isinstance(value, str):
+            add_candidates([value])
+    for key in ("files_hint", "summary_lines", "failure_summary", "log_tail"):
+        value = result_payload.get(key)
+        if isinstance(value, list):
+            add_candidates(_extract_file_candidates_from_text("\n".join(str(x) for x in value)))
+
+    if klass in ("backend-pytest:module-not-found", "backend-pytest:import"):
+        add_candidates(["requirements.txt", "app/main.py"])
+    elif klass in ("backend-pytest:assertion", "backend-pytest:api-response", "backend-pytest:other"):
+        add_candidates(["app/main.py"])
+    elif klass in ("frontend-lint", "frontend-typescript"):
+        add_candidates(["frontend/package.json", "frontend/tsconfig.json", "frontend/eslint.config.js"])
+    elif klass in ("frontend-build", "frontend-dependency", "env-dependency"):
+        add_candidates(["frontend/package.json", "package.json", ".env.example", "frontend/next.config.js"])
+    else:
+        add_candidates(["app/main.py", "requirements.txt", "package.json"])
+
+    selected: list[Path] = []
+    seen: set[str] = set()
+    for candidate in ordered_candidates:
+        resolved = _normalize_relevant_candidate(project_dir, candidate)
+        if resolved is None:
+            continue
+        rel = resolved.relative_to(project_dir).as_posix()
+        if rel in seen:
+            continue
+        seen.add(rel)
+        selected.append(resolved)
+        if len(selected) >= 4:
+            break
+    return selected
+
+
+def build_relevant_files_section(
+    project_dir: Path,
+    relevant_files: list[Path],
+    *,
+    max_lines_per_file: int = 200,
+    max_total_lines: int = 600,
+) -> str:
+    project_dir = project_dir.expanduser().resolve()
+    if not relevant_files:
+        return "- (none)"
+    lines: list[str] = []
+    for path in relevant_files:
+        rel = path.resolve().relative_to(project_dir).as_posix()
+        lines.append(f"- {rel}")
+    used = 0
+    for path in relevant_files:
+        rel = path.resolve().relative_to(project_dir).as_posix()
+        content = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        allow = min(max_lines_per_file, max_total_lines - used)
+        if allow <= 0:
+            break
+        chunk = content[:allow]
+        used += len(chunk)
+        lines.append("")
+        lines.append(f"## File: {rel}")
+        lines.extend(chunk)
+        if len(content) > len(chunk):
+            lines.append("... (truncated)")
+    return "\n".join(lines)
+
+
 def _build_fix_prompt(
     command: str,
     plan_lines: list[str],
@@ -213,6 +356,7 @@ def _build_fix_prompt(
     fix_strategy: str = "generic",
     failure_excerpt: str = "",
     repair_targets: Optional[list[str]] = None,
+    relevant_files_section: str = "",
 ) -> str:
     test_name = failure_details.get("test_name") or "확인 필요"
     file_path = failure_details.get("file_path") or (files_hint[0] if files_hint else "확인 필요")
@@ -228,6 +372,7 @@ def _build_fix_prompt(
     excerpt_block = failure_excerpt or "(excerpt 없음)"
     repair_targets = repair_targets or []
     repair_targets_block = ", ".join(repair_targets) if repair_targets else "확인 필요"
+    relevant_files_block = relevant_files_section or "- (none)"
     is_frontend = (failure_class or "").lower().startswith("frontend")
     failure_location_block = "\n".join(stack_top) if stack_top else "(핵심 실패 지점 없음)"
     if is_frontend:
@@ -266,6 +411,8 @@ def _build_fix_prompt(
         f"{excerpt_block}\n\n"
         "# Repair Targets\n"
         f"- Repair targets: {repair_targets_block}\n\n"
+        "# Relevant Files\n"
+        f"{relevant_files_block}\n\n"
         "# 실패 지점\n"
         f"{failure_location_section}"
         "# 수정 지시문\n"
@@ -323,6 +470,21 @@ def _write_fix_prompt(
         files_hint=files_hint,
         failure_file=str(details.get("file_path") or ""),
     )
+    state_payload = load_state(project_dir) or {}
+    relevant_files = select_relevant_files(
+        project_dir=project_dir,
+        failure_class=failure_class,
+        failure_excerpt=failure_excerpt,
+        repair_targets=repair_targets,
+        state=state_payload,
+        result={
+            "summary_lines": summary_lines,
+            "log_tail": log_tail,
+            "files_hint": files_hint,
+            "failure_file": str(details.get("file_path") or ""),
+        },
+    )
+    relevant_files_section = build_relevant_files_section(project_dir, relevant_files)
     prompt_text = _build_fix_prompt(
         command,
         plan_lines,
@@ -338,6 +500,7 @@ def _write_fix_prompt(
         fix_strategy=fix_strategy,
         failure_excerpt=failure_excerpt,
         repair_targets=repair_targets,
+        relevant_files_section=relevant_files_section,
     )
     prompt_path = log_dir / f"fix_{timestamp}.prompt.md"
     prompt_path.write_text(prompt_text, encoding="utf-8")

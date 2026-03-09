@@ -199,6 +199,9 @@ Telegram integration (MVP):
 - dependency/import 계열(`module-not-found`, `env-dependency`)은 코드보다 `requirements.txt`/`package.json`/config를 먼저 점검
 - backend assertion 계열은 테스트 파일보다 구현 파일(endpoint/service/serializer)을 우선 대상으로 선택
 - repair target 선택은 project-local 파일을 기본 원칙으로 하며, 시스템/외부 경로는 제외함
+- fix prompt는 `Relevant Files` 섹션으로 실패와 직접 관련된 파일(기본 2~4개)만 선별해 전달함
+- 우선순위는 repair targets -> 실패 excerpt에서 언급된 파일 -> failure class별 엔트리포인트/설정 파일 순서
+- local model(예: LLaMA)에서도 전체 코드보다 관련 파일만 좁혀 주는 것이 fix 성공률에 유리함
 - `.venv/.pyenv/site-packages/usr/lib/opt/homebrew` 등 외부 런타임 파일은 수정 대상으로 잡지 않음
 - failure excerpt는 Traceback 메타보다 핵심 에러 본문(`ModuleNotFoundError`, `AssertionError` 등)을 우선 압축해 제공
 - Failure Excerpt는 핵심 에러 본문 1~3줄 + 실패 파일/테스트 라인 중심으로 압축됨

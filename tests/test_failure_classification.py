@@ -15,6 +15,7 @@ from archmind.failure import (
     select_repair_targets,
 )
 from archmind.fixer import _build_fix_prompt
+from archmind.fixer import build_relevant_files_section, select_relevant_files
 
 
 def test_classify_assertion_error() -> None:
@@ -72,7 +73,86 @@ def test_fix_prompt_specializes_by_failure_class() -> None:
     assert "class: backend-pytest:module-not-found" in prompt
     assert "누락된 import/module/dependency를 먼저 해결하라" in prompt
     assert "Repair targets: requirements.txt" in prompt
+    assert "# Relevant Files" in prompt
     assert "표준 라이브러리/외부 환경 파일은 수정하지 말라." in prompt
+
+
+def test_select_relevant_files_module_not_found_includes_requirements(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("fastapi==0.111.0\n", encoding="utf-8")
+    (tmp_path / "app").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "app" / "main.py").write_text("from fastapi import FastAPI\n", encoding="utf-8")
+    (tmp_path / "tests").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "tests" / "test_defects.py").write_text("from fastapi.testclient import TestClient\n", encoding="utf-8")
+    files = select_relevant_files(
+        project_dir=tmp_path,
+        failure_class="backend-pytest:module-not-found",
+        failure_excerpt="E ModuleNotFoundError: No module named 'fastapi'\ntests/test_defects.py:1",
+        repair_targets=["requirements.txt"],
+        state={},
+        result={"files_hint": ["tests/test_defects.py"]},
+    )
+    rel = [p.relative_to(tmp_path).as_posix() for p in files]
+    assert "requirements.txt" in rel
+    assert "tests/test_defects.py" in rel
+
+
+def test_select_relevant_files_backend_assertion_prefers_test_and_main(tmp_path: Path) -> None:
+    (tmp_path / "app").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "app" / "main.py").write_text("def create_todo():\n    return {}\n", encoding="utf-8")
+    (tmp_path / "tests").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "tests" / "test_api.py").write_text("def test_create_todo():\n    assert False\n", encoding="utf-8")
+    files = select_relevant_files(
+        project_dir=tmp_path,
+        failure_class="backend-pytest:assertion",
+        failure_excerpt="E AssertionError: expected 200 got 500\nFAILED tests/test_api.py::test_create_todo",
+        repair_targets=["app/main.py"],
+        state={},
+        result={},
+    )
+    rel = [p.relative_to(tmp_path).as_posix() for p in files]
+    assert "app/main.py" in rel
+    assert "tests/test_api.py" in rel
+
+
+def test_select_relevant_files_frontend_lint_prefers_frontend_and_config(tmp_path: Path) -> None:
+    (tmp_path / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "frontend" / "app" / "page.tsx").write_text("const x=1\n", encoding="utf-8")
+    (tmp_path / "frontend" / "package.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "frontend" / "eslint.config.js").write_text("export default []\n", encoding="utf-8")
+    files = select_relevant_files(
+        project_dir=tmp_path,
+        failure_class="frontend-lint",
+        failure_excerpt="ESLint: Parsing error\nfrontend/app/page.tsx:12",
+        repair_targets=["frontend/app/page.tsx"],
+        state={},
+        result={},
+    )
+    rel = [p.relative_to(tmp_path).as_posix() for p in files]
+    assert "frontend/app/page.tsx" in rel
+    assert any(item in rel for item in ("frontend/package.json", "frontend/eslint.config.js"))
+
+
+def test_select_relevant_files_excludes_external_paths(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("fastapi==0.111.0\n", encoding="utf-8")
+    files = select_relevant_files(
+        project_dir=tmp_path,
+        failure_class="backend-pytest:import",
+        failure_excerpt="ImportError: cannot import name Query\n../../.pyenv/versions/3.11.7/lib/python3.11/importlib/__init__.py",
+        repair_targets=["../../.pyenv/versions/3.11.7/lib/python3.11/importlib/__init__.py", "requirements.txt"],
+        state={},
+        result={},
+    )
+    rel = [p.relative_to(tmp_path).as_posix() for p in files]
+    assert "requirements.txt" in rel
+    assert not any(".pyenv" in item or "importlib/__init__.py" in item for item in rel)
+
+
+def test_relevant_files_section_includes_file_blocks(tmp_path: Path) -> None:
+    (tmp_path / "requirements.txt").write_text("fastapi==0.111.0\n", encoding="utf-8")
+    section = build_relevant_files_section(tmp_path, [tmp_path / "requirements.txt"])
+    assert "- requirements.txt" in section
+    assert "## File: requirements.txt" in section
+    assert "fastapi==0.111.0" in section
 
 
 def test_module_not_found_excerpt_removes_frontend_noise_and_targets_requirements() -> None:

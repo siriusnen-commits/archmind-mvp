@@ -89,6 +89,7 @@ def test_frontend_fix_prompt_contains_error_summary(tmp_path: Path) -> None:
     assert "핵심 단계: lint 오류 수정" in prompt_text
     assert "프론트 오류 요약" in prompt_text
     assert "no-unused-vars" in prompt_text
+    assert "# Relevant Files" in prompt_text
     assert "린트/타입체크" in prompt_text
 
 
