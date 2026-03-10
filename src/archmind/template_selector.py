@@ -4,7 +4,7 @@ import os
 
 
 def get_supported_templates() -> list[str]:
-    return ["fastapi", "fastapi-ddd", "fullstack-ddd"]
+    return ["fastapi", "fastapi-ddd", "fullstack-ddd", "nextjs"]
 
 
 def resolve_default_template() -> str:

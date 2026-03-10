@@ -18,6 +18,8 @@ Idea routing notes:
 - Routing traces `selected_template` and `effective_template` separately for transparency.
 - `selected_template` is the baseline choice from `project_type`.
 - `effective_template` is the template actually used for generation.
+- `frontend-web` baseline now uses the supported `nextjs` template (no fallback to `fastapi`).
+- Example routing: `frontend-web -> selected_template=nextjs -> effective_template=nextjs`.
 - Unknown type falls back to `ARCHMIND_DEFAULT_TEMPLATE` (or built-in default).
 - If `selected_template` is unsupported, fallback is applied and `template_fallback_reason` is recorded.
 - Routing metadata is persisted in pipeline summaries, `result.json`, and `state.json`.

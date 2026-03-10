@@ -43,10 +43,10 @@ def test_supported_template_keeps_effective_equal_selected() -> None:
 
 
 def test_unsupported_template_falls_back_to_default_with_reason() -> None:
-    effective, reason = resolve_effective_template("nextjs", "fastapi-ddd")
+    effective, reason = resolve_effective_template("cli", "fastapi-ddd")
     assert effective == "fastapi-ddd"
     assert reason is not None
-    assert "nextjs template not supported" in reason
+    assert "cli template not supported" in reason
     assert "using default template 'fastapi-ddd'" in reason
 
 
@@ -55,6 +55,7 @@ def test_supported_templates_truthy() -> None:
     assert "fastapi" in supported
     assert "fastapi-ddd" in supported
     assert "fullstack-ddd" in supported
+    assert "nextjs" in supported
 
 
 def test_state_shows_selected_template_from_result(tmp_path: Path) -> None:

@@ -133,7 +133,7 @@ def test_pipeline_idea_generates_and_runs(tmp_path: Path, monkeypatch) -> None:
     assert any("pipeline run" in str(item.get("action") or "") for item in history if isinstance(item, dict))
 
 
-def test_pipeline_records_template_fallback_metadata(tmp_path: Path, monkeypatch) -> None:
+def test_pipeline_frontend_web_routes_to_nextjs_without_fallback(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project)
 
     exit_code = main(
@@ -158,12 +158,41 @@ def test_pipeline_records_template_fallback_metadata(tmp_path: Path, monkeypatch
     result_payload = json.loads((project_dir / ".archmind" / "result.json").read_text(encoding="utf-8"))
     assert result_payload.get("project_type") == "frontend-web"
     assert result_payload.get("selected_template") == "nextjs"
-    assert result_payload.get("effective_template") == "fastapi"
-    assert "template not supported" in str(result_payload.get("template_fallback_reason") or "")
+    assert result_payload.get("effective_template") == "nextjs"
+    assert result_payload.get("template_fallback_reason") in ("", None)
 
     state_payload = json.loads((project_dir / ".archmind" / "state.json").read_text(encoding="utf-8"))
-    assert state_payload.get("effective_template") == "fastapi"
-    assert "template not supported" in str(state_payload.get("template_fallback_reason") or "")
+    assert state_payload.get("effective_template") == "nextjs"
+    assert state_payload.get("template_fallback_reason") in ("", None)
+
+
+def test_pipeline_cli_type_keeps_fallback_metadata(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project)
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "python cli tool for csv merge",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "cli_routing_demo",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+
+    project_dir = tmp_path / "cli_routing_demo"
+    result_payload = json.loads((project_dir / ".archmind" / "result.json").read_text(encoding="utf-8"))
+    assert result_payload.get("project_type") == "cli-tool"
+    assert result_payload.get("selected_template") == "cli"
+    assert result_payload.get("effective_template") == "fastapi"
+    assert "template not supported" in str(result_payload.get("template_fallback_reason") or "")
 
 
 def test_pipeline_path_runs_backend_only(tmp_path: Path) -> None:

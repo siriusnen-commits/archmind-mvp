@@ -11,6 +11,7 @@ import requests
 
 from .templates.fastapi import enforce_fastapi_runtime
 from .templates.fastapi_ddd import enforce_fastapi_ddd
+from .templates.nextjs import enforce_nextjs_runtime
 
 DEBUG_RAW_OUTPUT = Path("examples/last_raw_output.txt")
 DEBUG_REPAIRED_OUTPUT = Path("examples/last_repaired_output.txt")
@@ -267,6 +268,11 @@ def apply_template(spec: Dict[str, Any], opt: GenerateOptions) -> Dict[str, Any]
             "scripts",
         ]
         spec["files"] = files
+    elif opt.template == "nextjs":
+        files = enforce_nextjs_runtime({}, project_name)
+        spec["directories"] = [
+            "app",
+        ]
 
     else:
         files = enforce_fastapi_runtime(files, project_name)
@@ -343,7 +349,7 @@ def generate_project(idea: str, opt: GenerateOptions):
     returns: Path to generated project root
     """
     # Deterministic templates should not require model access.
-    if opt.template in {"fastapi-ddd", "fullstack-ddd"}:
+    if opt.template in {"fastapi-ddd", "fullstack-ddd", "nextjs"}:
         project_name = (opt.name or "archmind_project").strip() or "archmind_project"
         spec = fallback_spec(project_name=project_name)
     else:

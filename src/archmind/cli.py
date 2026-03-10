@@ -71,7 +71,7 @@ def _templates_choices() -> list[str]:
     """
     Provide template choices. If a template module exists, include it.
     """
-    base = ["fastapi", "fastapi-ddd"]
+    base = ["fastapi", "fastapi-ddd", "nextjs"]
     try:
         # optional template
         import archmind.templates.fullstack_ddd  # noqa: F401

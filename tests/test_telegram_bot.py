@@ -69,6 +69,10 @@ def test_resolve_template_for_idea_backend_routes_to_fastapi() -> None:
     assert resolve_template_for_idea("simple fastapi notes api") == "fastapi"
 
 
+def test_resolve_template_for_idea_frontend_routes_to_nextjs() -> None:
+    assert resolve_template_for_idea("simple nextjs counter dashboard") == "nextjs"
+
+
 def test_planned_project_dir_does_not_create_folder(tmp_path: Path) -> None:
     project_dir = planned_project_dir(tmp_path, "notes app", ts="20260309_120000")
     assert project_dir.name == "20260309_120000_notes_app"
