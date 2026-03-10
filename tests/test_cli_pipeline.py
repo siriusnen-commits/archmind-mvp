@@ -133,6 +133,47 @@ def test_pipeline_idea_generates_and_runs(tmp_path: Path, monkeypatch) -> None:
     assert any("pipeline run" in str(item.get("action") or "") for item in history if isinstance(item, dict))
 
 
+def test_pipeline_idea_generator_receives_effective_template_for_frontend_web(tmp_path: Path, monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    def fake_generate_project(idea: str, opt) -> Path:  # type: ignore[no-untyped-def]
+        captured["idea"] = idea
+        captured["template"] = str(getattr(opt, "template", ""))
+        project_name = (opt.name or "archmind_project").strip() or "archmind_project"
+        project_dir = Path(opt.out) / project_name
+        project_dir.mkdir(parents=True, exist_ok=True)
+        project_dir.joinpath("pytest.ini").write_text("[pytest]\naddopts = -q\n", encoding="utf-8")
+        project_dir.joinpath("test_ok.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+        return project_dir
+
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: fake_generate_project)
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "simple nextjs counter dashboard",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "idea_frontend_route",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+    assert captured.get("idea") == "simple nextjs counter dashboard"
+    assert captured.get("template") == "nextjs"
+
+    result_payload = json.loads((tmp_path / "idea_frontend_route" / ".archmind" / "result.json").read_text(encoding="utf-8"))
+    assert result_payload.get("selected_template") == "nextjs"
+    assert result_payload.get("effective_template") == "nextjs"
+    assert result_payload.get("template_fallback_reason") in ("", None)
+
+
 def test_pipeline_frontend_web_routes_to_nextjs_without_fallback(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project)
 

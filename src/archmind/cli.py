@@ -399,6 +399,7 @@ def run_pipeline_cmd(args: argparse.Namespace) -> int:
         out=args.out,
         name=args.name,
         template=args.template,
+        template_explicit="--template" in list(getattr(args, "_argv", [])),
         prompt=args.prompt,
         gen_model=args.gen_model,
         gen_ollama_base_url=args.gen_ollama_base_url,

@@ -54,7 +54,6 @@ def test_build_pipeline_command() -> None:
     project_name = "20260309_notes_app"
     cmd = build_pipeline_command(
         idea="notes app",
-        template="fullstack-ddd",
         base_dir=base_dir,
         project_name=project_name,
     )
@@ -62,7 +61,7 @@ def test_build_pipeline_command() -> None:
     assert "--apply" in cmd
     assert cmd[cmd.index("--out") + 1] == str(base_dir)
     assert cmd[cmd.index("--name") + 1] == project_name
-    assert cmd[cmd.index("--template") + 1] == "fullstack-ddd"
+    assert "--template" not in cmd
 
 
 def test_resolve_template_for_idea_backend_routes_to_fastapi() -> None:

@@ -75,14 +75,12 @@ def planned_project_dir(base_dir: Path, idea: str, ts: Optional[str] = None) -> 
     return base_dir.expanduser().resolve() / make_project_name(idea, ts=ts)
 
 
-def build_pipeline_command(idea: str, template: str, base_dir: Path, project_name: str) -> list[str]:
+def build_pipeline_command(idea: str, base_dir: Path, project_name: str) -> list[str]:
     return [
         "archmind",
         "pipeline",
         "--idea",
         idea,
-        "--template",
-        template,
         "--out",
         str(base_dir),
         "--name",
@@ -967,14 +965,12 @@ async def _handle_idea_like(update: Any, context: Any, cmd_name: str) -> None:
         return
 
     base_dir = resolve_base_dir()
-    template = resolve_template_for_idea(idea)
     base_dir.mkdir(parents=True, exist_ok=True)
     project_dir = planned_project_dir(base_dir, idea)
     save_last_project_path(project_dir)
 
     command = build_pipeline_command(
         idea=idea,
-        template=template,
         base_dir=base_dir,
         project_name=project_dir.name,
     )

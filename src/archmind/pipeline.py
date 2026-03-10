@@ -30,6 +30,7 @@ class PipelineOptions:
     out: str
     name: Optional[str]
     template: str
+    template_explicit: bool
     prompt: Optional[str]
     gen_model: str
     gen_ollama_base_url: str
@@ -458,13 +459,13 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
     template_fallback_reason = ""
     if initial_idea:
         routed_type = normalize_project_type(detect_project_type(initial_idea))
-        selected_template = select_template_for_project_type(routed_type, initial_idea)
-        default_template = resolve_default_template()
-        if opts.template and opts.template != "fastapi":
-            effective_template = opts.template
+        if opts.template_explicit:
+            selected_template = (opts.template or "").strip().lower() or "fastapi"
         else:
-            effective_template, fallback_reason = resolve_effective_template(selected_template, default_template)
-            template_fallback_reason = fallback_reason or ""
+            selected_template = select_template_for_project_type(routed_type, initial_idea)
+        default_template = resolve_default_template()
+        effective_template, fallback_reason = resolve_effective_template(selected_template, default_template)
+        template_fallback_reason = fallback_reason or ""
         opts.template = effective_template
     else:
         fallback_template = resolve_default_template()
