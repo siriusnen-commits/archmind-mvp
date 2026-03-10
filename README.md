@@ -15,9 +15,12 @@ Idea routing notes:
 - ArchMind now performs a lightweight heuristic classification on idea text.
 - Supported baseline types: `backend-api`, `frontend-web`, `fullstack-web`, `cli-tool`, `automation-script`, `unknown`.
 - Baseline routing now follows `idea -> project_type -> selected_template`.
-- `selected_template` is recorded in pipeline/result/state artifacts for visibility.
+- Routing traces `selected_template` and `effective_template` separately for transparency.
+- `selected_template` is the baseline choice from `project_type`.
+- `effective_template` is the template actually used for generation.
 - Unknown type falls back to `ARCHMIND_DEFAULT_TEMPLATE` (or built-in default).
-- For unsupported routed templates, generation keeps a safe effective template to avoid breaking the loop.
+- If `selected_template` is unsupported, fallback is applied and `template_fallback_reason` is recorded.
+- Routing metadata is persisted in pipeline summaries, `result.json`, and `state.json`.
 - Current scope is initial routing only; richer template matching is a follow-up layer.
 - Next stage is template selection combined with LLM-assisted generation refinement.
 

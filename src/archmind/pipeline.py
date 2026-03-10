@@ -14,12 +14,12 @@ from archmind.evaluator import write_evaluation
 from archmind.planner import write_project_plan
 from archmind.project_type import detect_project_type, normalize_project_type
 from archmind.template_selector import (
-    is_supported_template,
     resolve_default_template,
+    resolve_effective_template,
     select_template_for_project_type,
 )
 from archmind.runner import RunConfig, RunResult, compute_run_status, run_pipeline
-from archmind.state import ensure_state, load_state, set_agent_state, update_after_fix, update_after_run
+from archmind.state import ensure_state, load_state, set_agent_state, update_after_fix, update_after_run, write_state
 from archmind.tasks import current_task, ensure_tasks
 
 
@@ -279,6 +279,7 @@ def _build_result_text(payload: dict[str, Any]) -> str:
         f"- project_type: {payload.get('project_type') or 'unknown'}",
         f"- selected_template: {payload.get('selected_template') or 'unknown'}",
         f"- effective_template: {payload.get('effective_template') or 'unknown'}",
+        f"- template_fallback_reason: {payload.get('template_fallback_reason') or 'N/A'}",
         f"- evaluation: {evaluation_text}",
         f"- state: {state_text}",
         f"- project_dir: {payload.get('project_dir')}",
@@ -359,6 +360,7 @@ def _write_pipeline_logs(
     project_type: str,
     selected_template: str,
     effective_template: str,
+    template_fallback_reason: str,
     run_result: RunResult,
     fix_exit: Optional[int],
     rerun_exit: Optional[int],
@@ -378,6 +380,7 @@ def _write_pipeline_logs(
         f"project_type: {project_type}",
         f"selected_template: {selected_template}",
         f"effective_template: {effective_template}",
+        f"template_fallback_reason: {template_fallback_reason or 'N/A'}",
         f"run_exit: {run_result.overall_exit_code}",
         f"fix_exit: {fix_exit if fix_exit is not None else 'N/A'}",
         f"rerun_exit: {rerun_exit if rerun_exit is not None else 'N/A'}",
@@ -392,6 +395,7 @@ def _write_pipeline_logs(
         f"- project_type: {project_type}",
         f"- selected_template: {selected_template}",
         f"- effective_template: {effective_template}",
+        f"- template_fallback_reason: {template_fallback_reason or 'N/A'}",
         "2) Run:",
         f"- exit_code: {run_result.overall_exit_code}",
         "3) Fix:",
@@ -406,7 +410,11 @@ def _write_pipeline_logs(
     if json_summary:
         payload = {
             "meta": {"project_dir": str(project_dir), "timestamp": timestamp, "project_type": project_type},
-            "template": {"selected_template": selected_template, "effective_template": effective_template},
+            "template": {
+                "selected_template": selected_template,
+                "effective_template": effective_template,
+                "template_fallback_reason": template_fallback_reason or None,
+            },
             "run": {"exit_code": run_result.overall_exit_code},
             "fix": {"exit_code": fix_exit},
             "rerun": {"exit_code": rerun_exit},
@@ -447,6 +455,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
     initial_idea = (opts.idea or "").strip()
     selected_template = ""
     effective_template = opts.template
+    template_fallback_reason = ""
     if initial_idea:
         routed_type = normalize_project_type(detect_project_type(initial_idea))
         selected_template = select_template_for_project_type(routed_type, initial_idea)
@@ -454,11 +463,8 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         if opts.template and opts.template != "fastapi":
             effective_template = opts.template
         else:
-            effective_template = selected_template
-            if not is_supported_template(effective_template):
-                effective_template = default_template
-            if not is_supported_template(effective_template):
-                effective_template = "fastapi"
+            effective_template, fallback_reason = resolve_effective_template(selected_template, default_template)
+            template_fallback_reason = fallback_reason or ""
         opts.template = effective_template
     else:
         fallback_template = resolve_default_template()
@@ -522,6 +528,10 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         effective_template = str(existing_result.get("effective_template") or existing_state.get("selected_template") or "").strip()
     if not effective_template:
         effective_template = opts.template or "fastapi"
+    if not template_fallback_reason:
+        template_fallback_reason = str(
+            existing_result.get("template_fallback_reason") or existing_state.get("template_fallback_reason") or ""
+        ).strip()
 
     final_exit = 1
     fix_exit: Optional[int] = None
@@ -613,6 +623,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         project_type,
         selected_template,
         effective_template,
+        template_fallback_reason,
         run_result,
         fix_exit,
         rerun_exit,
@@ -646,6 +657,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         "project_type": project_type,
         "selected_template": selected_template,
         "effective_template": effective_template,
+        "template_fallback_reason": template_fallback_reason or None,
         "project_dir": str(project_dir),
         "timestamp": timestamp,
         "command": command,
@@ -666,6 +678,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
                 "project_type": project_type,
                 "selected_template": selected_template,
                 "effective_template": effective_template,
+                "template_fallback_reason": template_fallback_reason or None,
             },
             "run_before_fix": {
                 "ok": run_before_ok,
@@ -719,6 +732,15 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         artifacts["state"] = str(project_dir / ".archmind" / "state.json")
 
     result_json, _ = write_result(project_dir, payload)
+    try:
+        synced_state = load_state(project_dir) or {}
+        synced_state["project_type"] = project_type
+        synced_state["selected_template"] = selected_template
+        synced_state["effective_template"] = effective_template
+        synced_state["template_fallback_reason"] = template_fallback_reason
+        write_state(project_dir, synced_state)
+    except Exception as exc:
+        print(f"[WARN] state template metadata sync failed: {exc}", file=sys.stderr)
 
     if status != "SUCCESS":
         summary = _latest_run_summary(project_dir)

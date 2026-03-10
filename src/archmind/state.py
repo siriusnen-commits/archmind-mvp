@@ -200,6 +200,22 @@ def _sync_summary_fields_from_latest_fix_summary(project_dir: Path, payload: dic
         payload["last_repair_targets"] = [str(x)[:120] for x in targets[:5]]
 
 
+def _sync_template_fields_from_result(project_dir: Path, payload: dict[str, Any]) -> None:
+    result_payload = _load_json(project_dir / ".archmind" / "result.json") or {}
+    project_type = str(result_payload.get("project_type") or "").strip()
+    if project_type:
+        payload["project_type"] = project_type
+    selected_template = str(result_payload.get("selected_template") or "").strip()
+    if selected_template:
+        payload["selected_template"] = selected_template
+    effective_template = str(result_payload.get("effective_template") or "").strip()
+    if effective_template:
+        payload["effective_template"] = effective_template
+    fallback_reason = str(result_payload.get("template_fallback_reason") or "").strip()
+    if fallback_reason:
+        payload["template_fallback_reason"] = fallback_reason
+
+
 def _normalize_loaded_state(project_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
     base = _default_state(project_dir)
     normalized = dict(base)
@@ -214,6 +230,7 @@ def _normalize_loaded_state(project_dir: Path, payload: dict[str, Any]) -> dict[
     normalized["agent_state"] = _safe_agent_state(str(normalized.get("agent_state") or "IDLE"))
     _sync_summary_fields_from_history(normalized)
     _sync_summary_fields_from_latest_fix_summary(project_dir, normalized)
+    _sync_template_fields_from_result(project_dir, normalized)
     return normalized
 
 
@@ -279,6 +296,8 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "next_action_reason": "",
         "project_type": "unknown",
         "selected_template": "unknown",
+        "effective_template": "unknown",
+        "template_fallback_reason": "",
         "derived_task_label": "",
         "recent_failures": [],
         "history": [],
@@ -309,14 +328,9 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     _sync_summary_fields_from_history(payload)
     _sync_summary_fields_from_latest_fix_summary(project_dir, payload)
+    _sync_template_fields_from_result(project_dir, payload)
     evaluation_payload = _load_json(project_dir / ".archmind" / "evaluation.json") or {}
     result_payload = _load_json(project_dir / ".archmind" / "result.json") or {}
-    result_project_type = str(result_payload.get("project_type") or "").strip()
-    if result_project_type:
-        payload["project_type"] = result_project_type
-    result_selected_template = str(result_payload.get("selected_template") or "").strip()
-    if result_selected_template:
-        payload["selected_template"] = result_selected_template
     decision = decide_next_action(payload, evaluation_payload, result_payload)
     payload["next_action"] = str(decision.get("action") or "STOP").strip()[:20]
     payload["next_action_reason"] = str(decision.get("reason") or "").strip()[:220]
@@ -346,6 +360,8 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     payload["derived_task_label"] = str(payload.get("derived_task_label") or "").strip()[:120]
     payload["project_type"] = str(payload.get("project_type") or "unknown").strip()[:40] or "unknown"
     payload["selected_template"] = str(payload.get("selected_template") or "unknown").strip()[:60] or "unknown"
+    payload["effective_template"] = str(payload.get("effective_template") or "unknown").strip()[:60] or "unknown"
+    payload["template_fallback_reason"] = str(payload.get("template_fallback_reason") or "").strip()[:220]
     payload["next_action"] = str(payload.get("next_action") or "STOP").strip()[:20]
     payload["next_action_reason"] = str(payload.get("next_action_reason") or "").strip()[:220]
     history = payload.get("history")
@@ -835,6 +851,8 @@ def format_state_text(project_dir: Path) -> str:
         f"Project status: {project_status}",
         f"Project type: {payload.get('project_type') or 'unknown'}",
         f"Selected template: {payload.get('selected_template') or 'unknown'}",
+        f"Effective template: {payload.get('effective_template') or 'unknown'}",
+        f"Template fallback: {payload.get('template_fallback_reason') or '(none)'}",
         f"Agent state: {agent_state}",
         f"Last status: {status}",
         f"Iterations: {iterations}",
@@ -891,6 +909,8 @@ def state_prompt_summary(project_dir: Path) -> list[str]:
         f"- last_status: {payload.get('last_status', 'UNKNOWN')}",
         f"- project_type: {payload.get('project_type', 'unknown')}",
         f"- selected_template: {payload.get('selected_template', 'unknown')}",
+        f"- effective_template: {payload.get('effective_template', 'unknown')}",
+        f"- template_fallback_reason: {payload.get('template_fallback_reason', '')}",
         f"- fix_attempts: {payload.get('fix_attempts', 0)}",
         f"- current_task: {current_line}",
         f"- failure_class: {payload.get('last_failure_class', 'unknown')}",
