@@ -27,6 +27,7 @@ from archmind.telegram_bot import (
     extract_key_error_lines,
     build_log_focus,
     build_logs_message,
+    resolve_template_for_idea,
     run_state_command,
     sanitize_log_excerpt,
     save_last_project_path,
@@ -62,6 +63,10 @@ def test_build_pipeline_command() -> None:
     assert cmd[cmd.index("--out") + 1] == str(base_dir)
     assert cmd[cmd.index("--name") + 1] == project_name
     assert cmd[cmd.index("--template") + 1] == "fullstack-ddd"
+
+
+def test_resolve_template_for_idea_backend_routes_to_fastapi() -> None:
+    assert resolve_template_for_idea("simple fastapi notes api") == "fastapi"
 
 
 def test_planned_project_dir_does_not_create_folder(tmp_path: Path) -> None:

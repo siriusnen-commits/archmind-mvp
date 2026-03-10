@@ -13,6 +13,11 @@ from archmind.environment import ensure_environment_readiness
 from archmind.evaluator import write_evaluation
 from archmind.planner import write_project_plan
 from archmind.project_type import detect_project_type, normalize_project_type
+from archmind.template_selector import (
+    is_supported_template,
+    resolve_default_template,
+    select_template_for_project_type,
+)
 from archmind.runner import RunConfig, RunResult, compute_run_status, run_pipeline
 from archmind.state import ensure_state, load_state, set_agent_state, update_after_fix, update_after_run
 from archmind.tasks import current_task, ensure_tasks
@@ -272,6 +277,8 @@ def _build_result_text(payload: dict[str, Any]) -> str:
         "ArchMind Pipeline Result",
         f"- status: {payload.get('status')}",
         f"- project_type: {payload.get('project_type') or 'unknown'}",
+        f"- selected_template: {payload.get('selected_template') or 'unknown'}",
+        f"- effective_template: {payload.get('effective_template') or 'unknown'}",
         f"- evaluation: {evaluation_text}",
         f"- state: {state_text}",
         f"- project_dir: {payload.get('project_dir')}",
@@ -350,6 +357,8 @@ def _write_pipeline_logs(
     project_dir: Path,
     timestamp: str,
     project_type: str,
+    selected_template: str,
+    effective_template: str,
     run_result: RunResult,
     fix_exit: Optional[int],
     rerun_exit: Optional[int],
@@ -367,6 +376,8 @@ def _write_pipeline_logs(
         f"timestamp: {timestamp}",
         f"project_dir: {project_dir}",
         f"project_type: {project_type}",
+        f"selected_template: {selected_template}",
+        f"effective_template: {effective_template}",
         f"run_exit: {run_result.overall_exit_code}",
         f"fix_exit: {fix_exit if fix_exit is not None else 'N/A'}",
         f"rerun_exit: {rerun_exit if rerun_exit is not None else 'N/A'}",
@@ -379,6 +390,8 @@ def _write_pipeline_logs(
         f"- project_dir: {project_dir}",
         f"- timestamp: {timestamp}",
         f"- project_type: {project_type}",
+        f"- selected_template: {selected_template}",
+        f"- effective_template: {effective_template}",
         "2) Run:",
         f"- exit_code: {run_result.overall_exit_code}",
         "3) Fix:",
@@ -393,6 +406,7 @@ def _write_pipeline_logs(
     if json_summary:
         payload = {
             "meta": {"project_dir": str(project_dir), "timestamp": timestamp, "project_type": project_type},
+            "template": {"selected_template": selected_template, "effective_template": effective_template},
             "run": {"exit_code": run_result.overall_exit_code},
             "fix": {"exit_code": fix_exit},
             "rerun": {"exit_code": rerun_exit},
@@ -430,6 +444,26 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         print("[ERROR] --profile generic-shell requires at least one --cmd.", file=sys.stderr)
         return 64
 
+    initial_idea = (opts.idea or "").strip()
+    selected_template = ""
+    effective_template = opts.template
+    if initial_idea:
+        routed_type = normalize_project_type(detect_project_type(initial_idea))
+        selected_template = select_template_for_project_type(routed_type, initial_idea)
+        default_template = resolve_default_template()
+        if opts.template and opts.template != "fastapi":
+            effective_template = opts.template
+        else:
+            effective_template = selected_template
+            if not is_supported_template(effective_template):
+                effective_template = default_template
+            if not is_supported_template(effective_template):
+                effective_template = "fastapi"
+        opts.template = effective_template
+    else:
+        fallback_template = resolve_default_template()
+        effective_template = opts.template or fallback_template or "fastapi"
+
     project_dir = _resolve_project_dir(opts)
     if project_dir is None:
         print("[ERROR] Provide --path or --idea for pipeline.", file=sys.stderr)
@@ -441,7 +475,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
 
     plan_md_path: Optional[Path] = None
     plan_json_path: Optional[Path] = None
-    plan_idea = (opts.idea or "").strip() or f"{project_dir.name} 안정화 및 개선"
+    plan_idea = initial_idea or f"{project_dir.name} 안정화 및 개선"
     try:
         plan_artifacts = write_project_plan(project_dir, plan_idea)
         plan_md_path = plan_artifacts.plan_md_path
@@ -474,12 +508,20 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         existing_state = json.loads((archmind_dir / "state.json").read_text(encoding="utf-8"))
     except Exception:
         existing_state = {}
-    inferred_type = detect_project_type(opts.idea or "") if opts.idea else ""
+    inferred_type = detect_project_type(initial_idea) if initial_idea else ""
     project_type = normalize_project_type(
         inferred_type
         or str(existing_result.get("project_type") or "")
         or str(existing_state.get("project_type") or "")
     )
+    if not selected_template:
+        selected_template = str(existing_result.get("selected_template") or existing_state.get("selected_template") or "").strip()
+    if not selected_template:
+        selected_template = select_template_for_project_type(project_type, initial_idea or None)
+    if not effective_template:
+        effective_template = str(existing_result.get("effective_template") or existing_state.get("selected_template") or "").strip()
+    if not effective_template:
+        effective_template = opts.template or "fastapi"
 
     final_exit = 1
     fix_exit: Optional[int] = None
@@ -569,6 +611,8 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         project_dir,
         timestamp,
         project_type,
+        selected_template,
+        effective_template,
         run_result,
         fix_exit,
         rerun_exit,
@@ -600,6 +644,8 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
     payload = {
         "status": status,
         "project_type": project_type,
+        "selected_template": selected_template,
+        "effective_template": effective_template,
         "project_dir": str(project_dir),
         "timestamp": timestamp,
         "command": command,
@@ -618,6 +664,8 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
                 "ok": opts.idea is None or project_dir.exists(),
                 "detail": "used --path" if opts.idea is None else "generated from idea",
                 "project_type": project_type,
+                "selected_template": selected_template,
+                "effective_template": effective_template,
             },
             "run_before_fix": {
                 "ok": run_before_ok,

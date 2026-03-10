@@ -14,9 +14,12 @@ What it does:
 Idea routing notes:
 - ArchMind now performs a lightweight heuristic classification on idea text.
 - Supported baseline types: `backend-api`, `frontend-web`, `fullstack-web`, `cli-tool`, `automation-script`, `unknown`.
-- The detected type is recorded in pipeline/result/state artifacts for visibility.
-- Current scope is initial routing only; full template auto-selection is a follow-up layer.
-- This classifier is designed as a stable base for future template matching and hybrid generation flows.
+- Baseline routing now follows `idea -> project_type -> selected_template`.
+- `selected_template` is recorded in pipeline/result/state artifacts for visibility.
+- Unknown type falls back to `ARCHMIND_DEFAULT_TEMPLATE` (or built-in default).
+- For unsupported routed templates, generation keeps a safe effective template to avoid breaking the loop.
+- Current scope is initial routing only; richer template matching is a follow-up layer.
+- Next stage is template selection combined with LLM-assisted generation refinement.
 
 What it doesn’t:
 - Replace code review or product design decisions

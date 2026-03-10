@@ -12,7 +12,9 @@ from typing import Any, Optional
 
 from archmind.decision import decide_next_action, next_action_suggestions
 from archmind.failure import classify_failure
+from archmind.project_type import detect_project_type, normalize_project_type
 from archmind.state import derive_task_label_from_failure_signature, load_state, set_agent_state
+from archmind.template_selector import is_supported_template, select_template_for_project_type
 
 LAST_PROJECT_PATH_FILE = Path.home() / ".archmind_telegram_last_project"
 DEFAULT_BASE_DIR = Path.home() / "archmind-telegram-projects"
@@ -45,6 +47,14 @@ def resolve_base_dir() -> Path:
 
 def resolve_default_template() -> str:
     return os.getenv("ARCHMIND_DEFAULT_TEMPLATE", DEFAULT_TEMPLATE).strip() or DEFAULT_TEMPLATE
+
+
+def resolve_template_for_idea(idea: str) -> str:
+    project_type = normalize_project_type(detect_project_type(idea))
+    selected_template = select_template_for_project_type(project_type, idea)
+    if is_supported_template(selected_template):
+        return selected_template
+    return resolve_default_template()
 
 
 def save_last_project_path(project_dir: Path, file_path: Path = LAST_PROJECT_PATH_FILE) -> None:
@@ -957,7 +967,7 @@ async def _handle_idea_like(update: Any, context: Any, cmd_name: str) -> None:
         return
 
     base_dir = resolve_base_dir()
-    template = resolve_default_template()
+    template = resolve_template_for_idea(idea)
     base_dir.mkdir(parents=True, exist_ok=True)
     project_dir = planned_project_dir(base_dir, idea)
     save_last_project_path(project_dir)
