@@ -277,6 +277,7 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "last_bootstrap_actions": [],
         "next_action": "STOP",
         "next_action_reason": "",
+        "project_type": "unknown",
         "derived_task_label": "",
         "recent_failures": [],
         "history": [],
@@ -309,6 +310,9 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     _sync_summary_fields_from_latest_fix_summary(project_dir, payload)
     evaluation_payload = _load_json(project_dir / ".archmind" / "evaluation.json") or {}
     result_payload = _load_json(project_dir / ".archmind" / "result.json") or {}
+    result_project_type = str(result_payload.get("project_type") or "").strip()
+    if result_project_type:
+        payload["project_type"] = result_project_type
     decision = decide_next_action(payload, evaluation_payload, result_payload)
     payload["next_action"] = str(decision.get("action") or "STOP").strip()[:20]
     payload["next_action_reason"] = str(decision.get("reason") or "").strip()[:220]
@@ -336,6 +340,7 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     else:
         payload["last_bootstrap_actions"] = [str(x)[:160] for x in bootstrap_actions[:5]]
     payload["derived_task_label"] = str(payload.get("derived_task_label") or "").strip()[:120]
+    payload["project_type"] = str(payload.get("project_type") or "unknown").strip()[:40] or "unknown"
     payload["next_action"] = str(payload.get("next_action") or "STOP").strip()[:20]
     payload["next_action_reason"] = str(payload.get("next_action_reason") or "").strip()[:220]
     history = payload.get("history")
@@ -823,6 +828,7 @@ def format_state_text(project_dir: Path) -> str:
 
     lines = [
         f"Project status: {project_status}",
+        f"Project type: {payload.get('project_type') or 'unknown'}",
         f"Agent state: {agent_state}",
         f"Last status: {status}",
         f"Iterations: {iterations}",
@@ -877,6 +883,7 @@ def state_prompt_summary(project_dir: Path) -> list[str]:
     lines = [
         f"- agent_state: {payload.get('agent_state', 'UNKNOWN')}",
         f"- last_status: {payload.get('last_status', 'UNKNOWN')}",
+        f"- project_type: {payload.get('project_type', 'unknown')}",
         f"- fix_attempts: {payload.get('fix_attempts', 0)}",
         f"- current_task: {current_line}",
         f"- failure_class: {payload.get('last_failure_class', 'unknown')}",

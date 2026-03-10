@@ -12,6 +12,7 @@ from archmind.fixer import run_fix_loop
 from archmind.environment import ensure_environment_readiness
 from archmind.evaluator import write_evaluation
 from archmind.planner import write_project_plan
+from archmind.project_type import detect_project_type, normalize_project_type
 from archmind.runner import RunConfig, RunResult, compute_run_status, run_pipeline
 from archmind.state import ensure_state, load_state, set_agent_state, update_after_fix, update_after_run
 from archmind.tasks import current_task, ensure_tasks
@@ -270,6 +271,7 @@ def _build_result_text(payload: dict[str, Any]) -> str:
     lines = [
         "ArchMind Pipeline Result",
         f"- status: {payload.get('status')}",
+        f"- project_type: {payload.get('project_type') or 'unknown'}",
         f"- evaluation: {evaluation_text}",
         f"- state: {state_text}",
         f"- project_dir: {payload.get('project_dir')}",
@@ -347,6 +349,7 @@ def _effective_fix_scope(opts: PipelineOptions) -> str:
 def _write_pipeline_logs(
     project_dir: Path,
     timestamp: str,
+    project_type: str,
     run_result: RunResult,
     fix_exit: Optional[int],
     rerun_exit: Optional[int],
@@ -363,6 +366,7 @@ def _write_pipeline_logs(
     log_lines = [
         f"timestamp: {timestamp}",
         f"project_dir: {project_dir}",
+        f"project_type: {project_type}",
         f"run_exit: {run_result.overall_exit_code}",
         f"fix_exit: {fix_exit if fix_exit is not None else 'N/A'}",
         f"rerun_exit: {rerun_exit if rerun_exit is not None else 'N/A'}",
@@ -374,6 +378,7 @@ def _write_pipeline_logs(
         "1) Pipeline meta:",
         f"- project_dir: {project_dir}",
         f"- timestamp: {timestamp}",
+        f"- project_type: {project_type}",
         "2) Run:",
         f"- exit_code: {run_result.overall_exit_code}",
         "3) Fix:",
@@ -387,7 +392,7 @@ def _write_pipeline_logs(
 
     if json_summary:
         payload = {
-            "meta": {"project_dir": str(project_dir), "timestamp": timestamp},
+            "meta": {"project_dir": str(project_dir), "timestamp": timestamp, "project_type": project_type},
             "run": {"exit_code": run_result.overall_exit_code},
             "fix": {"exit_code": fix_exit},
             "rerun": {"exit_code": rerun_exit},
@@ -458,6 +463,23 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
 
     run_config = _build_run_config(opts, project_dir)
     command = _build_command(opts)
+    archmind_dir = project_dir / ".archmind"
+    existing_result = {}
+    existing_state = {}
+    try:
+        existing_result = json.loads((archmind_dir / "result.json").read_text(encoding="utf-8"))
+    except Exception:
+        existing_result = {}
+    try:
+        existing_state = json.loads((archmind_dir / "state.json").read_text(encoding="utf-8"))
+    except Exception:
+        existing_state = {}
+    inferred_type = detect_project_type(opts.idea or "") if opts.idea else ""
+    project_type = normalize_project_type(
+        inferred_type
+        or str(existing_result.get("project_type") or "")
+        or str(existing_state.get("project_type") or "")
+    )
 
     final_exit = 1
     fix_exit: Optional[int] = None
@@ -546,6 +568,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
     _write_pipeline_logs(
         project_dir,
         timestamp,
+        project_type,
         run_result,
         fix_exit,
         rerun_exit,
@@ -576,6 +599,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
 
     payload = {
         "status": status,
+        "project_type": project_type,
         "project_dir": str(project_dir),
         "timestamp": timestamp,
         "command": command,
@@ -593,6 +617,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
                 "skipped": opts.idea is None,
                 "ok": opts.idea is None or project_dir.exists(),
                 "detail": "used --path" if opts.idea is None else "generated from idea",
+                "project_type": project_type,
             },
             "run_before_fix": {
                 "ok": run_before_ok,

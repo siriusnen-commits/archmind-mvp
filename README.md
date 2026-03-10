@@ -6,9 +6,17 @@ ArchMind is a CLI that generates runnable project scaffolds, then runs and fixes
 
 What it does:
 - Generates deterministic project skeletons from an idea
+- Detects a baseline `project_type` from idea text before generation
 - Runs backend and/or frontend checks with clear summaries
 - Creates fix plans and applies patches when explicitly allowed
 - Produces repeatable logs and artifacts under `.archmind/`
+
+Idea routing notes:
+- ArchMind now performs a lightweight heuristic classification on idea text.
+- Supported baseline types: `backend-api`, `frontend-web`, `fullstack-web`, `cli-tool`, `automation-script`, `unknown`.
+- The detected type is recorded in pipeline/result/state artifacts for visibility.
+- Current scope is initial routing only; full template auto-selection is a follow-up layer.
+- This classifier is designed as a stable base for future template matching and hybrid generation flows.
 
 What it doesn’t:
 - Replace code review or product design decisions
