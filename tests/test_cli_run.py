@@ -165,3 +165,66 @@ def test_frontend_fail_sets_exit_2(tmp_path: Path, monkeypatch) -> None:
     assert exit_code == 2
 
     assert not any("npm run build" in c for c in calls)
+
+
+def test_frontend_lint_warning_only_is_not_fail(tmp_path: Path, monkeypatch) -> None:
+    _write_pytest_pass_project(tmp_path)
+    _write_frontend_package(tmp_path)
+
+    monkeypatch.setattr("archmind.runner.shutil.which", lambda _: "/usr/bin/fake")
+
+    def fake_run_cmd_capture(cmd: list[str], cwd: Path, timeout_s: int) -> CommandResult:
+        if "pytest" in cmd:
+            return CommandResult(cmd=cmd, cwd=cwd, exit_code=0, duration_s=0.01, stdout="", stderr="")
+        if cmd[:2] == ["npm", "ci"]:
+            return CommandResult(cmd=cmd, cwd=cwd, exit_code=0, duration_s=0.01, stdout="ci ok", stderr="")
+        if cmd[:3] == ["npm", "run", "lint"]:
+            stdout = (
+                "./app/page.tsx\n"
+                "12:3  Warning: React Hook useEffect has a missing dependency\n"
+                "info  - Need to disable some ESLint rules?\n"
+                "Learn more here: https://nextjs.org/docs/app/api-reference/config/eslint#disabling-rules\n"
+            )
+            return CommandResult(cmd=cmd, cwd=cwd, exit_code=0, duration_s=0.01, stdout=stdout, stderr="")
+        if cmd[:3] == ["npm", "run", "test"]:
+            return CommandResult(cmd=cmd, cwd=cwd, exit_code=0, duration_s=0.01, stdout="test ok", stderr="")
+        if cmd[:3] == ["npm", "run", "build"]:
+            return CommandResult(cmd=cmd, cwd=cwd, exit_code=0, duration_s=0.01, stdout="build ok", stderr="")
+        return CommandResult(cmd=cmd, cwd=cwd, exit_code=0, duration_s=0.01, stdout="", stderr="")
+
+    monkeypatch.setattr("archmind.runner.run_cmd_capture", fake_run_cmd_capture)
+
+    exit_code = main(["run", "--path", str(tmp_path), "--all"])
+    assert exit_code == 0
+
+    summary_text = _find_summary(tmp_path).read_text(encoding="utf-8")
+    assert "status: WARNING" in summary_text
+    assert "Warning summary:" in summary_text
+    assert "Need to disable some ESLint rules" not in summary_text
+    assert "nextjs.org/docs/app/api-reference/config/eslint#disabling-rules" not in summary_text
+
+
+def test_frontend_lint_error_text_fails_even_when_exit_zero(tmp_path: Path, monkeypatch) -> None:
+    _write_pytest_pass_project(tmp_path)
+    _write_frontend_package(tmp_path)
+
+    monkeypatch.setattr("archmind.runner.shutil.which", lambda _: "/usr/bin/fake")
+
+    def fake_run_cmd_capture(cmd: list[str], cwd: Path, timeout_s: int) -> CommandResult:
+        if "pytest" in cmd:
+            return CommandResult(cmd=cmd, cwd=cwd, exit_code=0, duration_s=0.01, stdout="", stderr="")
+        if cmd[:2] == ["npm", "ci"]:
+            return CommandResult(cmd=cmd, cwd=cwd, exit_code=0, duration_s=0.01, stdout="ci ok", stderr="")
+        if cmd[:3] == ["npm", "run", "lint"]:
+            stdout = "ESLint: Parsing error\n./app/page.tsx:3:10\n"
+            return CommandResult(cmd=cmd, cwd=cwd, exit_code=0, duration_s=0.01, stdout=stdout, stderr="")
+        return CommandResult(cmd=cmd, cwd=cwd, exit_code=0, duration_s=0.01, stdout="", stderr="")
+
+    monkeypatch.setattr("archmind.runner.run_cmd_capture", fake_run_cmd_capture)
+
+    exit_code = main(["run", "--path", str(tmp_path), "--all"])
+    assert exit_code == 2
+
+    summary_text = _find_summary(tmp_path).read_text(encoding="utf-8")
+    assert "Failure summary:" in summary_text
+    assert "Frontend: ESLint: Parsing error" in summary_text

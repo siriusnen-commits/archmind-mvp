@@ -38,6 +38,11 @@ def test_classify_frontend_lint() -> None:
     assert classify_failure(excerpt, "frontend-lint:FAIL") == "frontend-lint"
 
 
+def test_classify_frontend_lint_warning() -> None:
+    excerpt = "frontend lint warning: app/page.tsx:12 Warning: React Hook useEffect has missing dependency"
+    assert classify_failure(excerpt, "frontend-lint-warning:WARNING") == "frontend-lint-warning"
+
+
 def test_classify_frontend_typescript() -> None:
     excerpt = "TS2322: Type 'string' is not assignable to type 'number'"
     assert classify_failure(excerpt, "frontend-typescript:FAIL") == "frontend-typescript"
@@ -304,6 +309,22 @@ def test_backend_failure_excerpt_drops_frontend_base_cancel_noise() -> None:
     assert "ESLint" not in excerpt
     assert "Base" not in excerpt
     assert "Cancel" not in excerpt
+
+
+def test_filter_noise_lines_removes_nextjs_eslint_guidance() -> None:
+    lines = filter_noise_lines(
+        [
+            "info  - Need to disable some ESLint rules?",
+            "Need to disable some ESLint rules",
+            "Learn more here: https://nextjs.org/docs/app/api-reference/config/eslint#disabling-rules",
+            "app/page.tsx:12:3 Warning: React Hook useEffect has a missing dependency",
+        ],
+        failure_class="frontend-lint-warning",
+    )
+    joined = "\n".join(lines)
+    assert "Need to disable some ESLint rules" not in joined
+    assert "nextjs.org/docs/app/api-reference/config/eslint#disabling-rules" not in joined
+    assert "Warning: React Hook useEffect has a missing dependency" in joined
 
 
 def test_frontend_failure_excerpt_drops_backend_traceback_noise() -> None:

@@ -72,6 +72,9 @@ def filter_noise_lines(lines: list[str], failure_class: str | None = None) -> li
                 "would you like to install",
                 "press enter to continue",
                 "learn more",
+                "need to disable some eslint rules",
+                "next.js eslint plugin",
+                "learn more here: https://nextjs.org/docs/app/api-reference/config/eslint#disabling-rules",
             )
         ):
             continue
@@ -116,7 +119,28 @@ def filter_noise_lines(lines: list[str], failure_class: str | None = None) -> li
             continue
         seen.add(line)
         out.append(line[:220])
-    return out
+    has_specific = any(
+        re.search(r"\.tsx?:\d+|\.jsx?:\d+|\.py:\d+|\bts\d{4}\b|assertionerror|modulenotfounderror|importerror", line, re.I)
+        or ("parsing error" in line.lower())
+        for line in out
+    )
+    if not has_specific:
+        return out
+    reduced: list[str] = []
+    for line in out:
+        lower = line.lower()
+        if any(
+            token in lower
+            for token in (
+                "compiled with warnings",
+                "eslint found too many warnings",
+                "problems (",
+                "linting and checking validity of types",
+            )
+        ):
+            continue
+        reduced.append(line)
+    return reduced
 
 
 def filter_secondary_noise(lines: list[str], failure_class: str | None = None) -> list[str]:
@@ -248,6 +272,18 @@ def classify_failure(excerpt: str, failure_signature: str = "") -> str:
         if "backend-pytest" in sig or "pytest" in text or "backend" in text:
             return "backend-pytest:api-response"
 
+    if "frontend-lint-warning" in sig:
+        return "frontend-lint-warning"
+
+    has_lint_context = "eslint" in text or ("lint" in text and ("frontend" in text or "frontend-lint" in sig))
+    has_warning = bool(re.search(r"\bwarning(?:s)?\b", text)) and "0 warnings" not in text
+    has_error = (
+        bool(re.search(r"\berror(?:s)?\b", text))
+        and "0 errors" not in text
+    ) or "parsing error" in text or bool(re.search(r"\bts\d{4}\b", text))
+
+    if has_lint_context and has_warning and not has_error:
+        return "frontend-lint-warning"
     if "eslint" in text or ("lint" in text and "frontend" in text):
         return "frontend-lint"
     if re.search(r"\bts\d{4}\b", text) or "is not assignable" in text:
@@ -276,6 +312,8 @@ def fix_strategy_for_class(failure_class: str) -> str:
         return "backend-import-resolution"
     if klass == "backend-pytest:api-response":
         return "backend-api-response"
+    if klass == "frontend-lint-warning":
+        return "frontend-lint-warning-review"
     if klass == "frontend-lint":
         return "frontend-lint-only"
     if klass == "frontend-typescript":
@@ -293,10 +331,15 @@ def select_primary_failure_class(failure_signature: str, classified_failure_clas
     if klass and klass != "unknown":
         return klass
     has_backend = "backend-pytest" in sig
-    has_frontend = any(tok in sig for tok in ("frontend-lint", "frontend-build", "frontend-typescript", "frontend-test"))
+    has_frontend = any(
+        tok in sig
+        for tok in ("frontend-lint-warning", "frontend-lint", "frontend-build", "frontend-typescript", "frontend-test")
+    )
     if has_backend:
         return "backend-pytest:other"
     if has_frontend:
+        if "frontend-lint-warning" in sig:
+            return "frontend-lint-warning"
         if "frontend-lint" in sig:
             return "frontend-lint"
         if "frontend-typescript" in sig:
@@ -311,6 +354,11 @@ def select_primary_failure_class(failure_signature: str, classified_failure_clas
 
 def strategy_instructions(failure_class: str) -> list[str]:
     klass = (failure_class or "unknown").lower()
+    if klass == "frontend-lint-warning":
+        return [
+            "warning-only lint는 실패와 구분해서 다뤄라.",
+            "불필요한 fix loop를 만들지 말고, 실제 에러 여부를 먼저 확인하라.",
+        ]
     if klass == "backend-pytest:assertion":
         return [
             "failing tests를 통과시키기 위해 구현을 수정하라.",
@@ -454,7 +502,7 @@ def select_repair_targets(
             targets = ["app/main.py"]
         return [t for t in list(dict.fromkeys(targets)) if is_safe_repair_target(t, Path(project_dir))][:3]
 
-    if klass == "frontend-lint":
+    if klass in ("frontend-lint", "frontend-lint-warning"):
         targets = [p for p in cleaned if p.startswith("frontend/") and p.endswith((".ts", ".tsx", ".js", ".jsx"))]
         if not targets:
             targets = ["frontend/eslint.config.js"]
@@ -503,7 +551,10 @@ def failure_signature_from_run_result(run_result: Any) -> str:
                 names.add("frontend-typescript")
             elif "test" in name or "vitest" in cmd or "jest" in cmd:
                 names.add("frontend-test")
+    elif frontend is not None and str(getattr(frontend, "status", "")).upper() == "WARNING":
+        names.add("frontend-lint-warning")
 
     if not names:
         return ""
-    return f"{'+'.join(sorted(names))}:FAIL"
+    level = "WARNING" if names == {"frontend-lint-warning"} else "FAIL"
+    return f"{'+'.join(sorted(names))}:{level}"

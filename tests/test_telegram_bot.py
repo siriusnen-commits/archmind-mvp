@@ -567,6 +567,8 @@ def test_sanitize_removes_eslint_interactive_noise() -> None:
     How would you like to configure ESLint?
     Strict (recommended)
     If you set up ESLint yourself, we recommend adding the Next.js ESLint plugin
+    info  - Need to disable some ESLint rules?
+    Learn more here: https://nextjs.org/docs/app/api-reference/config/eslint#disabling-rules
     ESLint: Parsing error
     app/page.tsx:12
     """
@@ -574,6 +576,8 @@ def test_sanitize_removes_eslint_interactive_noise() -> None:
     assert "How would you like to configure ESLint?" not in cleaned
     assert "Strict (recommended)" not in cleaned
     assert "If you set up ESLint yourself" not in cleaned
+    assert "Need to disable some ESLint rules" not in cleaned
+    assert "nextjs.org/docs/app/api-reference/config/eslint#disabling-rules" not in cleaned
     assert "ESLint: Parsing error" in cleaned
 
 

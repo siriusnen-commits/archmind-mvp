@@ -411,6 +411,99 @@ def _summarize_step_output(stdout: str, stderr: str, max_lines: int = 40) -> lis
     return _extract_tail_lines(combined, max_lines=max_lines)
 
 
+def _is_frontend_noise_line(line: str) -> bool:
+    lower = line.lower().strip()
+    if not lower:
+        return True
+    if lower in ("base", "cancel"):
+        return True
+    if lower.startswith("info  - need to disable some eslint rules?"):
+        return True
+    if "need to disable some eslint rules" in lower:
+        return True
+    if "learn more here: https://nextjs.org/docs/app/api-reference/config/eslint#disabling-rules" in lower:
+        return True
+    if "how would you like to configure eslint" in lower:
+        return True
+    if "strict (recommended)" in lower:
+        return True
+    if "if you set up eslint yourself" in lower:
+        return True
+    if "next.js eslint plugin" in lower:
+        return True
+    return False
+
+
+def _has_explicit_error(line: str) -> bool:
+    lower = line.lower()
+    if re.search(r"\b0 errors?\b", lower):
+        return False
+    if "parsing error" in lower:
+        return True
+    if "failed to compile" in lower:
+        return True
+    if "npm err!" in lower:
+        return True
+    if re.search(r"\bts\d{4}\b", lower):
+        return True
+    if re.search(r"\berrors?\b", lower):
+        return True
+    if re.search(r"\berror:\b", lower):
+        return True
+    return False
+
+
+def _has_warning(line: str) -> bool:
+    lower = line.lower()
+    if re.search(r"\b0 warnings?\b", lower):
+        return False
+    if re.search(r"\bwarnings?\b", lower):
+        return True
+    if re.search(r"\bwarning:\b", lower):
+        return True
+    return False
+
+
+def _is_redundant_lint_explanation(line: str) -> bool:
+    lower = line.lower()
+    if "eslint found too many warnings" in lower:
+        return True
+    if "compiled with warnings" in lower:
+        return True
+    if "problems (" in lower and "error" in lower and "warning" in lower:
+        return True
+    return False
+
+
+def _classify_frontend_lint(stdout: str, stderr: str) -> tuple[str, list[str]]:
+    combined = (stdout + "\n" + stderr).splitlines()
+    filtered: list[str] = []
+    seen: set[str] = set()
+    for raw in combined:
+        line = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", str(raw))
+        line = re.sub(r"\s+", " ", line).strip()
+        if not line or _is_frontend_noise_line(line):
+            continue
+        if line in seen:
+            continue
+        seen.add(line)
+        filtered.append(line[:220])
+
+    error_lines = [line for line in filtered if _has_explicit_error(line)]
+    warning_lines = [line for line in filtered if _has_warning(line) and line not in error_lines]
+
+    if error_lines:
+        return "FAIL", error_lines[:5]
+    if warning_lines:
+        detailed = [
+            line
+            for line in warning_lines
+            if not _is_redundant_lint_explanation(line) or len(warning_lines) == 1
+        ]
+        return "WARNING", (detailed or warning_lines)[:5]
+    return "OK", []
+
+
 def _profile_step_from_command(name: str, cmd: str, result: CommandResult) -> ProfileStepResult:
     status = "OK" if result.exit_code == 0 else "FAIL"
     return ProfileStepResult(
@@ -631,6 +724,7 @@ def run_frontend_pipeline(config: RunConfig) -> FrontendResult:
 
     steps: list[FrontendStepResult] = []
     summary_lines: list[str] = []
+    lint_warning_lines: list[str] = []
     install_attempted = False
 
     if not config.no_install:
@@ -700,6 +794,37 @@ def run_frontend_pipeline(config: RunConfig) -> FrontendResult:
                 timed_out=step_result.timed_out,
             )
         )
+        if script_name == "lint":
+            lint_status, lint_summary = _classify_frontend_lint(step_result.stdout, step_result.stderr)
+            if lint_status == "FAIL":
+                return FrontendResult(
+                    status="FAIL",
+                    node_detected=node_detected,
+                    npm_detected=npm_detected,
+                    install_attempted=install_attempted,
+                    steps=steps,
+                    summary_lines=lint_summary,
+                    reason="lint failed.",
+                )
+            if lint_status == "WARNING":
+                for line in lint_summary:
+                    if line not in lint_warning_lines:
+                        lint_warning_lines.append(line)
+                continue
+            if step_result.exit_code != 0:
+                combined = (step_result.stdout + "\n" + step_result.stderr).strip()
+                summary_lines = _extract_key_lines(_extract_tail_lines(combined))
+                return FrontendResult(
+                    status="FAIL",
+                    node_detected=node_detected,
+                    npm_detected=npm_detected,
+                    install_attempted=install_attempted,
+                    steps=steps,
+                    summary_lines=summary_lines,
+                    reason="lint failed.",
+                )
+            continue
+
         if step_result.exit_code != 0:
             combined = (step_result.stdout + "\n" + step_result.stderr).strip()
             summary_lines = _extract_key_lines(_extract_tail_lines(combined))
@@ -713,13 +838,16 @@ def run_frontend_pipeline(config: RunConfig) -> FrontendResult:
                 reason=f"{script_name} failed.",
             )
 
+    final_status = "WARNING" if lint_warning_lines else "PASS"
+    final_reason = "lint warnings detected." if lint_warning_lines else None
     return FrontendResult(
-        status="PASS",
+        status=final_status,
         node_detected=node_detected,
         npm_detected=npm_detected,
         install_attempted=install_attempted,
         steps=steps,
-        summary_lines=[],
+        summary_lines=lint_warning_lines[:5],
+        reason=final_reason,
     )
 
 
@@ -829,6 +957,7 @@ def _write_run_result_files(
     timestamp: str,
     steps: Sequence[ProfileStepResult],
     failure_summary: Sequence[str],
+    warning_summary: Sequence[str],
     reason: Optional[str],
 ) -> tuple[Path, Path]:
     result_dir = project_dir / ".archmind"
@@ -852,6 +981,7 @@ def _write_run_result_files(
             for step in steps
         ],
         "failure_summary": list(failure_summary)[:10],
+        "warning_summary": list(warning_summary)[:10],
     }
     json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     txt_path.write_text(
@@ -955,6 +1085,7 @@ def write_profile_log_and_summary(
         timestamp,
         steps,
         failure_summary,
+        [],
         reason,
     )
 
@@ -1025,10 +1156,13 @@ def _legacy_steps_from_results(
 
     if frontend.steps:
         for step in frontend.steps:
+            step_status = "OK" if step.exit_code == 0 else "FAIL"
+            if frontend.status == "WARNING" and step.name == "lint" and step.exit_code == 0:
+                step_status = "WARNING"
             steps.append(
                 ProfileStepResult(
                     name=f"frontend-{step.name}",
-                    status="OK" if step.exit_code == 0 else "FAIL",
+                    status=step_status,
                     cmd=_format_cmd(step.cmd),
                     exit_code=step.exit_code,
                     duration_s=step.duration_s,
@@ -1050,7 +1184,7 @@ def _legacy_overall_status_reason(
 ) -> tuple[str, Optional[str]]:
     if backend.status == "FAIL" or frontend.status == "FAIL":
         return "FAIL", None
-    has_pass = backend.status == "PASS" or frontend.status == "PASS"
+    has_pass = backend.status == "PASS" or frontend.status in ("PASS", "WARNING")
     if has_pass:
         return "SUCCESS", None
     if frontend.status in ("SKIPPED", "ABSENT") and frontend.reason:
@@ -1143,6 +1277,7 @@ def write_log_and_summary(config: RunConfig, backend: BackendResult, frontend: F
     else:
         summary_lines.append("- steps: none")
 
+    has_frontend_warning = frontend.status == "WARNING"
     if backend.status == "FAIL" or frontend.status == "FAIL":
         summary_lines.append("4) Failure summary:")
         if backend.status == "FAIL":
@@ -1164,6 +1299,12 @@ def write_log_and_summary(config: RunConfig, backend: BackendResult, frontend: F
             actions.append("Check log output for failing command.")
         for line in actions[:5]:
             summary_lines.append(f"- {line}")
+    elif has_frontend_warning and frontend.summary_lines:
+        summary_lines.append("4) Warning summary:")
+        for line in frontend.summary_lines:
+            summary_lines.append(f"- Frontend warning: {line}")
+        summary_lines.append("5) Next actions:")
+        summary_lines.append("- Review lint warnings; avoid unnecessary fix loop when warnings are non-blocking.")
 
     summary_path.write_text("\n".join(summary_lines).strip() + "\n", encoding="utf-8")
 
@@ -1220,6 +1361,7 @@ def write_log_and_summary(config: RunConfig, backend: BackendResult, frontend: F
         timestamp,
         legacy_steps,
         failure_summary,
+        frontend.summary_lines if frontend.status == "WARNING" else [],
         reason,
     )
 

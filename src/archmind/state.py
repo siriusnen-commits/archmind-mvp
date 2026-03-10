@@ -44,6 +44,8 @@ def derive_task_label_from_failure_signature(signature: str) -> str:
     key = "+".join(sorted(set(parts)))
     if key == "backend-pytest":
         return "backend pytest failure 분석"
+    if key == "frontend-lint-warning":
+        return "frontend lint warning 확인"
     if key == "frontend-lint":
         return "frontend lint failure 수정"
     if key == "frontend-build":
@@ -375,6 +377,12 @@ def _collect_result_failures(project_dir: Path, max_items: int = 10) -> list[str
                 line = _sanitize_line(str(item), project_dir)
                 if line:
                     out.append(line)
+        warning_lines = result.get("warning_summary")
+        if isinstance(warning_lines, list):
+            for item in warning_lines:
+                line = _sanitize_line(str(item), project_dir)
+                if line and line not in out:
+                    out.append(line)
     if out:
         return out[:max_items]
     run_logs = project_dir / ".archmind" / "run_logs"
@@ -383,7 +391,13 @@ def _collect_result_failures(project_dir: Path, max_items: int = 10) -> list[str
         if summaries:
             lines = summaries[0].read_text(encoding="utf-8", errors="replace").splitlines()
             for line in lines:
-                if "FAILED" in line or "AssertionError" in line or "failed" in line:
+                lower = line.lower()
+                if (
+                    "FAILED" in line
+                    or "AssertionError" in line
+                    or "failed" in line
+                    or "warning" in lower
+                ):
                     cleaned = _sanitize_line(line, project_dir)
                     if cleaned:
                         out.append(cleaned)
@@ -415,6 +429,10 @@ def _extract_failure_step_names_from_result(payload: dict[str, Any]) -> list[str
                 name = _normalize_step_name(str(step.get("name") or ""))
                 if name:
                     names.append(name)
+            if status == "WARNING":
+                name = _normalize_step_name(str(step.get("name") or ""))
+                if "frontend-lint" in name:
+                    names.append("frontend-lint-warning")
     elif isinstance(steps, dict):
         for section_name in ("run_before_fix", "run_after_fix"):
             section = steps.get(section_name)
@@ -428,6 +446,8 @@ def _extract_failure_step_names_from_result(payload: dict[str, Any]) -> list[str
                     names.append("backend-pytest")
                 if frontend_status == "FAIL":
                     names.append("frontend-lint")
+                if frontend_status == "WARNING":
+                    names.append("frontend-lint-warning")
     return sorted(set(names))
 
 
@@ -438,8 +458,11 @@ def _extract_failure_step_names_from_run_summary(payload: dict[str, Any]) -> lis
     if isinstance(backend, dict) and str(backend.get("status") or "").upper() == "FAIL":
         names.append("backend-pytest")
     if isinstance(frontend, dict):
-        if str(frontend.get("status") or "").upper() == "FAIL":
+        frontend_status = str(frontend.get("status") or "").upper()
+        if frontend_status == "FAIL":
             names.append("frontend-lint")
+        if frontend_status == "WARNING":
+            names.append("frontend-lint-warning")
         steps = frontend.get("steps")
         if isinstance(steps, list):
             for step in steps:
@@ -471,7 +494,8 @@ def _collect_failure_signature(project_dir: Path) -> str:
             step_names = _extract_failure_step_names_from_run_summary(summary_payload)
     if not step_names:
         return ""
-    return f"{'+'.join(sorted(step_names))}:FAIL"
+    level = "WARNING" if all(name.endswith("-warning") for name in step_names) else "FAIL"
+    return f"{'+'.join(sorted(step_names))}:{level}"
 
 
 def _collect_failure_class(project_dir: Path, failure_signature: str) -> str:
@@ -774,6 +798,12 @@ def format_state_text(project_dir: Path) -> str:
         if lower.startswith("timestamp:"):
             return True
         if "how would you like to configure eslint" in lower:
+            return True
+        if "need to disable some eslint rules" in lower:
+            return True
+        if "learn more here: https://nextjs.org/docs/app/api-reference/config/eslint#disabling-rules" in lower:
+            return True
+        if "next.js eslint plugin" in lower:
             return True
         if "strict (recommended)" in lower:
             return True

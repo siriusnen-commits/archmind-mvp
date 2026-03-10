@@ -304,6 +304,8 @@ def test_state_project_status_not_done_and_failure_noise_filtered(tmp_path: Path
                     "========================",
                     "Base",
                     "Cancel",
+                    "info  - Need to disable some ESLint rules?",
+                    "Learn more here: https://nextjs.org/docs/app/api-reference/config/eslint#disabling-rules",
                     "frontend lint failed",
                 ],
             }
@@ -315,6 +317,8 @@ def test_state_project_status_not_done_and_failure_noise_filtered(tmp_path: Path
     assert "Traceback:" not in output
     assert "Base" not in output
     assert "Cancel" not in output
+    assert "Need to disable some ESLint rules" not in output
+    assert "nextjs.org/docs/app/api-reference/config/eslint#disabling-rules" not in output
     assert "frontend lint failed" in output
 
 
@@ -334,6 +338,7 @@ def test_pipeline_path_increments_iterations(tmp_path: Path) -> None:
 
 def test_derive_task_label_from_failure_signature_mapping() -> None:
     assert derive_task_label_from_failure_signature("backend-pytest:FAIL") == "backend pytest failure 분석"
+    assert derive_task_label_from_failure_signature("frontend-lint-warning:WARNING") == "frontend lint warning 확인"
     assert derive_task_label_from_failure_signature("frontend-lint:FAIL") == "frontend lint failure 수정"
     assert derive_task_label_from_failure_signature("frontend-build:FAIL") == "frontend build failure 수정"
     assert (

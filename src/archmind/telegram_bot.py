@@ -247,6 +247,12 @@ def _humanize_summary_line(line: str) -> str:
         return ""
     if "how would you like to configure eslint" in lower:
         return ""
+    if "need to disable some eslint rules" in lower:
+        return ""
+    if "learn more here: https://nextjs.org/docs/app/api-reference/config/eslint#disabling-rules" in lower:
+        return ""
+    if "next.js eslint plugin" in lower:
+        return ""
     if lower.startswith("base") or lower.startswith("cancel"):
         return ""
     if "{" in text and "}" in text:
@@ -361,6 +367,12 @@ def sanitize_log_excerpt(text: str, max_lines: int = 40) -> str:
             continue
         if "if you set up eslint yourself" in lower:
             continue
+        if "need to disable some eslint rules" in lower:
+            continue
+        if "learn more here: https://nextjs.org/docs/app/api-reference/config/eslint#disabling-rules" in lower:
+            continue
+        if "next.js eslint plugin" in lower:
+            continue
         if lower in ("traceback:", "-----", "=====", "---", "==="):
             continue
         line = re.sub(r"\s+", " ", line)
@@ -408,6 +420,8 @@ def build_log_focus(log_type: str, failure_class: Optional[str], key_lines: list
         return ["inspect backend implementation", "compare API response with test expectations"]
     if klass in ("backend-pytest:import", "backend-pytest:module-not-found"):
         return ["inspect imports and module paths"]
+    if klass == "frontend-lint-warning":
+        return ["review frontend lint warnings", "promote to fail only when real errors exist"]
     if klass == "frontend-lint":
         return ["inspect frontend lint config", "inspect failing frontend file"]
     if klass == "frontend-typescript":
@@ -531,6 +545,8 @@ def _failure_summary_from_class(mode: str, failure_class: str, key_lines: list[s
             return "backend pytest failed"
         return "backend failure detected"
     if mode == "frontend":
+        if klass == "frontend-lint-warning":
+            return "frontend lint warning detected"
         if klass == "frontend-lint":
             return "frontend lint failed"
         if klass == "frontend-typescript":
