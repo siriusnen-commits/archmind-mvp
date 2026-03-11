@@ -45,3 +45,28 @@ def test_generated_fastapi_project_backend_run_is_not_skipped(tmp_path: Path, mo
     summary_text = summaries[-1].read_text(encoding="utf-8")
     assert "No pytest.ini or tests/ directory." not in summary_text
     assert "status: PASS" in summary_text
+
+
+def test_fastapi_generation_handles_requirements_case_collision_without_duplicate_write(
+    tmp_path: Path, monkeypatch
+) -> None:
+    def fake_case_collision_spec(prompt: str, idea: str, opt: GenerateOptions):  # type: ignore[no-untyped-def]
+        return {
+            "project_name": (opt.name or "archmind_project"),
+            "summary": "backend baseline",
+            "directories": [],
+            "files": {
+                "Requirements.txt": "requests==2.32.0\n",
+                "main.py": "print('placeholder')\n",
+            },
+        }
+
+    monkeypatch.setattr("archmind.generator.generate_valid_spec", fake_case_collision_spec)
+    opt = GenerateOptions(out=tmp_path, force=False, name="fastapi_case_demo", template="fastapi")
+    project_dir = generate_project("simple fastapi notes api", opt)
+
+    requirements_path = project_dir / "requirements.txt"
+    assert requirements_path.exists()
+    text = requirements_path.read_text(encoding="utf-8")
+    assert "requests==2.32.0" in text
+    assert "fastapi==0.115.0" in text

@@ -28,9 +28,42 @@ def _merge_requirements(existing: str) -> str:
     return "\n".join(existing_lines) + "\n"
 
 
+def _normalize_template_path(raw: str) -> str:
+    text = str(raw or "").strip().replace("\\", "/")
+    while text.startswith("./"):
+        text = text[2:]
+    text = text.lstrip("/")
+    if not text:
+        return ""
+    parts: list[str] = []
+    for part in text.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    return "/".join(parts)
+
+
+def _collect_existing_requirements(files: Dict[str, str]) -> str:
+    chunks: list[str] = []
+    for key in list(files.keys()):
+        normalized = _normalize_template_path(key)
+        if normalized.casefold() == "requirements.txt":
+            value = files.get(key)
+            if isinstance(value, str) and value.strip():
+                chunks.append(value)
+            if key != "requirements.txt":
+                files.pop(key, None)
+    return "\n".join(chunks)
+
+
 def enforce_fastapi_runtime(files: Dict[str, str], project_name: str) -> Dict[str, str]:
     # 1) requirements: merge 방식으로 강제
-    files["requirements.txt"] = _merge_requirements(files.get("requirements.txt", ""))
+    existing_requirements = _collect_existing_requirements(files)
+    files["requirements.txt"] = _merge_requirements(existing_requirements)
 
     # 2) pytest-ready baseline scaffold
     if "app/__init__.py" not in files:
