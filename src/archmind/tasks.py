@@ -235,6 +235,8 @@ def _task_done_by_rule(index: int, title: str, state: dict[str, Any], evaluation
     has_failure_analysis = bool(state.get("last_failure_class") or state.get("last_failure_signature"))
     has_fix_structured = bool(state.get("last_fix_strategy")) or bool(state.get("last_repair_targets"))
     success_run = _is_success_run(result, evaluation)
+    last_status = str(state.get("last_status") or "").upper()
+    success_execution = success_run and (iterations > 0 or last_status in ("SUCCESS", "DONE"))
     has_artifacts = bool(state) and bool(result)
 
     is_task1 = index == 1 or ("코드베이스" in title) or ("파악" in title) or ("review" in lower) or ("analy" in lower)
@@ -245,7 +247,7 @@ def _task_done_by_rule(index: int, title: str, state: dict[str, Any], evaluation
     if is_task1:
         return iterations > 0 or fix_attempts > 0 or has_failure_analysis
     if is_task2:
-        return fix_attempts > 0 or has_fix_structured
+        return fix_attempts > 0 or has_fix_structured or success_execution
     if is_task3:
         return success_run
     if is_task4:

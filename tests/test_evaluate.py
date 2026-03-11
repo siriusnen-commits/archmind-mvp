@@ -331,6 +331,30 @@ def test_evaluate_done_when_all_auto_tasks_done_and_success(tmp_path: Path) -> N
     assert payload["status"] == "DONE"
 
 
+def test_evaluate_done_for_direct_success_without_fix_attempts(tmp_path: Path) -> None:
+    _write_coarse_plan(tmp_path)
+    _write_tasks(tmp_path, ["todo", "todo", "todo", "todo"])
+    _write_result(tmp_path, "SUCCESS")
+    _write_state(
+        tmp_path,
+        {
+            "project_dir": str(tmp_path.resolve()),
+            "updated_at": "20260101_000000",
+            "iterations": 1,
+            "fix_attempts": 0,
+            "last_status": "SUCCESS",
+            "next_action": "DONE",
+            "next_action_reason": "direct scaffold run succeeded",
+        },
+    )
+    payload = evaluate_project(tmp_path)
+    tasks_payload = json.loads((tmp_path / ".archmind" / "tasks.json").read_text(encoding="utf-8"))
+    statuses = [item["status"] for item in tasks_payload["tasks"]]
+    assert statuses == ["done", "done", "done", "done"]
+    assert payload["checks"]["tasks_complete"] is True
+    assert payload["status"] == "DONE"
+
+
 def test_evaluate_syncs_plan_step_status(tmp_path: Path) -> None:
     _write_coarse_plan(tmp_path)
     _write_tasks(tmp_path, ["todo", "todo", "todo", "todo"])
