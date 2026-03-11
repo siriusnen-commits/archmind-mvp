@@ -26,6 +26,13 @@ Idea routing notes:
 - Current scope is initial routing only; richer template matching is a follow-up layer.
 - Next stage is template selection combined with LLM-assisted generation refinement.
 
+FastAPI baseline scaffold:
+- `fastapi` template now generates a pytest-ready backend baseline by default.
+- Included out of the box: `app/main.py`, root `main.py`, `tests/test_health.py`, and `pytest.ini`.
+- Baseline endpoint: `GET /health` returns `{"status": "ok"}`.
+- `requirements.txt` includes runtime + minimal test deps for immediate validation.
+- Result: backend-only projects can enter run/evaluate right after generation without "no tests" skip.
+
 What it doesn’t:
 - Replace code review or product design decisions
 - Modify files unless `--apply` is provided
