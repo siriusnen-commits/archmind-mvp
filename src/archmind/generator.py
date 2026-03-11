@@ -5,6 +5,7 @@ import json
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -112,6 +113,28 @@ def fallback_spec(project_name: str) -> Dict[str, Any]:
     }
 
 
+def _normalize_relative_path(raw: str) -> str:
+    text = str(raw or "").strip().replace("\\", "/")
+    if not text:
+        return ""
+    if len(text) >= 2 and text[1] == ":" and text[0].isalpha():
+        text = text[2:]
+    text = text.lstrip("/")
+    if not text:
+        return ""
+
+    parts: List[str] = []
+    for part in PurePosixPath(text).parts:
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if parts:
+                parts.pop()
+            continue
+        parts.append(part)
+    return "/".join(parts)
+
+
 def parse_json_or_debug(raw: str, *, model: str, base_url: str, timeout_s: int) -> Dict[str, Any]:
     """
     Parse JSON. If it fails:
@@ -172,11 +195,25 @@ def validate_and_fix_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(spec["files"], dict):
         raise ValueError("files must be an object mapping path->content")
 
+    cleaned_dirs: List[str] = []
+    seen_dirs = set()
+    for item in spec["directories"]:
+        if not isinstance(item, str):
+            continue
+        normalized = _normalize_relative_path(item)
+        if not normalized or normalized in seen_dirs:
+            continue
+        seen_dirs.add(normalized)
+        cleaned_dirs.append(normalized)
+
     # Keep only string->string files
     cleaned_files: Dict[str, str] = {}
     for k, v in spec["files"].items():
         if isinstance(k, str) and isinstance(v, str):
-            cleaned_files[k] = v
+            normalized = _normalize_relative_path(k)
+            if normalized:
+                cleaned_files[normalized] = v
+    spec["directories"] = cleaned_dirs
     spec["files"] = cleaned_files
 
     return spec
@@ -293,7 +330,10 @@ def safe_write_file(path: Path, content: str, force: bool) -> None:
 
 def ensure_dirs(base: Path, dirs: List[str]) -> None:
     base_resolved = base.resolve()
-    for d in dirs:
+    for d_raw in dirs:
+        d = _normalize_relative_path(d_raw)
+        if not d:
+            continue
         p = (base / d).resolve()
         if base_resolved not in p.parents and p != base_resolved:
             raise ValueError(f"Invalid directory path escapes base: {d}")
@@ -302,7 +342,13 @@ def ensure_dirs(base: Path, dirs: List[str]) -> None:
 
 def ensure_files(base: Path, files: Dict[str, str], *, force: bool) -> None:
     base_resolved = base.resolve()
-    for rel, content in files.items():
+    normalized_files: Dict[str, str] = {}
+    for rel_raw, content in files.items():
+        rel = _normalize_relative_path(rel_raw)
+        if rel:
+            normalized_files[rel] = content
+
+    for rel, content in normalized_files.items():
         p = (base / rel).resolve()
         if base_resolved not in p.parents and p != base_resolved:
             raise ValueError(f"Invalid file path escapes base: {rel}")
