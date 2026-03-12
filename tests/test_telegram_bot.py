@@ -17,6 +17,7 @@ from archmind.telegram_bot import (
     command_logs,
     command_continue,
     command_fix,
+    command_projects,
     command_status,
     command_help,
     command_retry,
@@ -36,6 +37,7 @@ from archmind.telegram_bot import (
     sanitize_log_excerpt,
     save_last_project_path,
     start_pipeline_process,
+    format_projects_list,
     format_status_text,
     watch_retry_and_notify,
 )
@@ -994,6 +996,72 @@ def test_format_status_text_defaults_when_idle_without_artifacts(tmp_path: Path)
     assert "Frontend: UNKNOWN" in out
 
 
+def test_projects_command_works_when_no_projects_exist(monkeypatch, tmp_path: Path) -> None:
+    empty_root = tmp_path / "projects"
+    empty_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(empty_root))
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    ctx = DummyContext()
+    asyncio.run(command_projects(update, ctx))
+    assert msg.sent
+    assert "Recent ArchMind projects" in msg.sent[-1]
+    assert "(no projects found)" in msg.sent[-1]
+
+
+def test_projects_command_returns_list(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(root))
+
+    p1 = root / "20260312_210244_simple_nextjs_todo_dashboard_req"
+    p2 = root / "20260312_140408_simple_fastapi_notes_api_require"
+    p1_arch = p1 / ".archmind"
+    p2_arch = p2 / ".archmind"
+    p1_arch.mkdir(parents=True, exist_ok=True)
+    p2_arch.mkdir(parents=True, exist_ok=True)
+    (p1_arch / "state.json").write_text(
+        json.dumps({"last_status": "DONE", "project_type": "frontend-web", "effective_template": "nextjs"}),
+        encoding="utf-8",
+    )
+    (p2_arch / "state.json").write_text(
+        json.dumps({"last_status": "DONE", "project_type": "backend-api", "effective_template": "fastapi"}),
+        encoding="utf-8",
+    )
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    ctx = DummyContext()
+    asyncio.run(command_projects(update, ctx))
+    out = msg.sent[-1]
+    assert "Recent ArchMind projects" in out
+    assert "1. 20260312_210244_simple_nextjs_todo_dashboard_req" in out or "1. 20260312_140408_simple_fastapi_notes_api_require" in out
+    assert "Status: DONE" in out
+    assert "Type: frontend-web" in out
+    assert "Template: nextjs" in out
+    assert "Type: backend-api" in out
+    assert "Template: fastapi" in out
+
+
+def test_format_projects_list_limits_to_ten_projects(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(root))
+    for i in range(12):
+        project = root / f"20260312_000{i:02d}_proj_{i}"
+        arch = project / ".archmind"
+        arch.mkdir(parents=True, exist_ok=True)
+        (arch / "state.json").write_text(
+            json.dumps({"last_status": "NOT_DONE", "project_type": "unknown", "effective_template": "unknown"}),
+            encoding="utf-8",
+        )
+
+    out = format_projects_list()
+    assert "Recent ArchMind projects" in out
+    assert out.count("Status: ") == 10
+
+
 def test_help_mentions_state_for_long_running_commands() -> None:
     msg = DummyMessage()
     update = DummyUpdate(message=msg, effective_chat=DummyChat())
@@ -1001,6 +1069,7 @@ def test_help_mentions_state_for_long_running_commands() -> None:
     asyncio.run(command_help(update, ctx))
     assert msg.sent
     assert "Long-running commands may take time; use /state for progress." in msg.sent[-1]
+    assert "/projects - list recent ArchMind projects" in msg.sent[-1]
 
 
 def test_watch_retry_accumulates_existing_fix_attempts(monkeypatch, tmp_path: Path) -> None:

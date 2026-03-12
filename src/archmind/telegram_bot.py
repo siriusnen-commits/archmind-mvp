@@ -19,6 +19,7 @@ from archmind.template_selector import is_supported_template, select_template_fo
 
 LAST_PROJECT_PATH_FILE = Path.home() / ".archmind_telegram_last_project"
 DEFAULT_BASE_DIR = Path.home() / "archmind-telegram-projects"
+DEFAULT_PROJECTS_DIR = Path.home() / "archmind-telegram-projects"
 DEFAULT_TEMPLATE = "fullstack-ddd"
 
 
@@ -125,6 +126,13 @@ def resolve_base_dir() -> Path:
     if raw:
         return Path(raw).expanduser().resolve()
     return DEFAULT_BASE_DIR.expanduser().resolve()
+
+
+def resolve_projects_dir() -> Path:
+    raw = os.getenv("ARCHMIND_PROJECTS_DIR", "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return DEFAULT_PROJECTS_DIR.expanduser().resolve()
 
 
 def resolve_default_template() -> str:
@@ -252,6 +260,7 @@ def _help_text() -> str:
         "/retry - run fix and then continue on the last project\n"
         "Long-running commands may take time; use /state for progress.\n"
         "/status - quick summary of current project state\n"
+        "/projects - list recent ArchMind projects\n"
         "/logs [backend|frontend|last] - show recent failure logs\n"
         "/state - show latest project state\n"
         "/help - show this message"
@@ -711,6 +720,37 @@ def format_status_text(project_dir: Path) -> str:
         next_action,
     ]
     return _truncate_message("\n".join(lines), limit=1200)
+
+
+def format_projects_list(projects_dir: Optional[Path] = None, limit: int = 10) -> str:
+    root = (projects_dir or resolve_projects_dir()).expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        return "Recent ArchMind projects\n\n(no projects found)"
+
+    projects = [path for path in root.iterdir() if path.is_dir()]
+    projects.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    picked = projects[: max(0, int(limit))]
+    if not picked:
+        return "Recent ArchMind projects\n\n(no projects found)"
+
+    lines: list[str] = ["Recent ArchMind projects", ""]
+    for idx, project_dir in enumerate(picked, start=1):
+        state_payload = _load_json(project_dir / ".archmind" / "state.json") or {}
+        result_payload = _load_json(project_dir / ".archmind" / "result.json") or {}
+        status = (
+            str(state_payload.get("last_status") or "").strip().upper()
+            or str(result_payload.get("status") or "").strip().upper()
+            or "UNKNOWN"
+        )
+        project_type = str(state_payload.get("project_type") or "unknown").strip() or "unknown"
+        template = str(state_payload.get("effective_template") or "unknown").strip() or "unknown"
+        lines.append(f"{idx}. {project_dir.name}")
+        lines.append(f"   Status: {status}")
+        lines.append(f"   Type: {project_type}")
+        lines.append(f"   Template: {template}")
+        if idx != len(picked):
+            lines.append("")
+    return _truncate_message("\n".join(lines), limit=3500)
 
 
 def _extract_candidate_lines(text: str, mode: str) -> list[str]:
@@ -1418,6 +1458,11 @@ async def command_status(update: Any, context: Any) -> None:
     await update.message.reply_text(format_status_text(project_path))
 
 
+async def command_projects(update: Any, context: Any) -> None:
+    del context
+    await update.message.reply_text(format_projects_list())
+
+
 async def command_logs(update: Any, context: Any) -> None:
     project_path = load_last_project_path()
     if project_path is None:
@@ -1464,5 +1509,6 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("logs", command_logs))
     app.add_handler(CommandHandler("state", command_state))
     app.add_handler(CommandHandler("status", command_status))
+    app.add_handler(CommandHandler("projects", command_projects))
     app.add_handler(CommandHandler("help", command_help))
     app.run_polling()
