@@ -18,6 +18,7 @@ from archmind.telegram_bot import (
     command_continue,
     command_fix,
     command_current,
+    command_tree,
     command_use,
     command_projects,
     command_status,
@@ -43,6 +44,7 @@ from archmind.telegram_bot import (
     get_current_project,
     start_pipeline_process,
     format_projects_list,
+    format_project_tree,
     format_status_text,
     list_recent_projects,
     watch_retry_and_notify,
@@ -1197,6 +1199,79 @@ def test_fix_continue_retry_use_current_project_when_set(monkeypatch, tmp_path: 
     assert all(path == current for path in used)
 
 
+def test_tree_works_with_current_project(tmp_path: Path) -> None:
+    project = tmp_path / "tree_current_proj"
+    (project / "app").mkdir(parents=True, exist_ok=True)
+    (project / "app" / "page.tsx").write_text("export default function Page(){}", encoding="utf-8")
+    set_current_project(project)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_tree(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "Project tree" in out
+    assert "Project: tree_current_proj" in out
+    assert "app" in out
+    assert "page.tsx" in out
+
+
+def test_tree_falls_back_to_last_project(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "tree_last_proj"
+    (project / "app").mkdir(parents=True, exist_ok=True)
+    (project / "app" / "layout.tsx").write_text("export default function Layout(){}", encoding="utf-8")
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_tree(update, DummyContext()))
+    assert "Project: tree_last_proj" in msg.sent[-1]
+    assert "layout.tsx" in msg.sent[-1]
+
+
+def test_tree_with_explicit_depth_works(tmp_path: Path) -> None:
+    project = tmp_path / "tree_depth_proj"
+    deep = project / "a" / "b" / "c"
+    deep.mkdir(parents=True, exist_ok=True)
+    (deep / "file.txt").write_text("x", encoding="utf-8")
+    set_current_project(project)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_tree(update, DummyContext(args=["3"])))
+    out = msg.sent[-1]
+    assert "a" in out
+    assert "b" in out
+    assert "c" in out
+
+
+def test_tree_invalid_depth_returns_error(tmp_path: Path) -> None:
+    project = tmp_path / "tree_invalid_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_tree(update, DummyContext(args=["abc"])))
+    assert "Invalid depth. Use /tree or /tree <n>." in msg.sent[-1]
+
+
+def test_tree_excluded_dirs_are_hidden(tmp_path: Path) -> None:
+    project = tmp_path / "tree_exclude_proj"
+    (project / "node_modules").mkdir(parents=True, exist_ok=True)
+    (project / ".git").mkdir(parents=True, exist_ok=True)
+    (project / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project / ".archmind" / "state.json").write_text("{}", encoding="utf-8")
+    out = format_project_tree(project, depth=2)
+    assert "node_modules" not in out
+    assert ".git" not in out
+    assert ".archmind" in out
+
+
+def test_tree_output_truncates_when_too_long(tmp_path: Path) -> None:
+    project = tmp_path / "tree_truncate_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    for i in range(120):
+        (project / f"file_{i}.txt").write_text("x", encoding="utf-8")
+    out = format_project_tree(project, depth=2, max_lines=30)
+    assert "... (truncated)" in out
+
+
 def test_format_projects_list_limits_to_ten_projects(monkeypatch, tmp_path: Path) -> None:
     root = tmp_path / "projects"
     root.mkdir(parents=True, exist_ok=True)
@@ -1225,6 +1300,7 @@ def test_help_mentions_state_for_long_running_commands() -> None:
     assert "/projects - list recent ArchMind projects" in msg.sent[-1]
     assert "/use <n|name> - select a project to work on" in msg.sent[-1]
     assert "/current - show currently selected project" in msg.sent[-1]
+    assert "/tree [n] - show project directory tree" in msg.sent[-1]
 
 
 def test_watch_retry_accumulates_existing_fix_attempts(monkeypatch, tmp_path: Path) -> None:

@@ -293,6 +293,7 @@ def _help_text() -> str:
         "/projects - list recent ArchMind projects\n"
         "/use <n|name> - select a project to work on\n"
         "/current - show currently selected project\n"
+        "/tree [n] - show project directory tree\n"
         "/logs [backend|frontend|last] - show recent failure logs\n"
         "/state - show latest project state\n"
         "/help - show this message"
@@ -804,6 +805,55 @@ def format_projects_list(projects_dir: Optional[Path] = None, limit: int = 10) -
         if idx != len(picked):
             lines.append("")
     return _truncate_message("\n".join(lines), limit=3500)
+
+
+def format_project_tree(project_dir: Path, depth: int = 2, max_depth: int = 4, max_lines: int = 80) -> str:
+    root = project_dir.expanduser().resolve()
+    effective_depth = max(1, min(int(depth), int(max_depth)))
+    exclude_names = {
+        "node_modules",
+        ".git",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".venv",
+        "dist",
+        "build",
+        ".next",
+        "coverage",
+    }
+
+    lines: list[str] = ["Project tree", "", f"Project: {root.name}", "", "."]
+    truncated = False
+
+    def _children(path: Path) -> list[Path]:
+        try:
+            entries = sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+        except Exception:
+            return []
+        return [entry for entry in entries if entry.name not in exclude_names]
+
+    def _walk(path: Path, prefix: str, level: int) -> None:
+        nonlocal truncated
+        if truncated or level > effective_depth:
+            return
+        children = _children(path)
+        for idx, child in enumerate(children):
+            branch = "└── " if idx == len(children) - 1 else "├── "
+            lines.append(f"{prefix}{branch}{child.name}")
+            if len(lines) >= max_lines:
+                truncated = True
+                return
+            if child.is_dir() and level < effective_depth:
+                next_prefix = f"{prefix}{'    ' if idx == len(children) - 1 else '│   '}"
+                _walk(child, next_prefix, level + 1)
+            if truncated:
+                return
+
+    _walk(root, "", 1)
+    if truncated:
+        lines.append("... (truncated)")
+    return _truncate_message("\n".join(lines), limit=3900)
 
 
 def _extract_candidate_lines(text: str, mode: str) -> list[str]:
@@ -1563,6 +1613,26 @@ async def command_projects(update: Any, context: Any) -> None:
     await update.message.reply_text(format_projects_list())
 
 
+async def command_tree(update: Any, context: Any) -> None:
+    args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
+    depth = 2
+    if args:
+        try:
+            depth = int(args[0])
+        except Exception:
+            await update.message.reply_text("Invalid depth. Use /tree or /tree <n>.")
+            return
+        if depth <= 0:
+            await update.message.reply_text("Invalid depth. Use /tree or /tree <n>.")
+            return
+
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text("No project selected. Use /projects then /use <n>.")
+        return
+    await update.message.reply_text(format_project_tree(project_path, depth=depth))
+
+
 async def command_logs(update: Any, context: Any) -> None:
     project_path = _resolve_target_project()
     if project_path is None:
@@ -1609,6 +1679,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("use", command_use))
     app.add_handler(CommandHandler("current", command_current))
     app.add_handler(CommandHandler("logs", command_logs))
+    app.add_handler(CommandHandler("tree", command_tree))
     app.add_handler(CommandHandler("projects", command_projects))
     app.add_handler(CommandHandler("state", command_state))
     app.add_handler(CommandHandler("status", command_status))
