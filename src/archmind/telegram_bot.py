@@ -505,20 +505,68 @@ def extract_key_error_lines(text: str, max_lines: int = 6) -> list[str]:
     return picked
 
 
+def _first_matching_path(key_lines: list[str], patterns: tuple[str, ...]) -> str:
+    for line in key_lines:
+        for pat in patterns:
+            match = re.search(pat, line, flags=re.IGNORECASE)
+            if match:
+                return str(match.group(1)).strip()
+    return ""
+
+
 def build_log_focus(log_type: str, failure_class: Optional[str], key_lines: list[str]) -> list[str]:
     klass = str(failure_class or "").lower()
+    frontend_path = _first_matching_path(
+        key_lines,
+        (
+            r"((?:frontend/)?(?:app|pages)/[^\s:]+\.(?:tsx?|jsx?))(?::\d+)?",
+            r"((?:frontend/)?[^\s:]+\.(?:tsx?|jsx?))(?::\d+)?",
+        ),
+    )
+    backend_path = _first_matching_path(
+        key_lines,
+        (
+            r"(tests/[^\s:]+\.py)(?::\d+)?",
+            r"(app/[^\s:]+\.py)(?::\d+)?",
+        ),
+    )
+
     if klass == "backend-pytest:assertion":
+        if backend_path:
+            return [f"inspect pytest failure in {backend_path}", "compare API response with test expectations"]
         return ["inspect backend implementation", "compare API response with test expectations"]
     if klass in ("backend-pytest:import", "backend-pytest:module-not-found"):
+        if backend_path:
+            return [f"inspect import/module path in {backend_path}"]
         return ["inspect imports and module paths"]
+    if klass in ("backend-pytest:other", "backend-dependency"):
+        if backend_path:
+            return [f"inspect pytest failure in {backend_path}"]
+        return ["inspect pytest failure"]
     if klass == "frontend-lint-warning":
+        if frontend_path:
+            return [f"inspect frontend warning file {frontend_path}", "promote to fail only when real errors exist"]
         return ["review frontend lint warnings", "promote to fail only when real errors exist"]
     if klass == "frontend-lint":
+        if frontend_path:
+            return [f"inspect frontend file {frontend_path}", "inspect lint config if rule mismatch exists"]
         return ["inspect frontend lint config", "inspect failing frontend file"]
     if klass == "frontend-typescript":
+        if frontend_path:
+            return [f"inspect TypeScript error in {frontend_path}", "inspect shared type definitions"]
         return ["inspect type definitions", "inspect failing TS file"]
     if klass == "frontend-build":
+        if frontend_path:
+            return [f"inspect build failure file {frontend_path}", "inspect build config/import path"]
         return ["inspect build config/import path"]
+    if klass in ("frontend-install", "frontend-missing-package"):
+        return ["inspect frontend package.json and install step", "verify npm install output"]
+    if klass == "environment-node-missing":
+        return ["install node/npm runtime on target host"]
+    if klass == "environment-python":
+        return ["inspect python environment and virtualenv"]
+    if klass in ("filesystem-overwrite", "filesystem-path-validation"):
+        return ["inspect path/overwrite safety constraints"]
     if log_type == "last":
         has_backend = any("assert" in line.lower() or "pytest" in line.lower() or "failed tests/" in line.lower() for line in key_lines)
         has_frontend = any("eslint" in line.lower() or "ts" in line.lower() or "frontend" in line.lower() for line in key_lines)
@@ -584,7 +632,7 @@ def _latest_run_logs(project_dir: Path) -> list[Path]:
 
 def _extract_candidate_lines(text: str, mode: str) -> list[str]:
     keywords_backend = ("backend", "pytest", "assert", "traceback", "failed", "error", "e ")
-    keywords_frontend = ("frontend", "eslint", "lint", "build", "tsc", "npm", "failed", "error")
+    keywords_frontend = ("frontend", "eslint", "lint", "build", "tsc", "npm", "failed", "error", "warning", "tsx", "jsx")
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if mode == "backend":
         picked = [line for line in lines if any(k in line.lower() for k in keywords_backend)]
@@ -634,6 +682,10 @@ def _failure_summary_from_class(mode: str, failure_class: str, key_lines: list[s
     if mode == "backend":
         if klass.startswith("backend-pytest"):
             return "backend pytest failed"
+        if klass == "backend-dependency":
+            return "backend dependency install failed"
+        if klass.startswith("environment"):
+            return "backend environment issue detected"
         return "backend failure detected"
     if mode == "frontend":
         if klass == "frontend-lint-warning":
@@ -644,12 +696,26 @@ def _failure_summary_from_class(mode: str, failure_class: str, key_lines: list[s
             return "frontend typescript failed"
         if klass == "frontend-build":
             return "frontend build failed"
+        if klass == "frontend-install":
+            return "frontend npm install failed"
+        if klass == "frontend-missing-package":
+            return "frontend package.json missing"
+        if klass == "environment-node-missing":
+            return "node/npm missing on host"
         return "frontend failure detected"
     if mode == "last":
         has_backend = any("assert" in line.lower() or "pytest" in line.lower() or line.lower().startswith("failed tests/") for line in key_lines)
         has_frontend = any(
             token in line.lower() for line in key_lines for token in ("eslint", "ts2304", "ts2322", "is not assignable")
         )
+        if klass in ("filesystem-overwrite", "filesystem-path-validation"):
+            return "filesystem validation blocked the run"
+        if klass == "environment-node-missing":
+            return "node/npm missing on host"
+        if klass == "frontend-install":
+            return "frontend npm install failed"
+        if klass == "backend-dependency":
+            return "backend dependency install failed"
         if has_backend and has_frontend:
             return "backend pytest failed\nfrontend lint failed"
         if has_backend:

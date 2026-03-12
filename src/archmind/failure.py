@@ -258,9 +258,69 @@ def extract_failure_excerpt(*sources: Any, max_lines: int = 6, failure_class: st
 def classify_failure(excerpt: str, failure_signature: str = "") -> str:
     text = (excerpt or "").lower()
     sig = (failure_signature or "").lower()
+    compact = re.sub(r"\s+", " ", text).strip()
 
-    if any(token in text for token in ("npm err!", "command not found: npm", "command not found: node", "pip install")):
+    if any(
+        token in text
+        for token in (
+            "refusing to overwrite existing file",
+            "use --force to overwrite files",
+            "file exists and --force not set",
+            "already exists (use --force)",
+        )
+    ):
+        return "filesystem-overwrite"
+
+    if any(
+        token in text
+        for token in (
+            "patch path escapes project",
+            "invalid directory path escapes base",
+            "invalid file path escapes base",
+            "path escapes base",
+            "path escapes project",
+        )
+    ):
+        return "filesystem-path-validation"
+
+    if any(
+        token in text
+        for token in (
+            "node/npm not available",
+            "command not found: npm",
+            "command not found: node",
+            "'npm' is not recognized",
+            "'node' is not recognized",
+            "npm: not found",
+            "node: not found",
+        )
+    ):
+        return "environment-node-missing"
+
+    if "frontend/package.json not found" in text or "no frontend package.json" in text:
+        return "frontend-missing-package"
+
+    if any(token in text for token in ("npm install failed", "npm ci failed", "npm err!")):
+        if "frontend" in sig or "frontend" in text or "npm ci" in text or "npm install" in text:
+            return "frontend-install"
         return "env-dependency"
+
+    if any(
+        token in text
+        for token in (
+            "python: command not found",
+            "no module named pip",
+            "venv",
+            "virtualenv",
+            "python environment",
+            "environment issue",
+            "unknown-environment-issue",
+        )
+    ):
+        return "environment-python"
+
+    if any(token in text for token in ("pip install", "no matching distribution found", "could not find a version")):
+        return "backend-dependency"
 
     if "module not found error" in text or "modulenotfounderror" in text:
         return "backend-pytest:module-not-found"
@@ -276,11 +336,23 @@ def classify_failure(excerpt: str, failure_signature: str = "") -> str:
         return "frontend-lint-warning"
 
     has_lint_context = "eslint" in text or ("lint" in text and ("frontend" in text or "frontend-lint" in sig))
-    has_warning = bool(re.search(r"\bwarning(?:s)?\b", text)) and "0 warnings" not in text
+    clean_lint = bool(
+        re.search(
+            r"\bno\s+eslint\s+warnings?\s+or\s+errors?\b|\bno\s+warnings?\s+or\s+errors?\b|\b0\s+warnings?\b.*\b0\s+errors?\b",
+            compact,
+        )
+    )
+    has_warning = bool(re.search(r"\bwarning(?:s)?\b", text)) and "0 warnings" not in text and not re.search(
+        r"\bno\b[^.\n]*\bwarnings?\b", text
+    )
     has_error = (
         bool(re.search(r"\berror(?:s)?\b", text))
         and "0 errors" not in text
+        and not re.search(r"\bno\b[^.\n]*\berrors?\b", text)
     ) or "parsing error" in text or bool(re.search(r"\bts\d{4}\b", text))
+
+    if has_lint_context and clean_lint and not has_error and not has_warning:
+        return "frontend-clean"
 
     if has_lint_context and has_warning and not has_error:
         return "frontend-lint-warning"
@@ -301,6 +373,10 @@ def classify_failure(excerpt: str, failure_signature: str = "") -> str:
         return "backend-pytest:other"
     if "frontend" in sig or "frontend" in text:
         return "frontend-other"
+    if any(token in text for token in ("env", "environment", "dependency install")):
+        return "environment-other"
+    if any(token in text for token in ("overwrite", "path escapes", "invalid file path")):
+        return "filesystem-other"
     return "unknown"
 
 
@@ -320,8 +396,18 @@ def fix_strategy_for_class(failure_class: str) -> str:
         return "frontend-typescript-safety"
     if klass == "frontend-build":
         return "frontend-build-stability"
-    if klass in ("frontend-dependency", "env-dependency"):
+    if klass in (
+        "frontend-dependency",
+        "env-dependency",
+        "frontend-install",
+        "backend-dependency",
+        "environment-node-missing",
+        "environment-python",
+        "frontend-missing-package",
+    ):
         return "dependency-environment"
+    if klass in ("filesystem-overwrite", "filesystem-path-validation", "filesystem-other"):
+        return "filesystem-guardrail"
     return "generic"
 
 
@@ -349,6 +435,10 @@ def select_primary_failure_class(failure_signature: str, classified_failure_clas
         if "frontend-test" in sig:
             return "frontend-test"
         return "frontend-other"
+    if "environment" in sig or "env-dependency" in sig:
+        return "environment-other"
+    if "filesystem" in sig:
+        return "filesystem-other"
     return "unknown"
 
 
@@ -390,6 +480,16 @@ def strategy_instructions(failure_class: str) -> list[str]:
         return [
             "dependency/env 문제를 먼저 해결하라.",
             "코드 수정보다 설치/설정 문제를 우선 의심하라.",
+        ]
+    if klass in ("frontend-install", "backend-dependency", "environment-node-missing", "environment-python"):
+        return [
+            "환경/설치 문제를 먼저 해결하라.",
+            "실패 원인 로그를 기준으로 패키지/런타임 설정을 점검하라.",
+        ]
+    if klass in ("filesystem-overwrite", "filesystem-path-validation", "filesystem-other"):
+        return [
+            "파일시스템 guardrail 위반을 먼저 해결하라.",
+            "경로를 프로젝트 내부로 제한하고 overwrite 정책을 준수하라.",
         ]
     return ["generic repair prompt를 적용하고 변경 범위를 최소화하라."]
 
@@ -520,9 +620,16 @@ def select_repair_targets(
         targets.extend(["frontend/next.config.js", "frontend/package.json"])
         return [t for t in list(dict.fromkeys(targets)) if is_safe_repair_target(t, Path(project_dir))][:3]
 
-    if klass in ("frontend-dependency", "env-dependency"):
+    if klass in ("frontend-dependency", "frontend-install", "frontend-missing-package"):
+        targets = ["frontend/package.json", "package.json", "frontend/next.config.js"]
+        return [t for t in list(dict.fromkeys(targets)) if is_safe_repair_target(t, Path(project_dir))][:3]
+
+    if klass in ("backend-dependency", "env-dependency", "environment-node-missing", "environment-python"):
         targets = ["frontend/package.json", "requirements.txt", ".env.example"]
         return [t for t in list(dict.fromkeys(targets)) if is_safe_repair_target(t, Path(project_dir))][:3]
+
+    if klass in ("filesystem-overwrite", "filesystem-path-validation", "filesystem-other"):
+        return ["inspect recent failure details"]
 
     return cleaned[:2] or ["inspect recent failure details"]
 
@@ -535,22 +642,33 @@ def failure_signature_from_run_result(run_result: Any) -> str:
 
     frontend = getattr(run_result, "frontend", None)
     if frontend is not None and str(getattr(frontend, "status", "")).upper() == "FAIL":
-        names.add("frontend-lint")
         steps = getattr(frontend, "steps", None) or []
+        saw_frontend_failure = False
         for step in steps:
             exit_code = getattr(step, "exit_code", None)
             if exit_code == 0:
                 continue
+            saw_frontend_failure = True
             name = str(getattr(step, "name", "")).lower()
             cmd = " ".join(str(x) for x in (getattr(step, "cmd", None) or []))
             if "lint" in name or "eslint" in cmd:
                 names.add("frontend-lint")
+            elif "install" in name or "npm ci" in cmd or "npm install" in cmd:
+                names.add("frontend-install")
             elif "build" in name or "next build" in cmd or "vite build" in cmd:
                 names.add("frontend-build")
             elif "tsc" in name or "typescript" in cmd:
                 names.add("frontend-typescript")
             elif "test" in name or "vitest" in cmd or "jest" in cmd:
                 names.add("frontend-test")
+        if not saw_frontend_failure:
+            reason = str(getattr(frontend, "reason", "")).lower()
+            if "npm install failed" in reason:
+                names.add("frontend-install")
+            elif "package.json" in reason:
+                names.add("frontend-missing-package")
+            else:
+                names.add("frontend-other")
     elif frontend is not None and str(getattr(frontend, "status", "")).upper() == "WARNING":
         names.add("frontend-lint-warning")
 

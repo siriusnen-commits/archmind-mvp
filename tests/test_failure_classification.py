@@ -53,6 +53,31 @@ def test_classify_frontend_build() -> None:
     assert classify_failure(excerpt, "frontend-build:FAIL") == "frontend-build"
 
 
+def test_classify_frontend_clean_lint() -> None:
+    excerpt = "✔ No ESLint warnings or errors"
+    assert classify_failure(excerpt, "frontend-lint:FAIL") == "frontend-clean"
+
+
+def test_classify_frontend_npm_install_failure() -> None:
+    excerpt = "npm install failed.\nnpm ERR! code ERESOLVE"
+    assert classify_failure(excerpt, "frontend-lint:FAIL") == "frontend-install"
+
+
+def test_classify_backend_pytest_failure_other() -> None:
+    excerpt = "FAILED tests/test_api.py::test_create_item - assert 500 == 200"
+    assert classify_failure(excerpt, "backend-pytest:FAIL") == "backend-pytest:other"
+
+
+def test_classify_overwrite_refusal() -> None:
+    excerpt = "Refusing to overwrite existing file: /tmp/demo/app/main.py (use --force)"
+    assert classify_failure(excerpt, "") == "filesystem-overwrite"
+
+
+def test_classify_path_escape_validation() -> None:
+    excerpt = "Invalid file path escapes base: ../../etc/passwd"
+    assert classify_failure(excerpt, "") == "filesystem-path-validation"
+
+
 def test_fix_prompt_specializes_by_failure_class() -> None:
     failure_class = classify_failure(
         "ModuleNotFoundError: No module named 'app.core.settings'",

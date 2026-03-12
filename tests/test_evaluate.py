@@ -83,6 +83,26 @@ def test_evaluate_not_done_when_pending_task_exists(tmp_path: Path) -> None:
     assert "pending tasks remain" in payload["reasons"]
 
 
+def test_evaluate_reasons_include_failure_type_and_incomplete_task(tmp_path: Path) -> None:
+    _write_tasks(tmp_path, ["done", "todo"])
+    _write_plan_with_acceptance(tmp_path)
+    _write_result(tmp_path, "FAIL")
+    _write_state(
+        tmp_path,
+        {
+            "project_dir": str(tmp_path.resolve()),
+            "updated_at": "20260101_000000",
+            "last_status": "NOT_DONE",
+            "last_failure_signature": "frontend-lint:FAIL",
+        },
+    )
+
+    payload = evaluate_project(tmp_path)
+    assert payload["status"] == "NOT_DONE"
+    assert "frontend lint failed" in payload["reasons"]
+    assert "task 2 not complete" in payload["reasons"]
+
+
 def test_evaluate_blocked_when_all_tasks_blocked(tmp_path: Path) -> None:
     _write_tasks(tmp_path, ["blocked", "blocked"])
     _write_plan_with_acceptance(tmp_path)

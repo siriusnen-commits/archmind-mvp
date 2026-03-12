@@ -72,6 +72,66 @@ def _compute_tasks_flags(project_dir: Path) -> tuple[bool, bool, bool]:
     return tasks_complete, pending_exists, all_blocked
 
 
+def _first_incomplete_task_reason(project_dir: Path) -> str:
+    payload = load_tasks(project_dir) or {}
+    tasks = payload.get("tasks")
+    if not isinstance(tasks, list):
+        return ""
+    for item in tasks:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "").strip().lower()
+        if status in ("todo", "doing", "blocked"):
+            try:
+                task_id = int(item.get("id"))
+            except Exception:
+                task_id = 0
+            if task_id > 0:
+                return f"task {task_id} not complete"
+            title = str(item.get("title") or "").strip()
+            if title:
+                return f"task not complete: {title[:80]}"
+            return "task not complete"
+    return ""
+
+
+def _failure_reason_from_signature(signature: str) -> str:
+    sig = str(signature or "").strip().lower()
+    if not sig:
+        return ""
+    if "frontend-lint-warning" in sig:
+        return "frontend lint warning detected"
+    if "frontend-lint" in sig:
+        return "frontend lint failed"
+    if "frontend-build" in sig:
+        return "frontend build failed"
+    if "frontend-install" in sig:
+        return "frontend npm install failed"
+    if "frontend-missing-package" in sig:
+        return "frontend package.json missing"
+    if "backend-pytest" in sig:
+        return "backend pytest failed"
+    if "backend-dependency" in sig:
+        return "backend dependency install failed"
+    if "environment-node-missing" in sig:
+        return "node/npm not available"
+    if "environment-python" in sig:
+        return "python environment issue detected"
+    if "filesystem-overwrite" in sig:
+        return "overwrite protection blocked file changes"
+    if "filesystem-path-validation" in sig:
+        return "path validation blocked out-of-project path"
+    if "frontend" in sig:
+        return "frontend check failed"
+    if "backend" in sig:
+        return "backend check failed"
+    if "environment" in sig or "env-dependency" in sig:
+        return "environment/dependency issue detected"
+    if "filesystem" in sig:
+        return "filesystem safety validation failed"
+    return ""
+
+
 def _extract_run_status(project_dir: Path) -> str:
     archmind = _archmind_dir(project_dir)
     result_payload = _load_json(archmind / "result.json")
@@ -178,6 +238,7 @@ def evaluate_project(project_dir: Path) -> dict[str, Any]:
     project_dir = project_dir.expanduser().resolve()
     archmind = _archmind_dir(project_dir)
     state_payload = load_state(project_dir) or {}
+    last_failure_signature = str(state_payload.get("last_failure_signature") or "").strip()
     result_payload = _load_json(archmind / "result.json")
     previous_eval = _load_json(archmind / "evaluation.json") or {}
     auto_update_task_completion(
@@ -208,11 +269,17 @@ def evaluate_project(project_dir: Path) -> dict[str, Any]:
             status = "NOT_DONE"
             if pending_exists:
                 reasons.append("pending tasks remain")
+                task_reason = _first_incomplete_task_reason(project_dir)
+                if task_reason:
+                    reasons.append(task_reason)
                 next_actions.append("complete pending tasks")
             if not tasks_complete and not pending_exists:
                 reasons.append("tasks are missing or incomplete")
                 next_actions.append("initialize tasks and mark progress")
             if run_status == "FAIL":
+                detailed_failure_reason = _failure_reason_from_signature(last_failure_signature)
+                if detailed_failure_reason:
+                    reasons.append(detailed_failure_reason)
                 reasons.append("latest run failed")
                 next_actions.append("run archmind fix --scope backend")
             elif run_status == "MISSING":

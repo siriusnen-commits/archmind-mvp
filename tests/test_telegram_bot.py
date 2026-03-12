@@ -508,6 +508,40 @@ def test_read_recent_frontend_logs_prefers_frontend_excerpt(tmp_path: Path) -> N
     assert "ESLint: Parsing error" in msg or "frontend lint failed" in msg
 
 
+def test_read_recent_frontend_logs_focus_points_to_failing_file(tmp_path: Path) -> None:
+    project_dir = tmp_path / "proj_focus_front"
+    run_logs = project_dir / ".archmind" / "run_logs"
+    run_logs.mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "state.json").write_text(
+        json.dumps({"last_failure_class": "frontend-lint"}),
+        encoding="utf-8",
+    )
+    (run_logs / "run_20260309_120000.summary.txt").write_text(
+        "frontend lint: FAIL\nESLint: Parsing error\napp/page.tsx:32: React Hook useEffect has missing dependency\n",
+        encoding="utf-8",
+    )
+    msg = read_recent_frontend_logs(project_dir)
+    assert "Failure:\nfrontend lint failed" in msg
+    assert "inspect frontend file app/page.tsx" in msg
+
+
+def test_read_recent_backend_logs_focus_mentions_pytest_failure(tmp_path: Path) -> None:
+    project_dir = tmp_path / "proj_focus_back"
+    run_logs = project_dir / ".archmind" / "run_logs"
+    run_logs.mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "state.json").write_text(
+        json.dumps({"last_failure_class": "backend-pytest:other"}),
+        encoding="utf-8",
+    )
+    (run_logs / "run_20260309_120000.summary.txt").write_text(
+        "backend: FAIL\nFAILED tests/test_api.py::test_create_todo - assert 500 == 200\n",
+        encoding="utf-8",
+    )
+    msg = read_recent_backend_logs(project_dir)
+    assert "Failure:\nbackend pytest failed" in msg
+    assert "inspect pytest failure" in msg
+
+
 def test_read_recent_logs_fallback_when_missing(tmp_path: Path) -> None:
     project_dir = tmp_path / "none"
     project_dir.mkdir(parents=True, exist_ok=True)
