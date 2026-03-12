@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -19,6 +20,87 @@ from archmind.template_selector import is_supported_template, select_template_fo
 LAST_PROJECT_PATH_FILE = Path.home() / ".archmind_telegram_last_project"
 DEFAULT_BASE_DIR = Path.home() / "archmind-telegram-projects"
 DEFAULT_TEMPLATE = "fullstack-ddd"
+
+
+@dataclass
+class _RunningJob:
+    job_id: int
+    command: str
+    state: str
+    project_dir: Path
+    started_at: float
+    proc: Optional[subprocess.Popen[str]] = None
+    task: Optional[asyncio.Task[Any]] = None
+
+
+_RUNNING_JOB: Optional[_RunningJob] = None
+_RUNNING_JOB_SEQ = 0
+
+
+def _is_job_active(job: _RunningJob) -> bool:
+    if job.task is not None and job.task.done():
+        return False
+    if job.proc is not None and job.proc.poll() is not None:
+        return False
+    return job.task is not None or job.proc is not None
+
+
+def _get_running_job() -> Optional[_RunningJob]:
+    global _RUNNING_JOB
+    if _RUNNING_JOB is None:
+        return None
+    if _is_job_active(_RUNNING_JOB):
+        return _RUNNING_JOB
+    _RUNNING_JOB = None
+    return None
+
+
+def _clear_running_job(job_id: Optional[int] = None) -> None:
+    global _RUNNING_JOB
+    if _RUNNING_JOB is None:
+        return
+    if job_id is None or _RUNNING_JOB.job_id == job_id:
+        _RUNNING_JOB = None
+
+
+def _register_running_job(
+    command: str,
+    state: str,
+    project_dir: Path,
+    *,
+    proc: Optional[subprocess.Popen[str]] = None,
+) -> _RunningJob:
+    global _RUNNING_JOB_SEQ, _RUNNING_JOB
+    _RUNNING_JOB_SEQ += 1
+    job = _RunningJob(
+        job_id=_RUNNING_JOB_SEQ,
+        command=command,
+        state=state,
+        project_dir=project_dir.expanduser().resolve(),
+        started_at=time.time(),
+        proc=proc,
+    )
+    _RUNNING_JOB = job
+    return job
+
+
+def _attach_running_task(job: _RunningJob, task: asyncio.Task[Any]) -> None:
+    job.task = task
+
+    def _cleanup(_task: asyncio.Task[Any]) -> None:  # noqa: ARG001
+        _clear_running_job(job.job_id)
+
+    task.add_done_callback(_cleanup)
+
+
+def _busy_message(job: _RunningJob) -> str:
+    return (
+        "ArchMind is already processing a command.\n"
+        f"Current state: {job.state}\n"
+        f"Current command: {job.command}\n"
+        f"Project: {job.project_dir.name}\n"
+        "Use /state to inspect current progress."
+    )
 
 
 def extract_idea(args: list[str]) -> str:
@@ -168,6 +250,7 @@ def _help_text() -> str:
         "/continue - continue the last project with pipeline\n"
         "/fix - run fix on the last project\n"
         "/retry - run fix and then continue on the last project\n"
+        "Long-running commands may take time; use /state for progress.\n"
         "/logs [backend|frontend|last] - show recent failure logs\n"
         "/state - show latest project state\n"
         "/help - show this message"
@@ -959,6 +1042,11 @@ def _temp_log_for_project(project_dir: Path) -> Path:
 
 
 async def _handle_idea_like(update: Any, context: Any, cmd_name: str) -> None:
+    running = _get_running_job()
+    if running is not None:
+        await update.message.reply_text(_busy_message(running))
+        return
+
     idea = extract_idea(getattr(context, "args", []))
     if not idea:
         await update.message.reply_text(f"Usage: /{cmd_name} <idea text>")
@@ -980,12 +1068,13 @@ async def _handle_idea_like(update: Any, context: Any, cmd_name: str) -> None:
         await update.message.reply_text(f"Failed to start pipeline: {exc}")
         return
 
+    job = _register_running_job(f"/{cmd_name}", "RUNNING", project_dir, proc=proc)
     application = getattr(context, "application", None)
     chat = getattr(update, "effective_chat", None)
     chat_id = getattr(chat, "id", None)
     if application is not None and chat_id is not None:
         started_at = time.time()
-        asyncio.create_task(
+        task = asyncio.create_task(
             watch_pipeline_and_notify(
                 proc=proc,
                 project_dir=project_dir,
@@ -995,13 +1084,19 @@ async def _handle_idea_like(update: Any, context: Any, cmd_name: str) -> None:
                 started_at=started_at,
             )
         )
+        _attach_running_task(job, task)
 
     await update.message.reply_text(
-        f"started: pid={proc.pid}\nproject={project_dir}\nstate=RUNNING\nlog={log_path}"
+        f"started: pid={proc.pid}\ncommand=/{cmd_name}\nproject={project_dir}\nstate=RUNNING\nlog={log_path}"
     )
 
 
 async def _handle_continue(update: Any, context: Any) -> None:
+    running = _get_running_job()
+    if running is not None:
+        await update.message.reply_text(_busy_message(running))
+        return
+
     project_dir = load_last_project_path()
     if project_dir is None:
         await update.message.reply_text(_missing_project_message())
@@ -1016,12 +1111,13 @@ async def _handle_continue(update: Any, context: Any) -> None:
         await update.message.reply_text(f"Failed to continue pipeline: {exc}")
         return
 
+    job = _register_running_job("/continue", "RUNNING", project_dir, proc=proc)
     application = getattr(context, "application", None)
     chat = getattr(update, "effective_chat", None)
     chat_id = getattr(chat, "id", None)
     if application is not None and chat_id is not None:
         started_at = time.time()
-        asyncio.create_task(
+        task = asyncio.create_task(
             watch_pipeline_and_notify(
                 proc=proc,
                 project_dir=project_dir,
@@ -1031,10 +1127,18 @@ async def _handle_continue(update: Any, context: Any) -> None:
                 started_at=started_at,
             )
         )
-    await update.message.reply_text(f"continuing: pid={proc.pid}\nproject={project_dir}\nstate=RUNNING")
+        _attach_running_task(job, task)
+    await update.message.reply_text(
+        f"continuing: pid={proc.pid}\ncommand=/continue\nproject={project_dir}\nstate=RUNNING"
+    )
 
 
 async def _handle_fix(update: Any, context: Any) -> None:
+    running = _get_running_job()
+    if running is not None:
+        await update.message.reply_text(_busy_message(running))
+        return
+
     project_dir = load_last_project_path()
     if project_dir is None:
         await update.message.reply_text(_missing_project_message())
@@ -1049,12 +1153,13 @@ async def _handle_fix(update: Any, context: Any) -> None:
         await update.message.reply_text(f"Failed to start fix: {exc}")
         return
 
+    job = _register_running_job("/fix", "FIXING", project_dir, proc=proc)
     application = getattr(context, "application", None)
     chat = getattr(update, "effective_chat", None)
     chat_id = getattr(chat, "id", None)
     if application is not None and chat_id is not None:
         started_at = time.time()
-        asyncio.create_task(
+        task = asyncio.create_task(
             watch_pipeline_and_notify(
                 proc=proc,
                 project_dir=project_dir,
@@ -1064,10 +1169,16 @@ async def _handle_fix(update: Any, context: Any) -> None:
                 started_at=started_at,
             )
         )
-    await update.message.reply_text(f"fix started: pid={proc.pid}\nproject={project_dir}\nstate=FIXING")
+        _attach_running_task(job, task)
+    await update.message.reply_text(f"fix started: pid={proc.pid}\ncommand=/fix\nproject={project_dir}\nstate=FIXING")
 
 
 async def _handle_retry(update: Any, context: Any) -> None:
+    running = _get_running_job()
+    if running is not None:
+        await update.message.reply_text(_busy_message(running))
+        return
+
     project_dir = load_last_project_path()
     if project_dir is None:
         await update.message.reply_text(_missing_project_message())
@@ -1088,7 +1199,8 @@ async def _handle_retry(update: Any, context: Any) -> None:
     chat_id = getattr(chat, "id", None)
     if application is not None and chat_id is not None:
         started_at = time.time()
-        asyncio.create_task(
+        job = _register_running_job("/retry", "RETRYING", project_dir)
+        task = asyncio.create_task(
             watch_retry_and_notify(
                 project_dir=project_dir,
                 temp_log=_temp_log_for_project(project_dir),
@@ -1097,9 +1209,10 @@ async def _handle_retry(update: Any, context: Any) -> None:
                 started_at=started_at,
             )
         )
+        _attach_running_task(job, task)
 
     await update.message.reply_text(
-        f"retry started\nproject={project_dir}\nmode=fix -> continue\nstate=RETRYING{warn}"
+        f"retry started\ncommand=/retry\nproject={project_dir}\nmode=fix -> continue\nstate=RETRYING{warn}"
     )
 
 
@@ -1128,6 +1241,17 @@ async def command_state(update: Any, context: Any) -> None:
     project_path = load_last_project_path()
     if project_path is None:
         await update.message.reply_text("No project yet. Start with /idea <text> first.")
+        return
+    running = _get_running_job()
+    if running is not None:
+        await update.message.reply_text(
+            _truncate_message(
+                f"Current state: {running.state}\n"
+                f"Current command: {running.command}\n"
+                f"Project: {running.project_dir}\n"
+                "Use /state again later for a full snapshot."
+            )
+        )
         return
     ok, output = run_state_command(project_path)
     if not ok:

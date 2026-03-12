@@ -5,6 +5,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import pytest
+import archmind.telegram_bot as telegram_bot
 from archmind.telegram_bot import (
     build_completion_message,
     build_finished_message,
@@ -15,6 +17,7 @@ from archmind.telegram_bot import (
     command_logs,
     command_continue,
     command_fix,
+    command_help,
     command_retry,
     command_state,
     extract_idea,
@@ -34,6 +37,13 @@ from archmind.telegram_bot import (
     start_pipeline_process,
     watch_retry_and_notify,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_running_job() -> None:
+    telegram_bot._clear_running_job()
+    yield
+    telegram_bot._clear_running_job()
 
 
 def test_extract_idea_parsing() -> None:
@@ -648,7 +658,34 @@ def test_continue_started_message_contains_running_state(monkeypatch, tmp_path: 
     asyncio.run(command_continue(update, ctx))
     assert msg.sent
     assert "continuing: pid=555" in msg.sent[-1]
+    assert "command=/continue" in msg.sent[-1]
     assert "state=RUNNING" in msg.sent[-1]
+
+
+def test_busy_message_when_long_running_command_already_running(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "busy_proj"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project_dir)
+    monkeypatch.setattr("archmind.telegram_bot.set_agent_state", lambda *a, **k: {})
+
+    class DummyProc:
+        pid = 777
+
+        def poll(self) -> None:
+            return None
+
+    monkeypatch.setattr("archmind.telegram_bot.start_background_process", lambda *a, **k: DummyProc())
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    ctx = DummyContext(application=None)
+
+    asyncio.run(command_continue(update, ctx))
+    asyncio.run(command_fix(update, ctx))
+
+    assert len(msg.sent) >= 2
+    assert "ArchMind is already processing a command." in msg.sent[-1]
+    assert "Current state: RUNNING" in msg.sent[-1]
+    assert "Use /state to inspect current progress." in msg.sent[-1]
 
 
 def test_retry_done_status_is_blocked_with_message(monkeypatch, tmp_path: Path) -> None:
@@ -804,6 +841,41 @@ def test_state_command_forwards_state_summary(monkeypatch, tmp_path: Path) -> No
     assert "Agent state: IDLE" in msg.sent[-1]
     assert "Fix attempts: 3" in msg.sent[-1]
     assert "Next action: STUCK" in msg.sent[-1]
+
+
+def test_state_command_shows_running_state_quickly(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "running_state_proj"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project_dir)
+    monkeypatch.setattr("archmind.telegram_bot.set_agent_state", lambda *a, **k: {})
+
+    class DummyProc:
+        pid = 808
+
+        def poll(self) -> None:
+            return None
+
+    monkeypatch.setattr("archmind.telegram_bot.start_background_process", lambda *a, **k: DummyProc())
+    monkeypatch.setattr("archmind.telegram_bot.run_state_command", lambda *_: (True, "should not be used"))
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    ctx = DummyContext(application=None)
+
+    asyncio.run(command_continue(update, ctx))
+    asyncio.run(command_state(update, ctx))
+
+    assert "Current state: RUNNING" in msg.sent[-1]
+    assert "Current command: /continue" in msg.sent[-1]
+    assert str(project_dir) in msg.sent[-1]
+
+
+def test_help_mentions_state_for_long_running_commands() -> None:
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    ctx = DummyContext()
+    asyncio.run(command_help(update, ctx))
+    assert msg.sent
+    assert "Long-running commands may take time; use /state for progress." in msg.sent[-1]
 
 
 def test_watch_retry_accumulates_existing_fix_attempts(monkeypatch, tmp_path: Path) -> None:
