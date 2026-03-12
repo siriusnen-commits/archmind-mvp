@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from archmind.cli import main
-from archmind.runner import CommandResult
+from archmind.runner import CommandResult, RunConfig, run_frontend_pipeline
 
 
 def _write_pytest_pass_project(root: Path) -> None:
@@ -38,6 +38,22 @@ def _write_frontend_package(root: Path) -> None:
 """,
         encoding="utf-8",
     )
+
+
+def _write_root_nextjs_package(root: Path) -> None:
+    root.joinpath("package.json").write_text(
+        """{
+  "name": "nextjs-demo",
+  "private": true,
+  "scripts": {
+    "lint": "echo lint"
+  }
+}
+""",
+        encoding="utf-8",
+    )
+    root.joinpath("next.config.mjs").write_text("export default {}\n", encoding="utf-8")
+    (root / "app").mkdir(parents=True, exist_ok=True)
 
 
 def _find_summary(root: Path) -> Path:
@@ -122,6 +138,24 @@ def test_frontend_absent_keeps_backend_result(tmp_path: Path) -> None:
     assert "status: ABSENT" in summary_text
 
 
+def test_frontend_absent_reason_mentions_root_nextjs_detection(tmp_path: Path) -> None:
+    config = RunConfig(
+        project_dir=tmp_path,
+        run_all=True,
+        backend_only=False,
+        frontend_only=False,
+        no_install=False,
+        timeout_s=30,
+        log_dir=tmp_path / ".archmind" / "run_logs",
+        json_summary=False,
+        command="run",
+    )
+
+    result = run_frontend_pipeline(config)
+    assert result.status == "ABSENT"
+    assert result.reason == "no frontend package.json or root nextjs project detected."
+
+
 def test_frontend_node_missing_is_skipped(tmp_path: Path, monkeypatch) -> None:
     _write_pytest_pass_project(tmp_path)
     _write_frontend_package(tmp_path)
@@ -133,6 +167,52 @@ def test_frontend_node_missing_is_skipped(tmp_path: Path, monkeypatch) -> None:
 
     summary_text = _find_summary(tmp_path).read_text(encoding="utf-8")
     assert "status: SKIPPED" in summary_text
+
+
+def test_frontend_subdir_package_uses_frontend_workdir(tmp_path: Path, monkeypatch) -> None:
+    _write_frontend_package(tmp_path)
+    monkeypatch.setattr("archmind.runner.shutil.which", lambda _: "/usr/bin/fake")
+
+    npm_cwds: list[Path] = []
+
+    def fake_run_cmd_capture(cmd: list[str], cwd: Path, timeout_s: int) -> CommandResult:
+        if cmd and cmd[0] == "npm":
+            npm_cwds.append(cwd)
+            if cmd[:2] == ["npm", "ci"]:
+                return CommandResult(cmd=cmd, cwd=cwd, exit_code=0, duration_s=0.01, stdout="ci ok", stderr="")
+            if cmd[:3] == ["npm", "run", "lint"]:
+                return CommandResult(cmd=cmd, cwd=cwd, exit_code=0, duration_s=0.01, stdout="lint ok", stderr="")
+        return CommandResult(cmd=cmd, cwd=cwd, exit_code=0, duration_s=0.01, stdout="", stderr="")
+
+    monkeypatch.setattr("archmind.runner.run_cmd_capture", fake_run_cmd_capture)
+
+    exit_code = main(["run", "--path", str(tmp_path), "--frontend-only"])
+    assert exit_code == 0
+    assert npm_cwds
+    assert all(cwd == (tmp_path / "frontend") for cwd in npm_cwds)
+
+
+def test_frontend_root_nextjs_uses_project_workdir(tmp_path: Path, monkeypatch) -> None:
+    _write_root_nextjs_package(tmp_path)
+    monkeypatch.setattr("archmind.runner.shutil.which", lambda _: "/usr/bin/fake")
+
+    npm_cwds: list[Path] = []
+
+    def fake_run_cmd_capture(cmd: list[str], cwd: Path, timeout_s: int) -> CommandResult:
+        if cmd and cmd[0] == "npm":
+            npm_cwds.append(cwd)
+            if cmd[:2] == ["npm", "ci"]:
+                return CommandResult(cmd=cmd, cwd=cwd, exit_code=0, duration_s=0.01, stdout="ci ok", stderr="")
+            if cmd[:3] == ["npm", "run", "lint"]:
+                return CommandResult(cmd=cmd, cwd=cwd, exit_code=0, duration_s=0.01, stdout="lint ok", stderr="")
+        return CommandResult(cmd=cmd, cwd=cwd, exit_code=0, duration_s=0.01, stdout="", stderr="")
+
+    monkeypatch.setattr("archmind.runner.run_cmd_capture", fake_run_cmd_capture)
+
+    exit_code = main(["run", "--path", str(tmp_path), "--frontend-only"])
+    assert exit_code == 0
+    assert npm_cwds
+    assert all(cwd == tmp_path for cwd in npm_cwds)
 
 
 def test_frontend_fail_sets_exit_2(tmp_path: Path, monkeypatch) -> None:

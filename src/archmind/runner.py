@@ -222,6 +222,24 @@ def _select_frontend_package_json(project_dir: Path) -> Optional[tuple[Path, Pat
     return None
 
 
+def _select_frontend_pipeline_package_json(project_dir: Path) -> Optional[tuple[Path, Path]]:
+    frontend_package = project_dir / "frontend" / "package.json"
+    if frontend_package.exists():
+        return frontend_package, frontend_package.parent
+
+    root_package = project_dir / "package.json"
+    nextjs_markers = (
+        project_dir / "next.config.mjs",
+        project_dir / "next.config.js",
+        project_dir / "app",
+        project_dir / "pages",
+    )
+    if root_package.exists() and any(marker.exists() for marker in nextjs_markers):
+        return root_package, project_dir
+
+    return None
+
+
 def _extract_failure_summary_lines(summary_path: Path, json_path: Optional[Path]) -> list[str]:
     if summary_path.exists():
         lines = summary_path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -670,10 +688,8 @@ def run_generic_shell_profile(config: RunConfig) -> list[ProfileStepResult]:
 
 
 def run_frontend_pipeline(config: RunConfig) -> FrontendResult:
-    frontend_dir = config.project_dir / "frontend"
-    package_json = frontend_dir / "package.json"
-
-    if not package_json.exists():
+    selected = _select_frontend_pipeline_package_json(config.project_dir)
+    if selected is None:
         return FrontendResult(
             status="ABSENT",
             node_detected=False,
@@ -681,8 +697,9 @@ def run_frontend_pipeline(config: RunConfig) -> FrontendResult:
             install_attempted=False,
             steps=[],
             summary_lines=[],
-            reason="frontend/package.json not found.",
+            reason="no frontend package.json or root nextjs project detected.",
         )
+    package_json, frontend_dir = selected
 
     node_detected = shutil.which("node") is not None
     npm_detected = shutil.which("npm") is not None
