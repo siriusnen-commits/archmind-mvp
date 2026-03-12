@@ -17,6 +17,7 @@ from archmind.telegram_bot import (
     command_logs,
     command_continue,
     command_fix,
+    command_status,
     command_help,
     command_retry,
     command_state,
@@ -35,6 +36,7 @@ from archmind.telegram_bot import (
     sanitize_log_excerpt,
     save_last_project_path,
     start_pipeline_process,
+    format_status_text,
     watch_retry_and_notify,
 )
 
@@ -901,6 +903,95 @@ def test_state_command_shows_running_state_quickly(monkeypatch, tmp_path: Path) 
     assert "Current state: RUNNING" in msg.sent[-1]
     assert "Current command: /continue" in msg.sent[-1]
     assert str(project_dir) in msg.sent[-1]
+
+
+def test_status_command_returns_summary(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "status_proj"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project_dir)
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "agent_state": "IDLE",
+                "iterations": 3,
+                "fix_attempts": 1,
+                "project_type": "frontend-web",
+                "effective_template": "nextjs",
+                "next_action": "run /fix",
+            }
+        ),
+        encoding="utf-8",
+    )
+    run_logs = archmind / "run_logs"
+    run_logs.mkdir(parents=True, exist_ok=True)
+    (run_logs / "run_20260312_120000.summary.json").write_text(
+        json.dumps({"backend": {"status": "SKIPPED"}, "frontend": {"status": "WARNING"}}),
+        encoding="utf-8",
+    )
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    ctx = DummyContext()
+    asyncio.run(command_status(update, ctx))
+
+    out = msg.sent[-1]
+    assert "ArchMind status" in out
+    assert "Project: status_proj" in out
+    assert "State: IDLE" in out
+    assert "Iterations: 3" in out
+    assert "Fix attempts: 1" in out
+    assert "Project type: frontend-web" in out
+    assert "Template: nextjs" in out
+    assert "Backend: SKIP" in out
+    assert "Frontend: WARNING" in out
+    assert "Next action:\nrun /fix" in out
+
+
+def test_status_command_works_when_running(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "status_running"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project_dir)
+    (archmind / "state.json").write_text(
+        json.dumps({"agent_state": "IDLE", "iterations": 4, "fix_attempts": 2, "project_type": "backend-api", "effective_template": "fastapi"}),
+        encoding="utf-8",
+    )
+    (archmind / "evaluation.json").write_text(json.dumps({"next_actions": ["run /continue"]}), encoding="utf-8")
+    run_logs = archmind / "run_logs"
+    run_logs.mkdir(parents=True, exist_ok=True)
+    (run_logs / "run_20260312_120000.summary.json").write_text(
+        json.dumps({"backend": {"status": "FAIL"}, "frontend": {"status": "ABSENT"}}),
+        encoding="utf-8",
+    )
+
+    class DummyProc:
+        pid = 1001
+
+        def poll(self) -> None:
+            return None
+
+    telegram_bot._register_running_job("/continue", "RUNNING", project_dir, proc=DummyProc())
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    ctx = DummyContext()
+    asyncio.run(command_status(update, ctx))
+
+    out = msg.sent[-1]
+    assert "State: RUNNING" in out
+    assert "Backend: FAIL" in out
+    assert "Frontend: ABSENT" in out
+    assert "Next action:\nrun /continue" in out
+
+
+def test_format_status_text_defaults_when_idle_without_artifacts(tmp_path: Path) -> None:
+    project_dir = tmp_path / "status_idle_default"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    out = format_status_text(project_dir)
+    assert "ArchMind status" in out
+    assert "Project: status_idle_default" in out
+    assert "State: IDLE" in out
+    assert "Backend: UNKNOWN" in out
+    assert "Frontend: UNKNOWN" in out
 
 
 def test_help_mentions_state_for_long_running_commands() -> None:

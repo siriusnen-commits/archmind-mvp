@@ -251,6 +251,7 @@ def _help_text() -> str:
         "/fix - run fix on the last project\n"
         "/retry - run fix and then continue on the last project\n"
         "Long-running commands may take time; use /state for progress.\n"
+        "/status - quick summary of current project state\n"
         "/logs [backend|frontend|last] - show recent failure logs\n"
         "/state - show latest project state\n"
         "/help - show this message"
@@ -628,6 +629,88 @@ def _latest_run_logs(project_dir: Path) -> list[Path]:
     for pattern in ("run_*.summary.txt", "run_*.summary.json", "run_*.log"):
         candidates.extend(run_logs.glob(pattern))
     return sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def _latest_run_summary_payload(project_dir: Path) -> dict[str, Any]:
+    run_logs = project_dir / ".archmind" / "run_logs"
+    if not run_logs.exists():
+        return {}
+    matches = sorted(run_logs.glob("run_*.summary.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not matches:
+        return {}
+    payload = _load_json(matches[0])
+    return payload or {}
+
+
+def _status_component_summary(project_dir: Path, result_payload: dict[str, Any]) -> tuple[str, str]:
+    summary_payload = _latest_run_summary_payload(project_dir)
+    backend = str((summary_payload.get("backend") or {}).get("status") or "").strip()
+    frontend = str((summary_payload.get("frontend") or {}).get("status") or "").strip()
+
+    if not backend or not frontend:
+        steps = result_payload.get("steps") if isinstance(result_payload, dict) else {}
+        if isinstance(steps, dict):
+            for key in ("run_after_fix", "run_before_fix"):
+                section = steps.get(key)
+                detail = section.get("detail") if isinstance(section, dict) else {}
+                if isinstance(detail, dict):
+                    backend = backend or str(detail.get("backend_status") or "").strip()
+                    frontend = frontend or str(detail.get("frontend_status") or "").strip()
+                if backend and frontend:
+                    break
+
+    return (_normalize_component_status(backend), _normalize_component_status(frontend))
+
+
+def format_status_text(project_dir: Path) -> str:
+    project_dir = project_dir.expanduser().resolve()
+    archmind_dir = project_dir / ".archmind"
+    state_payload = load_state(project_dir) or {}
+    result_payload = _load_json(archmind_dir / "result.json") or {}
+    evaluation_payload = _load_json(archmind_dir / "evaluation.json") or {}
+    running = _get_running_job()
+
+    if running is not None and running.project_dir == project_dir:
+        state_value = running.state
+    else:
+        state_value = str(state_payload.get("agent_state") or "").strip().upper() or "IDLE"
+        if state_value not in ("RUNNING", "IDLE", "FIXING", "RETRYING"):
+            state_value = "IDLE"
+
+    iterations = int(state_payload.get("iterations") or 0)
+    fix_attempts = int(state_payload.get("fix_attempts") or 0)
+    project_type = str(state_payload.get("project_type") or "unknown").strip() or "unknown"
+    template = str(state_payload.get("effective_template") or "unknown").strip() or "unknown"
+    backend_status, frontend_status = _status_component_summary(project_dir, result_payload)
+    state_next_action = str(state_payload.get("next_action") or "").strip()
+    eval_next_action = str((evaluation_payload.get("next_actions") or [""])[0]).strip()
+    if state_next_action and state_next_action.upper() not in ("STOP", "UNKNOWN"):
+        next_action = state_next_action
+    elif eval_next_action:
+        next_action = eval_next_action
+    elif state_next_action:
+        next_action = state_next_action
+    else:
+        next_action = "none"
+
+    lines = [
+        "ArchMind status",
+        "",
+        f"Project: {project_dir.name}",
+        f"State: {state_value}",
+        f"Iterations: {iterations}",
+        f"Fix attempts: {fix_attempts}",
+        f"Project type: {project_type}",
+        f"Template: {template}",
+        "",
+        "Last result:",
+        f"Backend: {backend_status}",
+        f"Frontend: {frontend_status}",
+        "",
+        "Next action:",
+        next_action,
+    ]
+    return _truncate_message("\n".join(lines), limit=1200)
 
 
 def _extract_candidate_lines(text: str, mode: str) -> list[str]:
@@ -1326,6 +1409,15 @@ async def command_state(update: Any, context: Any) -> None:
     await update.message.reply_text(_truncate_message(output))
 
 
+async def command_status(update: Any, context: Any) -> None:
+    del context
+    project_path = load_last_project_path()
+    if project_path is None:
+        await update.message.reply_text("No project yet. Start with /idea <text> first.")
+        return
+    await update.message.reply_text(format_status_text(project_path))
+
+
 async def command_logs(update: Any, context: Any) -> None:
     project_path = load_last_project_path()
     if project_path is None:
@@ -1371,5 +1463,6 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("retry", command_retry))
     app.add_handler(CommandHandler("logs", command_logs))
     app.add_handler(CommandHandler("state", command_state))
+    app.add_handler(CommandHandler("status", command_status))
     app.add_handler(CommandHandler("help", command_help))
     app.run_polling()
