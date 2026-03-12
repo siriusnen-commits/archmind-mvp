@@ -294,6 +294,8 @@ def _help_text() -> str:
         "/use <n|name> - select a project to work on\n"
         "/current - show currently selected project\n"
         "/tree [n] - show project directory tree\n"
+        "/open <path> - open a file from the current project\n"
+        "/diff - show recent diff for the current project\n"
         "/logs [backend|frontend|last] - show recent failure logs\n"
         "/state - show latest project state\n"
         "/help - show this message"
@@ -854,6 +856,87 @@ def format_project_tree(project_dir: Path, depth: int = 2, max_depth: int = 4, m
     if truncated:
         lines.append("... (truncated)")
     return _truncate_message("\n".join(lines), limit=3900)
+
+
+def format_file_preview(project_dir: Path, rel_path: str, max_lines: int = 120) -> str:
+    root = project_dir.expanduser().resolve()
+    value = str(rel_path or "").strip()
+    if not value:
+        return "Usage: /open <path>"
+
+    target = Path(value)
+    if target.is_absolute() or ".." in target.parts:
+        return "Invalid path. Use a project-relative file path."
+
+    file_path = (root / target).resolve()
+    try:
+        file_path.relative_to(root)
+    except Exception:
+        return "Invalid path. Use a project-relative file path."
+
+    if not file_path.exists():
+        return f"File not found: {value}"
+    if file_path.is_dir():
+        return f"Path is a directory: {value}"
+    if file_path.stat().st_size > 1_000_000:
+        return f"File too large to preview: {value}"
+
+    raw = file_path.read_bytes()
+    if b"\x00" in raw:
+        return f"Binary file not supported: {value}"
+
+    try:
+        text = raw.decode("utf-8")
+    except Exception:
+        return f"Could not decode file as UTF-8: {value}"
+
+    lines = text.splitlines()
+    out: list[str] = [f"File: {value}", ""]
+    for idx, line in enumerate(lines[:max_lines], start=1):
+        out.append(f"{idx} | {line}")
+    if len(lines) > max_lines:
+        out.append("... (truncated)")
+    return _truncate_message("\n".join(out), limit=3900)
+
+
+def format_recent_diff(project_dir: Path, max_lines: int = 120) -> str:
+    root = project_dir.expanduser().resolve()
+    run_logs = root / ".archmind" / "run_logs"
+    patch_content = ""
+    if run_logs.exists():
+        candidates = sorted(run_logs.glob("fix_*.patch.diff"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for candidate in candidates:
+            text = candidate.read_text(encoding="utf-8", errors="replace")
+            if text.strip():
+                patch_content = text
+                break
+
+    if not patch_content:
+        git_dir = root / ".git"
+        if git_dir.exists():
+            try:
+                completed = subprocess.run(  # noqa: S603
+                    ["git", "diff", "--", "."],
+                    cwd=root,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    shell=False,
+                    check=False,
+                )
+                patch_content = (completed.stdout or "").strip()
+            except Exception:
+                patch_content = ""
+
+    if not patch_content.strip():
+        return "No recent diff available."
+
+    lines = patch_content.splitlines()
+    out = ["Recent diff", ""]
+    out.extend(lines[:max_lines])
+    if len(lines) > max_lines:
+        out.append("... (truncated)")
+    return _truncate_message("\n".join(out), limit=3900)
 
 
 def _extract_candidate_lines(text: str, mode: str) -> list[str]:
@@ -1633,6 +1716,27 @@ async def command_tree(update: Any, context: Any) -> None:
     await update.message.reply_text(format_project_tree(project_path, depth=depth))
 
 
+async def command_open(update: Any, context: Any) -> None:
+    args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
+    if not args:
+        await update.message.reply_text("Usage: /open <path>")
+        return
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text("No project selected. Use /projects then /use <n>.")
+        return
+    await update.message.reply_text(format_file_preview(project_path, " ".join(args)))
+
+
+async def command_diff(update: Any, context: Any) -> None:
+    del context
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text("No project selected. Use /projects then /use <n>.")
+        return
+    await update.message.reply_text(format_recent_diff(project_path))
+
+
 async def command_logs(update: Any, context: Any) -> None:
     project_path = _resolve_target_project()
     if project_path is None:
@@ -1680,6 +1784,8 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("current", command_current))
     app.add_handler(CommandHandler("logs", command_logs))
     app.add_handler(CommandHandler("tree", command_tree))
+    app.add_handler(CommandHandler("open", command_open))
+    app.add_handler(CommandHandler("diff", command_diff))
     app.add_handler(CommandHandler("projects", command_projects))
     app.add_handler(CommandHandler("state", command_state))
     app.add_handler(CommandHandler("status", command_status))

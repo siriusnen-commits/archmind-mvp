@@ -18,6 +18,8 @@ from archmind.telegram_bot import (
     command_continue,
     command_fix,
     command_current,
+    command_diff,
+    command_open,
     command_tree,
     command_use,
     command_projects,
@@ -45,6 +47,8 @@ from archmind.telegram_bot import (
     start_pipeline_process,
     format_projects_list,
     format_project_tree,
+    format_file_preview,
+    format_recent_diff,
     format_status_text,
     list_recent_projects,
     watch_retry_and_notify,
@@ -1272,6 +1276,123 @@ def test_tree_output_truncates_when_too_long(tmp_path: Path) -> None:
     assert "... (truncated)" in out
 
 
+def test_open_works_for_valid_file(tmp_path: Path) -> None:
+    project = tmp_path / "open_valid_proj"
+    file_path = project / "app" / "page.tsx"
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text("export default function Page() {\n  return <main>Hello</main>\n}\n", encoding="utf-8")
+    set_current_project(project)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_open(update, DummyContext(args=["app/page.tsx"])))
+    out = msg.sent[-1]
+    assert "File: app/page.tsx" in out
+    assert "1 | export default function Page() {" in out
+
+
+def test_open_rejects_missing_file(tmp_path: Path) -> None:
+    project = tmp_path / "open_missing_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_open(update, DummyContext(args=["app/missing.tsx"])))
+    assert "File not found: app/missing.tsx" in msg.sent[-1]
+
+
+def test_open_rejects_directory(tmp_path: Path) -> None:
+    project = tmp_path / "open_dir_proj"
+    (project / "app").mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_open(update, DummyContext(args=["app"])))
+    assert "Path is a directory: app" in msg.sent[-1]
+
+
+def test_open_rejects_path_escape(tmp_path: Path) -> None:
+    project = tmp_path / "open_escape_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_open(update, DummyContext(args=["../secret.txt"])))
+    assert "Invalid path. Use a project-relative file path." in msg.sent[-1]
+
+
+def test_open_truncates_long_file(tmp_path: Path) -> None:
+    project = tmp_path / "open_truncate_proj"
+    file_path = project / "notes.txt"
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text("\n".join([f"line {i}" for i in range(180)]), encoding="utf-8")
+    out = format_file_preview(project, "notes.txt", max_lines=40)
+    assert "... (truncated)" in out
+
+
+def test_diff_returns_latest_fix_patch_when_present(tmp_path: Path) -> None:
+    project = tmp_path / "diff_patch_proj"
+    run_logs = project / ".archmind" / "run_logs"
+    run_logs.mkdir(parents=True, exist_ok=True)
+    (run_logs / "fix_20260312.patch.diff").write_text(
+        "--- a/app/page.tsx\n+++ b/app/page.tsx\n@@\n-old line\n+new line\n",
+        encoding="utf-8",
+    )
+    set_current_project(project)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_diff(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "Recent diff" in out
+    assert "--- a/app/page.tsx" in out
+    assert "+new line" in out
+
+
+def test_diff_falls_back_to_git_diff_when_no_patch_exists(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "diff_git_proj"
+    (project / ".git").mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+
+    class DummyCompleted:
+        def __init__(self) -> None:
+            self.stdout = "--- a/file.txt\n+++ b/file.txt\n@@\n-old\n+new\n"
+            self.returncode = 0
+
+    monkeypatch.setattr("archmind.telegram_bot.subprocess.run", lambda *a, **k: DummyCompleted())
+    out = format_recent_diff(project)
+    assert "Recent diff" in out
+    assert "--- a/file.txt" in out
+    assert "+new" in out
+
+
+def test_diff_returns_no_diff_message_when_nothing_available(tmp_path: Path) -> None:
+    project = tmp_path / "diff_none_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    out = format_recent_diff(project)
+    assert out == "No recent diff available."
+
+
+def test_open_and_diff_use_current_project_when_set(monkeypatch, tmp_path: Path) -> None:
+    current = tmp_path / "current_open_diff"
+    other = tmp_path / "other_open_diff"
+    (current / "app").mkdir(parents=True, exist_ok=True)
+    (other / "app").mkdir(parents=True, exist_ok=True)
+    (current / "app" / "page.tsx").write_text("current", encoding="utf-8")
+    (other / "app" / "page.tsx").write_text("other", encoding="utf-8")
+    run_logs = current / ".archmind" / "run_logs"
+    run_logs.mkdir(parents=True, exist_ok=True)
+    (run_logs / "fix_current.patch.diff").write_text("--- a/x\n+++ b/x\n+current\n", encoding="utf-8")
+    set_current_project(current)
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: other)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_open(update, DummyContext(args=["app/page.tsx"])))
+    assert "current" in msg.sent[-1]
+
+    asyncio.run(command_diff(update, DummyContext()))
+    assert "+current" in msg.sent[-1]
+
+
 def test_format_projects_list_limits_to_ten_projects(monkeypatch, tmp_path: Path) -> None:
     root = tmp_path / "projects"
     root.mkdir(parents=True, exist_ok=True)
@@ -1301,6 +1422,8 @@ def test_help_mentions_state_for_long_running_commands() -> None:
     assert "/use <n|name> - select a project to work on" in msg.sent[-1]
     assert "/current - show currently selected project" in msg.sent[-1]
     assert "/tree [n] - show project directory tree" in msg.sent[-1]
+    assert "/open <path> - open a file from the current project" in msg.sent[-1]
+    assert "/diff - show recent diff for the current project" in msg.sent[-1]
 
 
 def test_watch_retry_accumulates_existing_fix_attempts(monkeypatch, tmp_path: Path) -> None:
