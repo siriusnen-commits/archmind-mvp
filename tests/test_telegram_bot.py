@@ -17,6 +17,8 @@ from archmind.telegram_bot import (
     command_logs,
     command_continue,
     command_fix,
+    command_current,
+    command_use,
     command_projects,
     command_status,
     command_help,
@@ -34,11 +36,15 @@ from archmind.telegram_bot import (
     build_logs_message,
     resolve_template_for_idea,
     run_state_command,
+    resolve_project_selection,
     sanitize_log_excerpt,
     save_last_project_path,
+    set_current_project,
+    get_current_project,
     start_pipeline_process,
     format_projects_list,
     format_status_text,
+    list_recent_projects,
     watch_retry_and_notify,
 )
 
@@ -46,8 +52,10 @@ from archmind.telegram_bot import (
 @pytest.fixture(autouse=True)
 def _reset_running_job() -> None:
     telegram_bot._clear_running_job()
+    telegram_bot.clear_current_project()
     yield
     telegram_bot._clear_running_job()
+    telegram_bot.clear_current_project()
 
 
 def test_extract_idea_parsing() -> None:
@@ -1044,6 +1052,151 @@ def test_projects_command_returns_list(monkeypatch, tmp_path: Path) -> None:
     assert "Template: fastapi" in out
 
 
+def test_use_by_index_works(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(root))
+    for name in ("20260312_p1", "20260312_p2"):
+        project = root / name
+        (project / ".archmind").mkdir(parents=True, exist_ok=True)
+        (project / ".archmind" / "state.json").write_text(
+            json.dumps({"last_status": "NOT_DONE", "project_type": "backend-api", "effective_template": "fastapi"}),
+            encoding="utf-8",
+        )
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    ctx = DummyContext(args=["1"])
+    asyncio.run(command_use(update, ctx))
+
+    assert msg.sent
+    assert "selected current project:" in msg.sent[-1]
+    assert get_current_project() is not None
+
+
+def test_use_by_project_name_works(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(root))
+    project = root / "20260312_named_proj"
+    (project / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project / ".archmind" / "state.json").write_text(
+        json.dumps({"last_status": "DONE", "project_type": "frontend-web", "effective_template": "nextjs"}),
+        encoding="utf-8",
+    )
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    ctx = DummyContext(args=["20260312_named_proj"])
+    asyncio.run(command_use(update, ctx))
+
+    assert msg.sent
+    assert "selected current project: 20260312_named_proj" in msg.sent[-1]
+    assert get_current_project() == project.resolve()
+
+
+def test_invalid_use_returns_error(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(root))
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+
+    asyncio.run(command_use(update, DummyContext(args=["3"])))
+    assert "invalid index" in msg.sent[-1]
+
+    asyncio.run(command_use(update, DummyContext(args=["missing_project"])))
+    assert "project not found" in msg.sent[-1]
+
+
+def test_current_shows_selected_project(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "current_proj"
+    archmind = project / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "state.json").write_text(
+        json.dumps({"last_status": "DONE", "project_type": "frontend-web", "effective_template": "nextjs"}),
+        encoding="utf-8",
+    )
+    set_current_project(project)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_current(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "Current project" in out
+    assert "Project: current_proj" in out
+    assert "Status: DONE" in out
+    assert "Type: frontend-web" in out
+    assert "Template: nextjs" in out
+
+
+def test_projects_marks_current_project(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(root))
+    p1 = root / "p1"
+    p2 = root / "p2"
+    (p1 / ".archmind").mkdir(parents=True, exist_ok=True)
+    (p2 / ".archmind").mkdir(parents=True, exist_ok=True)
+    set_current_project(p2)
+    out = format_projects_list()
+    assert "p2 [current]" in out
+
+
+def test_status_uses_current_project_when_set(monkeypatch, tmp_path: Path) -> None:
+    current = tmp_path / "current_status_proj"
+    other = tmp_path / "other_status_proj"
+    for project, typ in ((current, "frontend-web"), (other, "backend-api")):
+        archmind = project / ".archmind"
+        archmind.mkdir(parents=True, exist_ok=True)
+        (archmind / "state.json").write_text(
+            json.dumps({"agent_state": "IDLE", "iterations": 1, "fix_attempts": 0, "project_type": typ, "effective_template": "nextjs"}),
+            encoding="utf-8",
+        )
+    set_current_project(current)
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: other)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_status(update, DummyContext()))
+    assert "Project: current_status_proj" in msg.sent[-1]
+
+
+def test_fix_continue_retry_use_current_project_when_set(monkeypatch, tmp_path: Path) -> None:
+    current = tmp_path / "current_ops_proj"
+    other = tmp_path / "other_ops_proj"
+    current.mkdir(parents=True, exist_ok=True)
+    other.mkdir(parents=True, exist_ok=True)
+    set_current_project(current)
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: other)
+    monkeypatch.setattr("archmind.telegram_bot._status_from_sources", lambda _p: "NOT_DONE")
+
+    used: list[Path] = []
+
+    def fake_set_agent_state(project_dir_arg, state, **kwargs):  # type: ignore[no-untyped-def]
+        del state, kwargs
+        used.append(project_dir_arg)
+        return {}
+
+    class DummyProc:
+        pid = 999
+
+        def poll(self) -> None:
+            return None
+
+    monkeypatch.setattr("archmind.telegram_bot.set_agent_state", fake_set_agent_state)
+    monkeypatch.setattr("archmind.telegram_bot.start_background_process", lambda *a, **k: DummyProc())
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_continue(update, DummyContext(application=None)))
+    telegram_bot._clear_running_job()
+    asyncio.run(command_fix(update, DummyContext(application=None)))
+    telegram_bot._clear_running_job()
+    asyncio.run(command_retry(update, DummyContext(application=None)))
+
+    assert used
+    assert all(path == current for path in used)
+
+
 def test_format_projects_list_limits_to_ten_projects(monkeypatch, tmp_path: Path) -> None:
     root = tmp_path / "projects"
     root.mkdir(parents=True, exist_ok=True)
@@ -1070,6 +1223,8 @@ def test_help_mentions_state_for_long_running_commands() -> None:
     assert msg.sent
     assert "Long-running commands may take time; use /state for progress." in msg.sent[-1]
     assert "/projects - list recent ArchMind projects" in msg.sent[-1]
+    assert "/use <n|name> - select a project to work on" in msg.sent[-1]
+    assert "/current - show currently selected project" in msg.sent[-1]
 
 
 def test_watch_retry_accumulates_existing_fix_attempts(monkeypatch, tmp_path: Path) -> None:

@@ -36,6 +36,7 @@ class _RunningJob:
 
 _RUNNING_JOB: Optional[_RunningJob] = None
 _RUNNING_JOB_SEQ = 0
+_CURRENT_PROJECT: Optional[Path] = None
 
 
 def _is_job_active(job: _RunningJob) -> bool:
@@ -62,6 +63,35 @@ def _clear_running_job(job_id: Optional[int] = None) -> None:
         return
     if job_id is None or _RUNNING_JOB.job_id == job_id:
         _RUNNING_JOB = None
+
+
+def set_current_project(project_dir: Path) -> None:
+    global _CURRENT_PROJECT
+    _CURRENT_PROJECT = project_dir.expanduser().resolve()
+
+
+def clear_current_project() -> None:
+    global _CURRENT_PROJECT
+    _CURRENT_PROJECT = None
+
+
+def get_current_project() -> Optional[Path]:
+    if _CURRENT_PROJECT is None:
+        return None
+    project_dir = _CURRENT_PROJECT.expanduser().resolve()
+    if project_dir.exists() and project_dir.is_dir():
+        return project_dir
+    return None
+
+
+def _resolve_target_project() -> Optional[Path]:
+    current = get_current_project()
+    if current is not None:
+        return current
+    last = load_last_project_path()
+    if last is not None and last.exists() and last.is_dir():
+        return last
+    return None
 
 
 def _register_running_job(
@@ -261,6 +291,8 @@ def _help_text() -> str:
         "Long-running commands may take time; use /state for progress.\n"
         "/status - quick summary of current project state\n"
         "/projects - list recent ArchMind projects\n"
+        "/use <n|name> - select a project to work on\n"
+        "/current - show currently selected project\n"
         "/logs [backend|frontend|last] - show recent failure logs\n"
         "/state - show latest project state\n"
         "/help - show this message"
@@ -640,6 +672,31 @@ def _latest_run_logs(project_dir: Path) -> list[Path]:
     return sorted(candidates, key=lambda p: p.stat().st_mtime, reverse=True)
 
 
+def list_recent_projects(projects_dir: Optional[Path] = None, limit: int = 10) -> list[Path]:
+    root = (projects_dir or resolve_projects_dir()).expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        return []
+    projects = [path for path in root.iterdir() if path.is_dir()]
+    projects.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return projects[: max(0, int(limit))]
+
+
+def resolve_project_selection(selection: str, projects: Optional[list[Path]] = None) -> Optional[Path]:
+    value = str(selection or "").strip()
+    if not value:
+        return None
+    candidates = projects if projects is not None else list_recent_projects()
+    if value.isdigit():
+        idx = int(value)
+        if idx <= 0 or idx > len(candidates):
+            return None
+        return candidates[idx - 1]
+    for project in candidates:
+        if project.name == value:
+            return project
+    return None
+
+
 def _latest_run_summary_payload(project_dir: Path) -> dict[str, Any]:
     run_logs = project_dir / ".archmind" / "run_logs"
     if not run_logs.exists():
@@ -723,16 +780,11 @@ def format_status_text(project_dir: Path) -> str:
 
 
 def format_projects_list(projects_dir: Optional[Path] = None, limit: int = 10) -> str:
-    root = (projects_dir or resolve_projects_dir()).expanduser().resolve()
-    if not root.exists() or not root.is_dir():
-        return "Recent ArchMind projects\n\n(no projects found)"
-
-    projects = [path for path in root.iterdir() if path.is_dir()]
-    projects.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    picked = projects[: max(0, int(limit))]
+    picked = list_recent_projects(projects_dir=projects_dir, limit=limit)
     if not picked:
         return "Recent ArchMind projects\n\n(no projects found)"
 
+    current = get_current_project()
     lines: list[str] = ["Recent ArchMind projects", ""]
     for idx, project_dir in enumerate(picked, start=1):
         state_payload = _load_json(project_dir / ".archmind" / "state.json") or {}
@@ -744,7 +796,8 @@ def format_projects_list(projects_dir: Optional[Path] = None, limit: int = 10) -
         )
         project_type = str(state_payload.get("project_type") or "unknown").strip() or "unknown"
         template = str(state_payload.get("effective_template") or "unknown").strip() or "unknown"
-        lines.append(f"{idx}. {project_dir.name}")
+        marker = " [current]" if current is not None and project_dir.resolve() == current.resolve() else ""
+        lines.append(f"{idx}. {project_dir.name}{marker}")
         lines.append(f"   Status: {status}")
         lines.append(f"   Type: {project_type}")
         lines.append(f"   Template: {template}")
@@ -1286,7 +1339,7 @@ async def _handle_continue(update: Any, context: Any) -> None:
         await update.message.reply_text(_busy_message(running))
         return
 
-    project_dir = load_last_project_path()
+    project_dir = _resolve_target_project()
     if project_dir is None:
         await update.message.reply_text(_missing_project_message())
         return
@@ -1328,7 +1381,7 @@ async def _handle_fix(update: Any, context: Any) -> None:
         await update.message.reply_text(_busy_message(running))
         return
 
-    project_dir = load_last_project_path()
+    project_dir = _resolve_target_project()
     if project_dir is None:
         await update.message.reply_text(_missing_project_message())
         return
@@ -1368,7 +1421,7 @@ async def _handle_retry(update: Any, context: Any) -> None:
         await update.message.reply_text(_busy_message(running))
         return
 
-    project_dir = load_last_project_path()
+    project_dir = _resolve_target_project()
     if project_dir is None:
         await update.message.reply_text(_missing_project_message())
         return
@@ -1427,7 +1480,7 @@ async def command_retry(update: Any, context: Any) -> None:
 
 async def command_state(update: Any, context: Any) -> None:
     del context
-    project_path = load_last_project_path()
+    project_path = _resolve_target_project()
     if project_path is None:
         await update.message.reply_text("No project yet. Start with /idea <text> first.")
         return
@@ -1451,11 +1504,58 @@ async def command_state(update: Any, context: Any) -> None:
 
 async def command_status(update: Any, context: Any) -> None:
     del context
-    project_path = load_last_project_path()
+    project_path = _resolve_target_project()
     if project_path is None:
         await update.message.reply_text("No project yet. Start with /idea <text> first.")
         return
     await update.message.reply_text(format_status_text(project_path))
+
+
+async def command_current(update: Any, context: Any) -> None:
+    del context
+    project_path = get_current_project()
+    if project_path is None:
+        await update.message.reply_text("No current project selected. Use /projects then /use <n>.")
+        return
+
+    state_payload = _load_json(project_path / ".archmind" / "state.json") or {}
+    result_payload = _load_json(project_path / ".archmind" / "result.json") or {}
+    status = (
+        str(state_payload.get("last_status") or "").strip().upper()
+        or str(result_payload.get("status") or "").strip().upper()
+        or "UNKNOWN"
+    )
+    project_type = str(state_payload.get("project_type") or "unknown").strip() or "unknown"
+    template = str(state_payload.get("effective_template") or "unknown").strip() or "unknown"
+    message = (
+        "Current project\n\n"
+        f"Project: {project_path.name}\n"
+        f"Status: {status}\n"
+        f"Type: {project_type}\n"
+        f"Template: {template}"
+    )
+    await update.message.reply_text(message)
+
+
+async def command_use(update: Any, context: Any) -> None:
+    args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
+    if not args:
+        await update.message.reply_text("Usage: /use <n|project_name>")
+        return
+
+    projects = list_recent_projects()
+    selection = args[0]
+    target = resolve_project_selection(selection, projects=projects)
+    if target is None:
+        if selection.isdigit():
+            await update.message.reply_text("invalid index")
+        else:
+            await update.message.reply_text("project not found")
+        return
+
+    set_current_project(target)
+    save_last_project_path(target)
+    await update.message.reply_text(f"selected current project: {target.name}")
 
 
 async def command_projects(update: Any, context: Any) -> None:
@@ -1464,7 +1564,7 @@ async def command_projects(update: Any, context: Any) -> None:
 
 
 async def command_logs(update: Any, context: Any) -> None:
-    project_path = load_last_project_path()
+    project_path = _resolve_target_project()
     if project_path is None:
         await update.message.reply_text(_missing_project_message())
         return
@@ -1506,9 +1606,11 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("continue", command_continue))
     app.add_handler(CommandHandler("fix", command_fix))
     app.add_handler(CommandHandler("retry", command_retry))
+    app.add_handler(CommandHandler("use", command_use))
+    app.add_handler(CommandHandler("current", command_current))
     app.add_handler(CommandHandler("logs", command_logs))
+    app.add_handler(CommandHandler("projects", command_projects))
     app.add_handler(CommandHandler("state", command_state))
     app.add_handler(CommandHandler("status", command_status))
-    app.add_handler(CommandHandler("projects", command_projects))
     app.add_handler(CommandHandler("help", command_help))
     app.run_polling()
