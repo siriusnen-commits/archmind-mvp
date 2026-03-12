@@ -456,6 +456,8 @@ def _has_explicit_error(line: str) -> bool:
     lower = line.lower()
     if re.search(r"\b0 errors?\b", lower):
         return False
+    if re.search(r"\bno\b[^.\n]*\berrors?\b", lower):
+        return False
     if "parsing error" in lower:
         return True
     if "failed to compile" in lower:
@@ -474,6 +476,8 @@ def _has_explicit_error(line: str) -> bool:
 def _has_warning(line: str) -> bool:
     lower = line.lower()
     if re.search(r"\b0 warnings?\b", lower):
+        return False
+    if re.search(r"\bno\b[^.\n]*\bwarnings?\b", lower):
         return False
     if re.search(r"\bwarnings?\b", lower):
         return True

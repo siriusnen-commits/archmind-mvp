@@ -4,6 +4,7 @@ from pathlib import Path
 
 from archmind.cli import main
 from archmind.runner import CommandResult, RunConfig, run_frontend_pipeline
+import json
 
 
 def _write_pytest_pass_project(root: Path) -> None:
@@ -245,6 +246,46 @@ def test_frontend_fail_sets_exit_2(tmp_path: Path, monkeypatch) -> None:
     assert exit_code == 2
 
     assert not any("npm run build" in c for c in calls)
+
+
+def test_frontend_clean_lint_message_is_success_and_not_failure_summary(tmp_path: Path, monkeypatch) -> None:
+    _write_frontend_package(tmp_path)
+    monkeypatch.setattr("archmind.runner.shutil.which", lambda _: "/usr/bin/fake")
+
+    def fake_run_cmd_capture(cmd: list[str], cwd: Path, timeout_s: int) -> CommandResult:
+        if cmd[:2] == ["npm", "ci"]:
+            return CommandResult(cmd=cmd, cwd=cwd, exit_code=0, duration_s=0.01, stdout="ci ok", stderr="")
+        if cmd[:3] == ["npm", "run", "lint"]:
+            return CommandResult(
+                cmd=cmd,
+                cwd=cwd,
+                exit_code=0,
+                duration_s=0.01,
+                stdout="✔ No ESLint warnings or errors\n",
+                stderr="",
+            )
+        if cmd[:3] == ["npm", "run", "test"]:
+            return CommandResult(cmd=cmd, cwd=cwd, exit_code=0, duration_s=0.01, stdout="test ok", stderr="")
+        if cmd[:3] == ["npm", "run", "build"]:
+            return CommandResult(cmd=cmd, cwd=cwd, exit_code=0, duration_s=0.01, stdout="build ok", stderr="")
+        return CommandResult(cmd=cmd, cwd=cwd, exit_code=0, duration_s=0.01, stdout="", stderr="")
+
+    monkeypatch.setattr("archmind.runner.run_cmd_capture", fake_run_cmd_capture)
+
+    exit_code = main(["run", "--path", str(tmp_path), "--frontend-only"])
+    assert exit_code == 0
+
+    summary_text = _find_summary(tmp_path).read_text(encoding="utf-8")
+    assert "Frontend:" in summary_text
+    assert "status: PASS" in summary_text
+    assert "Failure summary:" not in summary_text
+    assert "frontend failed:" not in summary_text
+    assert "Warning summary:" not in summary_text
+
+    result_payload = json.loads((tmp_path / ".archmind" / "result.json").read_text(encoding="utf-8"))
+    assert result_payload.get("status") == "SUCCESS"
+    assert result_payload.get("failure_summary") == []
+    assert result_payload.get("warning_summary") == []
 
 
 def test_frontend_lint_warning_only_is_not_fail(tmp_path: Path, monkeypatch) -> None:
