@@ -5,7 +5,7 @@ from pathlib import Path
 
 from archmind.cli import main
 from archmind.state import derive_task_label_from_failure_signature
-from archmind.state import ensure_state, format_state_text, load_state, update_after_fix, update_state_event
+from archmind.state import clear_progress_step, ensure_state, format_state_text, load_state, set_progress_step, update_after_fix, update_state_event
 
 
 def _write_backend_project(root: Path, *, failing: bool = False) -> None:
@@ -26,6 +26,30 @@ def test_state_created_and_updated_after_run(tmp_path: Path) -> None:
     assert state["iterations"] >= 1
     assert "archmind run" in state["last_action"]
     assert state["last_status"] in {"SUCCESS", "SKIP", "FAIL", "STUCK"}
+
+
+def test_progress_step_fields_are_recorded_and_cleared(tmp_path: Path) -> None:
+    ensure_state(tmp_path)
+    set_progress_step(
+        tmp_path,
+        "running_checks",
+        "Running checks",
+        status="RUNNING",
+        detail="backend/frontend checks",
+    )
+    state = load_state(tmp_path)
+    assert state is not None
+    assert state.get("current_step_key") == "running_checks"
+    assert state.get("current_step_label") == "Running checks"
+    assert state.get("current_step_status") == "RUNNING"
+    assert state.get("current_step_detail") == "backend/frontend checks"
+    assert state.get("last_progress_at")
+
+    clear_progress_step(tmp_path)
+    cleared = load_state(tmp_path)
+    assert cleared is not None
+    assert cleared.get("current_step_key") == ""
+    assert cleared.get("current_step_label") == ""
 
 
 def test_run_invokes_environment_readiness_check(tmp_path: Path, monkeypatch) -> None:

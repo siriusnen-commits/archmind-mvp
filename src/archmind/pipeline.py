@@ -19,7 +19,7 @@ from archmind.template_selector import (
     select_template_for_project_type,
 )
 from archmind.runner import RunConfig, RunResult, compute_run_status, run_pipeline
-from archmind.state import ensure_state, load_state, set_agent_state, update_after_fix, update_after_run, write_state
+from archmind.state import ensure_state, load_state, set_agent_state, set_progress_step, update_after_fix, update_after_run, write_state
 from archmind.tasks import current_task, ensure_tasks
 
 
@@ -498,7 +498,28 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         ensure_environment_readiness(project_dir)
         if opts.idea:
             set_agent_state(project_dir, "PLANNING", action="pipeline planning", summary="idea to project planning")
+            set_progress_step(
+                project_dir,
+                "planning",
+                "Planning architecture",
+                status="RUNNING",
+                detail="analyzing idea",
+            )
+            set_progress_step(
+                project_dir,
+                "generating",
+                "Generating project scaffold",
+                status="RUNNING",
+                detail=f"template={effective_template}",
+            )
         set_agent_state(project_dir, "RUNNING", action="pipeline run", summary="pipeline execution started")
+        set_progress_step(
+            project_dir,
+            "running_checks",
+            "Running checks",
+            status="RUNNING",
+            detail="backend/frontend checks",
+        )
     except Exception as exc:
         print(f"[WARN] state initialization failed: {exc}", file=sys.stderr)
 
@@ -541,6 +562,16 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
     run_result: Optional[RunResult] = None
 
     for iteration in range(1, opts.max_iterations + 1):
+        try:
+            set_progress_step(
+                project_dir,
+                "running_checks",
+                "Running checks",
+                status="RUNNING",
+                detail=f"iteration={iteration}",
+            )
+        except Exception:
+            pass
         run_result = run_pipeline(run_config)
         run_status, _ = compute_run_status(run_result)
         try:
@@ -562,6 +593,13 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
                 "FIXING",
                 action=f"pipeline fix iteration {iteration}",
                 summary=f"pipeline fix iteration {iteration} started",
+            )
+            set_progress_step(
+                project_dir,
+                "fixing",
+                "Applying fixes",
+                status="RUNNING",
+                detail=f"iteration={iteration}",
             )
         except Exception as exc:
             print(f"[WARN] state phase(FIXING) failed: {exc}", file=sys.stderr)
@@ -594,6 +632,13 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
                 "RUNNING",
                 action=f"pipeline rerun iteration {iteration}",
                 summary=f"pipeline rerun iteration {iteration} started",
+            )
+            set_progress_step(
+                project_dir,
+                "running_checks",
+                "Running checks",
+                status="RUNNING",
+                detail=f"rerun iteration={iteration}",
             )
         except Exception as exc:
             print(f"[WARN] state phase(RUNNING) failed: {exc}", file=sys.stderr)
@@ -709,6 +754,16 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
     evaluation_payload = None
     evaluation_path: Optional[Path] = None
     try:
+        set_progress_step(
+            project_dir,
+            "evaluating",
+            "Evaluating results",
+            status="RUNNING",
+            detail="final evaluation",
+        )
+    except Exception:
+        pass
+    try:
         evaluation_payload, evaluation_path = write_evaluation(project_dir)
     except Exception as exc:
         print(f"[WARN] evaluation failed: {exc}", file=sys.stderr)
@@ -742,6 +797,22 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         write_state(project_dir, synced_state)
     except Exception as exc:
         print(f"[WARN] state template metadata sync failed: {exc}", file=sys.stderr)
+
+    try:
+        finished_detail = (
+            str(evaluation_payload.get("status"))
+            if isinstance(evaluation_payload, dict) and evaluation_payload.get("status")
+            else status
+        )
+        set_progress_step(
+            project_dir,
+            "finished",
+            "Finished",
+            status="DONE" if status == "SUCCESS" else "NOT_DONE",
+            detail=str(finished_detail),
+        )
+    except Exception:
+        pass
 
     if status != "SUCCESS":
         summary = _latest_run_summary(project_dir)

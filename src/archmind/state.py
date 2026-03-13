@@ -67,6 +67,10 @@ def _now() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
+def _now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
 def _safe_status(value: str) -> str:
     status = (value or "").upper()
     return status if status in LAST_STATUSES else "UNKNOWN"
@@ -294,6 +298,11 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "last_bootstrap_actions": [],
         "next_action": "STOP",
         "next_action_reason": "",
+        "current_step_key": "",
+        "current_step_label": "",
+        "current_step_status": "",
+        "current_step_detail": "",
+        "last_progress_at": "",
         "project_type": "unknown",
         "selected_template": "unknown",
         "effective_template": "unknown",
@@ -364,6 +373,11 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     payload["template_fallback_reason"] = str(payload.get("template_fallback_reason") or "").strip()[:220]
     payload["next_action"] = str(payload.get("next_action") or "STOP").strip()[:20]
     payload["next_action_reason"] = str(payload.get("next_action_reason") or "").strip()[:220]
+    payload["current_step_key"] = str(payload.get("current_step_key") or "").strip()[:40]
+    payload["current_step_label"] = str(payload.get("current_step_label") or "").strip()[:120]
+    payload["current_step_status"] = str(payload.get("current_step_status") or "").strip()[:20]
+    payload["current_step_detail"] = str(payload.get("current_step_detail") or "").strip()[:220]
+    payload["last_progress_at"] = str(payload.get("last_progress_at") or "").strip()[:40]
     history = payload.get("history")
     if not isinstance(history, list):
         payload["history"] = []
@@ -647,6 +661,35 @@ def set_agent_state(
     return payload
 
 
+def set_progress_step(
+    project_dir: Path,
+    step_key: str,
+    step_label: str,
+    *,
+    status: str = "RUNNING",
+    detail: Optional[str] = None,
+) -> dict[str, Any]:
+    payload = ensure_state(project_dir.expanduser().resolve())
+    payload["current_step_key"] = str(step_key or "").strip()
+    payload["current_step_label"] = str(step_label or "").strip()
+    payload["current_step_status"] = str(status or "RUNNING").strip().upper()
+    payload["current_step_detail"] = str(detail or "").strip()
+    payload["last_progress_at"] = _now_iso()
+    write_state(project_dir, payload)
+    return payload
+
+
+def clear_progress_step(project_dir: Path) -> dict[str, Any]:
+    payload = ensure_state(project_dir.expanduser().resolve())
+    payload["current_step_key"] = ""
+    payload["current_step_label"] = ""
+    payload["current_step_status"] = ""
+    payload["current_step_detail"] = ""
+    payload["last_progress_at"] = _now_iso()
+    write_state(project_dir, payload)
+    return payload
+
+
 def update_environment_readiness(
     project_dir: Path,
     *,
@@ -843,6 +886,14 @@ def format_state_text(project_dir: Path) -> str:
     next_reason = str(decision.get("reason") or payload.get("next_action_reason") or "")
     env_issue = str(payload.get("environment_issue") or "env-readiness-ok")
     env_reason = str(payload.get("environment_issue_reason") or "").strip()
+    progress_label = str(payload.get("current_step_label") or "").strip()
+    progress_status = str(payload.get("current_step_status") or "").strip()
+    progress_detail = str(payload.get("current_step_detail") or "").strip()
+    progress_text = progress_label or "(none)"
+    if progress_detail:
+        progress_text = f"{progress_text} ({progress_detail})"
+    if progress_status:
+        progress_text = f"{progress_text} [{progress_status}]"
     bootstrap_actions = payload.get("last_bootstrap_actions")
     if not isinstance(bootstrap_actions, list):
         bootstrap_actions = []
@@ -861,6 +912,7 @@ def format_state_text(project_dir: Path) -> str:
         f"Failure class: {payload.get('last_failure_class') or 'unknown'}",
         f"Environment issue: {env_issue}",
         f"Environment reason: {env_reason or '(none)'}",
+        f"Progress: {progress_text}",
         f"Next action: {next_action}",
         f"Reason: {next_reason or '(none)'}",
         "Bootstrap actions:",

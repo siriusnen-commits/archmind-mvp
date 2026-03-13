@@ -712,6 +712,7 @@ def test_continue_started_message_contains_running_state(monkeypatch, tmp_path: 
     assert "continuing: pid=555" in msg.sent[-1]
     assert "command=/continue" in msg.sent[-1]
     assert "state=RUNNING" in msg.sent[-1]
+    assert "progress=Running checks" in msg.sent[-1]
 
 
 def test_busy_message_when_long_running_command_already_running(monkeypatch, tmp_path: Path) -> None:
@@ -737,7 +738,8 @@ def test_busy_message_when_long_running_command_already_running(monkeypatch, tmp
     assert len(msg.sent) >= 2
     assert "ArchMind is already processing a command." in msg.sent[-1]
     assert "Current state: RUNNING" in msg.sent[-1]
-    assert "Use /state to inspect current progress." in msg.sent[-1]
+    assert "Progress: Running checks" in msg.sent[-1]
+    assert "Use /status to inspect current progress." in msg.sent[-1]
 
 
 def test_retry_done_status_is_blocked_with_message(monkeypatch, tmp_path: Path) -> None:
@@ -918,6 +920,7 @@ def test_state_command_shows_running_state_quickly(monkeypatch, tmp_path: Path) 
 
     assert "Current state: RUNNING" in msg.sent[-1]
     assert "Current command: /continue" in msg.sent[-1]
+    assert "Progress: Running checks" in msg.sent[-1]
     assert str(project_dir) in msg.sent[-1]
 
 
@@ -994,6 +997,7 @@ def test_status_command_works_when_running(monkeypatch, tmp_path: Path) -> None:
 
     out = msg.sent[-1]
     assert "State: RUNNING" in out
+    assert "Progress: Running checks" in out
     assert "Backend: FAIL" in out
     assert "Frontend: ABSENT" in out
     assert "Next action:\nrun /continue" in out

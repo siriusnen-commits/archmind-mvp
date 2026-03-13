@@ -125,12 +125,14 @@ def _attach_running_task(job: _RunningJob, task: asyncio.Task[Any]) -> None:
 
 
 def _busy_message(job: _RunningJob) -> str:
+    progress = _progress_text(job.project_dir, fallback=_progress_fallback_for_command(job.command))
     return (
         "ArchMind is already processing a command.\n"
         f"Current state: {job.state}\n"
         f"Current command: {job.command}\n"
         f"Project: {job.project_dir.name}\n"
-        "Use /state to inspect current progress."
+        f"Progress: {progress}\n"
+        "Use /status to inspect current progress."
     )
 
 
@@ -330,6 +332,30 @@ def _status_from_sources(project_dir: Path) -> str:
     if result and result.get("status"):
         return str(result.get("status"))
     return "UNKNOWN"
+
+
+def _progress_fallback_for_command(command: str) -> str:
+    cmd = str(command or "").strip().lower()
+    if cmd in ("/idea", "/pipeline"):
+        return "Planning architecture"
+    if cmd == "/continue":
+        return "Running checks"
+    if cmd == "/fix":
+        return "Applying fixes"
+    if cmd == "/retry":
+        return "Applying fixes"
+    return "Running"
+
+
+def _progress_text(project_dir: Path, fallback: str = "") -> str:
+    state = _load_json(project_dir / ".archmind" / "state.json") or {}
+    label = str(state.get("current_step_label") or "").strip()
+    detail = str(state.get("current_step_detail") or "").strip()
+    if label and detail:
+        return f"{label} ({detail})"
+    if label:
+        return label
+    return fallback or "unknown"
 
 
 def _current_task_label(project_dir: Path, status: str) -> Optional[str]:
@@ -751,6 +777,10 @@ def format_status_text(project_dir: Path) -> str:
     project_type = str(state_payload.get("project_type") or "unknown").strip() or "unknown"
     template = str(state_payload.get("effective_template") or "unknown").strip() or "unknown"
     backend_status, frontend_status = _status_component_summary(project_dir, result_payload)
+    if running is not None and running.project_dir == project_dir:
+        progress = _progress_text(project_dir, fallback=_progress_fallback_for_command(running.command))
+    else:
+        progress = _progress_text(project_dir, fallback="none")
     state_next_action = str(state_payload.get("next_action") or "").strip()
     eval_next_action = str((evaluation_payload.get("next_actions") or [""])[0]).strip()
     if state_next_action and state_next_action.upper() not in ("STOP", "UNKNOWN"):
@@ -767,6 +797,7 @@ def format_status_text(project_dir: Path) -> str:
         "",
         f"Project: {project_dir.name}",
         f"State: {state_value}",
+        f"Progress: {progress}",
         f"Iterations: {iterations}",
         f"Fix attempts: {fix_attempts}",
         f"Project type: {project_type}",
@@ -1462,7 +1493,12 @@ async def _handle_idea_like(update: Any, context: Any, cmd_name: str) -> None:
         _attach_running_task(job, task)
 
     await update.message.reply_text(
-        f"started: pid={proc.pid}\ncommand=/{cmd_name}\nproject={project_dir}\nstate=RUNNING\nlog={log_path}"
+        f"started: pid={proc.pid}\n"
+        f"command=/{cmd_name}\n"
+        f"project={project_dir}\n"
+        f"state=RUNNING\n"
+        f"progress={_progress_fallback_for_command(f'/{cmd_name}')}\n"
+        f"log={log_path}"
     )
 
 
@@ -1504,7 +1540,11 @@ async def _handle_continue(update: Any, context: Any) -> None:
         )
         _attach_running_task(job, task)
     await update.message.reply_text(
-        f"continuing: pid={proc.pid}\ncommand=/continue\nproject={project_dir}\nstate=RUNNING"
+        f"continuing: pid={proc.pid}\n"
+        f"command=/continue\n"
+        f"project={project_dir}\n"
+        f"state=RUNNING\n"
+        f"progress={_progress_text(project_dir, fallback='Running checks')}"
     )
 
 
@@ -1545,7 +1585,13 @@ async def _handle_fix(update: Any, context: Any) -> None:
             )
         )
         _attach_running_task(job, task)
-    await update.message.reply_text(f"fix started: pid={proc.pid}\ncommand=/fix\nproject={project_dir}\nstate=FIXING")
+    await update.message.reply_text(
+        f"fix started: pid={proc.pid}\n"
+        f"command=/fix\n"
+        f"project={project_dir}\n"
+        f"state=FIXING\n"
+        f"progress={_progress_text(project_dir, fallback='Applying fixes')}"
+    )
 
 
 async def _handle_retry(update: Any, context: Any) -> None:
@@ -1587,7 +1633,12 @@ async def _handle_retry(update: Any, context: Any) -> None:
         _attach_running_task(job, task)
 
     await update.message.reply_text(
-        f"retry started\ncommand=/retry\nproject={project_dir}\nmode=fix -> continue\nstate=RETRYING{warn}"
+        f"retry started\n"
+        f"command=/retry\n"
+        f"project={project_dir}\n"
+        f"mode=fix -> continue\n"
+        f"state=RETRYING\n"
+        f"progress={_progress_text(project_dir, fallback='Applying fixes')}{warn}"
     )
 
 
@@ -1624,6 +1675,7 @@ async def command_state(update: Any, context: Any) -> None:
                 f"Current state: {running.state}\n"
                 f"Current command: {running.command}\n"
                 f"Project: {running.project_dir}\n"
+                f"Progress: {_progress_text(running.project_dir, fallback=_progress_fallback_for_command(running.command))}\n"
                 "Use /state again later for a full snapshot."
             )
         )

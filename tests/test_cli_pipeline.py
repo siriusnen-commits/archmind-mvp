@@ -131,6 +131,9 @@ def test_pipeline_idea_generates_and_runs(tmp_path: Path, monkeypatch) -> None:
     history = state_payload.get("history") or []
     assert any("pipeline planning" in str(item.get("action") or "") for item in history if isinstance(item, dict))
     assert any("pipeline run" in str(item.get("action") or "") for item in history if isinstance(item, dict))
+    assert state_payload.get("current_step_key") == "finished"
+    assert state_payload.get("current_step_label") == "Finished"
+    assert state_payload.get("last_progress_at")
 
 
 def test_pipeline_idea_generator_receives_effective_template_for_frontend_web(tmp_path: Path, monkeypatch) -> None:
