@@ -298,6 +298,7 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "last_bootstrap_actions": [],
         "next_action": "STOP",
         "next_action_reason": "",
+        "github_repo_url": "",
         "current_step_key": "",
         "current_step_label": "",
         "current_step_status": "",
@@ -373,6 +374,7 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     payload["template_fallback_reason"] = str(payload.get("template_fallback_reason") or "").strip()[:220]
     payload["next_action"] = str(payload.get("next_action") or "STOP").strip()[:20]
     payload["next_action_reason"] = str(payload.get("next_action_reason") or "").strip()[:220]
+    payload["github_repo_url"] = str(payload.get("github_repo_url") or "").strip()[:300]
     payload["current_step_key"] = str(payload.get("current_step_key") or "").strip()[:40]
     payload["current_step_label"] = str(payload.get("current_step_label") or "").strip()[:120]
     payload["current_step_status"] = str(payload.get("current_step_status") or "").strip()[:20]
@@ -912,6 +914,7 @@ def format_state_text(project_dir: Path) -> str:
         f"Failure class: {payload.get('last_failure_class') or 'unknown'}",
         f"Environment issue: {env_issue}",
         f"Environment reason: {env_reason or '(none)'}",
+        f"GitHub repo: {payload.get('github_repo_url') or '(none)'}",
         f"Progress: {progress_text}",
         f"Next action: {next_action}",
         f"Reason: {next_reason or '(none)'}",
@@ -969,6 +972,7 @@ def state_prompt_summary(project_dir: Path) -> list[str]:
         f"- environment_issue: {payload.get('environment_issue', 'env-readiness-ok')}",
         f"- next_action: {decision.get('action', payload.get('next_action', 'STOP'))}",
         f"- next_action_reason: {decision.get('reason', payload.get('next_action_reason', ''))}",
+        f"- github_repo_url: {payload.get('github_repo_url', '')}",
         "- recent_failures:",
     ]
     if failures:

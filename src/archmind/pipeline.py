@@ -11,6 +11,7 @@ from typing import Any, Optional
 from archmind.fixer import run_fix_loop
 from archmind.environment import ensure_environment_readiness
 from archmind.evaluator import write_evaluation
+from archmind.github_repo import create_github_repo
 from archmind.planner import write_project_plan
 from archmind.project_type import detect_project_type, normalize_project_type
 from archmind.template_selector import (
@@ -560,6 +561,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
     rerun_exit: Optional[int] = None
     rerun_result: Optional[RunResult] = None
     run_result: Optional[RunResult] = None
+    github_repo_url: Optional[str] = None
 
     for iteration in range(1, opts.max_iterations + 1):
         try:
@@ -700,6 +702,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
 
     payload = {
         "status": status,
+        "github_repo_url": None,
         "project_type": project_type,
         "selected_template": selected_template,
         "effective_template": effective_template,
@@ -798,6 +801,27 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
     except Exception as exc:
         print(f"[WARN] state template metadata sync failed: {exc}", file=sys.stderr)
 
+    if status == "SUCCESS" and opts.idea:
+        try:
+            github_repo_url = create_github_repo(project_dir)
+        except Exception as exc:
+            github_repo_url = None
+            print(f"[WARN] github repo creation failed: {exc}", file=sys.stderr)
+        if github_repo_url:
+            payload["github_repo_url"] = github_repo_url
+            try:
+                write_result(project_dir, payload)
+            except Exception as exc:
+                print(f"[WARN] result github_repo_url sync failed: {exc}", file=sys.stderr)
+            try:
+                synced_state = load_state(project_dir) or {}
+                synced_state["github_repo_url"] = github_repo_url
+                write_state(project_dir, synced_state)
+            except Exception as exc:
+                print(f"[WARN] state github_repo_url sync failed: {exc}", file=sys.stderr)
+        elif opts.idea:
+            print("[WARN] github repo creation skipped/failed.", file=sys.stderr)
+
     try:
         finished_detail = (
             str(evaluation_payload.get("status"))
@@ -822,6 +846,9 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
 
     if status == "SUCCESS":
         print(f"[DONE] SUCCESS. result: {result_json}")
+        if github_repo_url:
+            print("GitHub repo:")
+            print(github_repo_url)
         if state_payload:
             print(f"[STATE] {state_payload.get('last_status')} iterations={state_payload.get('iterations')}")
         if evaluation_payload:

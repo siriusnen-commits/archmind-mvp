@@ -776,6 +776,7 @@ def format_status_text(project_dir: Path) -> str:
     fix_attempts = int(state_payload.get("fix_attempts") or 0)
     project_type = str(state_payload.get("project_type") or "unknown").strip() or "unknown"
     template = str(state_payload.get("effective_template") or "unknown").strip() or "unknown"
+    github_repo_url = str(state_payload.get("github_repo_url") or result_payload.get("github_repo_url") or "").strip()
     backend_status, frontend_status = _status_component_summary(project_dir, result_payload)
     if running is not None and running.project_dir == project_dir:
         progress = _progress_text(project_dir, fallback=_progress_fallback_for_command(running.command))
@@ -802,14 +803,20 @@ def format_status_text(project_dir: Path) -> str:
         f"Fix attempts: {fix_attempts}",
         f"Project type: {project_type}",
         f"Template: {template}",
-        "",
-        "Last result:",
-        f"Backend: {backend_status}",
-        f"Frontend: {frontend_status}",
-        "",
-        "Next action:",
-        next_action,
     ]
+    if github_repo_url:
+        lines.append(f"GitHub repo: {github_repo_url}")
+    lines.extend(
+        [
+            "",
+            "Last result:",
+            f"Backend: {backend_status}",
+            f"Frontend: {frontend_status}",
+            "",
+            "Next action:",
+            next_action,
+        ]
+    )
     return _truncate_message("\n".join(lines), limit=1200)
 
 
@@ -1288,6 +1295,7 @@ def build_finished_message(
             fallback_lines=fallback_lines,
         )
     next_actions = _recommend_next_actions(status, summary_lines, state, evaluation, result)[:3]
+    github_repo_url = str(state.get("github_repo_url") or result.get("github_repo_url") or "").strip()
 
     lines = [
         "ArchMind finished",
@@ -1312,6 +1320,12 @@ def build_finished_message(
         "Summary:",
     ]
     lines.extend(f"- {line}" for line in summary_lines[:5])
+    if github_repo_url:
+        lines += [
+            "",
+            "GitHub repo:",
+            github_repo_url,
+        ]
     if next_actions:
         lines += [
             "",

@@ -220,6 +220,23 @@ def test_build_completion_message_reads_result_state_json(tmp_path: Path) -> Non
     assert "- run /logs backend" in message
 
 
+def test_build_completion_message_includes_github_repo_url_when_present(tmp_path: Path) -> None:
+    project_dir = tmp_path / "repo_msg"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "result.json").write_text(
+        json.dumps({"status": "SUCCESS", "github_repo_url": "https://github.com/siriusnen-commits/repo_msg"}),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps({"last_status": "DONE", "iterations": 1, "fix_attempts": 0, "github_repo_url": "https://github.com/siriusnen-commits/repo_msg"}),
+        encoding="utf-8",
+    )
+    msg = build_completion_message(project_dir, tmp_path / "unused.log")
+    assert "GitHub repo:" in msg
+    assert "https://github.com/siriusnen-commits/repo_msg" in msg
+
+
 def test_build_completion_message_fallbacks_to_temp_log(tmp_path: Path) -> None:
     project_dir = tmp_path / "p2"
     project_dir.mkdir(parents=True, exist_ok=True)
