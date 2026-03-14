@@ -35,6 +35,7 @@ AGENT_STATES = (
 )
 
 HEALTHCHECK_STATUSES = ("SUCCESS", "FAIL", "SKIPPED")
+SERVICE_DEPLOY_STATUSES = ("SUCCESS", "FAIL", "SKIPPED")
 
 
 def derive_task_label_from_failure_signature(signature: str) -> str:
@@ -86,6 +87,11 @@ def _safe_optional_status(value: str) -> str:
 def _safe_healthcheck_status(value: str) -> str:
     status = (value or "").upper()
     return status if status in HEALTHCHECK_STATUSES else ""
+
+
+def _safe_service_deploy_status(value: str) -> str:
+    status = (value or "").upper()
+    return status if status in SERVICE_DEPLOY_STATUSES else ""
 
 
 def _safe_agent_state(value: str) -> str:
@@ -312,9 +318,16 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "next_action_reason": "",
         "github_repo_url": "",
         "deploy_target": "",
+        "deploy_kind": "",
         "last_deploy_status": "",
         "deploy_url": "",
         "last_deploy_detail": "",
+        "backend_deploy_url": "",
+        "backend_deploy_status": "",
+        "backend_deploy_detail": "",
+        "frontend_deploy_url": "",
+        "frontend_deploy_status": "",
+        "frontend_deploy_detail": "",
         "healthcheck_url": "",
         "healthcheck_status": "",
         "healthcheck_detail": "",
@@ -395,9 +408,16 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     payload["next_action_reason"] = str(payload.get("next_action_reason") or "").strip()[:220]
     payload["github_repo_url"] = str(payload.get("github_repo_url") or "").strip()[:300]
     payload["deploy_target"] = str(payload.get("deploy_target") or "").strip()[:40]
+    payload["deploy_kind"] = str(payload.get("deploy_kind") or "").strip()[:20]
     payload["last_deploy_status"] = _safe_optional_status(str(payload.get("last_deploy_status") or ""))
     payload["deploy_url"] = str(payload.get("deploy_url") or "").strip()[:300]
     payload["last_deploy_detail"] = str(payload.get("last_deploy_detail") or "").strip()[:220]
+    payload["backend_deploy_url"] = str(payload.get("backend_deploy_url") or "").strip()[:300]
+    payload["backend_deploy_status"] = _safe_service_deploy_status(str(payload.get("backend_deploy_status") or ""))
+    payload["backend_deploy_detail"] = str(payload.get("backend_deploy_detail") or "").strip()[:220]
+    payload["frontend_deploy_url"] = str(payload.get("frontend_deploy_url") or "").strip()[:300]
+    payload["frontend_deploy_status"] = _safe_service_deploy_status(str(payload.get("frontend_deploy_status") or ""))
+    payload["frontend_deploy_detail"] = str(payload.get("frontend_deploy_detail") or "").strip()[:220]
     payload["healthcheck_url"] = str(payload.get("healthcheck_url") or "").strip()[:300]
     payload["healthcheck_status"] = _safe_healthcheck_status(str(payload.get("healthcheck_status") or ""))
     payload["healthcheck_detail"] = str(payload.get("healthcheck_detail") or "").strip()[:220]
@@ -841,6 +861,7 @@ def update_after_deploy(
     payload = ensure_state(project_dir)
 
     target = str(result.get("target") or "").strip()
+    kind = str(result.get("kind") or "").strip().lower() or "backend"
     status = _safe_optional_status(str(result.get("status") or ""))
     detail = _sanitize_line(str(result.get("detail") or ""), project_dir)
     raw_url = result.get("url")
@@ -851,12 +872,33 @@ def update_after_deploy(
     healthcheck_detail = _sanitize_line(str(result.get("healthcheck_detail") or ""), project_dir)
 
     payload["deploy_target"] = target[:40]
+    payload["deploy_kind"] = kind[:20]
     payload["last_deploy_status"] = status
     payload["deploy_url"] = deploy_url[:300]
     payload["last_deploy_detail"] = detail[:220]
     payload["healthcheck_url"] = healthcheck_url[:300]
     payload["healthcheck_status"] = healthcheck_status
     payload["healthcheck_detail"] = healthcheck_detail[:220]
+    backend = result.get("backend")
+    if isinstance(backend, dict):
+        payload["backend_deploy_url"] = str(backend.get("url") or "").strip()[:300]
+        payload["backend_deploy_status"] = _safe_service_deploy_status(str(backend.get("status") or ""))
+        payload["backend_deploy_detail"] = _sanitize_line(str(backend.get("detail") or ""), project_dir)[:220]
+    elif kind == "backend":
+        payload["backend_deploy_url"] = deploy_url[:300]
+        payload["backend_deploy_status"] = _safe_service_deploy_status(status or "SUCCESS")
+        payload["backend_deploy_detail"] = detail[:220]
+
+    frontend = result.get("frontend")
+    if isinstance(frontend, dict):
+        payload["frontend_deploy_url"] = str(frontend.get("url") or "").strip()[:300]
+        payload["frontend_deploy_status"] = _safe_service_deploy_status(str(frontend.get("status") or ""))
+        payload["frontend_deploy_detail"] = _sanitize_line(str(frontend.get("detail") or ""), project_dir)[:220]
+    elif kind == "frontend":
+        payload["frontend_deploy_url"] = deploy_url[:300]
+        payload["frontend_deploy_status"] = _safe_service_deploy_status(status or "SUCCESS")
+        payload["frontend_deploy_detail"] = detail[:220]
+
     payload["last_action"] = _sanitize_line(action, project_dir)
 
     _append_history(
@@ -988,9 +1030,14 @@ def format_state_text(project_dir: Path) -> str:
         f"Environment reason: {env_reason or '(none)'}",
         f"GitHub repo: {payload.get('github_repo_url') or '(none)'}",
         f"Deploy target: {payload.get('deploy_target') or '(none)'}",
+        f"Deploy kind: {payload.get('deploy_kind') or '(none)'}",
         f"Deploy status: {payload.get('last_deploy_status') or '(none)'}",
         f"Deploy URL: {payload.get('deploy_url') or '(none)'}",
         f"Deploy detail: {payload.get('last_deploy_detail') or '(none)'}",
+        f"Backend deploy status: {payload.get('backend_deploy_status') or '(none)'}",
+        f"Backend deploy URL: {payload.get('backend_deploy_url') or '(none)'}",
+        f"Frontend deploy status: {payload.get('frontend_deploy_status') or '(none)'}",
+        f"Frontend deploy URL: {payload.get('frontend_deploy_url') or '(none)'}",
         f"Health URL: {payload.get('healthcheck_url') or '(none)'}",
         f"Health status: {payload.get('healthcheck_status') or '(none)'}",
         f"Health detail: {payload.get('healthcheck_detail') or '(none)'}",
@@ -1053,9 +1100,16 @@ def state_prompt_summary(project_dir: Path) -> list[str]:
         f"- next_action_reason: {decision.get('reason', payload.get('next_action_reason', ''))}",
         f"- github_repo_url: {payload.get('github_repo_url', '')}",
         f"- deploy_target: {payload.get('deploy_target', '')}",
+        f"- deploy_kind: {payload.get('deploy_kind', '')}",
         f"- last_deploy_status: {payload.get('last_deploy_status', '')}",
         f"- deploy_url: {payload.get('deploy_url', '')}",
         f"- last_deploy_detail: {payload.get('last_deploy_detail', '')}",
+        f"- backend_deploy_status: {payload.get('backend_deploy_status', '')}",
+        f"- backend_deploy_url: {payload.get('backend_deploy_url', '')}",
+        f"- backend_deploy_detail: {payload.get('backend_deploy_detail', '')}",
+        f"- frontend_deploy_status: {payload.get('frontend_deploy_status', '')}",
+        f"- frontend_deploy_url: {payload.get('frontend_deploy_url', '')}",
+        f"- frontend_deploy_detail: {payload.get('frontend_deploy_detail', '')}",
         f"- healthcheck_url: {payload.get('healthcheck_url', '')}",
         f"- healthcheck_status: {payload.get('healthcheck_status', '')}",
         f"- healthcheck_detail: {payload.get('healthcheck_detail', '')}",

@@ -43,6 +43,7 @@ def _deploy_fail(target: str, detail: str, *, mode: str = "mock") -> dict[str, A
         "ok": False,
         "target": target,
         "mode": mode,
+        "kind": "backend",
         "status": "FAIL",
         "url": None,
         "detail": detail,
@@ -113,6 +114,29 @@ def _run_railway(cmd: list[str], *, cwd: Path | None = None) -> subprocess.Compl
     )
 
 
+def detect_deploy_kind(project_dir: Path) -> str:
+    root = project_dir.expanduser().resolve()
+    has_backend = any(
+        (
+            (root / "app").is_dir(),
+            (root / "requirements.txt").exists(),
+            (root / "pytest.ini").exists(),
+        )
+    )
+    has_frontend = any(
+        (
+            (root / "frontend").is_dir(),
+            (root / "package.json").exists(),
+            ((root / "next.config.mjs").exists() and (root / "app").is_dir()),
+        )
+    )
+    if has_backend and has_frontend:
+        return "fullstack"
+    if has_frontend:
+        return "frontend"
+    return "backend"
+
+
 def verify_deploy_health(
     deploy_url: str,
     path: str = "/health",
@@ -178,7 +202,25 @@ def verify_deploy_health(
     }
 
 
-def deploy_to_railway_mock(project_dir: Path) -> dict[str, Any]:
+def _service_result(status: str, url: str | None, detail: str) -> dict[str, Any]:
+    return {
+        "status": status,
+        "url": url,
+        "detail": detail,
+    }
+
+
+def _placeholder_backend_url(project_dir: Path) -> str:
+    slug = generate_deploy_slug(project_dir.name or "archmind-app")
+    return f"https://api-{slug}.up.railway.app"
+
+
+def _placeholder_frontend_url(project_dir: Path) -> str:
+    slug = generate_deploy_slug(project_dir.name or "archmind-app")
+    return f"https://web-{slug}.up.railway.app"
+
+
+def deploy_to_railway_mock(project_dir: Path, kind: str = "backend") -> dict[str, Any]:
     project_dir = project_dir.expanduser().resolve()
     if not project_dir.exists() or not project_dir.is_dir():
         return _deploy_fail("railway", f"path is not a directory: {project_dir}", mode="mock")
@@ -187,10 +229,43 @@ def deploy_to_railway_mock(project_dir: Path) -> dict[str, Any]:
     if not can_deploy:
         return _deploy_fail("railway", detail, mode="mock")
 
+    if kind == "fullstack":
+        backend_url = _placeholder_backend_url(project_dir)
+        frontend_url = _placeholder_frontend_url(project_dir)
+        return {
+            "ok": True,
+            "target": "railway",
+            "mode": "mock",
+            "kind": "fullstack",
+            "status": "SUCCESS",
+            "url": frontend_url,
+            "detail": "mock fullstack deploy success",
+            "backend": _service_result("SUCCESS", backend_url, "mock backend deploy success"),
+            "frontend": _service_result("SUCCESS", frontend_url, "mock frontend deploy success"),
+            "healthcheck_url": "",
+            "healthcheck_status": "SKIPPED",
+            "healthcheck_detail": "mock deploy mode",
+        }
+    if kind == "frontend":
+        frontend_url = _placeholder_frontend_url(project_dir)
+        return {
+            "ok": True,
+            "target": "railway",
+            "mode": "mock",
+            "kind": "frontend",
+            "status": "SUCCESS",
+            "url": frontend_url,
+            "detail": "mock frontend deploy success",
+            "healthcheck_url": "",
+            "healthcheck_status": "SKIPPED",
+            "healthcheck_detail": "frontend health check not implemented",
+        }
+
     return {
         "ok": True,
         "target": "railway",
         "mode": "mock",
+        "kind": "backend",
         "status": "SUCCESS",
         "url": MOCK_RAILWAY_URL,
         "detail": "mock deploy success (real deploy disabled)",
@@ -200,7 +275,43 @@ def deploy_to_railway_mock(project_dir: Path) -> dict[str, Any]:
     }
 
 
-def deploy_to_railway_real(project_dir: Path) -> dict[str, Any]:
+def deploy_to_railway_real(project_dir: Path, kind: str = "backend") -> dict[str, Any]:
+    if kind == "frontend":
+        return {
+            "ok": True,
+            "target": "railway",
+            "mode": "real",
+            "kind": "frontend",
+            "status": "SUCCESS",
+            "url": None,
+            "detail": "real frontend deploy not implemented yet",
+            "healthcheck_url": "",
+            "healthcheck_status": "SKIPPED",
+            "healthcheck_detail": "frontend health check not implemented",
+        }
+    if kind == "fullstack":
+        backend_result = deploy_to_railway_real(project_dir, kind="backend")
+        frontend_result = _service_result("SKIPPED", None, "real frontend deploy not implemented yet")
+        top_status = "SUCCESS" if bool(backend_result.get("ok")) else "FAIL"
+        return {
+            "ok": bool(backend_result.get("ok")),
+            "target": "railway",
+            "mode": "real",
+            "kind": "fullstack",
+            "status": top_status,
+            "url": backend_result.get("url"),
+            "detail": "fullstack deploy completed (frontend skipped)",
+            "backend": _service_result(
+                str(backend_result.get("status") or "FAIL"),
+                backend_result.get("url"),
+                str(backend_result.get("detail") or ""),
+            ),
+            "frontend": frontend_result,
+            "healthcheck_url": str(backend_result.get("healthcheck_url") or ""),
+            "healthcheck_status": str(backend_result.get("healthcheck_status") or "SKIPPED"),
+            "healthcheck_detail": str(backend_result.get("healthcheck_detail") or ""),
+        }
+
     project_dir = project_dir.expanduser().resolve()
     if not project_dir.exists() or not project_dir.is_dir():
         return _deploy_fail("railway", f"path is not a directory: {project_dir}", mode="real")
@@ -232,6 +343,7 @@ def deploy_to_railway_real(project_dir: Path) -> dict[str, Any]:
         "ok": True,
         "target": "railway",
         "mode": "real",
+        "kind": "backend",
         "status": "SUCCESS",
         "url": deploy_url,
         "detail": "railway deploy success",
@@ -244,10 +356,10 @@ def deploy_to_railway_real(project_dir: Path) -> dict[str, Any]:
     return result
 
 
-def deploy_to_railway(project_dir: Path, allow_real_deploy: bool = False) -> dict[str, Any]:
+def deploy_to_railway(project_dir: Path, allow_real_deploy: bool = False, kind: str = "backend") -> dict[str, Any]:
     if allow_real_deploy:
-        return deploy_to_railway_real(project_dir)
-    return deploy_to_railway_mock(project_dir)
+        return deploy_to_railway_real(project_dir, kind=kind)
+    return deploy_to_railway_mock(project_dir, kind=kind)
 
 
 def deploy_project(
@@ -259,10 +371,9 @@ def deploy_project(
     resolved_target = (target or "").strip().lower()
     if not resolved_target:
         resolved_target = detect_deploy_target(project_dir)
+    kind = detect_deploy_kind(project_dir)
     if resolved_target == "railway":
-        if allow_real_deploy:
-            return deploy_to_railway_real(project_dir)
-        return deploy_to_railway_mock(project_dir)
+        return deploy_to_railway(project_dir, allow_real_deploy=allow_real_deploy, kind=kind)
     return _deploy_fail(
         resolved_target or "unknown",
         f"unsupported deploy target: {resolved_target or 'unknown'}",

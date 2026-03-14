@@ -1862,31 +1862,53 @@ async def command_deploy(update: Any, context: Any) -> None:
         str(result.get("target") or target),
     ]
     mode = str(result.get("mode") or ("real" if allow_real_deploy else "mock")).strip()
+    kind = str(result.get("kind") or "backend").strip().lower()
     lines.append("")
     lines.append(f"Mode: {mode}")
-    lines.extend(
-        [
-            "",
-            "Status:",
-            str(result.get("status") or "UNKNOWN"),
-        ]
-    )
-    url = str(result.get("url") or "").strip()
-    if url:
-        lines.extend(["", "Deploy URL:", url])
-    if mode == "real":
-        health_status = str(result.get("healthcheck_status") or "").strip().upper()
-        health_url = str(result.get("healthcheck_url") or "").strip()
-        health_detail = str(result.get("healthcheck_detail") or "").strip()
-        if health_status:
-            lines.extend(["", "Health check:", health_status])
-            if health_url:
-                lines.extend(["", "Health URL:", health_url])
-            if health_detail and health_status != "SUCCESS":
-                lines.extend(["", "Detail:", health_detail])
-    detail = str(result.get("detail") or "").strip()
-    if detail:
-        lines.extend(["", "Detail:", detail])
+    lines.extend(["", "Kind:", kind])
+
+    if kind == "fullstack":
+        backend = result.get("backend") if isinstance(result.get("backend"), dict) else {}
+        frontend = result.get("frontend") if isinstance(result.get("frontend"), dict) else {}
+        lines.extend(["", "Backend:", str(backend.get("status") or "UNKNOWN")])
+        backend_url = str(backend.get("url") or "").strip()
+        if backend_url:
+            lines.append(backend_url)
+        backend_detail = str(backend.get("detail") or "").strip()
+        if backend_detail and str(backend.get("status") or "").upper() != "SUCCESS":
+            lines.append(backend_detail)
+
+        lines.extend(["", "Frontend:", str(frontend.get("status") or "UNKNOWN")])
+        frontend_url = str(frontend.get("url") or "").strip()
+        if frontend_url:
+            lines.append(frontend_url)
+        frontend_detail = str(frontend.get("detail") or "").strip()
+        if frontend_detail and str(frontend.get("status") or "").upper() != "SUCCESS":
+            lines.append(frontend_detail)
+    else:
+        lines.extend(
+            [
+                "",
+                "Status:",
+                str(result.get("status") or "UNKNOWN"),
+            ]
+        )
+        url = str(result.get("url") or "").strip()
+        if url:
+            lines.extend(["", "Deploy URL:", url])
+        if mode == "real":
+            health_status = str(result.get("healthcheck_status") or "").strip().upper()
+            health_url = str(result.get("healthcheck_url") or "").strip()
+            health_detail = str(result.get("healthcheck_detail") or "").strip()
+            if health_status:
+                lines.extend(["", "Health check:", health_status])
+                if health_url:
+                    lines.extend(["", "Health URL:", health_url])
+                if health_detail and health_status != "SUCCESS":
+                    lines.extend(["", "Detail:", health_detail])
+        detail = str(result.get("detail") or "").strip()
+        if detail:
+            lines.extend(["", "Detail:", detail])
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 
 

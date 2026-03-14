@@ -12,6 +12,7 @@ def test_cli_deploy_success_outputs_summary(monkeypatch, tmp_path: Path, capsys)
             "ok": True,
             "target": "railway",
             "mode": "mock",
+            "kind": "backend",
             "status": "SUCCESS",
             "url": "https://example.up.railway.app",
             "detail": "mock deploy success",
@@ -25,6 +26,7 @@ def test_cli_deploy_success_outputs_summary(monkeypatch, tmp_path: Path, capsys)
     assert exit_code == 0
     assert "[DEPLOY] target=railway" in out
     assert "[DEPLOY] mode=mock" in out
+    assert "[DEPLOY] kind=backend" in out
     assert "[DEPLOY] status=SUCCESS" in out
     assert "[DEPLOY] url=https://example.up.railway.app" in out
     assert "[HEALTH] status=SKIPPED" in out
@@ -37,6 +39,7 @@ def test_cli_deploy_failure_returns_nonzero(monkeypatch, tmp_path: Path) -> None
             "ok": False,
             "target": "railway",
             "mode": "mock",
+            "kind": "backend",
             "status": "FAIL",
             "url": None,
             "detail": "railway CLI not installed",
@@ -57,6 +60,7 @@ def test_cli_deploy_real_flag_is_forwarded(monkeypatch, tmp_path: Path, capsys) 
             "ok": True,
             "target": "railway",
             "mode": "real",
+            "kind": "backend",
             "status": "SUCCESS",
             "url": "https://real-demo.up.railway.app",
             "detail": "railway deploy success",
@@ -76,3 +80,36 @@ def test_cli_deploy_real_flag_is_forwarded(monkeypatch, tmp_path: Path, capsys) 
     assert "[HEALTH] url=https://real-demo.up.railway.app/health" in out
     assert "[HEALTH] status=SUCCESS" in out
     assert "[HEALTH] detail=health endpoint returned status ok" in out
+
+
+def test_cli_deploy_fullstack_prints_backend_frontend_sections(monkeypatch, tmp_path: Path, capsys) -> None:
+    monkeypatch.setattr(
+        "archmind.deploy.deploy_project",
+        lambda *a, **k: {
+            "ok": True,
+            "target": "railway",
+            "mode": "mock",
+            "kind": "fullstack",
+            "status": "SUCCESS",
+            "url": "https://web-example.up.railway.app",
+            "detail": "mock fullstack deploy success",
+            "backend": {
+                "status": "SUCCESS",
+                "url": "https://api-example.up.railway.app",
+                "detail": "mock backend deploy success",
+            },
+            "frontend": {
+                "status": "SUCCESS",
+                "url": "https://web-example.up.railway.app",
+                "detail": "mock frontend deploy success",
+            },
+        },
+    )
+    exit_code = main(["deploy", "--path", str(tmp_path), "--target", "railway"])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "[DEPLOY] kind=fullstack" in out
+    assert "[BACKEND] status=SUCCESS" in out
+    assert "[BACKEND] url=https://api-example.up.railway.app" in out
+    assert "[FRONTEND] status=SUCCESS" in out
+    assert "[FRONTEND] url=https://web-example.up.railway.app" in out

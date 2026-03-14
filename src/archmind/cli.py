@@ -451,21 +451,44 @@ def run_deploy(args: argparse.Namespace) -> int:
 
     print(f"[DEPLOY] target={result.get('target') or args.target}")
     print(f"[DEPLOY] mode={result.get('mode') or 'mock'}")
-    print(f"[DEPLOY] status={result.get('status') or 'UNKNOWN'}")
-    if result.get("url"):
-        print(f"[DEPLOY] url={result.get('url')}")
-    detail = str(result.get("detail") or "").strip()
-    if detail:
-        print(f"[DEPLOY] detail={detail}")
-    health_status = str(result.get("healthcheck_status") or "").strip().upper()
-    if health_status:
-        health_url = str(result.get("healthcheck_url") or "").strip()
-        if health_url:
-            print(f"[HEALTH] url={health_url}")
-        print(f"[HEALTH] status={health_status}")
-        health_detail = str(result.get("healthcheck_detail") or "").strip()
-        if health_detail:
-            print(f"[HEALTH] detail={health_detail}")
+    kind = str(result.get("kind") or "backend").strip().lower()
+    print(f"[DEPLOY] kind={kind}")
+    if kind == "fullstack":
+        backend = result.get("backend") if isinstance(result.get("backend"), dict) else {}
+        frontend = result.get("frontend") if isinstance(result.get("frontend"), dict) else {}
+        print()
+        print(f"[BACKEND] status={backend.get('status') or 'UNKNOWN'}")
+        backend_url = str(backend.get("url") or "").strip()
+        if backend_url:
+            print(f"[BACKEND] url={backend_url}")
+        backend_detail = str(backend.get("detail") or "").strip()
+        if backend_detail:
+            print(f"[BACKEND] detail={backend_detail}")
+
+        print()
+        print(f"[FRONTEND] status={frontend.get('status') or 'UNKNOWN'}")
+        frontend_url = str(frontend.get("url") or "").strip()
+        if frontend_url:
+            print(f"[FRONTEND] url={frontend_url}")
+        frontend_detail = str(frontend.get("detail") or "").strip()
+        if frontend_detail:
+            print(f"[FRONTEND] detail={frontend_detail}")
+    else:
+        print(f"[DEPLOY] status={result.get('status') or 'UNKNOWN'}")
+        if result.get("url"):
+            print(f"[DEPLOY] url={result.get('url')}")
+        detail = str(result.get("detail") or "").strip()
+        if detail:
+            print(f"[DEPLOY] detail={detail}")
+        health_status = str(result.get("healthcheck_status") or "").strip().upper()
+        if health_status:
+            health_url = str(result.get("healthcheck_url") or "").strip()
+            if health_url:
+                print(f"[HEALTH] url={health_url}")
+            print(f"[HEALTH] status={health_status}")
+            health_detail = str(result.get("healthcheck_detail") or "").strip()
+            if health_detail:
+                print(f"[HEALTH] detail={health_detail}")
 
     return 0 if bool(result.get("ok")) else 1
 

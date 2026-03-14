@@ -3,7 +3,7 @@ from __future__ import annotations
 from urllib.error import URLError
 from pathlib import Path
 
-from archmind.deploy import deploy_project, generate_deploy_slug, verify_deploy_health
+from archmind.deploy import deploy_project, detect_deploy_kind, generate_deploy_slug, verify_deploy_health
 from archmind.state import load_state, update_after_deploy
 
 
@@ -29,6 +29,7 @@ def test_deploy_project_returns_success_mock_when_provider_available(tmp_path: P
     result = deploy_project(tmp_path, target="railway", allow_real_deploy=False)
     assert result["ok"] is True
     assert result["target"] == "railway"
+    assert result["kind"] == "backend"
     assert result["status"] == "SUCCESS"
     assert result["mode"] == "mock"
     assert str(result.get("url") or "").startswith("https://")
@@ -38,6 +39,7 @@ def test_update_after_deploy_persists_deploy_fields(tmp_path: Path) -> None:
     result = {
         "ok": True,
         "target": "railway",
+        "kind": "backend",
         "status": "SUCCESS",
         "url": "https://example.up.railway.app",
         "detail": "mock deploy success",
@@ -55,6 +57,26 @@ def test_update_after_deploy_persists_deploy_fields(tmp_path: Path) -> None:
     assert state.get("healthcheck_url") == "https://example.up.railway.app/health"
     assert state.get("healthcheck_status") == "SUCCESS"
     assert state.get("healthcheck_detail") == "health endpoint returned status ok"
+    assert state.get("deploy_kind") == "backend"
+    assert state.get("backend_deploy_status") == "SUCCESS"
+
+
+def test_detect_deploy_kind_backend(tmp_path: Path) -> None:
+    (tmp_path / "app").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    assert detect_deploy_kind(tmp_path) == "backend"
+
+
+def test_detect_deploy_kind_frontend(tmp_path: Path) -> None:
+    (tmp_path / "package.json").write_text('{"name":"web"}', encoding="utf-8")
+    assert detect_deploy_kind(tmp_path) == "frontend"
+
+
+def test_detect_deploy_kind_fullstack(tmp_path: Path) -> None:
+    (tmp_path / "app").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "frontend" / "package.json").write_text('{"name":"web"}', encoding="utf-8")
+    assert detect_deploy_kind(tmp_path) == "fullstack"
 
 
 def test_generate_deploy_slug_from_timestamped_name() -> None:
@@ -112,6 +134,61 @@ def test_deploy_project_real_path_calls_railway_commands(monkeypatch, tmp_path: 
     assert any(cmd[:2] == ["railway", "init"] for cmd in commands)
     assert ["railway", "up", "--detach"] in commands
     assert ["railway", "domain"] in commands
+
+
+def test_fullstack_mock_deploy_returns_backend_frontend_entries(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "app").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "frontend" / "package.json").write_text('{"name":"web"}', encoding="utf-8")
+
+    class DummyCompleted:
+        returncode = 0
+        stdout = "railway 3.0.0"
+        stderr = ""
+
+    monkeypatch.setattr("archmind.deploy.shutil.which", lambda _name: "/usr/local/bin/railway")
+    monkeypatch.setattr("archmind.deploy.subprocess.run", lambda *a, **k: DummyCompleted())
+
+    result = deploy_project(tmp_path, target="railway", allow_real_deploy=False)
+    assert result["ok"] is True
+    assert result["kind"] == "fullstack"
+    assert isinstance(result.get("backend"), dict)
+    assert isinstance(result.get("frontend"), dict)
+    assert result["backend"]["status"] == "SUCCESS"
+    assert result["frontend"]["status"] == "SUCCESS"
+
+
+def test_fullstack_state_stores_backend_frontend_fields(tmp_path: Path) -> None:
+    result = {
+        "ok": True,
+        "target": "railway",
+        "mode": "mock",
+        "kind": "fullstack",
+        "status": "SUCCESS",
+        "url": "https://web-example.up.railway.app",
+        "detail": "mock fullstack deploy success",
+        "backend": {
+            "status": "SUCCESS",
+            "url": "https://api-example.up.railway.app",
+            "detail": "mock backend deploy success",
+        },
+        "frontend": {
+            "status": "SUCCESS",
+            "url": "https://web-example.up.railway.app",
+            "detail": "mock frontend deploy success",
+        },
+        "healthcheck_url": "",
+        "healthcheck_status": "SKIPPED",
+        "healthcheck_detail": "mock deploy mode",
+    }
+    update_after_deploy(tmp_path, result, action="archmind deploy --path x --target railway")
+    state = load_state(tmp_path)
+    assert state is not None
+    assert state.get("deploy_kind") == "fullstack"
+    assert state.get("backend_deploy_status") == "SUCCESS"
+    assert state.get("backend_deploy_url") == "https://api-example.up.railway.app"
+    assert state.get("frontend_deploy_status") == "SUCCESS"
+    assert state.get("frontend_deploy_url") == "https://web-example.up.railway.app"
 
 
 def test_verify_deploy_health_success(monkeypatch) -> None:
