@@ -120,7 +120,7 @@ def enforce_fastapi_runtime(files: Dict[str, str], project_name: str) -> Dict[st
             "```\n\n"
             "## Run\n"
             "```bash\n"
-            "PORT=8000 python main.py\n"
+            "python -m uvicorn app.main:app --reload --host 0.0.0.0 --port ${PORT:-8000}\n"
             "```\n\n"
             "## Test\n"
             "```bash\n"

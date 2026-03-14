@@ -13,9 +13,9 @@ def enforce_nextjs_runtime(_files: dict[str, str], project_name: str) -> dict[st
         '  "private": true,\n'
         '  "version": "0.1.0",\n'
         '  "scripts": {\n'
-        '    "dev": "next dev",\n'
+        '    "dev": "next dev -p 5173",\n'
         '    "build": "next build",\n'
-        '    "start": "next start",\n'
+        '    "start": "sh -c \'next start -p ${PORT:-3000}\'",\n'
         '    "lint": "next lint"\n'
         "  },\n"
         '  "dependencies": {\n'

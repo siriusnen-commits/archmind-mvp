@@ -18,3 +18,4 @@ def test_generate_nextjs_template_scaffold(tmp_path: Path) -> None:
     package_text = (project_dir / "package.json").read_text(encoding="utf-8")
     assert '"next"' in package_text
     assert '"lint": "next lint"' in package_text
+    assert '"start": "sh -c \'next start -p ${PORT:-3000}\'"' in package_text

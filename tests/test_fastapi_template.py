@@ -70,3 +70,12 @@ def test_fastapi_generation_handles_requirements_case_collision_without_duplicat
     text = requirements_path.read_text(encoding="utf-8")
     assert "requests==2.32.0" in text
     assert "fastapi==0.115.0" in text
+
+
+def test_fastapi_readme_run_command_is_runtime_neutral(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("archmind.generator.generate_valid_spec", _fake_backend_spec)
+    opt = GenerateOptions(out=tmp_path, force=False, name="fastapi_runtime_demo", template="fastapi")
+    project_dir = generate_project("simple fastapi notes api", opt)
+
+    readme = (project_dir / "README.md").read_text(encoding="utf-8")
+    assert "python -m uvicorn app.main:app --reload --host 0.0.0.0 --port ${PORT:-8000}" in readme

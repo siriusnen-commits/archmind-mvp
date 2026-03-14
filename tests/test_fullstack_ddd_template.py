@@ -112,3 +112,9 @@ def test_pipeline_generate_and_run_backend_only(tmp_path: Path) -> None:
     log_dir = project_dir / ".archmind" / "run_logs"
     assert log_dir.exists()
     assert list(log_dir.glob("run_*.summary.txt"))
+
+
+def test_fullstack_frontend_start_script_is_runtime_neutral(tmp_path: Path) -> None:
+    project_dir = _generate_fullstack(tmp_path, name="fullstack_runtime_neutral")
+    package_text = (project_dir / "frontend" / "package.json").read_text(encoding="utf-8")
+    assert '"start": "sh -c \'next start -p ${PORT:-3000}\'"' in package_text

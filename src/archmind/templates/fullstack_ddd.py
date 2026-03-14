@@ -502,7 +502,7 @@ def test_defects_query_and_sorting():
   "scripts": {{
     "dev": "next dev -p 5173",
     "build": "next build",
-    "start": "next start -p 5173",
+    "start": "sh -c 'next start -p ${{PORT:-3000}}'",
     "lint": "next lint"
   }},
   "dependencies": {{
@@ -1024,7 +1024,7 @@ export default function DefectsPage() {
     # Root helper scripts (선택)
     files["scripts/dev_backend.sh"] = """#!/usr/bin/env bash
 set -euo pipefail
-python -m uvicorn app.main:app --reload --port 8000
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port ${PORT:-8000}
 """
     files["scripts/dev_frontend.sh"] = """#!/usr/bin/env bash
 set -euo pipefail
@@ -1045,7 +1045,7 @@ python -m pip install -r requirements.txt
 
 ## Backend run
 ```bash
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port ${{PORT:-8000}}
 ```
 
 ## Frontend setup
