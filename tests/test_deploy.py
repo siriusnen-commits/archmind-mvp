@@ -12,6 +12,9 @@ from archmind.deploy import (
     detect_deploy_kind,
     generate_deploy_slug,
     get_frontend_deploy_dir,
+    get_local_runtime_status,
+    is_pid_running,
+    list_running_local_projects,
     stop_local_services,
     verify_frontend_smoke,
     verify_deploy_health,
@@ -455,6 +458,79 @@ def test_stop_local_services_handles_missing_pids(tmp_path: Path) -> None:
     assert state is not None
     assert state.get("backend_pid") is None
     assert state.get("frontend_pid") is None
+
+
+def test_is_pid_running_true_when_kill_zero_succeeds(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.deploy.os.kill", lambda *_a, **_k: None)
+    assert is_pid_running(12345) is True
+
+
+def test_is_pid_running_false_when_process_missing(monkeypatch) -> None:
+    def fake_kill(_pid: int, _sig: int) -> None:
+        raise ProcessLookupError
+
+    monkeypatch.setattr("archmind.deploy.os.kill", fake_kill)
+    assert is_pid_running(12345) is False
+
+
+def test_list_running_local_projects_includes_backend_only_running(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    project = root / "backend_only"
+    (project / ".archmind").mkdir(parents=True, exist_ok=True)
+    write_state(
+        project,
+        {
+            "deploy_target": "local",
+            "backend_pid": 11111,
+            "frontend_pid": None,
+            "backend_deploy_url": "http://127.0.0.1:8011",
+            "frontend_deploy_url": "",
+        },
+    )
+
+    monkeypatch.setattr("archmind.deploy.is_pid_running", lambda pid: int(pid or 0) == 11111)
+    rows = list_running_local_projects(root)
+    assert len(rows) == 1
+    assert rows[0]["project_name"] == "backend_only"
+    assert rows[0]["backend"]["status"] == "RUNNING"
+    assert rows[0]["frontend"]["status"] == "NOT RUNNING"
+
+
+def test_list_running_local_projects_excludes_dead_pids(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    project = root / "dead_service"
+    (project / ".archmind").mkdir(parents=True, exist_ok=True)
+    write_state(
+        project,
+        {
+            "deploy_target": "local",
+            "backend_pid": 22222,
+            "frontend_pid": 33333,
+        },
+    )
+
+    monkeypatch.setattr("archmind.deploy.is_pid_running", lambda _pid: False)
+    rows = list_running_local_projects(root)
+    assert rows == []
+
+
+def test_get_local_runtime_status_uses_urls_and_pid_status(monkeypatch, tmp_path: Path) -> None:
+    write_state(
+        tmp_path,
+        {
+            "deploy_target": "local",
+            "backend_pid": 44444,
+            "frontend_pid": 55555,
+            "backend_deploy_url": "http://127.0.0.1:8044",
+            "frontend_deploy_url": "http://127.0.0.1:3044",
+        },
+    )
+    monkeypatch.setattr("archmind.deploy.is_pid_running", lambda pid: int(pid or 0) == 44444)
+    status = get_local_runtime_status(tmp_path)
+    assert status["backend"]["status"] == "RUNNING"
+    assert status["backend"]["url"] == "http://127.0.0.1:8044"
+    assert status["frontend"]["status"] == "NOT RUNNING"
+    assert status["frontend"]["url"] == "http://127.0.0.1:3044"
 
 
 def test_verify_deploy_health_success(monkeypatch) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import inspect
 import json
+import os
 import sys
 from dataclasses import is_dataclass
 from typing import Any, Callable, Dict, Optional, Sequence
@@ -258,6 +259,10 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("stop", help="Stop local services started by local deploy")
     s.add_argument("--path", required=True, help="Project root path")
     s.set_defaults(func=run_stop)
+
+    rn = sub.add_parser("running", help="List running local services across projects")
+    rn.add_argument("--projects-dir", default=None, help="Projects root directory (defaults to ARCHMIND_PROJECTS_DIR)")
+    rn.set_defaults(func=run_running)
 
     pl = sub.add_parser("plan", help="Generate project plan artifacts")
     pl.add_argument("--idea", required=True, help="Plan idea / goal")
@@ -562,6 +567,36 @@ def run_stop(args: argparse.Namespace) -> int:
     frontend_detail = str(frontend.get("detail") or "").strip()
     if frontend_detail:
         print(f"[STOP] frontend detail={frontend_detail}")
+    return 0
+
+
+def run_running(args: argparse.Namespace) -> int:
+    from archmind.deploy import list_running_local_projects
+
+    if args.projects_dir:
+        projects_root = Path(args.projects_dir).expanduser().resolve()
+    else:
+        raw = os.getenv("ARCHMIND_PROJECTS_DIR", "").strip()
+        projects_root = Path(raw).expanduser().resolve() if raw else (Path.home() / "archmind-telegram-projects")
+
+    rows = list_running_local_projects(projects_root)
+    if not rows:
+        print("No local services running.")
+        return 0
+
+    for item in rows:
+        name = str(item.get("project_name") or "")
+        backend = item.get("backend") if isinstance(item.get("backend"), dict) else {}
+        frontend = item.get("frontend") if isinstance(item.get("frontend"), dict) else {}
+        print(f"[RUNNING] {name}")
+        backend_status = str(backend.get("status") or "NOT RUNNING")
+        backend_pid = backend.get("pid")
+        backend_url = str(backend.get("url") or "").strip()
+        print(f"  backend: {backend_status} pid={backend_pid} url={backend_url or '-'}")
+        frontend_status = str(frontend.get("status") or "NOT RUNNING")
+        frontend_pid = frontend.get("pid")
+        frontend_url = str(frontend.get("url") or "").strip()
+        print(f"  frontend: {frontend_status} pid={frontend_pid} url={frontend_url or '-'}")
     return 0
 
 

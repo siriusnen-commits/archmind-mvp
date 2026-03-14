@@ -313,6 +313,7 @@ def _help_text() -> str:
         "/open <path> - open a file from the current project\n"
         "/diff - show recent diff for the current project\n"
         "/logs [backend|frontend|last] - show recent failure logs\n"
+        "/running - list running local services\n"
         "/stop [local] - stop local services for current project\n"
         "/state - show latest project state\n"
         "/help - show this message"
@@ -1898,6 +1899,45 @@ async def command_logs(update: Any, context: Any) -> None:
     await update.message.reply_text(_truncate_message(msg, limit=1500))
 
 
+async def command_running(update: Any, context: Any) -> None:
+    del context
+    from archmind.deploy import list_running_local_projects
+
+    projects_root = resolve_projects_dir()
+    rows = list_running_local_projects(projects_root)
+    if not rows:
+        await update.message.reply_text("No local services running.")
+        return
+
+    current = get_current_project()
+    lines = ["Running local services", ""]
+    for idx, item in enumerate(rows, start=1):
+        project_dir = item.get("project_dir")
+        project_name = str(item.get("project_name") or "")
+        marker = ""
+        if isinstance(project_dir, Path) and current is not None and project_dir.resolve() == current.resolve():
+            marker = " [current]"
+
+        backend = item.get("backend") if isinstance(item.get("backend"), dict) else {}
+        frontend = item.get("frontend") if isinstance(item.get("frontend"), dict) else {}
+        lines.append(f"{idx}. {project_name}{marker}")
+        backend_status = str(backend.get("status") or "NOT RUNNING")
+        backend_pid = backend.get("pid")
+        lines.append(f"   Backend: {backend_status}" + (f" (pid {backend_pid})" if backend_pid else ""))
+        backend_url = str(backend.get("url") or "").strip()
+        if backend_url:
+            lines.append(f"   URL: {backend_url}")
+        frontend_status = str(frontend.get("status") or "NOT RUNNING")
+        frontend_pid = frontend.get("pid")
+        lines.append(f"   Frontend: {frontend_status}" + (f" (pid {frontend_pid})" if frontend_pid else ""))
+        frontend_url = str(frontend.get("url") or "").strip()
+        if frontend_url:
+            lines.append(f"   URL: {frontend_url}")
+        if idx != len(rows):
+            lines.append("")
+    await update.message.reply_text(_truncate_message("\n".join(lines), limit=3500))
+
+
 async def command_deploy(update: Any, context: Any) -> None:
     running = _get_running_job()
     if running is not None:
@@ -2088,6 +2128,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("use", command_use))
     app.add_handler(CommandHandler("current", command_current))
     app.add_handler(CommandHandler("logs", command_logs))
+    app.add_handler(CommandHandler("running", command_running))
     app.add_handler(CommandHandler("tree", command_tree))
     app.add_handler(CommandHandler("open", command_open))
     app.add_handler(CommandHandler("diff", command_diff))

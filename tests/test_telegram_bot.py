@@ -16,6 +16,7 @@ from archmind.telegram_bot import (
     build_retry_commands,
     command_idea_local,
     command_logs,
+    command_running,
     command_continue,
     command_fix,
     command_current,
@@ -1523,6 +1524,7 @@ def test_help_mentions_state_for_long_running_commands() -> None:
     assert "/open <path> - open a file from the current project" in msg.sent[-1]
     assert "/diff - show recent diff for the current project" in msg.sent[-1]
     assert "/deploy [target] [real] - deploy current project (targets: railway, local)" in msg.sent[-1]
+    assert "/running - list running local services" in msg.sent[-1]
     assert "/stop [local] - stop local services for current project" in msg.sent[-1]
 
 
@@ -1871,6 +1873,52 @@ def test_stop_local_when_not_running(monkeypatch, tmp_path: Path) -> None:
     out = msg.sent[-1]
     assert "Backend:\nNOT RUNNING" in out
     assert "Frontend:\nNOT RUNNING" in out
+
+
+def test_running_shows_no_local_services(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.deploy.list_running_local_projects", lambda _root: [])
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_running(update, DummyContext()))
+    assert msg.sent[-1] == "No local services running."
+
+
+def test_running_lists_projects_with_current_marker(monkeypatch, tmp_path: Path) -> None:
+    current = tmp_path / "proj_current"
+    other = tmp_path / "proj_other"
+    current.mkdir(parents=True, exist_ok=True)
+    other.mkdir(parents=True, exist_ok=True)
+    set_current_project(current)
+
+    monkeypatch.setattr(
+        "archmind.deploy.list_running_local_projects",
+        lambda _root: [
+            {
+                "project_dir": current,
+                "project_name": "proj_current",
+                "backend": {"status": "RUNNING", "pid": 12345, "url": "http://127.0.0.1:8011"},
+                "frontend": {"status": "RUNNING", "pid": 12346, "url": "http://127.0.0.1:3011"},
+            },
+            {
+                "project_dir": other,
+                "project_name": "proj_other",
+                "backend": {"status": "RUNNING", "pid": 11111, "url": "http://127.0.0.1:8050"},
+                "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+            },
+        ],
+    )
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_running(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "Running local services" in out
+    assert "1. proj_current [current]" in out
+    assert "Backend: RUNNING (pid 12345)" in out
+    assert "URL: http://127.0.0.1:8011" in out
+    assert "Frontend: RUNNING (pid 12346)" in out
+    assert "2. proj_other" in out
+    assert "Frontend: NOT RUNNING" in out
 
 
 def test_watch_retry_accumulates_existing_fix_attempts(monkeypatch, tmp_path: Path) -> None:

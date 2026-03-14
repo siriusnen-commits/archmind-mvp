@@ -739,6 +739,77 @@ def _to_pid(value: Any) -> int | None:
     return pid if pid > 0 else None
 
 
+def is_pid_running(pid: int | None) -> bool:
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return False
+
+
+def get_local_runtime_status(project_dir: Path) -> dict[str, Any]:
+    root = project_dir.expanduser().resolve()
+    state = load_state(root) or {}
+    backend_pid = _to_pid(state.get("backend_pid"))
+    frontend_pid = _to_pid(state.get("frontend_pid"))
+    backend_running = is_pid_running(backend_pid)
+    frontend_running = is_pid_running(frontend_pid)
+    deploy_target = str(state.get("deploy_target") or "").strip().lower()
+    backend_url = str(state.get("backend_deploy_url") or state.get("deploy_url") or "").strip()
+    frontend_url = str(state.get("frontend_deploy_url") or "").strip()
+
+    return {
+        "project_dir": root,
+        "project_name": root.name,
+        "deploy_target": deploy_target,
+        "backend": {
+            "status": "RUNNING" if backend_running else "NOT RUNNING",
+            "pid": backend_pid,
+            "url": backend_url,
+        },
+        "frontend": {
+            "status": "RUNNING" if frontend_running else "NOT RUNNING",
+            "pid": frontend_pid,
+            "url": frontend_url,
+        },
+        "running": backend_running or frontend_running,
+        "mtime": (root / ".archmind" / "state.json").stat().st_mtime if (root / ".archmind" / "state.json").exists() else 0.0,
+    }
+
+
+def list_running_local_projects(projects_root: Path) -> list[dict[str, Any]]:
+    root = projects_root.expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for project_dir in root.iterdir():
+        if not project_dir.is_dir():
+            continue
+        state_path = project_dir / ".archmind" / "state.json"
+        if not state_path.exists():
+            continue
+        status = get_local_runtime_status(project_dir)
+        backend_pid = status.get("backend", {}).get("pid") if isinstance(status.get("backend"), dict) else None
+        frontend_pid = status.get("frontend", {}).get("pid") if isinstance(status.get("frontend"), dict) else None
+        deploy_target = str(status.get("deploy_target") or "").strip().lower()
+        candidate = deploy_target == "local" or backend_pid is not None or frontend_pid is not None
+        if not candidate:
+            continue
+        if not bool(status.get("running")):
+            continue
+        rows.append(status)
+
+    rows.sort(key=lambda item: float(item.get("mtime") or 0.0), reverse=True)
+    return rows
+
+
 def _stop_pid(pid: int | None) -> tuple[str, str]:
     if pid is None:
         return "NOT RUNNING", ""

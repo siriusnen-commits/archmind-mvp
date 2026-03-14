@@ -273,3 +273,30 @@ def test_cli_stop_outputs_not_running(monkeypatch, tmp_path: Path, capsys) -> No
     assert exit_code == 0
     assert "[STOP] backend not running" in out
     assert "[STOP] frontend not running" in out
+
+
+def test_cli_running_prints_running_projects(monkeypatch, tmp_path: Path, capsys) -> None:
+    monkeypatch.setattr(
+        "archmind.deploy.list_running_local_projects",
+        lambda _root: [
+            {
+                "project_name": "proj_a",
+                "backend": {"status": "RUNNING", "pid": 12345, "url": "http://127.0.0.1:8011"},
+                "frontend": {"status": "RUNNING", "pid": 12346, "url": "http://127.0.0.1:3011"},
+            }
+        ],
+    )
+    exit_code = main(["running", "--projects-dir", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "[RUNNING] proj_a" in out
+    assert "backend: RUNNING pid=12345 url=http://127.0.0.1:8011" in out
+    assert "frontend: RUNNING pid=12346 url=http://127.0.0.1:3011" in out
+
+
+def test_cli_running_prints_no_services_when_empty(monkeypatch, tmp_path: Path, capsys) -> None:
+    monkeypatch.setattr("archmind.deploy.list_running_local_projects", lambda _root: [])
+    exit_code = main(["running", "--projects-dir", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "No local services running." in out
