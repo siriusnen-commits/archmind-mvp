@@ -351,6 +351,38 @@ def _run_local_process(cmd: list[str], *, cwd: Path) -> subprocess.Popen[str]:
     )
 
 
+def read_last_lines(path: Path, lines: int = 20) -> str | None:
+    target = path.expanduser().resolve()
+    if not target.exists() or not target.is_file():
+        return None
+    try:
+        content = target.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return None
+    if not content:
+        return None
+    take = max(1, int(lines))
+    return "\n".join(content[-take:])
+
+
+def _run_local_process_with_log(cmd: list[str], *, cwd: Path, log_path: Path) -> subprocess.Popen[str]:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(log_path, "a", encoding="utf-8")
+    try:
+        proc = subprocess.Popen(  # noqa: S603
+            cmd,
+            cwd=cwd,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            text=True,
+            shell=False,
+            start_new_session=True,
+        )
+    finally:
+        handle.close()
+    return proc
+
+
 def _backend_smoke_with_retry(base_url: str, attempts: int = 5, interval_s: float = 0.4) -> dict[str, Any]:
     latest = verify_deploy_health(base_url)
     if str(latest.get("healthcheck_status") or "").upper() == "SUCCESS":
@@ -382,7 +414,7 @@ def deploy_backend_local(project_dir: Path) -> dict[str, Any]:
     port = find_free_port()
     cmd = ["uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(port)]
     try:
-        proc = _run_local_process(cmd, cwd=root)
+        proc = _run_local_process_with_log(cmd, cwd=root, log_path=(root / ".archmind" / "backend.log"))
     except Exception as exc:
         return _service_result("FAIL", None, f"local backend start failed: {exc}")
     return {
@@ -401,7 +433,7 @@ def deploy_frontend_local(project_dir: Path) -> dict[str, Any]:
     port = find_free_port()
     cmd = ["npm", "run", "dev", "--", "--hostname", "127.0.0.1", "--port", str(port)]
     try:
-        proc = _run_local_process(cmd, cwd=frontend_dir)
+        proc = _run_local_process_with_log(cmd, cwd=frontend_dir, log_path=(root / ".archmind" / "frontend.log"))
     except Exception as exc:
         return _service_result("FAIL", None, f"local frontend start failed: {exc}")
     return {

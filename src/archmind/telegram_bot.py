@@ -312,7 +312,7 @@ def _help_text() -> str:
         "/tree [n] - show project directory tree\n"
         "/open <path> - open a file from the current project\n"
         "/diff - show recent diff for the current project\n"
-        "/logs [backend|frontend|last] - show recent failure logs\n"
+        "/logs [backend|frontend|last|local [backend|frontend]] - show logs\n"
         "/running - list running local services\n"
         "/stop [local] - stop local services for current project\n"
         "/state - show latest project state\n"
@@ -1885,8 +1885,32 @@ async def command_logs(update: Any, context: Any) -> None:
 
     args = [str(x).strip().lower() for x in getattr(context, "args", []) if str(x).strip()]
     mode = args[0] if args else "last"
-    if mode not in ("backend", "frontend", "last"):
-        await update.message.reply_text("Usage: /logs [backend|frontend|last]")
+    if mode not in ("backend", "frontend", "last", "local"):
+        await update.message.reply_text("Usage: /logs [backend|frontend|last|local [backend|frontend]]")
+        return
+
+    if mode == "local":
+        from archmind.deploy import read_last_lines
+
+        local_scope = args[1] if len(args) > 1 else "all"
+        if local_scope not in ("all", "backend", "frontend"):
+            await update.message.reply_text("Usage: /logs local [backend|frontend]")
+            return
+        show_backend = local_scope in ("all", "backend")
+        show_frontend = local_scope in ("all", "frontend")
+
+        backend_text = read_last_lines(project_path / ".archmind" / "backend.log", lines=20) if show_backend else None
+        frontend_text = read_last_lines(project_path / ".archmind" / "frontend.log", lines=20) if show_frontend else None
+        if (show_backend and not backend_text) and (show_frontend and not frontend_text):
+            await update.message.reply_text("No logs available.")
+            return
+
+        lines = ["Local logs", "", "Project:", project_path.name]
+        if show_backend:
+            lines.extend(["", "Backend logs (last 20 lines):", "", backend_text or "No logs available."])
+        if show_frontend:
+            lines.extend(["", "Frontend logs (last 20 lines):", "", frontend_text or "No logs available."])
+        await update.message.reply_text(_truncate_message("\n".join(lines), limit=3500))
         return
 
     if mode == "backend":

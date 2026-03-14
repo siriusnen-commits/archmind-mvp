@@ -677,6 +677,51 @@ def test_logs_command_without_last_project_shows_help(monkeypatch) -> None:
     assert "No previous project found. Use /idea first." in msg.sent[-1]
 
 
+def test_logs_local_shows_backend_and_frontend(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "local_logs_proj"
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    set_current_project(project_dir)
+    (project_dir / ".archmind" / "backend.log").write_text("b1\nb2\n", encoding="utf-8")
+    (project_dir / ".archmind" / "frontend.log").write_text("f1\nf2\n", encoding="utf-8")
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_logs(update, DummyContext(args=["local"])))
+    out = msg.sent[-1]
+    assert "Local logs" in out
+    assert "Project:\nlocal_logs_proj" in out
+    assert "Backend logs (last 20 lines):" in out
+    assert "b1\nb2" in out
+    assert "Frontend logs (last 20 lines):" in out
+    assert "f1\nf2" in out
+
+
+def test_logs_local_backend_only(tmp_path: Path) -> None:
+    project_dir = tmp_path / "local_logs_backend"
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    set_current_project(project_dir)
+    (project_dir / ".archmind" / "backend.log").write_text("only backend\n", encoding="utf-8")
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_logs(update, DummyContext(args=["local", "backend"])))
+    out = msg.sent[-1]
+    assert "Backend logs (last 20 lines):" in out
+    assert "only backend" in out
+    assert "Frontend logs (last 20 lines):" not in out
+
+
+def test_logs_local_no_logs_available(tmp_path: Path) -> None:
+    project_dir = tmp_path / "local_logs_empty"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    set_current_project(project_dir)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_logs(update, DummyContext(args=["local"])))
+    assert msg.sent[-1] == "No logs available."
+
+
 def test_extract_key_error_lines_backend_priority() -> None:
     raw = """
     project_dir: /tmp/demo

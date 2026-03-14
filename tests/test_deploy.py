@@ -15,6 +15,7 @@ from archmind.deploy import (
     get_local_runtime_status,
     is_pid_running,
     list_running_local_projects,
+    read_last_lines,
     stop_local_services,
     verify_frontend_smoke,
     verify_deploy_health,
@@ -133,7 +134,7 @@ def test_local_backend_deploy_returns_localhost_url(monkeypatch, tmp_path: Path)
         pid = 12001
 
     monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 8011)
-    monkeypatch.setattr("archmind.deploy._run_local_process", lambda *a, **k: DummyProc())
+    monkeypatch.setattr("archmind.deploy._run_local_process_with_log", lambda *a, **k: DummyProc())
     result = deploy_backend_local(tmp_path)
     assert result["status"] == "SUCCESS"
     assert result["url"] == "http://127.0.0.1:8011"
@@ -148,11 +149,41 @@ def test_local_frontend_deploy_returns_localhost_url(monkeypatch, tmp_path: Path
         pid = 13001
 
     monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 3011)
-    monkeypatch.setattr("archmind.deploy._run_local_process", lambda *a, **k: DummyProc())
+    monkeypatch.setattr("archmind.deploy._run_local_process_with_log", lambda *a, **k: DummyProc())
     result = deploy_frontend_local(tmp_path)
     assert result["status"] == "SUCCESS"
     assert result["url"] == "http://127.0.0.1:3011"
     assert result["pid"] == 13001
+
+
+def test_local_deploy_process_uses_archmind_log_files(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "app").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "frontend" / "package.json").write_text('{"name":"web"}', encoding="utf-8")
+    captured: list[str] = []
+
+    class DummyProc:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+    def fake_popen(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        out = kwargs.get("stdout")
+        name = str(getattr(out, "name", ""))
+        captured.append(name)
+        if "uvicorn" in " ".join(str(x) for x in cmd):
+            return DummyProc(14001)
+        return DummyProc(14002)
+
+    monkeypatch.setattr("archmind.deploy.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 8011)
+    backend = deploy_backend_local(tmp_path)
+    monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 3011)
+    frontend = deploy_frontend_local(tmp_path)
+
+    assert backend["status"] == "SUCCESS"
+    assert frontend["status"] == "SUCCESS"
+    assert any(path.endswith(".archmind/backend.log") for path in captured)
+    assert any(path.endswith(".archmind/frontend.log") for path in captured)
 
 
 def test_local_fullstack_deploy_returns_both_urls(monkeypatch, tmp_path: Path) -> None:
@@ -531,6 +562,16 @@ def test_get_local_runtime_status_uses_urls_and_pid_status(monkeypatch, tmp_path
     assert status["backend"]["url"] == "http://127.0.0.1:8044"
     assert status["frontend"]["status"] == "NOT RUNNING"
     assert status["frontend"]["url"] == "http://127.0.0.1:3044"
+
+
+def test_read_last_lines_returns_none_when_missing(tmp_path: Path) -> None:
+    assert read_last_lines(tmp_path / "missing.log", lines=20) is None
+
+
+def test_read_last_lines_returns_tail_content(tmp_path: Path) -> None:
+    path = tmp_path / "service.log"
+    path.write_text("l1\nl2\nl3\n", encoding="utf-8")
+    assert read_last_lines(path, lines=2) == "l2\nl3"
 
 
 def test_verify_deploy_health_success(monkeypatch) -> None:

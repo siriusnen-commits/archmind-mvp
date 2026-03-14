@@ -264,6 +264,13 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--projects-dir", default=None, help="Projects root directory (defaults to ARCHMIND_PROJECTS_DIR)")
     rn.set_defaults(func=run_running)
 
+    lg = sub.add_parser("logs", help="Show local service logs")
+    lg.add_argument("--path", required=True, help="Project root path")
+    lg.add_argument("--local", action="store_true", help="Read local runtime logs")
+    lg.add_argument("--backend", action="store_true", help="Show backend local logs")
+    lg.add_argument("--frontend", action="store_true", help="Show frontend local logs")
+    lg.set_defaults(func=run_logs)
+
     pl = sub.add_parser("plan", help="Generate project plan artifacts")
     pl.add_argument("--idea", required=True, help="Plan idea / goal")
     pl.add_argument("--path", default=".", help="Existing project path")
@@ -597,6 +604,44 @@ def run_running(args: argparse.Namespace) -> int:
         frontend_pid = frontend.get("pid")
         frontend_url = str(frontend.get("url") or "").strip()
         print(f"  frontend: {frontend_status} pid={frontend_pid} url={frontend_url or '-'}")
+    return 0
+
+
+def run_logs(args: argparse.Namespace) -> int:
+    from archmind.deploy import read_last_lines
+
+    project_dir = Path(args.path).expanduser().resolve()
+    if not project_dir.exists():
+        print(f"[ERROR] Path not found: {project_dir}", file=sys.stderr)
+        return 64
+    if not project_dir.is_dir():
+        print(f"[ERROR] Path is not a directory: {project_dir}", file=sys.stderr)
+        return 64
+
+    if not args.local:
+        print("[ERROR] Only --local logs are supported in this command.", file=sys.stderr)
+        return 64
+
+    show_backend = bool(args.backend)
+    show_frontend = bool(args.frontend)
+    if not show_backend and not show_frontend:
+        show_backend = True
+        show_frontend = True
+
+    backend_text = read_last_lines(project_dir / ".archmind" / "backend.log", lines=20) if show_backend else None
+    frontend_text = read_last_lines(project_dir / ".archmind" / "frontend.log", lines=20) if show_frontend else None
+    if (show_backend and not backend_text) and (show_frontend and not frontend_text):
+        print("No logs available.")
+        return 0
+
+    if show_backend:
+        print("[BACKEND LOGS]")
+        print(backend_text or "No logs available.")
+        if show_frontend:
+            print()
+    if show_frontend:
+        print("[FRONTEND LOGS]")
+        print(frontend_text or "No logs available.")
     return 0
 
 
