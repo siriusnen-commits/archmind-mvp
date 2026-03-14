@@ -40,3 +40,29 @@ def test_cli_deploy_failure_returns_nonzero(monkeypatch, tmp_path: Path) -> None
     )
     exit_code = main(["deploy", "--path", str(tmp_path), "--target", "railway"])
     assert exit_code == 1
+
+
+def test_cli_deploy_real_flag_is_forwarded(monkeypatch, tmp_path: Path, capsys) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_deploy(project_dir, target="railway", allow_real_deploy=False):  # type: ignore[no-untyped-def]
+        captured["project_dir"] = project_dir
+        captured["target"] = target
+        captured["allow_real_deploy"] = allow_real_deploy
+        return {
+            "ok": True,
+            "target": "railway",
+            "mode": "real",
+            "status": "SUCCESS",
+            "url": "https://real-demo.up.railway.app",
+            "detail": "railway deploy success",
+        }
+
+    monkeypatch.setattr("archmind.deploy.deploy_project", fake_deploy)
+    exit_code = main(["deploy", "--path", str(tmp_path), "--target", "railway", "--allow-real-deploy"])
+    out = capsys.readouterr().out
+
+    assert exit_code == 0
+    assert captured["allow_real_deploy"] is True
+    assert "[DEPLOY] mode=real" in out
+    assert "[DEPLOY] url=https://real-demo.up.railway.app" in out

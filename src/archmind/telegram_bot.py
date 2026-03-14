@@ -1838,12 +1838,19 @@ async def command_deploy(update: Any, context: Any) -> None:
         return
 
     args = [str(x).strip().lower() for x in getattr(context, "args", []) if str(x).strip()]
-    target = args[0] if args else "railway"
+    target = "railway"
+    allow_real_deploy = False
+    if args:
+        if args[0] == "railway":
+            target = "railway"
+            args = args[1:]
+        allow_real_deploy = "real" in args
 
     from archmind.deploy import deploy_project
 
-    result = deploy_project(project_path, target=target, allow_real_deploy=False)
-    update_after_deploy(project_path, result, action=f"telegram /deploy {target}")
+    result = deploy_project(project_path, target=target, allow_real_deploy=allow_real_deploy)
+    action = f"telegram /deploy {target}" + (" real" if allow_real_deploy else "")
+    update_after_deploy(project_path, result, action=action.strip())
 
     lines = [
         "Deploy finished",
@@ -1854,10 +1861,9 @@ async def command_deploy(update: Any, context: Any) -> None:
         "Target:",
         str(result.get("target") or target),
     ]
-    mode = str(result.get("mode") or "").strip()
-    if mode == "mock":
-        lines.append("")
-        lines.append("Mode: mock")
+    mode = str(result.get("mode") or ("real" if allow_real_deploy else "mock")).strip()
+    lines.append("")
+    lines.append(f"Mode: {mode}")
     lines.extend(
         [
             "",

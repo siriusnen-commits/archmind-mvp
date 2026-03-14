@@ -1519,6 +1519,39 @@ def test_deploy_output_includes_target_status_url(monkeypatch, tmp_path: Path) -
     assert "Deploy URL:\nhttps://example.up.railway.app" in out
 
 
+def test_deploy_parses_real_flag(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "deploy_real_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+
+    captured: dict[str, object] = {}
+
+    def fake_deploy(project_dir, target="railway", allow_real_deploy=False):  # type: ignore[no-untyped-def]
+        captured["project_dir"] = project_dir
+        captured["target"] = target
+        captured["allow_real_deploy"] = allow_real_deploy
+        return {
+            "ok": True,
+            "target": "railway",
+            "mode": "real",
+            "status": "SUCCESS",
+            "url": "https://real-demo.up.railway.app",
+            "detail": "railway deploy success",
+        }
+
+    monkeypatch.setattr("archmind.deploy.deploy_project", fake_deploy)
+    monkeypatch.setattr("archmind.telegram_bot.update_after_deploy", lambda *a, **k: {})
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_deploy(update, DummyContext(args=["railway", "real"])))
+    out = msg.sent[-1]
+
+    assert captured["allow_real_deploy"] is True
+    assert "Mode: real" in out
+    assert "Deploy URL:\nhttps://real-demo.up.railway.app" in out
+
+
 def test_watch_retry_accumulates_existing_fix_attempts(monkeypatch, tmp_path: Path) -> None:
     project_dir = tmp_path / "retry_project_existing_fix"
     archmind = project_dir / ".archmind"
