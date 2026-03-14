@@ -4,7 +4,10 @@ from urllib.error import URLError
 from pathlib import Path
 
 from archmind.deploy import (
+    deploy_backend_local,
+    deploy_frontend_local,
     deploy_frontend_to_railway_real,
+    deploy_fullstack_local,
     deploy_project,
     detect_deploy_kind,
     generate_deploy_slug,
@@ -23,6 +26,26 @@ def test_deploy_project_returns_fail_when_railway_cli_missing(tmp_path: Path, mo
     assert result["status"] == "FAIL"
     assert result["url"] is None
     assert "railway CLI not installed" in str(result.get("detail") or "")
+
+
+def test_deploy_project_dispatches_to_railway(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("archmind.deploy.detect_deploy_kind", lambda _p: "backend")
+    monkeypatch.setattr(
+        "archmind.deploy.deploy_to_railway",
+        lambda *_a, **_k: {"ok": True, "target": "railway", "mode": "mock", "kind": "backend", "status": "SUCCESS", "url": "x", "detail": "ok"},
+    )
+    result = deploy_project(tmp_path, target="railway", allow_real_deploy=False)
+    assert result["target"] == "railway"
+
+
+def test_deploy_project_dispatches_to_local(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("archmind.deploy.detect_deploy_kind", lambda _p: "backend")
+    monkeypatch.setattr(
+        "archmind.deploy.deploy_to_local",
+        lambda *_a, **_k: {"ok": True, "target": "local", "mode": "real", "kind": "backend", "status": "SUCCESS", "url": "http://127.0.0.1:8001", "detail": "ok"},
+    )
+    result = deploy_project(tmp_path, target="local", allow_real_deploy=False)
+    assert result["target"] == "local"
 
 
 def test_deploy_project_returns_success_mock_when_provider_available(tmp_path: Path, monkeypatch) -> None:
@@ -97,6 +120,60 @@ def test_get_frontend_deploy_dir_prefers_frontend_subdir(tmp_path: Path) -> None
 def test_get_frontend_deploy_dir_uses_root_package_json(tmp_path: Path) -> None:
     (tmp_path / "package.json").write_text('{"name":"root-web"}', encoding="utf-8")
     assert get_frontend_deploy_dir(tmp_path) == tmp_path
+
+
+def test_local_backend_deploy_returns_localhost_url(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "app").mkdir(parents=True, exist_ok=True)
+
+    class DummyProc:
+        pid = 12001
+
+    monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 8011)
+    monkeypatch.setattr("archmind.deploy._run_local_process", lambda *a, **k: DummyProc())
+    result = deploy_backend_local(tmp_path)
+    assert result["status"] == "SUCCESS"
+    assert result["url"] == "http://127.0.0.1:8011"
+    assert result["pid"] == 12001
+
+
+def test_local_frontend_deploy_returns_localhost_url(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "frontend" / "package.json").write_text('{"name":"web"}', encoding="utf-8")
+
+    class DummyProc:
+        pid = 13001
+
+    monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 3011)
+    monkeypatch.setattr("archmind.deploy._run_local_process", lambda *a, **k: DummyProc())
+    result = deploy_frontend_local(tmp_path)
+    assert result["status"] == "SUCCESS"
+    assert result["url"] == "http://127.0.0.1:3011"
+    assert result["pid"] == 13001
+
+
+def test_local_fullstack_deploy_returns_both_urls(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "archmind.deploy.deploy_backend_local",
+        lambda _p: {"status": "SUCCESS", "url": "http://127.0.0.1:8011", "detail": "local backend started", "pid": 1001},
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.deploy_frontend_local",
+        lambda _p: {"status": "SUCCESS", "url": "http://127.0.0.1:3011", "detail": "local frontend started", "pid": 1002},
+    )
+    monkeypatch.setattr(
+        "archmind.deploy._backend_smoke_with_retry",
+        lambda _url: {"healthcheck_url": "http://127.0.0.1:8011/health", "healthcheck_status": "SUCCESS", "healthcheck_detail": "health endpoint returned status ok"},
+    )
+    monkeypatch.setattr(
+        "archmind.deploy._frontend_smoke_with_retry",
+        lambda _url: {"url": "http://127.0.0.1:3011", "status": "SUCCESS", "detail": "frontend URL returned HTTP 200"},
+    )
+    result = deploy_fullstack_local(tmp_path)
+    assert result["kind"] == "fullstack"
+    assert result["backend"]["url"] == "http://127.0.0.1:8011"
+    assert result["frontend"]["url"] == "http://127.0.0.1:3011"
+    assert result["backend_smoke_status"] == "SUCCESS"
+    assert result["frontend_smoke_status"] == "SUCCESS"
 
 
 def test_generate_deploy_slug_from_timestamped_name() -> None:
@@ -219,6 +296,37 @@ def test_fullstack_state_stores_backend_frontend_fields(tmp_path: Path) -> None:
     assert state.get("frontend_deploy_url") == "https://web-example.up.railway.app"
     assert state.get("backend_smoke_status") == "SKIPPED"
     assert state.get("frontend_smoke_status") == "SKIPPED"
+
+
+def test_local_fullstack_state_stores_smoke_fields(tmp_path: Path) -> None:
+    result = {
+        "ok": True,
+        "target": "local",
+        "mode": "real",
+        "kind": "fullstack",
+        "status": "SUCCESS",
+        "url": "http://127.0.0.1:3011",
+        "detail": "local fullstack deploy completed",
+        "backend": {"status": "SUCCESS", "url": "http://127.0.0.1:8011", "detail": "local backend started"},
+        "frontend": {"status": "SUCCESS", "url": "http://127.0.0.1:3011", "detail": "local frontend started"},
+        "backend_smoke_url": "http://127.0.0.1:8011/health",
+        "backend_smoke_status": "SUCCESS",
+        "backend_smoke_detail": "health endpoint returned status ok",
+        "frontend_smoke_url": "http://127.0.0.1:3011",
+        "frontend_smoke_status": "SUCCESS",
+        "frontend_smoke_detail": "frontend URL returned HTTP 200",
+        "backend_pid": 1001,
+        "frontend_pid": 1002,
+    }
+    update_after_deploy(tmp_path, result, action="archmind deploy --path x --target local")
+    state = load_state(tmp_path)
+    assert state is not None
+    assert state.get("deploy_target") == "local"
+    assert state.get("deploy_mode") == "real"
+    assert state.get("backend_smoke_status") == "SUCCESS"
+    assert state.get("frontend_smoke_status") == "SUCCESS"
+    assert int(state.get("backend_pid") or 0) == 1001
+    assert int(state.get("frontend_pid") or 0) == 1002
 
 
 def test_frontend_real_deploy_returns_fail_when_railway_missing(monkeypatch, tmp_path: Path) -> None:

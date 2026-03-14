@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import re
+import socket
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 from urllib import error, parse, request
@@ -264,6 +266,12 @@ def _service_result(status: str, url: str | None, detail: str) -> dict[str, Any]
     }
 
 
+def find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
 def _placeholder_backend_url(project_dir: Path) -> str:
     slug = generate_deploy_slug(project_dir.name or "archmind-app")
     return f"https://api-{slug}.up.railway.app"
@@ -325,6 +333,181 @@ def deploy_frontend_to_railway_real(project_dir: Path) -> dict[str, Any]:
     domain_match = _RAILWAY_DOMAIN_RE.search(domain_text)
     frontend_url = domain_match.group(0) if domain_match else None
     return _service_result("SUCCESS", frontend_url, "real frontend deploy success")
+
+
+def _run_local_process(cmd: list[str], *, cwd: Path) -> subprocess.Popen[str]:
+    return subprocess.Popen(  # noqa: S603
+        cmd,
+        cwd=cwd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        shell=False,
+        start_new_session=True,
+    )
+
+
+def _backend_smoke_with_retry(base_url: str, attempts: int = 5, interval_s: float = 0.4) -> dict[str, Any]:
+    latest = verify_deploy_health(base_url)
+    if str(latest.get("healthcheck_status") or "").upper() == "SUCCESS":
+        return latest
+    for _ in range(max(0, attempts - 1)):
+        time.sleep(interval_s)
+        latest = verify_deploy_health(base_url)
+        if str(latest.get("healthcheck_status") or "").upper() == "SUCCESS":
+            return latest
+    return latest
+
+
+def _frontend_smoke_with_retry(base_url: str, attempts: int = 5, interval_s: float = 0.4) -> dict[str, Any]:
+    latest = verify_frontend_smoke(base_url)
+    if str(latest.get("status") or "").upper() == "SUCCESS":
+        return latest
+    for _ in range(max(0, attempts - 1)):
+        time.sleep(interval_s)
+        latest = verify_frontend_smoke(base_url)
+        if str(latest.get("status") or "").upper() == "SUCCESS":
+            return latest
+    return latest
+
+
+def deploy_backend_local(project_dir: Path) -> dict[str, Any]:
+    root = project_dir.expanduser().resolve()
+    if not (root / "app").is_dir():
+        return _service_result("FAIL", None, "backend app directory not found")
+    port = find_free_port()
+    cmd = ["uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(port)]
+    try:
+        proc = _run_local_process(cmd, cwd=root)
+    except Exception as exc:
+        return _service_result("FAIL", None, f"local backend start failed: {exc}")
+    return {
+        "status": "SUCCESS",
+        "url": f"http://127.0.0.1:{port}",
+        "detail": "local backend started",
+        "pid": int(proc.pid),
+    }
+
+
+def deploy_frontend_local(project_dir: Path) -> dict[str, Any]:
+    root = project_dir.expanduser().resolve()
+    frontend_dir = get_frontend_deploy_dir(root)
+    if frontend_dir is None:
+        return _service_result("FAIL", None, "frontend deploy directory not found")
+    port = find_free_port()
+    cmd = ["npm", "run", "dev", "--", "--hostname", "127.0.0.1", "--port", str(port)]
+    try:
+        proc = _run_local_process(cmd, cwd=frontend_dir)
+    except Exception as exc:
+        return _service_result("FAIL", None, f"local frontend start failed: {exc}")
+    return {
+        "status": "SUCCESS",
+        "url": f"http://127.0.0.1:{port}",
+        "detail": "local frontend started",
+        "pid": int(proc.pid),
+    }
+
+
+def deploy_fullstack_local(project_dir: Path) -> dict[str, Any]:
+    backend = deploy_backend_local(project_dir)
+    frontend = deploy_frontend_local(project_dir)
+    backend_ok = str(backend.get("status") or "").upper() == "SUCCESS"
+    frontend_ok = str(frontend.get("status") or "").upper() == "SUCCESS"
+    backend_smoke = (
+        _backend_smoke_with_retry(str(backend.get("url") or ""))
+        if backend_ok
+        else {"healthcheck_url": "", "healthcheck_status": "SKIPPED", "healthcheck_detail": "backend deploy failed"}
+    )
+    frontend_smoke = (
+        _frontend_smoke_with_retry(str(frontend.get("url") or ""))
+        if frontend_ok
+        else {"url": "", "status": "SKIPPED", "detail": "frontend deploy failed"}
+    )
+    return {
+        "ok": backend_ok or frontend_ok,
+        "target": "local",
+        "mode": "real",
+        "kind": "fullstack",
+        "status": "SUCCESS" if (backend_ok and frontend_ok) else "FAIL",
+        "url": frontend.get("url") or backend.get("url"),
+        "detail": "local fullstack deploy completed",
+        "backend": _service_result(str(backend.get("status") or "FAIL"), backend.get("url"), str(backend.get("detail") or "")),
+        "frontend": _service_result(str(frontend.get("status") or "FAIL"), frontend.get("url"), str(frontend.get("detail") or "")),
+        "backend_pid": backend.get("pid"),
+        "frontend_pid": frontend.get("pid"),
+        "healthcheck_url": str(backend_smoke.get("healthcheck_url") or ""),
+        "healthcheck_status": str(backend_smoke.get("healthcheck_status") or "SKIPPED"),
+        "healthcheck_detail": str(backend_smoke.get("healthcheck_detail") or ""),
+        "backend_smoke_url": str(backend_smoke.get("healthcheck_url") or ""),
+        "backend_smoke_status": str(backend_smoke.get("healthcheck_status") or "SKIPPED"),
+        "backend_smoke_detail": str(backend_smoke.get("healthcheck_detail") or ""),
+        "frontend_smoke_url": str(frontend_smoke.get("url") or ""),
+        "frontend_smoke_status": str(frontend_smoke.get("status") or "SKIPPED"),
+        "frontend_smoke_detail": str(frontend_smoke.get("detail") or ""),
+    }
+
+
+def deploy_to_local(project_dir: Path, kind: str = "backend") -> dict[str, Any]:
+    root = project_dir.expanduser().resolve()
+    if not root.exists() or not root.is_dir():
+        return _deploy_fail("local", f"path is not a directory: {root}", mode="real")
+
+    if kind == "fullstack":
+        return deploy_fullstack_local(root)
+    if kind == "frontend":
+        frontend = deploy_frontend_local(root)
+        ok = str(frontend.get("status") or "").upper() == "SUCCESS"
+        frontend_smoke = (
+            _frontend_smoke_with_retry(str(frontend.get("url") or ""))
+            if ok
+            else {"url": "", "status": "SKIPPED", "detail": "frontend deploy failed"}
+        )
+        return {
+            "ok": ok,
+            "target": "local",
+            "mode": "real",
+            "kind": "frontend",
+            "status": "SUCCESS" if ok else "FAIL",
+            "url": frontend.get("url"),
+            "detail": str(frontend.get("detail") or ""),
+            "frontend_pid": frontend.get("pid"),
+            "healthcheck_url": "",
+            "healthcheck_status": "SKIPPED",
+            "healthcheck_detail": "backend not deployed",
+            "backend_smoke_url": "",
+            "backend_smoke_status": "SKIPPED",
+            "backend_smoke_detail": "backend not deployed",
+            "frontend_smoke_url": str(frontend_smoke.get("url") or ""),
+            "frontend_smoke_status": str(frontend_smoke.get("status") or "SKIPPED"),
+            "frontend_smoke_detail": str(frontend_smoke.get("detail") or ""),
+        }
+
+    backend = deploy_backend_local(root)
+    ok = str(backend.get("status") or "").upper() == "SUCCESS"
+    backend_smoke = (
+        _backend_smoke_with_retry(str(backend.get("url") or ""))
+        if ok
+        else {"healthcheck_url": "", "healthcheck_status": "SKIPPED", "healthcheck_detail": "backend deploy failed"}
+    )
+    return {
+        "ok": ok,
+        "target": "local",
+        "mode": "real",
+        "kind": "backend",
+        "status": "SUCCESS" if ok else "FAIL",
+        "url": backend.get("url"),
+        "detail": str(backend.get("detail") or ""),
+        "backend_pid": backend.get("pid"),
+        "healthcheck_url": str(backend_smoke.get("healthcheck_url") or ""),
+        "healthcheck_status": str(backend_smoke.get("healthcheck_status") or "SKIPPED"),
+        "healthcheck_detail": str(backend_smoke.get("healthcheck_detail") or ""),
+        "backend_smoke_url": str(backend_smoke.get("healthcheck_url") or ""),
+        "backend_smoke_status": str(backend_smoke.get("healthcheck_status") or "SKIPPED"),
+        "backend_smoke_detail": str(backend_smoke.get("healthcheck_detail") or ""),
+        "frontend_smoke_url": "",
+        "frontend_smoke_status": "SKIPPED",
+        "frontend_smoke_detail": "frontend not deployed",
+    }
 
 
 def deploy_to_railway_mock(project_dir: Path, kind: str = "backend") -> dict[str, Any]:
@@ -535,6 +718,8 @@ def deploy_project(
     kind = detect_deploy_kind(project_dir)
     if resolved_target == "railway":
         return deploy_to_railway(project_dir, allow_real_deploy=allow_real_deploy, kind=kind)
+    if resolved_target == "local":
+        return deploy_to_local(project_dir, kind=kind)
     return _deploy_fail(
         resolved_target or "unknown",
         f"unsupported deploy target: {resolved_target or 'unknown'}",

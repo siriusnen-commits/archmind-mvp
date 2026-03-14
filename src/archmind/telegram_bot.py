@@ -290,7 +290,7 @@ def _help_text() -> str:
         "/continue - continue the last project with pipeline\n"
         "/fix - run fix on the last project\n"
         "/retry - run fix and then continue on the last project\n"
-        "/deploy [target] - deploy current project\n"
+        "/deploy [target] [real] - deploy current project (targets: railway, local)\n"
         "Long-running commands may take time; use /state for progress.\n"
         "/status - quick summary of current project state\n"
         "/projects - list recent ArchMind projects\n"
@@ -1841,8 +1841,8 @@ async def command_deploy(update: Any, context: Any) -> None:
     target = "railway"
     allow_real_deploy = False
     if args:
-        if args[0] == "railway":
-            target = "railway"
+        if args[0] in ("railway", "local"):
+            target = args[0]
             args = args[1:]
         allow_real_deploy = "real" in args
 

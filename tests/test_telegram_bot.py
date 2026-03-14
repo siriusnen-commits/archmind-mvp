@@ -1446,7 +1446,7 @@ def test_help_mentions_state_for_long_running_commands() -> None:
     assert "/tree [n] - show project directory tree" in msg.sent[-1]
     assert "/open <path> - open a file from the current project" in msg.sent[-1]
     assert "/diff - show recent diff for the current project" in msg.sent[-1]
-    assert "/deploy [target] - deploy current project" in msg.sent[-1]
+    assert "/deploy [target] [real] - deploy current project (targets: railway, local)" in msg.sent[-1]
 
 
 def test_deploy_without_selected_project_shows_message(monkeypatch) -> None:
@@ -1660,6 +1660,51 @@ def test_telegram_real_fullstack_shows_real_frontend_deploy_result(monkeypatch, 
     assert "https://web-real.up.railway.app" in out
     assert "Backend smoke:\nSUCCESS" in out
     assert "Frontend smoke:\nSUCCESS" in out
+
+
+def test_deploy_local_target_parses_and_displays(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "deploy_local_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+
+    captured: dict[str, object] = {}
+
+    def fake_deploy(project_dir, target="railway", allow_real_deploy=False):  # type: ignore[no-untyped-def]
+        captured["project_dir"] = project_dir
+        captured["target"] = target
+        captured["allow_real_deploy"] = allow_real_deploy
+        return {
+            "ok": True,
+            "target": "local",
+            "mode": "real",
+            "kind": "fullstack",
+            "status": "SUCCESS",
+            "url": "http://127.0.0.1:3011",
+            "detail": "local fullstack deploy completed",
+            "backend": {"status": "SUCCESS", "url": "http://127.0.0.1:8011", "detail": "local backend started"},
+            "frontend": {"status": "SUCCESS", "url": "http://127.0.0.1:3011", "detail": "local frontend started"},
+            "backend_smoke_url": "http://127.0.0.1:8011/health",
+            "backend_smoke_status": "SUCCESS",
+            "backend_smoke_detail": "health endpoint returned status ok",
+            "frontend_smoke_url": "http://127.0.0.1:3011",
+            "frontend_smoke_status": "SUCCESS",
+            "frontend_smoke_detail": "frontend URL returned HTTP 200",
+        }
+
+    monkeypatch.setattr("archmind.deploy.deploy_project", fake_deploy)
+    monkeypatch.setattr("archmind.telegram_bot.update_after_deploy", lambda *a, **k: {})
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_deploy(update, DummyContext(args=["local"])))
+    out = msg.sent[-1]
+
+    assert captured["target"] == "local"
+    assert "Target:\nlocal" in out
+    assert "Backend:\nSUCCESS" in out
+    assert "http://127.0.0.1:8011" in out
+    assert "Frontend:\nSUCCESS" in out
+    assert "http://127.0.0.1:3011" in out
 
 
 def test_watch_retry_accumulates_existing_fix_attempts(monkeypatch, tmp_path: Path) -> None:

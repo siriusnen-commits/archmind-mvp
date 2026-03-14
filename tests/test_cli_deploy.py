@@ -178,3 +178,64 @@ def test_cli_real_fullstack_shows_real_frontend_deploy_result(monkeypatch, tmp_p
     assert "[FRONTEND] url=https://web-real.up.railway.app" in out
     assert "[BACKEND-SMOKE] status=SUCCESS" in out
     assert "[FRONTEND-SMOKE] status=SUCCESS" in out
+
+
+def test_cli_local_output_includes_localhost_urls(monkeypatch, tmp_path: Path, capsys) -> None:
+    monkeypatch.setattr(
+        "archmind.deploy.deploy_project",
+        lambda *a, **k: {
+            "ok": True,
+            "target": "local",
+            "mode": "real",
+            "kind": "fullstack",
+            "status": "SUCCESS",
+            "url": "http://127.0.0.1:3011",
+            "detail": "local fullstack deploy completed",
+            "backend": {
+                "status": "SUCCESS",
+                "url": "http://127.0.0.1:8011",
+                "detail": "local backend started",
+            },
+            "frontend": {
+                "status": "SUCCESS",
+                "url": "http://127.0.0.1:3011",
+                "detail": "local frontend started",
+            },
+            "backend_smoke_url": "http://127.0.0.1:8011/health",
+            "backend_smoke_status": "SUCCESS",
+            "backend_smoke_detail": "health endpoint returned status ok",
+            "frontend_smoke_url": "http://127.0.0.1:3011",
+            "frontend_smoke_status": "SUCCESS",
+            "frontend_smoke_detail": "frontend URL returned HTTP 200",
+        },
+    )
+    exit_code = main(["deploy", "--path", str(tmp_path), "--target", "local"])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "[DEPLOY] target=local" in out
+    assert "[BACKEND] url=http://127.0.0.1:8011" in out
+    assert "[FRONTEND] url=http://127.0.0.1:3011" in out
+    assert "[BACKEND-SMOKE] url=http://127.0.0.1:8011/health" in out
+    assert "[FRONTEND-SMOKE] url=http://127.0.0.1:3011" in out
+
+
+def test_cli_default_target_is_railway(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_deploy(project_dir, target="railway", allow_real_deploy=False):  # type: ignore[no-untyped-def]
+        captured["target"] = target
+        captured["allow_real_deploy"] = allow_real_deploy
+        return {
+            "ok": True,
+            "target": target,
+            "mode": "mock",
+            "kind": "backend",
+            "status": "SUCCESS",
+            "url": "https://example.up.railway.app",
+            "detail": "mock deploy success",
+        }
+
+    monkeypatch.setattr("archmind.deploy.deploy_project", fake_deploy)
+    exit_code = main(["deploy", "--path", str(tmp_path)])
+    assert exit_code == 0
+    assert captured["target"] == "railway"
