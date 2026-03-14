@@ -247,6 +247,12 @@ def build_parser() -> argparse.ArgumentParser:
     ppipe.add_argument("--json-summary", action="store_true", help="Write pipeline summary.json")
     ppipe.set_defaults(func=run_pipeline_cmd)
 
+    d = sub.add_parser("deploy", help="Deploy a project to a target provider")
+    d.add_argument("--path", required=True, help="Project root path")
+    d.add_argument("--target", default="railway", help="Deploy target (phase 1: railway)")
+    d.add_argument("--allow-real-deploy", action="store_true", help="Allow non-mock deploy path")
+    d.set_defaults(func=run_deploy)
+
     pl = sub.add_parser("plan", help="Generate project plan artifacts")
     pl.add_argument("--idea", required=True, help="Plan idea / goal")
     pl.add_argument("--path", default=".", help="Existing project path")
@@ -421,6 +427,38 @@ def run_pipeline_cmd(args: argparse.Namespace) -> int:
     )
 
     return run_pipeline_command(opts)
+
+
+def run_deploy(args: argparse.Namespace) -> int:
+    from archmind.deploy import deploy_project
+    from archmind.state import update_after_deploy
+
+    project_dir = Path(args.path).expanduser().resolve()
+    if not project_dir.exists():
+        print(f"[ERROR] Path not found: {project_dir}", file=sys.stderr)
+        return 64
+    if not project_dir.is_dir():
+        print(f"[ERROR] Path is not a directory: {project_dir}", file=sys.stderr)
+        return 64
+
+    command = "archmind " + " ".join(getattr(args, "_argv", []))
+    result = deploy_project(
+        project_dir=project_dir,
+        target=args.target,
+        allow_real_deploy=bool(args.allow_real_deploy),
+    )
+    update_after_deploy(project_dir, result, action=command.strip())
+
+    print(f"[DEPLOY] target={result.get('target') or args.target}")
+    print(f"[DEPLOY] mode={result.get('mode') or 'mock'}")
+    print(f"[DEPLOY] status={result.get('status') or 'UNKNOWN'}")
+    if result.get("url"):
+        print(f"[DEPLOY] url={result.get('url')}")
+    detail = str(result.get("detail") or "").strip()
+    if detail:
+        print(f"[DEPLOY] detail={detail}")
+
+    return 0 if bool(result.get("ok")) else 1
 
 
 def run_plan(args: argparse.Namespace) -> int:

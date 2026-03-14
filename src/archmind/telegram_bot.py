@@ -14,7 +14,7 @@ from typing import Any, Optional
 from archmind.decision import decide_next_action, next_action_suggestions
 from archmind.failure import classify_failure
 from archmind.project_type import detect_project_type, normalize_project_type
-from archmind.state import derive_task_label_from_failure_signature, load_state, set_agent_state
+from archmind.state import derive_task_label_from_failure_signature, load_state, set_agent_state, update_after_deploy
 from archmind.template_selector import is_supported_template, select_template_for_project_type
 
 LAST_PROJECT_PATH_FILE = Path.home() / ".archmind_telegram_last_project"
@@ -290,6 +290,7 @@ def _help_text() -> str:
         "/continue - continue the last project with pipeline\n"
         "/fix - run fix on the last project\n"
         "/retry - run fix and then continue on the last project\n"
+        "/deploy [target] - deploy current project\n"
         "Long-running commands may take time; use /state for progress.\n"
         "/status - quick summary of current project state\n"
         "/projects - list recent ArchMind projects\n"
@@ -1825,6 +1826,54 @@ async def command_logs(update: Any, context: Any) -> None:
     await update.message.reply_text(_truncate_message(msg, limit=1500))
 
 
+async def command_deploy(update: Any, context: Any) -> None:
+    running = _get_running_job()
+    if running is not None:
+        await update.message.reply_text(_busy_message(running))
+        return
+
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text("No project selected. Use /projects then /use <n>.")
+        return
+
+    args = [str(x).strip().lower() for x in getattr(context, "args", []) if str(x).strip()]
+    target = args[0] if args else "railway"
+
+    from archmind.deploy import deploy_project
+
+    result = deploy_project(project_path, target=target, allow_real_deploy=False)
+    update_after_deploy(project_path, result, action=f"telegram /deploy {target}")
+
+    lines = [
+        "Deploy finished",
+        "",
+        "Project:",
+        project_path.name,
+        "",
+        "Target:",
+        str(result.get("target") or target),
+    ]
+    mode = str(result.get("mode") or "").strip()
+    if mode == "mock":
+        lines.append("")
+        lines.append("Mode: mock")
+    lines.extend(
+        [
+            "",
+            "Status:",
+            str(result.get("status") or "UNKNOWN"),
+        ]
+    )
+    url = str(result.get("url") or "").strip()
+    if url:
+        lines.extend(["", "Deploy URL:", url])
+    detail = str(result.get("detail") or "").strip()
+    if detail:
+        lines.extend(["", "Detail:", detail])
+    await update.message.reply_text(_truncate_message("\n".join(lines)))
+
+
 async def command_help(update: Any, context: Any) -> None:
     del context
     await update.message.reply_text(_help_text())
@@ -1855,5 +1904,6 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("projects", command_projects))
     app.add_handler(CommandHandler("state", command_state))
     app.add_handler(CommandHandler("status", command_status))
+    app.add_handler(CommandHandler("deploy", command_deploy))
     app.add_handler(CommandHandler("help", command_help))
     app.run_polling()

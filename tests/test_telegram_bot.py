@@ -24,6 +24,7 @@ from archmind.telegram_bot import (
     command_use,
     command_projects,
     command_status,
+    command_deploy,
     command_help,
     command_retry,
     command_state,
@@ -1445,6 +1446,77 @@ def test_help_mentions_state_for_long_running_commands() -> None:
     assert "/tree [n] - show project directory tree" in msg.sent[-1]
     assert "/open <path> - open a file from the current project" in msg.sent[-1]
     assert "/diff - show recent diff for the current project" in msg.sent[-1]
+    assert "/deploy [target] - deploy current project" in msg.sent[-1]
+
+
+def test_deploy_without_selected_project_shows_message(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: None)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_deploy(update, DummyContext()))
+    assert msg.sent
+    assert msg.sent[-1] == "No project selected. Use /projects then /use <n>."
+
+
+def test_deploy_uses_current_project_selection(monkeypatch, tmp_path: Path) -> None:
+    current = tmp_path / "current_for_deploy"
+    other = tmp_path / "other_for_deploy"
+    current.mkdir(parents=True, exist_ok=True)
+    other.mkdir(parents=True, exist_ok=True)
+    set_current_project(current)
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: other)
+
+    used_paths: list[Path] = []
+
+    def fake_deploy(project_dir, target="railway", allow_real_deploy=False):  # type: ignore[no-untyped-def]
+        used_paths.append(project_dir)
+        assert target == "railway"
+        assert allow_real_deploy is False
+        return {
+            "ok": True,
+            "target": "railway",
+            "mode": "mock",
+            "status": "SUCCESS",
+            "url": "https://example.up.railway.app",
+            "detail": "mock deploy success",
+        }
+
+    monkeypatch.setattr("archmind.telegram_bot.update_after_deploy", lambda *a, **k: {})
+    monkeypatch.setattr("archmind.deploy.deploy_project", fake_deploy)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_deploy(update, DummyContext()))
+    assert used_paths == [current]
+    assert "Project:\ncurrent_for_deploy" in msg.sent[-1]
+
+
+def test_deploy_output_includes_target_status_url(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "deploy_msg_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+
+    monkeypatch.setattr(
+        "archmind.deploy.deploy_project",
+        lambda *a, **k: {
+            "ok": True,
+            "target": "railway",
+            "mode": "mock",
+            "status": "SUCCESS",
+            "url": "https://example.up.railway.app",
+            "detail": "mock deploy success",
+        },
+    )
+    monkeypatch.setattr("archmind.telegram_bot.update_after_deploy", lambda *a, **k: {})
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_deploy(update, DummyContext(args=["railway"])))
+    out = msg.sent[-1]
+    assert "Target:\nrailway" in out
+    assert "Mode: mock" in out
+    assert "Status:\nSUCCESS" in out
+    assert "Deploy URL:\nhttps://example.up.railway.app" in out
 
 
 def test_watch_retry_accumulates_existing_fix_attempts(monkeypatch, tmp_path: Path) -> None:

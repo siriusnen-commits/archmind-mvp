@@ -106,6 +106,11 @@ archmind fix --path /tmp/defect_demo --scope backend --dry-run
 archmind fix --path /tmp/defect_demo --scope backend --apply
 ```
 
+Deploy (phase 1, mock by default):
+```bash
+archmind deploy --path /tmp/defect_demo --target railway
+```
+
 Pipeline:
 ```bash
 archmind pipeline --path /tmp/defect_demo --backend-only --max-iterations 1 --model none
@@ -238,12 +243,15 @@ Telegram integration (MVP):
 - 실행:
   `python scripts/telegram_bot.py`
 - 지원 명령:
-  `/idea <text>`, `/pipeline <text>`, `/continue`, `/fix`, `/retry`, `/logs [backend|frontend|last]`, `/state`, `/help`
+  `/idea <text>`, `/pipeline <text>`, `/continue`, `/fix`, `/retry`, `/deploy [target]`, `/logs [backend|frontend|last]`, `/state`, `/help`
 - `/idea` 와 `/pipeline` 은 백그라운드로 `archmind pipeline ... --apply` 실행
 - `/continue` 는 마지막 프로젝트에 대해 `archmind pipeline --path <last_project>` 재실행
 - `/fix` 는 마지막 프로젝트에 대해 `archmind fix --path <last_project> --apply` 실행
 - `/retry` 는 실패 복구 루프를 한 번에 실행:
   `archmind fix --path <last_project> --apply` 후 `archmind pipeline --path <last_project>`
+- `/deploy` 는 현재 선택된 프로젝트를 deploy target(phase 1: `railway`)에 대해 실행
+  - 기본은 mock 모드(실제 배포 없음)
+  - 결과는 `state.json`의 deploy 필드에 기록
 - 상태 카운팅 규칙:
   `iterations` 는 run/pipeline 사이클 횟수, `fix_attempts` 는 fix 실행 횟수로 분리 추적
 - `/fix` 는 `fix_attempts`만 증가시키고, `/continue` 는 `iterations`를 증가시킴

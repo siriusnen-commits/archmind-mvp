@@ -76,6 +76,11 @@ def _safe_status(value: str) -> str:
     return status if status in LAST_STATUSES else "UNKNOWN"
 
 
+def _safe_optional_status(value: str) -> str:
+    status = (value or "").upper()
+    return status if status in LAST_STATUSES else ""
+
+
 def _safe_agent_state(value: str) -> str:
     state = (value or "").upper()
     return state if state in AGENT_STATES else "UNKNOWN"
@@ -299,6 +304,10 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "next_action": "STOP",
         "next_action_reason": "",
         "github_repo_url": "",
+        "deploy_target": "",
+        "last_deploy_status": "",
+        "deploy_url": "",
+        "last_deploy_detail": "",
         "current_step_key": "",
         "current_step_label": "",
         "current_step_status": "",
@@ -375,6 +384,10 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     payload["next_action"] = str(payload.get("next_action") or "STOP").strip()[:20]
     payload["next_action_reason"] = str(payload.get("next_action_reason") or "").strip()[:220]
     payload["github_repo_url"] = str(payload.get("github_repo_url") or "").strip()[:300]
+    payload["deploy_target"] = str(payload.get("deploy_target") or "").strip()[:40]
+    payload["last_deploy_status"] = _safe_optional_status(str(payload.get("last_deploy_status") or ""))
+    payload["deploy_url"] = str(payload.get("deploy_url") or "").strip()[:300]
+    payload["last_deploy_detail"] = str(payload.get("last_deploy_detail") or "").strip()[:220]
     payload["current_step_key"] = str(payload.get("current_step_key") or "").strip()[:40]
     payload["current_step_label"] = str(payload.get("current_step_label") or "").strip()[:120]
     payload["current_step_status"] = str(payload.get("current_step_status") or "").strip()[:20]
@@ -805,6 +818,45 @@ def update_after_evaluation(project_dir: Path, evaluation_status: str, stuck_rea
     return payload
 
 
+def update_after_deploy(
+    project_dir: Path,
+    result: dict[str, Any],
+    *,
+    action: str = "archmind deploy",
+) -> dict[str, Any]:
+    project_dir = project_dir.expanduser().resolve()
+    payload = ensure_state(project_dir)
+
+    target = str(result.get("target") or "").strip()
+    status = _safe_optional_status(str(result.get("status") or ""))
+    detail = _sanitize_line(str(result.get("detail") or ""), project_dir)
+    raw_url = result.get("url")
+    deploy_url = str(raw_url).strip() if raw_url is not None else ""
+
+    payload["deploy_target"] = target[:40]
+    payload["last_deploy_status"] = status
+    payload["deploy_url"] = deploy_url[:300]
+    payload["last_deploy_detail"] = detail[:220]
+    payload["last_action"] = _sanitize_line(action, project_dir)
+
+    _append_history(
+        payload,
+        {
+            "timestamp": _now(),
+            "action": _sanitize_line(action, project_dir),
+            "status": status or "UNKNOWN",
+            "agent_state": _safe_agent_state(str(payload.get("agent_state") or "UNKNOWN")),
+            "summary": _sanitize_line(f"deploy {target} {status or 'UNKNOWN'}", project_dir)[:160],
+            "current_task_id": str(payload.get("current_task_id") or ""),
+            "current_task_title": _sanitize_line(_task_title(project_dir, payload.get("current_task_id")) or "", project_dir),
+            "failure_signature": "",
+            "failure_class": "",
+        },
+    )
+    write_state(project_dir, payload)
+    return payload
+
+
 def sync_from_tasks(project_dir: Path, action: str = "tasks update", status: str = "UNKNOWN") -> dict[str, Any]:
     return update_state_event(project_dir, action, status, "task status updated")
 
@@ -915,6 +967,10 @@ def format_state_text(project_dir: Path) -> str:
         f"Environment issue: {env_issue}",
         f"Environment reason: {env_reason or '(none)'}",
         f"GitHub repo: {payload.get('github_repo_url') or '(none)'}",
+        f"Deploy target: {payload.get('deploy_target') or '(none)'}",
+        f"Deploy status: {payload.get('last_deploy_status') or '(none)'}",
+        f"Deploy URL: {payload.get('deploy_url') or '(none)'}",
+        f"Deploy detail: {payload.get('last_deploy_detail') or '(none)'}",
         f"Progress: {progress_text}",
         f"Next action: {next_action}",
         f"Reason: {next_reason or '(none)'}",
@@ -973,6 +1029,10 @@ def state_prompt_summary(project_dir: Path) -> list[str]:
         f"- next_action: {decision.get('action', payload.get('next_action', 'STOP'))}",
         f"- next_action_reason: {decision.get('reason', payload.get('next_action_reason', ''))}",
         f"- github_repo_url: {payload.get('github_repo_url', '')}",
+        f"- deploy_target: {payload.get('deploy_target', '')}",
+        f"- last_deploy_status: {payload.get('last_deploy_status', '')}",
+        f"- deploy_url: {payload.get('deploy_url', '')}",
+        f"- last_deploy_detail: {payload.get('last_deploy_detail', '')}",
         "- recent_failures:",
     ]
     if failures:
