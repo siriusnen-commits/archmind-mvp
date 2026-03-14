@@ -4,7 +4,9 @@ Idea → Architecture → Working Project
 
 AI development platform that turns ideas into runnable software projects.
 
-# ArchMind v0.2.0
+# ArchMind v0.3.0
+
+ArchMind v0.3 introduces automatic repository creation, real deployment, and post-deploy smoke verification, enabling idea-to-live-service workflows.
 
 ArchMind is a CLI that generates runnable project scaffolds, then runs and fixes them with a repeatable pipeline. Use it to validate templates or existing codebases fast, with structured logs and minimal setup.
 
