@@ -34,9 +34,18 @@ class _RunningJob:
     task: Optional[asyncio.Task[Any]] = None
 
 
+@dataclass
+class _PendingDelete:
+    chat_id: int
+    project_dir: Path
+    mode: str
+    created_at: float
+
+
 _RUNNING_JOB: Optional[_RunningJob] = None
 _RUNNING_JOB_SEQ = 0
 _CURRENT_PROJECT: Optional[Path] = None
+_PENDING_DELETE: Optional[_PendingDelete] = None
 
 
 def _is_job_active(job: _RunningJob) -> bool:
@@ -65,6 +74,29 @@ def _clear_running_job(job_id: Optional[int] = None) -> None:
         _RUNNING_JOB = None
 
 
+def _set_pending_delete(chat_id: int, project_dir: Path, mode: str) -> None:
+    global _PENDING_DELETE
+    _PENDING_DELETE = _PendingDelete(
+        chat_id=int(chat_id),
+        project_dir=project_dir.expanduser().resolve(),
+        mode=str(mode or "local").strip().lower() or "local",
+        created_at=time.time(),
+    )
+
+
+def _get_pending_delete(chat_id: int) -> Optional[_PendingDelete]:
+    if _PENDING_DELETE is None:
+        return None
+    if int(_PENDING_DELETE.chat_id) != int(chat_id):
+        return None
+    return _PENDING_DELETE
+
+
+def _clear_pending_delete() -> None:
+    global _PENDING_DELETE
+    _PENDING_DELETE = None
+
+
 def set_current_project(project_dir: Path) -> None:
     global _CURRENT_PROJECT
     _CURRENT_PROJECT = project_dir.expanduser().resolve()
@@ -82,6 +114,19 @@ def get_current_project() -> Optional[Path]:
     if project_dir.exists() and project_dir.is_dir():
         return project_dir
     return None
+
+
+def _clear_project_selection_if_deleted(project_dir: Path) -> None:
+    target = project_dir.expanduser().resolve()
+    current = get_current_project()
+    if current is not None and current.resolve() == target:
+        clear_current_project()
+    last = load_last_project_path()
+    if last is not None and last.resolve() == target and LAST_PROJECT_PATH_FILE.expanduser().exists():
+        try:
+            LAST_PROJECT_PATH_FILE.expanduser().unlink()
+        except Exception:
+            pass
 
 
 def _resolve_target_project() -> Optional[Path]:
@@ -316,6 +361,7 @@ def _help_text() -> str:
         "/running - list running local services\n"
         "/stop [local] - stop local services for current project\n"
         "/restart [local] - restart running local services for current project\n"
+        "/delete_project [local|repo|all] - delete project resources (repo/all require confirmation)\n"
         "/state - show latest project state\n"
         "/help - show this message"
     )
@@ -2182,6 +2228,120 @@ async def command_restart(update: Any, context: Any) -> None:
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 
 
+async def command_delete_project(update: Any, context: Any) -> None:
+    running = _get_running_job()
+    if running is not None:
+        await update.message.reply_text(_busy_message(running))
+        return
+
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text("No project selected. Use /projects then /use <n>.")
+        return
+
+    args = [str(x).strip().lower() for x in getattr(context, "args", []) if str(x).strip()]
+    mode = args[0] if args else "local"
+    if mode not in ("local", "repo", "all"):
+        await update.message.reply_text("Usage: /delete_project [local|repo|all]")
+        return
+
+    chat = getattr(update, "effective_chat", None)
+    chat_id = int(getattr(chat, "id", 0) or 0)
+    if mode in ("repo", "all"):
+        if chat_id <= 0:
+            await update.message.reply_text("Delete confirmation unavailable for this chat.")
+            return
+        _set_pending_delete(chat_id, project_path, mode)
+        lines = [
+            "Delete confirmation required",
+            "",
+            "Project:",
+            project_path.name,
+            "",
+            "This will permanently delete:",
+        ]
+        if mode in ("local", "all"):
+            lines.append("- local project directory")
+            lines.append("- local running services")
+        if mode in ("repo", "all"):
+            lines.append("- GitHub repository")
+        lines += [
+            "",
+            "Reply exactly with:",
+            "DELETE YES",
+        ]
+        await update.message.reply_text("\n".join(lines))
+        return
+
+    from archmind.deploy import delete_project
+
+    result = delete_project(project_path, mode="local")
+    if str(result.get("local_status") or "").upper() == "DELETED":
+        _clear_project_selection_if_deleted(project_path)
+
+    lines = [
+        "Project deleted",
+        "",
+        "Project:",
+        project_path.name,
+        "",
+        "Mode:",
+        "local",
+        "",
+        "Local directory:",
+        str(result.get("local_status") or "UNCHANGED"),
+        "",
+        "GitHub repository:",
+        "UNCHANGED",
+    ]
+    detail = str(result.get("local_detail") or "").strip()
+    if detail and str(result.get("local_status") or "").upper() != "DELETED":
+        lines.extend(["", "Detail:", detail])
+    await update.message.reply_text(_truncate_message("\n".join(lines)))
+
+
+async def command_text(update: Any, context: Any) -> None:
+    del context
+    message = getattr(update, "message", None)
+    text = str(getattr(message, "text", "") or "").strip()
+    if text != "DELETE YES":
+        return
+    chat = getattr(update, "effective_chat", None)
+    chat_id = int(getattr(chat, "id", 0) or 0)
+    pending = _get_pending_delete(chat_id)
+    if pending is None:
+        return
+
+    from archmind.deploy import delete_project
+
+    result = delete_project(pending.project_dir, mode=pending.mode)
+    if str(result.get("local_status") or "").upper() == "DELETED":
+        _clear_project_selection_if_deleted(pending.project_dir)
+    lines = [
+        "Project deleted",
+        "",
+        "Project:",
+        pending.project_dir.name,
+        "",
+        "Mode:",
+        pending.mode,
+        "",
+        "Local directory:",
+        str(result.get("local_status") or "UNCHANGED"),
+        "",
+        "GitHub repository:",
+        str(result.get("repo_status") or "UNCHANGED"),
+    ]
+    local_detail = str(result.get("local_detail") or "").strip()
+    repo_detail = str(result.get("repo_detail") or "").strip()
+    if local_detail and str(result.get("local_status") or "").upper() != "DELETED":
+        lines.extend(["", "Local detail:", local_detail])
+    if repo_detail and str(result.get("repo_status") or "").upper() != "DELETED":
+        lines.extend(["", "Repo detail:", repo_detail])
+    _clear_pending_delete()
+    await update.message.reply_text(_truncate_message("\n".join(lines)))
+
+
 async def command_help(update: Any, context: Any) -> None:
     del context
     await update.message.reply_text(_help_text())
@@ -2193,7 +2353,7 @@ def run_bot() -> None:
         raise SystemExit("TELEGRAM_BOT_TOKEN is required")
 
     try:
-        from telegram.ext import ApplicationBuilder, CommandHandler
+        from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
     except Exception as exc:
         raise SystemExit(f"python-telegram-bot is required: {exc}") from exc
 
@@ -2217,5 +2377,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("deploy", command_deploy))
     app.add_handler(CommandHandler("stop", command_stop))
     app.add_handler(CommandHandler("restart", command_restart))
+    app.add_handler(CommandHandler("delete_project", command_delete_project))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, command_text))
     app.add_handler(CommandHandler("help", command_help))
     app.run_polling()

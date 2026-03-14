@@ -27,6 +27,7 @@ from archmind.telegram_bot import (
     command_projects,
     command_status,
     command_deploy,
+    command_delete_project,
     command_restart,
     command_stop,
     command_help,
@@ -63,9 +64,11 @@ from archmind.telegram_bot import (
 @pytest.fixture(autouse=True)
 def _reset_running_job() -> None:
     telegram_bot._clear_running_job()
+    telegram_bot._clear_pending_delete()
     telegram_bot.clear_current_project()
     yield
     telegram_bot._clear_running_job()
+    telegram_bot._clear_pending_delete()
     telegram_bot.clear_current_project()
 
 
@@ -1573,6 +1576,7 @@ def test_help_mentions_state_for_long_running_commands() -> None:
     assert "/running - list running local services" in msg.sent[-1]
     assert "/stop [local] - stop local services for current project" in msg.sent[-1]
     assert "/restart [local] - restart running local services for current project" in msg.sent[-1]
+    assert "/delete_project [local|repo|all] - delete project resources (repo/all require confirmation)" in msg.sent[-1]
 
 
 def test_idea_local_starts_pipeline_with_auto_deploy_local(monkeypatch, tmp_path: Path) -> None:
@@ -1975,6 +1979,120 @@ def test_restart_local_when_not_running(monkeypatch, tmp_path: Path) -> None:
     out = msg.sent[-1]
     assert "Backend:\nNOT RUNNING" in out
     assert "Frontend:\nNOT RUNNING" in out
+
+
+def test_delete_project_local_executes_and_reports(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "delete_local_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+    monkeypatch.setattr(
+        "archmind.deploy.delete_project",
+        lambda _p, mode="local": {
+            "ok": True,
+            "mode": mode,
+            "local_status": "DELETED",
+            "local_detail": "",
+            "repo_status": "UNCHANGED",
+            "repo_detail": "",
+        },
+    )
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_delete_project(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "Project deleted" in out
+    assert "Mode:\nlocal" in out
+    assert "Local directory:\nDELETED" in out
+    assert "GitHub repository:\nUNCHANGED" in out
+
+
+def test_delete_project_local_clears_current_selection(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "delete_local_clear_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+    monkeypatch.setattr(
+        "archmind.deploy.delete_project",
+        lambda _p, mode="local": {
+            "ok": True,
+            "mode": mode,
+            "local_status": "DELETED",
+            "local_detail": "",
+            "repo_status": "UNCHANGED",
+            "repo_detail": "",
+        },
+    )
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project)
+    monkeypatch.setattr("archmind.telegram_bot.LAST_PROJECT_PATH_FILE", tmp_path / "last_proj")
+    (tmp_path / "last_proj").write_text(str(project), encoding="utf-8")
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_delete_project(update, DummyContext(args=["local"])))
+    assert get_current_project() is None
+
+
+def test_delete_project_repo_requires_confirmation(tmp_path: Path) -> None:
+    project = tmp_path / "delete_repo_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat(id=77))
+    asyncio.run(command_delete_project(update, DummyContext(args=["repo"])))
+    out = msg.sent[-1]
+    assert "Delete confirmation required" in out
+    assert "Reply exactly with:\nDELETE YES" in out
+
+
+def test_delete_project_all_requires_confirmation(tmp_path: Path) -> None:
+    project = tmp_path / "delete_all_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat(id=88))
+    asyncio.run(command_delete_project(update, DummyContext(args=["all"])))
+    out = msg.sent[-1]
+    assert "Delete confirmation required" in out
+    assert "- local project directory" in out
+    assert "- GitHub repository" in out
+
+
+def test_delete_project_confirmation_executes_delete(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "delete_confirm_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "archmind.deploy.delete_project",
+        lambda _p, mode="local": calls.append(mode)
+        or {
+            "ok": True,
+            "mode": mode,
+            "local_status": "DELETED",
+            "local_detail": "",
+            "repo_status": "DELETED",
+            "repo_detail": "",
+        },
+    )
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat(id=99))
+    asyncio.run(command_delete_project(update, DummyContext(args=["all"])))
+
+    confirm_msg = DummyMessage()
+    confirm_update = DummyUpdate(message=confirm_msg, effective_chat=DummyChat(id=99))
+    confirm_update.message.text = "DELETE YES"  # type: ignore[attr-defined]
+    asyncio.run(telegram_bot.command_text(confirm_update, DummyContext()))
+    assert calls == ["all"]
+    assert "Project deleted" in confirm_msg.sent[-1]
+    assert "Mode:\nall" in confirm_msg.sent[-1]
+
+
+def test_delete_yes_without_pending_is_ignored() -> None:
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat(id=66))
+    update.message.text = "DELETE YES"  # type: ignore[attr-defined]
+    asyncio.run(telegram_bot.command_text(update, DummyContext()))
+    assert msg.sent == []
 
 
 def test_running_shows_no_local_services(monkeypatch) -> None:

@@ -936,3 +936,192 @@ def restart_local_services(project_dir: Path) -> dict[str, Any]:
         "stop": stop_result,
         "deploy": deploy_result,
     }
+
+
+def _parse_github_repo_slug(raw_url: str) -> str | None:
+    text = str(raw_url or "").strip()
+    if not text:
+        return None
+    http_match = re.search(r"github\.com[:/]+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?$", text)
+    if http_match:
+        return http_match.group(1)
+    ssh_match = re.search(r"git@github\.com:([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?$", text)
+    if ssh_match:
+        return ssh_match.group(1)
+    return None
+
+
+def _github_repo_slug_from_state_or_result(project_dir: Path) -> str | None:
+    root = project_dir.expanduser().resolve()
+    state = load_state(root) or {}
+    state_url = str(state.get("github_repo_url") or "").strip()
+    slug = _parse_github_repo_slug(state_url)
+    if slug:
+        return slug
+
+    result_path = root / ".archmind" / "result.json"
+    if result_path.exists():
+        try:
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+        except Exception:
+            result = {}
+        if isinstance(result, dict):
+            result_url = str(result.get("github_repo_url") or "").strip()
+            slug = _parse_github_repo_slug(result_url)
+            if slug:
+                return slug
+    return None
+
+
+def _github_repo_slug_from_git_remote(project_dir: Path) -> str | None:
+    root = project_dir.expanduser().resolve()
+    try:
+        completed = subprocess.run(  # noqa: S603
+            ["git", "-C", str(root), "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            shell=False,
+            check=False,
+        )
+    except Exception:
+        return None
+    if completed.returncode != 0:
+        return None
+    return _parse_github_repo_slug(str(completed.stdout or "").strip())
+
+
+def _resolve_github_repo_slug(project_dir: Path) -> str | None:
+    slug = _github_repo_slug_from_state_or_result(project_dir)
+    if slug:
+        return slug
+    return _github_repo_slug_from_git_remote(project_dir)
+
+
+def delete_local_project(project_dir: Path) -> dict[str, Any]:
+    root = project_dir.expanduser().resolve()
+    stop_result = stop_local_services(root)
+    if not root.exists():
+        return {
+            "ok": True,
+            "mode": "local",
+            "local_status": "SKIPPED",
+            "local_detail": "project directory not found",
+            "repo_status": "UNCHANGED",
+            "repo_detail": "",
+            "stop": stop_result,
+        }
+    try:
+        shutil.rmtree(root)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "mode": "local",
+            "local_status": "FAIL",
+            "local_detail": f"local delete failed: {exc}",
+            "repo_status": "UNCHANGED",
+            "repo_detail": "",
+            "stop": stop_result,
+        }
+    return {
+        "ok": True,
+        "mode": "local",
+        "local_status": "DELETED",
+        "local_detail": "local project directory deleted",
+        "repo_status": "UNCHANGED",
+        "repo_detail": "",
+        "stop": stop_result,
+    }
+
+
+def delete_github_repo(project_dir: Path) -> dict[str, Any]:
+    root = project_dir.expanduser().resolve()
+    slug = _resolve_github_repo_slug(root)
+    if not slug:
+        return {
+            "ok": False,
+            "mode": "repo",
+            "repo_status": "SKIPPED",
+            "repo_detail": "github repo url not found",
+            "repo_slug": "",
+        }
+    try:
+        completed = subprocess.run(  # noqa: S603
+            ["gh", "repo", "delete", slug, "--yes"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            shell=False,
+            check=False,
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "mode": "repo",
+            "repo_status": "FAIL",
+            "repo_detail": f"github repo delete failed: {exc}",
+            "repo_slug": slug,
+        }
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip() or "github repo delete failed"
+        return {
+            "ok": False,
+            "mode": "repo",
+            "repo_status": "FAIL",
+            "repo_detail": detail,
+            "repo_slug": slug,
+        }
+    payload = load_state(root) or {}
+    if payload:
+        payload["github_repo_url"] = ""
+        try:
+            write_state(root, payload)
+        except Exception:
+            pass
+    return {
+        "ok": True,
+        "mode": "repo",
+        "repo_status": "DELETED",
+        "repo_detail": "github repository deleted",
+        "repo_slug": slug,
+    }
+
+
+def delete_project(project_dir: Path, mode: str = "local") -> dict[str, Any]:
+    root = project_dir.expanduser().resolve()
+    selected_mode = str(mode or "").strip().lower() or "local"
+    if selected_mode not in ("local", "repo", "all"):
+        return {
+            "ok": False,
+            "mode": selected_mode,
+            "local_status": "UNCHANGED",
+            "local_detail": "",
+            "repo_status": "UNCHANGED",
+            "repo_detail": f"unsupported delete mode: {selected_mode}",
+        }
+
+    if selected_mode == "local":
+        return delete_local_project(root)
+    if selected_mode == "repo":
+        repo = delete_github_repo(root)
+        return {
+            "ok": bool(repo.get("ok")),
+            "mode": "repo",
+            "local_status": "UNCHANGED",
+            "local_detail": "",
+            "repo_status": str(repo.get("repo_status") or "UNCHANGED"),
+            "repo_detail": str(repo.get("repo_detail") or ""),
+            "repo_slug": str(repo.get("repo_slug") or ""),
+        }
+
+    repo = delete_github_repo(root)
+    local = delete_local_project(root)
+    return {
+        "ok": bool(repo.get("ok")) and bool(local.get("ok")),
+        "mode": "all",
+        "local_status": str(local.get("local_status") or "UNCHANGED"),
+        "local_detail": str(local.get("local_detail") or ""),
+        "repo_status": str(repo.get("repo_status") or "UNCHANGED"),
+        "repo_detail": str(repo.get("repo_detail") or ""),
+        "repo_slug": str(repo.get("repo_slug") or ""),
+    }

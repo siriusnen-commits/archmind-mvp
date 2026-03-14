@@ -264,6 +264,12 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("--path", required=True, help="Project root path")
     rs.set_defaults(func=run_restart)
 
+    dp = sub.add_parser("delete-project", help="Delete project resources (local/repo/all)")
+    dp.add_argument("--path", required=True, help="Project root path")
+    dp.add_argument("--mode", choices=["local", "repo", "all"], default="local", help="Deletion mode")
+    dp.add_argument("--confirm", action="store_true", help="Required for destructive repo/all deletion")
+    dp.set_defaults(func=run_delete_project)
+
     rn = sub.add_parser("running", help="List running local services across projects")
     rn.add_argument("--projects-dir", default=None, help="Projects root directory (defaults to ARCHMIND_PROJECTS_DIR)")
     rn.set_defaults(func=run_running)
@@ -674,6 +680,57 @@ def run_restart(args: argparse.Namespace) -> int:
     if frontend_detail and frontend_status.upper() == "FAIL":
         print(f"[RESTART] frontend detail={frontend_detail}")
     return 0
+
+
+def run_delete_project(args: argparse.Namespace) -> int:
+    from archmind.deploy import delete_project
+
+    project_dir = Path(args.path).expanduser().resolve()
+    if not project_dir.exists():
+        print(f"[ERROR] Path not found: {project_dir}", file=sys.stderr)
+        return 64
+    if not project_dir.is_dir():
+        print(f"[ERROR] Path is not a directory: {project_dir}", file=sys.stderr)
+        return 64
+
+    mode = str(args.mode or "local").strip().lower()
+    if mode in ("repo", "all") and not bool(args.confirm):
+        print(f"[DELETE] confirmation required for {mode} deletion. Re-run with --confirm")
+        return 1
+
+    result = delete_project(project_dir, mode=mode)
+    local_status = str(result.get("local_status") or "UNCHANGED").upper()
+    repo_status = str(result.get("repo_status") or "UNCHANGED").upper()
+    local_detail = str(result.get("local_detail") or "").strip()
+    repo_detail = str(result.get("repo_detail") or "").strip()
+
+    if mode == "local":
+        if local_status == "DELETED":
+            print("[DELETE] local project deleted")
+        else:
+            print(f"[DELETE] local deletion status: {local_status}")
+            if local_detail:
+                print(f"[DELETE] local deletion detail: {local_detail}")
+        return 0 if bool(result.get("ok")) else 1
+
+    if mode == "repo":
+        if repo_status == "DELETED":
+            print("[DELETE] github repo deleted")
+        else:
+            print(f"[DELETE] repo deletion failed: {repo_detail or repo_status.lower()}")
+        return 0 if bool(result.get("ok")) else 1
+
+    if bool(result.get("ok")):
+        print("[DELETE] all resources deleted")
+    else:
+        print("[DELETE] all deletion completed with errors")
+    print(f"[DELETE] local: {local_status}")
+    print(f"[DELETE] repo: {repo_status}")
+    if local_detail and local_status != "DELETED":
+        print(f"[DELETE] local detail: {local_detail}")
+    if repo_detail and repo_status != "DELETED":
+        print(f"[DELETE] repo detail: {repo_detail}")
+    return 0 if bool(result.get("ok")) else 1
 
 
 def run_plan(args: argparse.Namespace) -> int:

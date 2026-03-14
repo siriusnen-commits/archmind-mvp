@@ -366,3 +366,55 @@ def test_cli_restart_outputs_not_running(monkeypatch, tmp_path: Path, capsys) ->
     assert exit_code == 0
     assert "[RESTART] backend not running" in out
     assert "[RESTART] frontend not running" in out
+
+
+def test_cli_delete_project_repo_requires_confirm(tmp_path: Path, capsys) -> None:
+    exit_code = main(["delete-project", "--path", str(tmp_path), "--mode", "repo"])
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "confirmation required for repo deletion" in out
+
+
+def test_cli_delete_project_all_requires_confirm(tmp_path: Path, capsys) -> None:
+    exit_code = main(["delete-project", "--path", str(tmp_path), "--mode", "all"])
+    out = capsys.readouterr().out
+    assert exit_code == 1
+    assert "confirmation required for all deletion" in out
+
+
+def test_cli_delete_project_repo_with_confirm_executes(monkeypatch, tmp_path: Path, capsys) -> None:
+    monkeypatch.setattr(
+        "archmind.deploy.delete_project",
+        lambda _p, mode="local": {
+            "ok": True,
+            "mode": mode,
+            "local_status": "UNCHANGED",
+            "local_detail": "",
+            "repo_status": "DELETED",
+            "repo_detail": "",
+            "repo_slug": "owner/name",
+        },
+    )
+    exit_code = main(["delete-project", "--path", str(tmp_path), "--mode", "repo", "--confirm"])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "[DELETE] github repo deleted" in out
+
+
+def test_cli_delete_project_all_with_confirm_executes(monkeypatch, tmp_path: Path, capsys) -> None:
+    monkeypatch.setattr(
+        "archmind.deploy.delete_project",
+        lambda _p, mode="local": {
+            "ok": True,
+            "mode": mode,
+            "local_status": "DELETED",
+            "local_detail": "",
+            "repo_status": "DELETED",
+            "repo_detail": "",
+            "repo_slug": "owner/name",
+        },
+    )
+    exit_code = main(["delete-project", "--path", str(tmp_path), "--mode", "all", "--confirm"])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "[DELETE] all resources deleted" in out

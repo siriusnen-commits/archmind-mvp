@@ -4,6 +4,9 @@ from urllib.error import URLError
 from pathlib import Path
 
 from archmind.deploy import (
+    delete_github_repo,
+    delete_local_project,
+    delete_project,
     deploy_backend_local,
     deploy_frontend_local,
     deploy_frontend_to_railway_real,
@@ -683,6 +686,73 @@ def test_read_last_lines_returns_tail_content(tmp_path: Path) -> None:
     path = tmp_path / "service.log"
     path.write_text("l1\nl2\nl3\n", encoding="utf-8")
     assert read_last_lines(path, lines=2) == "l2\nl3"
+
+
+def test_delete_local_project_calls_stop_and_rmtree(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "to_delete"
+    project.mkdir(parents=True, exist_ok=True)
+    called = {"stop": 0, "rmtree": 0}
+
+    def fake_stop(_p: Path):  # type: ignore[no-untyped-def]
+        called["stop"] += 1
+        return {"ok": True}
+
+    def fake_rmtree(path: Path):  # type: ignore[no-untyped-def]
+        called["rmtree"] += 1
+        assert path == project
+
+    monkeypatch.setattr("archmind.deploy.stop_local_services", fake_stop)
+    monkeypatch.setattr("archmind.deploy.shutil.rmtree", fake_rmtree)
+    result = delete_local_project(project)
+    assert called["stop"] == 1
+    assert called["rmtree"] == 1
+    assert result["local_status"] == "DELETED"
+
+
+def test_delete_github_repo_skips_when_url_missing(tmp_path: Path) -> None:
+    result = delete_github_repo(tmp_path)
+    assert result["ok"] is False
+    assert result["repo_status"] == "SKIPPED"
+    assert "not found" in str(result["repo_detail"]).lower()
+
+
+def test_delete_github_repo_uses_gh_delete(monkeypatch, tmp_path: Path) -> None:
+    write_state(tmp_path, {"github_repo_url": "https://github.com/siriusnen-commits/demo-repo"})
+
+    class DummyCompleted:
+        returncode = 0
+        stdout = "deleted"
+        stderr = ""
+
+    captured: dict[str, object] = {}
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        captured["cmd"] = cmd
+        return DummyCompleted()
+
+    monkeypatch.setattr("archmind.deploy.subprocess.run", fake_run)
+    result = delete_github_repo(tmp_path)
+    assert result["ok"] is True
+    assert result["repo_status"] == "DELETED"
+    assert captured["cmd"] == ["gh", "repo", "delete", "siriusnen-commits/demo-repo", "--yes"]
+
+
+def test_delete_project_all_runs_repo_then_local(monkeypatch, tmp_path: Path) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "archmind.deploy.delete_github_repo",
+        lambda _p: calls.append("repo")
+        or {"ok": True, "repo_status": "DELETED", "repo_detail": "", "repo_slug": "owner/name"},
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.delete_local_project",
+        lambda _p: calls.append("local") or {"ok": True, "local_status": "DELETED", "local_detail": ""},
+    )
+    result = delete_project(tmp_path, mode="all")
+    assert calls == ["repo", "local"]
+    assert result["ok"] is True
+    assert result["repo_status"] == "DELETED"
+    assert result["local_status"] == "DELETED"
 
 
 def test_verify_deploy_health_success(monkeypatch) -> None:
