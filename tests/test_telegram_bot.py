@@ -14,6 +14,7 @@ from archmind.telegram_bot import (
     build_fix_command,
     build_pipeline_command,
     build_retry_commands,
+    command_idea_local,
     command_logs,
     command_continue,
     command_fix,
@@ -91,6 +92,20 @@ def test_build_pipeline_command() -> None:
     assert cmd[cmd.index("--out") + 1] == str(base_dir)
     assert cmd[cmd.index("--name") + 1] == project_name
     assert "--template" not in cmd
+
+
+def test_build_pipeline_command_for_idea_local_enables_auto_deploy() -> None:
+    base_dir = Path("/tmp/projects")
+    cmd = build_pipeline_command(
+        idea="notes app",
+        base_dir=base_dir,
+        project_name="20260315_notes_app",
+        auto_deploy=True,
+        deploy_target="local",
+    )
+    assert "--auto-deploy" in cmd
+    assert "--deploy-target" in cmd
+    assert cmd[cmd.index("--deploy-target") + 1] == "local"
 
 
 def test_resolve_template_for_idea_backend_routes_to_fastapi() -> None:
@@ -236,6 +251,66 @@ def test_build_completion_message_includes_github_repo_url_when_present(tmp_path
     msg = build_completion_message(project_dir, tmp_path / "unused.log")
     assert "GitHub repo:" in msg
     assert "https://github.com/siriusnen-commits/repo_msg" in msg
+
+
+def test_build_completion_message_includes_auto_deploy_success_summary(tmp_path: Path) -> None:
+    project_dir = tmp_path / "auto_deploy_done"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "evaluation.json").write_text(json.dumps({"status": "DONE"}), encoding="utf-8")
+    (archmind / "result.json").write_text(json.dumps({"status": "SUCCESS"}), encoding="utf-8")
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "last_status": "DONE",
+                "iterations": 1,
+                "fix_attempts": 0,
+                "auto_deploy_enabled": True,
+                "auto_deploy_target": "local",
+                "auto_deploy_status": "SUCCESS",
+                "backend_deploy_url": "http://127.0.0.1:8011",
+                "backend_smoke_status": "SUCCESS",
+                "backend_smoke_url": "http://127.0.0.1:8011/health",
+                "frontend_deploy_url": "http://127.0.0.1:3011",
+                "frontend_smoke_status": "SUCCESS",
+                "frontend_smoke_url": "http://127.0.0.1:3011",
+            }
+        ),
+        encoding="utf-8",
+    )
+    msg = build_completion_message(project_dir, tmp_path / "unused.log")
+    assert "Auto deploy: local SUCCESS" in msg
+    assert "Backend URL:" in msg
+    assert "http://127.0.0.1:8011" in msg
+    assert "Frontend URL:" in msg
+    assert "http://127.0.0.1:3011" in msg
+
+
+def test_build_completion_message_separates_auto_deploy_fail_from_done(tmp_path: Path) -> None:
+    project_dir = tmp_path / "auto_deploy_fail_done"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "evaluation.json").write_text(json.dumps({"status": "DONE"}), encoding="utf-8")
+    (archmind / "result.json").write_text(json.dumps({"status": "SUCCESS"}), encoding="utf-8")
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "last_status": "DONE",
+                "iterations": 1,
+                "fix_attempts": 0,
+                "auto_deploy_enabled": True,
+                "auto_deploy_target": "local",
+                "auto_deploy_status": "FAIL",
+                "last_deploy_detail": "local backend start failed",
+            }
+        ),
+        encoding="utf-8",
+    )
+    msg = build_completion_message(project_dir, tmp_path / "unused.log")
+    assert "Status: DONE" in msg
+    assert "Auto deploy: local FAIL" in msg
+    assert "Auto deploy detail:" in msg
+    assert "local backend start failed" in msg
 
 
 def test_build_completion_message_fallbacks_to_temp_log(tmp_path: Path) -> None:
@@ -1447,6 +1522,38 @@ def test_help_mentions_state_for_long_running_commands() -> None:
     assert "/open <path> - open a file from the current project" in msg.sent[-1]
     assert "/diff - show recent diff for the current project" in msg.sent[-1]
     assert "/deploy [target] [real] - deploy current project (targets: railway, local)" in msg.sent[-1]
+
+
+def test_idea_local_starts_pipeline_with_auto_deploy_local(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "20260315_auto_local"
+    log_path = tmp_path / "20260315_auto_local.telegram.log"
+    captured: dict[str, object] = {}
+
+    class DummyProc:
+        pid = 31337
+
+    def fake_start_pipeline_process(cmd, base_dir, project_name):  # type: ignore[no-untyped-def]
+        captured["cmd"] = cmd
+        captured["base_dir"] = base_dir
+        captured["project_name"] = project_name
+        return DummyProc(), log_path
+
+    monkeypatch.setattr("archmind.telegram_bot.resolve_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("archmind.telegram_bot.planned_project_dir", lambda *_a, **_k: project_dir)
+    monkeypatch.setattr("archmind.telegram_bot.start_pipeline_process", fake_start_pipeline_process)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    ctx = DummyContext(args=["build", "notes", "app"], application=None)
+    asyncio.run(command_idea_local(update, ctx))
+
+    cmd = captured["cmd"]
+    assert isinstance(cmd, list)
+    assert "--auto-deploy" in cmd
+    assert "--deploy-target" in cmd
+    assert cmd[cmd.index("--deploy-target") + 1] == "local"
+    assert "command=/idea_local" in msg.sent[-1]
+    assert "auto_deploy=local" in msg.sent[-1]
 
 
 def test_deploy_without_selected_project_shows_message(monkeypatch) -> None:

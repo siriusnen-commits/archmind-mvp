@@ -317,6 +317,9 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "next_action": "STOP",
         "next_action_reason": "",
         "github_repo_url": "",
+        "auto_deploy_enabled": False,
+        "auto_deploy_target": "",
+        "auto_deploy_status": "",
         "deploy_target": "",
         "deploy_mode": "",
         "deploy_kind": "",
@@ -416,6 +419,9 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     payload["next_action"] = str(payload.get("next_action") or "STOP").strip()[:20]
     payload["next_action_reason"] = str(payload.get("next_action_reason") or "").strip()[:220]
     payload["github_repo_url"] = str(payload.get("github_repo_url") or "").strip()[:300]
+    payload["auto_deploy_enabled"] = bool(payload.get("auto_deploy_enabled"))
+    payload["auto_deploy_target"] = str(payload.get("auto_deploy_target") or "").strip()[:40]
+    payload["auto_deploy_status"] = _safe_optional_status(str(payload.get("auto_deploy_status") or ""))
     payload["deploy_target"] = str(payload.get("deploy_target") or "").strip()[:40]
     payload["deploy_mode"] = str(payload.get("deploy_mode") or "").strip()[:20]
     payload["deploy_kind"] = str(payload.get("deploy_kind") or "").strip()[:20]
@@ -1063,6 +1069,9 @@ def format_state_text(project_dir: Path) -> str:
         f"Environment issue: {env_issue}",
         f"Environment reason: {env_reason or '(none)'}",
         f"GitHub repo: {payload.get('github_repo_url') or '(none)'}",
+        f"Auto deploy enabled: {bool(payload.get('auto_deploy_enabled'))}",
+        f"Auto deploy target: {payload.get('auto_deploy_target') or '(none)'}",
+        f"Auto deploy status: {payload.get('auto_deploy_status') or '(none)'}",
         f"Deploy target: {payload.get('deploy_target') or '(none)'}",
         f"Deploy mode: {payload.get('deploy_mode') or '(none)'}",
         f"Deploy kind: {payload.get('deploy_kind') or '(none)'}",
@@ -1140,6 +1149,9 @@ def state_prompt_summary(project_dir: Path) -> list[str]:
         f"- next_action: {decision.get('action', payload.get('next_action', 'STOP'))}",
         f"- next_action_reason: {decision.get('reason', payload.get('next_action_reason', ''))}",
         f"- github_repo_url: {payload.get('github_repo_url', '')}",
+        f"- auto_deploy_enabled: {bool(payload.get('auto_deploy_enabled'))}",
+        f"- auto_deploy_target: {payload.get('auto_deploy_target', '')}",
+        f"- auto_deploy_status: {payload.get('auto_deploy_status', '')}",
         f"- deploy_target: {payload.get('deploy_target', '')}",
         f"- deploy_mode: {payload.get('deploy_mode', '')}",
         f"- deploy_kind: {payload.get('deploy_kind', '')}",

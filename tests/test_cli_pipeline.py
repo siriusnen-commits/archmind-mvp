@@ -346,3 +346,97 @@ def test_pipeline_backend_only_skips_frontend_in_subprocess(tmp_path: Path) -> N
     summary_text = summaries[-1].read_text(encoding="utf-8")
     assert "Frontend:" in summary_text
     assert "frontend not requested" in summary_text
+
+
+def test_pipeline_auto_deploy_local_calls_deploy(monkeypatch, tmp_path: Path) -> None:
+    _write_backend_project(tmp_path)
+    captured: dict[str, object] = {}
+
+    def fake_deploy(project_dir, target="railway", allow_real_deploy=False):  # type: ignore[no-untyped-def]
+        captured["project_dir"] = project_dir
+        captured["target"] = target
+        captured["allow_real_deploy"] = allow_real_deploy
+        return {
+            "ok": True,
+            "target": "local",
+            "mode": "real",
+            "kind": "backend",
+            "status": "SUCCESS",
+            "url": "http://127.0.0.1:8011",
+            "detail": "local backend started",
+            "backend_smoke_url": "http://127.0.0.1:8011/health",
+            "backend_smoke_status": "SUCCESS",
+            "backend_smoke_detail": "health endpoint returned status ok",
+            "frontend_smoke_url": "",
+            "frontend_smoke_status": "SKIPPED",
+            "frontend_smoke_detail": "frontend not deployed",
+        }
+
+    monkeypatch.setattr("archmind.pipeline.deploy_project", fake_deploy)
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--path",
+            str(tmp_path),
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+            "--auto-deploy",
+            "--deploy-target",
+            "local",
+        ]
+    )
+    assert exit_code == 0
+    assert captured["project_dir"] == tmp_path.resolve()
+    assert captured["target"] == "local"
+    assert captured["allow_real_deploy"] is True
+
+    result_payload = json.loads((tmp_path / ".archmind" / "result.json").read_text(encoding="utf-8"))
+    assert result_payload.get("auto_deploy_enabled") is True
+    assert result_payload.get("auto_deploy_target") == "local"
+    assert result_payload.get("auto_deploy_status") == "SUCCESS"
+
+
+def test_pipeline_auto_deploy_fail_does_not_fail_pipeline(monkeypatch, tmp_path: Path) -> None:
+    _write_backend_project(tmp_path)
+
+    monkeypatch.setattr(
+        "archmind.pipeline.deploy_project",
+        lambda *a, **k: {
+            "ok": False,
+            "target": "local",
+            "mode": "real",
+            "kind": "backend",
+            "status": "FAIL",
+            "url": None,
+            "detail": "local backend start failed",
+            "backend_smoke_url": "",
+            "backend_smoke_status": "SKIPPED",
+            "backend_smoke_detail": "deploy failed before smoke check",
+            "frontend_smoke_url": "",
+            "frontend_smoke_status": "SKIPPED",
+            "frontend_smoke_detail": "frontend not deployed",
+        },
+    )
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--path",
+            str(tmp_path),
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+            "--auto-deploy",
+        ]
+    )
+    assert exit_code == 0
+
+    result_payload = json.loads((tmp_path / ".archmind" / "result.json").read_text(encoding="utf-8"))
+    assert result_payload.get("status") == "SUCCESS"
+    assert result_payload.get("auto_deploy_status") == "FAIL"

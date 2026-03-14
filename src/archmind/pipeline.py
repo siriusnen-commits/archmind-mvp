@@ -12,6 +12,7 @@ from archmind.fixer import run_fix_loop
 from archmind.environment import ensure_environment_readiness
 from archmind.evaluator import write_evaluation
 from archmind.github_repo import create_github_repo
+from archmind.deploy import deploy_project
 from archmind.planner import write_project_plan
 from archmind.project_type import detect_project_type, normalize_project_type
 from archmind.template_selector import (
@@ -20,7 +21,16 @@ from archmind.template_selector import (
     select_template_for_project_type,
 )
 from archmind.runner import RunConfig, RunResult, compute_run_status, run_pipeline
-from archmind.state import ensure_state, load_state, set_agent_state, set_progress_step, update_after_fix, update_after_run, write_state
+from archmind.state import (
+    ensure_state,
+    load_state,
+    set_agent_state,
+    set_progress_step,
+    update_after_deploy,
+    update_after_fix,
+    update_after_run,
+    write_state,
+)
 from archmind.tasks import current_task, ensure_tasks
 
 
@@ -50,6 +60,8 @@ class PipelineOptions:
     apply: bool
     dry_run: bool
     json_summary: bool
+    auto_deploy: bool
+    auto_deploy_target: str
 
 
 def _filter_kwargs_for_callable(fn, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -242,6 +254,10 @@ def _build_command(opts: PipelineOptions) -> str:
         parts.append("--dry-run")
     if opts.json_summary:
         parts.append("--json-summary")
+    if opts.auto_deploy:
+        parts.append("--auto-deploy")
+    if opts.auto_deploy_target:
+        parts += ["--deploy-target", opts.auto_deploy_target]
     return " ".join(parts)
 
 
@@ -294,6 +310,11 @@ def _build_result_text(payload: dict[str, Any]) -> str:
         f"- run_before_fix: {payload['steps']['run_before_fix']}",
         f"- fix: {payload['steps']['fix']}",
         f"- run_after_fix: {payload['steps']['run_after_fix']}",
+    ]
+    auto_deploy_step = payload.get("steps", {}).get("auto_deploy")
+    if isinstance(auto_deploy_step, dict):
+        lines.append(f"- auto_deploy: {auto_deploy_step}")
+    lines += [
         "",
         "Artifacts:",
     ]
@@ -445,6 +466,8 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         steps.append("run")
         steps.append("fix (on failure)")
         steps.append("run (after fix)")
+        if opts.auto_deploy:
+            steps.append(f"auto deploy ({opts.auto_deploy_target or 'local'})")
         print("[DRY-RUN] pipeline plan:")
         for step in steps:
             print(f"- {step}")
@@ -781,6 +804,52 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
     )
     if evaluation_path:
         artifacts["evaluation"] = str(evaluation_path)
+
+    auto_deploy_target = (opts.auto_deploy_target or "local").strip().lower() or "local"
+    auto_deploy_status = "SKIPPED"
+    auto_deploy_detail = ""
+    auto_deploy_result: dict[str, Any] | None = None
+    evaluation_status = ""
+    if isinstance(evaluation_payload, dict):
+        evaluation_status = str(evaluation_payload.get("status") or "").strip().upper()
+    if opts.auto_deploy:
+        if status != "SUCCESS":
+            auto_deploy_status = "SKIPPED"
+            auto_deploy_detail = "pipeline not successful"
+        elif evaluation_status and evaluation_status != "DONE":
+            auto_deploy_status = "SKIPPED"
+            auto_deploy_detail = f"evaluation status {evaluation_status}"
+        elif auto_deploy_target != "local":
+            auto_deploy_status = "SKIPPED"
+            auto_deploy_detail = "auto deploy currently supports local target only"
+        else:
+            try:
+                auto_deploy_result = deploy_project(project_dir=project_dir, target="local", allow_real_deploy=True)
+                update_after_deploy(
+                    project_dir,
+                    auto_deploy_result,
+                    action=f"archmind pipeline auto-deploy {auto_deploy_target}",
+                )
+                auto_deploy_status = (
+                    "SUCCESS" if str(auto_deploy_result.get("status") or "").strip().upper() == "SUCCESS" else "FAIL"
+                )
+                auto_deploy_detail = str(auto_deploy_result.get("detail") or "").strip()
+            except Exception as exc:
+                auto_deploy_status = "FAIL"
+                auto_deploy_detail = f"auto deploy failed: {exc}"
+
+    payload["auto_deploy_enabled"] = bool(opts.auto_deploy)
+    payload["auto_deploy_target"] = auto_deploy_target if opts.auto_deploy else ""
+    payload["auto_deploy_status"] = auto_deploy_status if opts.auto_deploy else "SKIPPED"
+    payload["steps"]["auto_deploy"] = {
+        "enabled": bool(opts.auto_deploy),
+        "target": auto_deploy_target if opts.auto_deploy else "",
+        "status": auto_deploy_status if opts.auto_deploy else "SKIPPED",
+        "detail": auto_deploy_detail,
+    }
+    if isinstance(auto_deploy_result, dict):
+        payload["auto_deploy_result"] = auto_deploy_result
+
     state_payload = load_state(project_dir)
     if state_payload:
         payload["state"] = {
@@ -797,6 +866,9 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         synced_state["selected_template"] = selected_template
         synced_state["effective_template"] = effective_template
         synced_state["template_fallback_reason"] = template_fallback_reason
+        synced_state["auto_deploy_enabled"] = bool(opts.auto_deploy)
+        synced_state["auto_deploy_target"] = auto_deploy_target if opts.auto_deploy else ""
+        synced_state["auto_deploy_status"] = auto_deploy_status if opts.auto_deploy else "SKIPPED"
         write_state(project_dir, synced_state)
     except Exception as exc:
         print(f"[WARN] state template metadata sync failed: {exc}", file=sys.stderr)
@@ -846,6 +918,32 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
 
     if status == "SUCCESS":
         print(f"[DONE] SUCCESS. result: {result_json}")
+        if opts.auto_deploy:
+            print(f"[AUTO-DEPLOY] target={auto_deploy_target}")
+            print(f"[AUTO-DEPLOY] status={auto_deploy_status}")
+            if auto_deploy_detail:
+                print(f"[AUTO-DEPLOY] detail={auto_deploy_detail}")
+            if isinstance(auto_deploy_result, dict):
+                kind = str(auto_deploy_result.get("kind") or "").strip().lower()
+                if kind == "fullstack":
+                    backend = auto_deploy_result.get("backend") if isinstance(auto_deploy_result.get("backend"), dict) else {}
+                    frontend = auto_deploy_result.get("frontend") if isinstance(auto_deploy_result.get("frontend"), dict) else {}
+                    backend_url = str(backend.get("url") or "").strip()
+                    frontend_url = str(frontend.get("url") or "").strip()
+                    if backend_url:
+                        print(f"[AUTO-DEPLOY] backend_url={backend_url}")
+                    if frontend_url:
+                        print(f"[AUTO-DEPLOY] frontend_url={frontend_url}")
+                else:
+                    deploy_url = str(auto_deploy_result.get("url") or "").strip()
+                    if deploy_url:
+                        print(f"[AUTO-DEPLOY] url={deploy_url}")
+                backend_smoke = str(auto_deploy_result.get("backend_smoke_status") or "").strip().upper()
+                frontend_smoke = str(auto_deploy_result.get("frontend_smoke_status") or "").strip().upper()
+                if backend_smoke:
+                    print(f"[AUTO-DEPLOY] backend_smoke={backend_smoke}")
+                if frontend_smoke:
+                    print(f"[AUTO-DEPLOY] frontend_smoke={frontend_smoke}")
         if github_repo_url:
             print("GitHub repo:")
             print(github_repo_url)

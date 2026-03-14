@@ -245,6 +245,8 @@ def build_parser() -> argparse.ArgumentParser:
     ppipe.add_argument("--apply", action="store_true", help="Apply fix changes")
     ppipe.add_argument("--dry-run", action="store_true", help="Plan only, no execution")
     ppipe.add_argument("--json-summary", action="store_true", help="Write pipeline summary.json")
+    ppipe.add_argument("--auto-deploy", action="store_true", help="After successful pipeline, auto deploy (local only)")
+    ppipe.add_argument("--deploy-target", default="local", help="Auto deploy target (currently: local)")
     ppipe.set_defaults(func=run_pipeline_cmd)
 
     d = sub.add_parser("deploy", help="Deploy a project to a target provider")
@@ -424,6 +426,8 @@ def run_pipeline_cmd(args: argparse.Namespace) -> int:
         apply=args.apply,
         dry_run=args.dry_run,
         json_summary=args.json_summary,
+        auto_deploy=bool(args.auto_deploy),
+        auto_deploy_target=str(args.deploy_target or "local"),
     )
 
     return run_pipeline_command(opts)

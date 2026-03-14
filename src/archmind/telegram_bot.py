@@ -197,8 +197,15 @@ def planned_project_dir(base_dir: Path, idea: str, ts: Optional[str] = None) -> 
     return base_dir.expanduser().resolve() / make_project_name(idea, ts=ts)
 
 
-def build_pipeline_command(idea: str, base_dir: Path, project_name: str) -> list[str]:
-    return [
+def build_pipeline_command(
+    idea: str,
+    base_dir: Path,
+    project_name: str,
+    *,
+    auto_deploy: bool = False,
+    deploy_target: str = "local",
+) -> list[str]:
+    cmd = [
         "archmind",
         "pipeline",
         "--idea",
@@ -209,6 +216,11 @@ def build_pipeline_command(idea: str, base_dir: Path, project_name: str) -> list
         project_name,
         "--apply",
     ]
+    if auto_deploy:
+        cmd.append("--auto-deploy")
+        target = str(deploy_target or "local").strip().lower() or "local"
+        cmd += ["--deploy-target", target]
+    return cmd
 
 
 def build_continue_command(project_dir: Path) -> list[str]:
@@ -286,6 +298,7 @@ def _help_text() -> str:
     return (
         "Commands:\n"
         "/idea <text> - run archmind pipeline from an idea\n"
+        "/idea_local <text> - run /idea and auto deploy to local\n"
         "/pipeline <text> - alias of /idea\n"
         "/continue - continue the last project with pipeline\n"
         "/fix - run fix on the last project\n"
@@ -337,7 +350,7 @@ def _status_from_sources(project_dir: Path) -> str:
 
 def _progress_fallback_for_command(command: str) -> str:
     cmd = str(command or "").strip().lower()
-    if cmd in ("/idea", "/pipeline"):
+    if cmd in ("/idea", "/pipeline", "/idea_local"):
         return "Planning architecture"
     if cmd == "/continue":
         return "Running checks"
@@ -1295,6 +1308,11 @@ def build_finished_message(
             result=result,
             fallback_lines=fallback_lines,
         )
+    auto_deploy_enabled = bool(state.get("auto_deploy_enabled"))
+    auto_deploy_target = str(state.get("auto_deploy_target") or "").strip() or "local"
+    auto_deploy_status = str(state.get("auto_deploy_status") or "").strip().upper() or "SKIPPED"
+    if auto_deploy_enabled:
+        summary_lines.append(f"Auto deploy: {auto_deploy_target} {auto_deploy_status}")
     next_actions = _recommend_next_actions(status, summary_lines, state, evaluation, result)[:3]
     github_repo_url = str(state.get("github_repo_url") or result.get("github_repo_url") or "").strip()
 
@@ -1320,13 +1338,44 @@ def build_finished_message(
         "",
         "Summary:",
     ]
-    lines.extend(f"- {line}" for line in summary_lines[:5])
+    summary_limit = 6 if auto_deploy_enabled else 5
+    lines.extend(f"- {line}" for line in summary_lines[:summary_limit])
     if github_repo_url:
         lines += [
             "",
             "GitHub repo:",
             github_repo_url,
         ]
+    if auto_deploy_enabled:
+        backend_url = str(state.get("backend_deploy_url") or "").strip()
+        frontend_url = str(state.get("frontend_deploy_url") or "").strip()
+        deploy_url = str(state.get("deploy_url") or "").strip()
+        backend_smoke_status = str(state.get("backend_smoke_status") or "").strip().upper()
+        backend_smoke_url = str(state.get("backend_smoke_url") or "").strip()
+        frontend_smoke_status = str(state.get("frontend_smoke_status") or "").strip().upper()
+        frontend_smoke_url = str(state.get("frontend_smoke_url") or "").strip()
+        deploy_detail = str(state.get("last_deploy_detail") or "").strip()
+        lines += [
+            "",
+            f"Auto deploy target: {auto_deploy_target}",
+            f"Auto deploy status: {auto_deploy_status}",
+        ]
+        if backend_url:
+            lines += ["", "Backend URL:", backend_url]
+        if backend_smoke_status:
+            lines += ["", "Backend smoke:", backend_smoke_status]
+            if backend_smoke_url:
+                lines.append(backend_smoke_url)
+        if frontend_url:
+            lines += ["", "Frontend URL:", frontend_url]
+        elif deploy_url and not backend_url:
+            lines += ["", "Deploy URL:", deploy_url]
+        if frontend_smoke_status:
+            lines += ["", "Frontend smoke:", frontend_smoke_status]
+            if frontend_smoke_url:
+                lines.append(frontend_smoke_url)
+        if auto_deploy_status == "FAIL" and deploy_detail:
+            lines += ["", "Auto deploy detail:", deploy_detail]
     if next_actions:
         lines += [
             "",
@@ -1462,7 +1511,14 @@ def _temp_log_for_project(project_dir: Path) -> Path:
     return root / f"{project_dir.name}.telegram.log"
 
 
-async def _handle_idea_like(update: Any, context: Any, cmd_name: str) -> None:
+async def _handle_idea_like(
+    update: Any,
+    context: Any,
+    cmd_name: str,
+    *,
+    auto_deploy: bool = False,
+    auto_deploy_target: str = "local",
+) -> None:
     running = _get_running_job()
     if running is not None:
         await update.message.reply_text(_busy_message(running))
@@ -1482,6 +1538,8 @@ async def _handle_idea_like(update: Any, context: Any, cmd_name: str) -> None:
         idea=idea,
         base_dir=base_dir,
         project_name=project_dir.name,
+        auto_deploy=auto_deploy,
+        deploy_target=auto_deploy_target,
     )
     try:
         proc, log_path = start_pipeline_process(command, base_dir=base_dir, project_name=project_dir.name)
@@ -1507,14 +1565,17 @@ async def _handle_idea_like(update: Any, context: Any, cmd_name: str) -> None:
         )
         _attach_running_task(job, task)
 
-    await update.message.reply_text(
+    start_msg = (
         f"started: pid={proc.pid}\n"
         f"command=/{cmd_name}\n"
         f"project={project_dir}\n"
         f"state=RUNNING\n"
         f"progress={_progress_fallback_for_command(f'/{cmd_name}')}\n"
-        f"log={log_path}"
     )
+    if auto_deploy:
+        start_msg += f"auto_deploy={auto_deploy_target}\n"
+    start_msg += f"log={log_path}"
+    await update.message.reply_text(start_msg)
 
 
 async def _handle_continue(update: Any, context: Any) -> None:
@@ -1659,6 +1720,16 @@ async def _handle_retry(update: Any, context: Any) -> None:
 
 async def command_idea(update: Any, context: Any) -> None:
     await _handle_idea_like(update, context, "idea")
+
+
+async def command_idea_local(update: Any, context: Any) -> None:
+    await _handle_idea_like(
+        update,
+        context,
+        "idea_local",
+        auto_deploy=True,
+        auto_deploy_target="local",
+    )
 
 
 async def command_pipeline(update: Any, context: Any) -> None:
@@ -1965,6 +2036,7 @@ def run_bot() -> None:
 
     app = ApplicationBuilder().token(token).build()
     app.add_handler(CommandHandler("idea", command_idea))
+    app.add_handler(CommandHandler("idea_local", command_idea_local))
     app.add_handler(CommandHandler("pipeline", command_pipeline))
     app.add_handler(CommandHandler("continue", command_continue))
     app.add_handler(CommandHandler("fix", command_fix))
