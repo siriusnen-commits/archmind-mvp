@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib import error, parse, request
 
-from archmind.state import ensure_state, load_state, write_state
+from archmind.state import ensure_state, load_state, update_after_deploy, write_state
 
 
 MOCK_RAILWAY_URL = "https://example.up.railway.app"
@@ -880,4 +880,59 @@ def stop_local_services(project_dir: Path) -> dict[str, Any]:
             "pid": frontend_pid,
             "detail": frontend_detail,
         },
+    }
+
+
+def restart_local_services(project_dir: Path) -> dict[str, Any]:
+    root = project_dir.expanduser().resolve()
+    before = get_local_runtime_status(root)
+    backend_was_running = str(before.get("backend", {}).get("status") or "") == "RUNNING"
+    frontend_was_running = str(before.get("frontend", {}).get("status") or "") == "RUNNING"
+
+    stop_result = stop_local_services(root)
+    if not backend_was_running and not frontend_was_running:
+        return {
+            "ok": True,
+            "target": "local",
+            "backend": {"status": "NOT RUNNING", "url": "", "detail": ""},
+            "frontend": {"status": "NOT RUNNING", "url": "", "detail": ""},
+            "stop": stop_result,
+        }
+
+    restart_kind = "fullstack" if (backend_was_running and frontend_was_running) else ("backend" if backend_was_running else "frontend")
+    deploy_result = deploy_to_local(root, kind=restart_kind)
+    update_after_deploy(root, deploy_result, action="archmind restart --path <project>")
+
+    backend_status = "NOT RUNNING"
+    backend_url = ""
+    backend_detail = ""
+    if backend_was_running:
+        backend_source = deploy_result
+        if restart_kind == "fullstack":
+            backend_source = deploy_result.get("backend") if isinstance(deploy_result.get("backend"), dict) else {}
+        backend_ok = str(backend_source.get("status") or "").upper() == "SUCCESS"
+        backend_status = "RESTARTED" if backend_ok else "FAIL"
+        backend_url = str(backend_source.get("url") or "").strip()
+        backend_detail = str(backend_source.get("detail") or "").strip()
+
+    frontend_status = "NOT RUNNING"
+    frontend_url = ""
+    frontend_detail = ""
+    if frontend_was_running:
+        frontend_source = deploy_result
+        if restart_kind == "fullstack":
+            frontend_source = deploy_result.get("frontend") if isinstance(deploy_result.get("frontend"), dict) else {}
+        frontend_ok = str(frontend_source.get("status") or "").upper() == "SUCCESS"
+        frontend_status = "RESTARTED" if frontend_ok else "FAIL"
+        frontend_url = str(frontend_source.get("url") or "").strip()
+        frontend_detail = str(frontend_source.get("detail") or "").strip()
+
+    ok = backend_status != "FAIL" and frontend_status != "FAIL"
+    return {
+        "ok": ok,
+        "target": "local",
+        "backend": {"status": backend_status, "url": backend_url, "detail": backend_detail},
+        "frontend": {"status": frontend_status, "url": frontend_url, "detail": frontend_detail},
+        "stop": stop_result,
+        "deploy": deploy_result,
     }

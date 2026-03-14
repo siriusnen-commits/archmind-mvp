@@ -16,6 +16,7 @@ from archmind.deploy import (
     is_pid_running,
     list_running_local_projects,
     read_last_lines,
+    restart_local_services,
     stop_local_services,
     verify_frontend_smoke,
     verify_deploy_health,
@@ -489,6 +490,116 @@ def test_stop_local_services_handles_missing_pids(tmp_path: Path) -> None:
     assert state is not None
     assert state.get("backend_pid") is None
     assert state.get("frontend_pid") is None
+
+
+def test_restart_local_services_calls_stop_then_deploy(monkeypatch, tmp_path: Path) -> None:
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "RUNNING"},
+            "frontend": {"status": "RUNNING"},
+        },
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.stop_local_services",
+        lambda _p: calls.append("stop") or {"ok": True, "backend": {"status": "STOPPED"}, "frontend": {"status": "STOPPED"}},
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.deploy_to_local",
+        lambda _p, kind="backend": calls.append(f"deploy:{kind}")
+        or {
+            "ok": True,
+            "target": "local",
+            "mode": "real",
+            "kind": "fullstack",
+            "status": "SUCCESS",
+            "url": "http://127.0.0.1:3011",
+            "detail": "local fullstack deploy completed",
+            "backend": {"status": "SUCCESS", "url": "http://127.0.0.1:8011", "detail": "local backend started"},
+            "frontend": {"status": "SUCCESS", "url": "http://127.0.0.1:3011", "detail": "local frontend started"},
+            "backend_pid": 9001,
+            "frontend_pid": 9002,
+            "backend_smoke_url": "http://127.0.0.1:8011/health",
+            "backend_smoke_status": "SUCCESS",
+            "backend_smoke_detail": "health endpoint returned status ok",
+            "frontend_smoke_url": "http://127.0.0.1:3011",
+            "frontend_smoke_status": "SUCCESS",
+            "frontend_smoke_detail": "frontend URL returned HTTP 200",
+            "healthcheck_url": "http://127.0.0.1:8011/health",
+            "healthcheck_status": "SUCCESS",
+            "healthcheck_detail": "health endpoint returned status ok",
+        },
+    )
+    monkeypatch.setattr("archmind.deploy.update_after_deploy", lambda *_a, **_k: {})
+
+    result = restart_local_services(tmp_path)
+    assert calls == ["stop", "deploy:fullstack"]
+    assert result["backend"]["status"] == "RESTARTED"
+    assert result["frontend"]["status"] == "RESTARTED"
+
+
+def test_restart_local_services_updates_pids_in_state(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "RUNNING"},
+            "frontend": {"status": "NOT RUNNING"},
+        },
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.stop_local_services",
+        lambda _p: {"ok": True, "backend": {"status": "STOPPED"}, "frontend": {"status": "NOT RUNNING"}},
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.deploy_to_local",
+        lambda _p, kind="backend": {
+            "ok": True,
+            "target": "local",
+            "mode": "real",
+            "kind": "backend",
+            "status": "SUCCESS",
+            "url": "http://127.0.0.1:8055",
+            "detail": "local backend started",
+            "backend_pid": 8055,
+            "backend_smoke_url": "http://127.0.0.1:8055/health",
+            "backend_smoke_status": "SUCCESS",
+            "backend_smoke_detail": "health endpoint returned status ok",
+            "frontend_smoke_url": "",
+            "frontend_smoke_status": "SKIPPED",
+            "frontend_smoke_detail": "frontend not deployed",
+            "healthcheck_url": "http://127.0.0.1:8055/health",
+            "healthcheck_status": "SUCCESS",
+            "healthcheck_detail": "health endpoint returned status ok",
+        },
+    )
+
+    result = restart_local_services(tmp_path)
+    assert result["backend"]["status"] == "RESTARTED"
+    assert result["frontend"]["status"] == "NOT RUNNING"
+    state = load_state(tmp_path)
+    assert state is not None
+    assert int(state.get("backend_pid") or 0) == 8055
+
+
+def test_restart_local_services_when_not_running(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "NOT RUNNING"},
+            "frontend": {"status": "NOT RUNNING"},
+        },
+    )
+    called = {"deploy": 0}
+    monkeypatch.setattr("archmind.deploy.stop_local_services", lambda _p: {"ok": True})
+    monkeypatch.setattr(
+        "archmind.deploy.deploy_to_local",
+        lambda _p, kind="backend": called.__setitem__("deploy", called["deploy"] + 1) or {"ok": True},
+    )
+    result = restart_local_services(tmp_path)
+    assert called["deploy"] == 0
+    assert result["backend"]["status"] == "NOT RUNNING"
+    assert result["frontend"]["status"] == "NOT RUNNING"
 
 
 def test_is_pid_running_true_when_kill_zero_succeeds(monkeypatch) -> None:

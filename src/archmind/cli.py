@@ -260,6 +260,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--path", required=True, help="Project root path")
     s.set_defaults(func=run_stop)
 
+    rs = sub.add_parser("restart", help="Restart local services started by local deploy")
+    rs.add_argument("--path", required=True, help="Project root path")
+    rs.set_defaults(func=run_restart)
+
     rn = sub.add_parser("running", help="List running local services across projects")
     rn.add_argument("--projects-dir", default=None, help="Projects root directory (defaults to ARCHMIND_PROJECTS_DIR)")
     rn.set_defaults(func=run_running)
@@ -642,6 +646,33 @@ def run_logs(args: argparse.Namespace) -> int:
     if show_frontend:
         print("[FRONTEND LOGS]")
         print(frontend_text or "No logs available.")
+    return 0
+
+
+def run_restart(args: argparse.Namespace) -> int:
+    from archmind.deploy import restart_local_services
+
+    project_dir = Path(args.path).expanduser().resolve()
+    if not project_dir.exists():
+        print(f"[ERROR] Path not found: {project_dir}", file=sys.stderr)
+        return 64
+    if not project_dir.is_dir():
+        print(f"[ERROR] Path is not a directory: {project_dir}", file=sys.stderr)
+        return 64
+
+    result = restart_local_services(project_dir)
+    backend = result.get("backend") if isinstance(result.get("backend"), dict) else {}
+    frontend = result.get("frontend") if isinstance(result.get("frontend"), dict) else {}
+    backend_status = str(backend.get("status") or "NOT RUNNING")
+    frontend_status = str(frontend.get("status") or "NOT RUNNING")
+    print(f"[RESTART] backend {backend_status.lower()}")
+    backend_detail = str(backend.get("detail") or "").strip()
+    if backend_detail and backend_status.upper() == "FAIL":
+        print(f"[RESTART] backend detail={backend_detail}")
+    print(f"[RESTART] frontend {frontend_status.lower()}")
+    frontend_detail = str(frontend.get("detail") or "").strip()
+    if frontend_detail and frontend_status.upper() == "FAIL":
+        print(f"[RESTART] frontend detail={frontend_detail}")
     return 0
 
 

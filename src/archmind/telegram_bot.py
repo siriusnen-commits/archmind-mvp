@@ -315,6 +315,7 @@ def _help_text() -> str:
         "/logs [backend|frontend|last|local [backend|frontend]] - show logs\n"
         "/running - list running local services\n"
         "/stop [local] - stop local services for current project\n"
+        "/restart [local] - restart running local services for current project\n"
         "/state - show latest project state\n"
         "/help - show this message"
     )
@@ -2127,6 +2128,60 @@ async def command_stop(update: Any, context: Any) -> None:
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 
 
+async def command_restart(update: Any, context: Any) -> None:
+    running = _get_running_job()
+    if running is not None:
+        await update.message.reply_text(_busy_message(running))
+        return
+
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text("No project selected. Use /projects then /use <n>.")
+        return
+
+    args = [str(x).strip().lower() for x in getattr(context, "args", []) if str(x).strip()]
+    if args and args[0] not in ("local",):
+        await update.message.reply_text("Usage: /restart or /restart local")
+        return
+
+    from archmind.deploy import restart_local_services
+
+    result = restart_local_services(project_path)
+    backend = result.get("backend") if isinstance(result.get("backend"), dict) else {}
+    frontend = result.get("frontend") if isinstance(result.get("frontend"), dict) else {}
+
+    lines = [
+        "Local services restarted",
+        "",
+        "Project:",
+        project_path.name,
+        "",
+        "Backend:",
+        str(backend.get("status") or "NOT RUNNING"),
+    ]
+    backend_url = str(backend.get("url") or "").strip()
+    if backend_url:
+        lines.append(backend_url)
+    lines.extend(
+        [
+            "",
+            "Frontend:",
+            str(frontend.get("status") or "NOT RUNNING"),
+        ]
+    )
+    frontend_url = str(frontend.get("url") or "").strip()
+    if frontend_url:
+        lines.append(frontend_url)
+
+    backend_detail = str(backend.get("detail") or "").strip()
+    frontend_detail = str(frontend.get("detail") or "").strip()
+    if backend_detail and str(backend.get("status") or "").upper() == "FAIL":
+        lines.extend(["", "Backend detail:", backend_detail])
+    if frontend_detail and str(frontend.get("status") or "").upper() == "FAIL":
+        lines.extend(["", "Frontend detail:", frontend_detail])
+    await update.message.reply_text(_truncate_message("\n".join(lines)))
+
+
 async def command_help(update: Any, context: Any) -> None:
     del context
     await update.message.reply_text(_help_text())
@@ -2161,5 +2216,6 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("status", command_status))
     app.add_handler(CommandHandler("deploy", command_deploy))
     app.add_handler(CommandHandler("stop", command_stop))
+    app.add_handler(CommandHandler("restart", command_restart))
     app.add_handler(CommandHandler("help", command_help))
     app.run_polling()

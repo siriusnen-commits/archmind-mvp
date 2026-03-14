@@ -27,6 +27,7 @@ from archmind.telegram_bot import (
     command_projects,
     command_status,
     command_deploy,
+    command_restart,
     command_stop,
     command_help,
     command_retry,
@@ -1571,6 +1572,7 @@ def test_help_mentions_state_for_long_running_commands() -> None:
     assert "/deploy [target] [real] - deploy current project (targets: railway, local)" in msg.sent[-1]
     assert "/running - list running local services" in msg.sent[-1]
     assert "/stop [local] - stop local services for current project" in msg.sent[-1]
+    assert "/restart [local] - restart running local services for current project" in msg.sent[-1]
 
 
 def test_idea_local_starts_pipeline_with_auto_deploy_local(monkeypatch, tmp_path: Path) -> None:
@@ -1915,6 +1917,61 @@ def test_stop_local_when_not_running(monkeypatch, tmp_path: Path) -> None:
     msg = DummyMessage()
     update = DummyUpdate(message=msg, effective_chat=DummyChat())
     asyncio.run(command_stop(update, DummyContext(args=["local"])))
+    out = msg.sent[-1]
+    assert "Backend:\nNOT RUNNING" in out
+    assert "Frontend:\nNOT RUNNING" in out
+
+
+def test_restart_without_selected_project_shows_message(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: None)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_restart(update, DummyContext()))
+    assert msg.sent
+    assert msg.sent[-1] == "No project selected. Use /projects then /use <n>."
+
+
+def test_restart_local_restarts_services_and_displays_urls(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "restart_local_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+    monkeypatch.setattr(
+        "archmind.deploy.restart_local_services",
+        lambda _p: {
+            "ok": True,
+            "target": "local",
+            "backend": {"status": "RESTARTED", "url": "http://127.0.0.1:8011", "detail": ""},
+            "frontend": {"status": "RESTARTED", "url": "http://127.0.0.1:3011", "detail": ""},
+        },
+    )
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_restart(update, DummyContext(args=["local"])))
+    out = msg.sent[-1]
+    assert "Local services restarted" in out
+    assert "Project:\nrestart_local_proj" in out
+    assert "Backend:\nRESTARTED" in out
+    assert "http://127.0.0.1:8011" in out
+    assert "Frontend:\nRESTARTED" in out
+    assert "http://127.0.0.1:3011" in out
+
+
+def test_restart_local_when_not_running(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "restart_none_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+    monkeypatch.setattr(
+        "archmind.deploy.restart_local_services",
+        lambda _p: {
+            "ok": True,
+            "target": "local",
+            "backend": {"status": "NOT RUNNING", "url": "", "detail": ""},
+            "frontend": {"status": "NOT RUNNING", "url": "", "detail": ""},
+        },
+    )
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_restart(update, DummyContext()))
     out = msg.sent[-1]
     assert "Backend:\nNOT RUNNING" in out
     assert "Frontend:\nNOT RUNNING" in out

@@ -332,3 +332,37 @@ def test_cli_logs_local_no_logs(monkeypatch, tmp_path: Path, capsys) -> None:
     out = capsys.readouterr().out
     assert exit_code == 0
     assert "No logs available." in out
+
+
+def test_cli_restart_outputs_restarted(monkeypatch, tmp_path: Path, capsys) -> None:
+    monkeypatch.setattr(
+        "archmind.deploy.restart_local_services",
+        lambda _p: {
+            "ok": True,
+            "target": "local",
+            "backend": {"status": "RESTARTED", "url": "http://127.0.0.1:8011", "detail": ""},
+            "frontend": {"status": "RESTARTED", "url": "http://127.0.0.1:3011", "detail": ""},
+        },
+    )
+    exit_code = main(["restart", "--path", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "[RESTART] backend restarted" in out
+    assert "[RESTART] frontend restarted" in out
+
+
+def test_cli_restart_outputs_not_running(monkeypatch, tmp_path: Path, capsys) -> None:
+    monkeypatch.setattr(
+        "archmind.deploy.restart_local_services",
+        lambda _p: {
+            "ok": True,
+            "target": "local",
+            "backend": {"status": "NOT RUNNING", "url": "", "detail": ""},
+            "frontend": {"status": "NOT RUNNING", "url": "", "detail": ""},
+        },
+    )
+    exit_code = main(["restart", "--path", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "[RESTART] backend not running" in out
+    assert "[RESTART] frontend not running" in out
