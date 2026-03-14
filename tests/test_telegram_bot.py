@@ -1537,6 +1537,9 @@ def test_deploy_parses_real_flag(monkeypatch, tmp_path: Path) -> None:
             "status": "SUCCESS",
             "url": "https://real-demo.up.railway.app",
             "detail": "railway deploy success",
+            "healthcheck_url": "https://real-demo.up.railway.app/health",
+            "healthcheck_status": "SUCCESS",
+            "healthcheck_detail": "health endpoint returned status ok",
         }
 
     monkeypatch.setattr("archmind.deploy.deploy_project", fake_deploy)
@@ -1550,6 +1553,8 @@ def test_deploy_parses_real_flag(monkeypatch, tmp_path: Path) -> None:
     assert captured["allow_real_deploy"] is True
     assert "Mode: real" in out
     assert "Deploy URL:\nhttps://real-demo.up.railway.app" in out
+    assert "Health check:\nSUCCESS" in out
+    assert "Health URL:\nhttps://real-demo.up.railway.app/health" in out
 
 
 def test_watch_retry_accumulates_existing_fix_attempts(monkeypatch, tmp_path: Path) -> None:

@@ -457,6 +457,15 @@ def run_deploy(args: argparse.Namespace) -> int:
     detail = str(result.get("detail") or "").strip()
     if detail:
         print(f"[DEPLOY] detail={detail}")
+    health_status = str(result.get("healthcheck_status") or "").strip().upper()
+    if health_status:
+        health_url = str(result.get("healthcheck_url") or "").strip()
+        if health_url:
+            print(f"[HEALTH] url={health_url}")
+        print(f"[HEALTH] status={health_status}")
+        health_detail = str(result.get("healthcheck_detail") or "").strip()
+        if health_detail:
+            print(f"[HEALTH] detail={health_detail}")
 
     return 0 if bool(result.get("ok")) else 1
 

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from urllib.error import URLError
 from pathlib import Path
 
-from archmind.deploy import deploy_project, generate_deploy_slug
+from archmind.deploy import deploy_project, generate_deploy_slug, verify_deploy_health
 from archmind.state import load_state, update_after_deploy
 
 
@@ -40,6 +41,9 @@ def test_update_after_deploy_persists_deploy_fields(tmp_path: Path) -> None:
         "status": "SUCCESS",
         "url": "https://example.up.railway.app",
         "detail": "mock deploy success",
+        "healthcheck_url": "https://example.up.railway.app/health",
+        "healthcheck_status": "SUCCESS",
+        "healthcheck_detail": "health endpoint returned status ok",
     }
     update_after_deploy(tmp_path, result, action="archmind deploy --path x --target railway")
     state = load_state(tmp_path)
@@ -48,6 +52,9 @@ def test_update_after_deploy_persists_deploy_fields(tmp_path: Path) -> None:
     assert state.get("last_deploy_status") == "SUCCESS"
     assert state.get("deploy_url") == "https://example.up.railway.app"
     assert state.get("last_deploy_detail") == "mock deploy success"
+    assert state.get("healthcheck_url") == "https://example.up.railway.app/health"
+    assert state.get("healthcheck_status") == "SUCCESS"
+    assert state.get("healthcheck_detail") == "health endpoint returned status ok"
 
 
 def test_generate_deploy_slug_from_timestamped_name() -> None:
@@ -85,6 +92,14 @@ def test_deploy_project_real_path_calls_railway_commands(monkeypatch, tmp_path: 
 
     monkeypatch.setattr("archmind.deploy.shutil.which", lambda _name: "/usr/local/bin/railway")
     monkeypatch.setattr("archmind.deploy.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "archmind.deploy.verify_deploy_health",
+        lambda *_a, **_k: {
+            "healthcheck_url": "https://real-demo.up.railway.app/health",
+            "healthcheck_status": "SUCCESS",
+            "healthcheck_detail": "health endpoint returned status ok",
+        },
+    )
 
     result = deploy_project(tmp_path, target="railway", allow_real_deploy=True)
     assert result["ok"] is True
@@ -97,3 +112,73 @@ def test_deploy_project_real_path_calls_railway_commands(monkeypatch, tmp_path: 
     assert any(cmd[:2] == ["railway", "init"] for cmd in commands)
     assert ["railway", "up", "--detach"] in commands
     assert ["railway", "domain"] in commands
+
+
+def test_verify_deploy_health_success(monkeypatch) -> None:
+    class DummyResponse:
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def getcode(self) -> int:
+            return 200
+
+        def read(self) -> bytes:
+            return b'{"status":"ok"}'
+
+    monkeypatch.setattr("archmind.deploy.request.urlopen", lambda *_a, **_k: DummyResponse())
+    result = verify_deploy_health("https://demo.up.railway.app")
+    assert result["healthcheck_status"] == "SUCCESS"
+    assert result["healthcheck_url"] == "https://demo.up.railway.app/health"
+
+
+def test_verify_deploy_health_fail_on_non_200(monkeypatch) -> None:
+    class DummyResponse:
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def getcode(self) -> int:
+            return 503
+
+        def read(self) -> bytes:
+            return b"unavailable"
+
+    monkeypatch.setattr("archmind.deploy.request.urlopen", lambda *_a, **_k: DummyResponse())
+    result = verify_deploy_health("https://demo.up.railway.app")
+    assert result["healthcheck_status"] == "FAIL"
+    assert "HTTP 503" in result["healthcheck_detail"]
+
+
+def test_verify_deploy_health_fail_on_invalid_body(monkeypatch) -> None:
+    class DummyResponse:
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def getcode(self) -> int:
+            return 200
+
+        def read(self) -> bytes:
+            return b'{"message":"alive"}'
+
+    monkeypatch.setattr("archmind.deploy.request.urlopen", lambda *_a, **_k: DummyResponse())
+    result = verify_deploy_health("https://demo.up.railway.app")
+    assert result["healthcheck_status"] == "FAIL"
+    assert result["healthcheck_detail"] == "unexpected response body"
+
+
+def test_verify_deploy_health_fail_on_request_exception(monkeypatch) -> None:
+    def fake_urlopen(*_a, **_k):  # type: ignore[no-untyped-def]
+        raise URLError("timed out")
+
+    monkeypatch.setattr("archmind.deploy.request.urlopen", fake_urlopen)
+    result = verify_deploy_health("https://demo.up.railway.app")
+    assert result["healthcheck_status"] == "FAIL"
+    assert "health request failed" in result["healthcheck_detail"]

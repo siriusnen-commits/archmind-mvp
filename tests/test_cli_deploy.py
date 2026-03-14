@@ -15,6 +15,9 @@ def test_cli_deploy_success_outputs_summary(monkeypatch, tmp_path: Path, capsys)
             "status": "SUCCESS",
             "url": "https://example.up.railway.app",
             "detail": "mock deploy success",
+            "healthcheck_url": "",
+            "healthcheck_status": "SKIPPED",
+            "healthcheck_detail": "mock deploy mode",
         },
     )
     exit_code = main(["deploy", "--path", str(tmp_path), "--target", "railway"])
@@ -24,6 +27,7 @@ def test_cli_deploy_success_outputs_summary(monkeypatch, tmp_path: Path, capsys)
     assert "[DEPLOY] mode=mock" in out
     assert "[DEPLOY] status=SUCCESS" in out
     assert "[DEPLOY] url=https://example.up.railway.app" in out
+    assert "[HEALTH] status=SKIPPED" in out
 
 
 def test_cli_deploy_failure_returns_nonzero(monkeypatch, tmp_path: Path) -> None:
@@ -56,6 +60,9 @@ def test_cli_deploy_real_flag_is_forwarded(monkeypatch, tmp_path: Path, capsys) 
             "status": "SUCCESS",
             "url": "https://real-demo.up.railway.app",
             "detail": "railway deploy success",
+            "healthcheck_url": "https://real-demo.up.railway.app/health",
+            "healthcheck_status": "SUCCESS",
+            "healthcheck_detail": "health endpoint returned status ok",
         }
 
     monkeypatch.setattr("archmind.deploy.deploy_project", fake_deploy)
@@ -66,3 +73,6 @@ def test_cli_deploy_real_flag_is_forwarded(monkeypatch, tmp_path: Path, capsys) 
     assert captured["allow_real_deploy"] is True
     assert "[DEPLOY] mode=real" in out
     assert "[DEPLOY] url=https://real-demo.up.railway.app" in out
+    assert "[HEALTH] url=https://real-demo.up.railway.app/health" in out
+    assert "[HEALTH] status=SUCCESS" in out
+    assert "[HEALTH] detail=health endpoint returned status ok" in out

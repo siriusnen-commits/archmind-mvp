@@ -1874,6 +1874,16 @@ async def command_deploy(update: Any, context: Any) -> None:
     url = str(result.get("url") or "").strip()
     if url:
         lines.extend(["", "Deploy URL:", url])
+    if mode == "real":
+        health_status = str(result.get("healthcheck_status") or "").strip().upper()
+        health_url = str(result.get("healthcheck_url") or "").strip()
+        health_detail = str(result.get("healthcheck_detail") or "").strip()
+        if health_status:
+            lines.extend(["", "Health check:", health_status])
+            if health_url:
+                lines.extend(["", "Health URL:", health_url])
+            if health_detail and health_status != "SUCCESS":
+                lines.extend(["", "Detail:", health_detail])
     detail = str(result.get("detail") or "").strip()
     if detail:
         lines.extend(["", "Detail:", detail])

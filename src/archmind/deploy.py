@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
+from urllib import error, parse, request
 
 
 MOCK_RAILWAY_URL = "https://example.up.railway.app"
@@ -44,6 +46,9 @@ def _deploy_fail(target: str, detail: str, *, mode: str = "mock") -> dict[str, A
         "status": "FAIL",
         "url": None,
         "detail": detail,
+        "healthcheck_url": "",
+        "healthcheck_status": "SKIPPED",
+        "healthcheck_detail": "deploy failed before health check",
     }
 
 
@@ -108,6 +113,71 @@ def _run_railway(cmd: list[str], *, cwd: Path | None = None) -> subprocess.Compl
     )
 
 
+def verify_deploy_health(
+    deploy_url: str,
+    path: str = "/health",
+    timeout_s: float = 10.0,
+) -> dict[str, Any]:
+    base = str(deploy_url or "").strip()
+    if not base:
+        return {
+            "healthcheck_url": "",
+            "healthcheck_status": "SKIPPED",
+            "healthcheck_detail": "deploy URL missing",
+        }
+
+    parsed = parse.urlparse(base)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return {
+            "healthcheck_url": "",
+            "healthcheck_status": "FAIL",
+            "healthcheck_detail": "invalid deploy URL",
+        }
+
+    clean_path = "/" + str(path or "/health").lstrip("/")
+    health_url = parse.urljoin(base.rstrip("/") + "/", clean_path.lstrip("/"))
+    req = request.Request(health_url, method="GET")
+    try:
+        with request.urlopen(req, timeout=timeout_s) as response:  # noqa: S310
+            status_code = int(response.getcode() or 0)
+            body_text = response.read().decode("utf-8", errors="replace")
+    except error.URLError as exc:
+        return {
+            "healthcheck_url": health_url,
+            "healthcheck_status": "FAIL",
+            "healthcheck_detail": f"health request failed: {exc.reason}",
+        }
+    except Exception as exc:
+        return {
+            "healthcheck_url": health_url,
+            "healthcheck_status": "FAIL",
+            "healthcheck_detail": f"health request failed: {exc}",
+        }
+
+    if status_code != 200:
+        return {
+            "healthcheck_url": health_url,
+            "healthcheck_status": "FAIL",
+            "healthcheck_detail": f"health endpoint returned HTTP {status_code}",
+        }
+
+    try:
+        payload = json.loads(body_text)
+    except Exception:
+        payload = None
+    if isinstance(payload, dict) and str(payload.get("status") or "").strip().lower() == "ok":
+        return {
+            "healthcheck_url": health_url,
+            "healthcheck_status": "SUCCESS",
+            "healthcheck_detail": "health endpoint returned status ok",
+        }
+    return {
+        "healthcheck_url": health_url,
+        "healthcheck_status": "FAIL",
+        "healthcheck_detail": "unexpected response body",
+    }
+
+
 def deploy_to_railway_mock(project_dir: Path) -> dict[str, Any]:
     project_dir = project_dir.expanduser().resolve()
     if not project_dir.exists() or not project_dir.is_dir():
@@ -124,6 +194,9 @@ def deploy_to_railway_mock(project_dir: Path) -> dict[str, Any]:
         "status": "SUCCESS",
         "url": MOCK_RAILWAY_URL,
         "detail": "mock deploy success (real deploy disabled)",
+        "healthcheck_url": "",
+        "healthcheck_status": "SKIPPED",
+        "healthcheck_detail": "mock deploy mode",
     }
 
 
@@ -155,14 +228,20 @@ def deploy_to_railway_real(project_dir: Path) -> dict[str, Any]:
     domain_match = _RAILWAY_DOMAIN_RE.search(domain_text)
     deploy_url = domain_match.group(0) if domain_match else None
 
-    return {
+    result: dict[str, Any] = {
         "ok": True,
         "target": "railway",
         "mode": "real",
         "status": "SUCCESS",
         "url": deploy_url,
         "detail": "railway deploy success",
+        "healthcheck_url": "",
+        "healthcheck_status": "SKIPPED",
+        "healthcheck_detail": "deploy URL missing",
     }
+    if deploy_url:
+        result.update(verify_deploy_health(deploy_url))
+    return result
 
 
 def deploy_to_railway(project_dir: Path, allow_real_deploy: bool = False) -> dict[str, Any]:

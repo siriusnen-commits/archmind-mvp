@@ -34,6 +34,8 @@ AGENT_STATES = (
     "UNKNOWN",
 )
 
+HEALTHCHECK_STATUSES = ("SUCCESS", "FAIL", "SKIPPED")
+
 
 def derive_task_label_from_failure_signature(signature: str) -> str:
     raw = (signature or "").strip().lower()
@@ -79,6 +81,11 @@ def _safe_status(value: str) -> str:
 def _safe_optional_status(value: str) -> str:
     status = (value or "").upper()
     return status if status in LAST_STATUSES else ""
+
+
+def _safe_healthcheck_status(value: str) -> str:
+    status = (value or "").upper()
+    return status if status in HEALTHCHECK_STATUSES else ""
 
 
 def _safe_agent_state(value: str) -> str:
@@ -308,6 +315,9 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "last_deploy_status": "",
         "deploy_url": "",
         "last_deploy_detail": "",
+        "healthcheck_url": "",
+        "healthcheck_status": "",
+        "healthcheck_detail": "",
         "current_step_key": "",
         "current_step_label": "",
         "current_step_status": "",
@@ -388,6 +398,9 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     payload["last_deploy_status"] = _safe_optional_status(str(payload.get("last_deploy_status") or ""))
     payload["deploy_url"] = str(payload.get("deploy_url") or "").strip()[:300]
     payload["last_deploy_detail"] = str(payload.get("last_deploy_detail") or "").strip()[:220]
+    payload["healthcheck_url"] = str(payload.get("healthcheck_url") or "").strip()[:300]
+    payload["healthcheck_status"] = _safe_healthcheck_status(str(payload.get("healthcheck_status") or ""))
+    payload["healthcheck_detail"] = str(payload.get("healthcheck_detail") or "").strip()[:220]
     payload["current_step_key"] = str(payload.get("current_step_key") or "").strip()[:40]
     payload["current_step_label"] = str(payload.get("current_step_label") or "").strip()[:120]
     payload["current_step_status"] = str(payload.get("current_step_status") or "").strip()[:20]
@@ -832,11 +845,18 @@ def update_after_deploy(
     detail = _sanitize_line(str(result.get("detail") or ""), project_dir)
     raw_url = result.get("url")
     deploy_url = str(raw_url).strip() if raw_url is not None else ""
+    raw_health_url = result.get("healthcheck_url")
+    healthcheck_url = str(raw_health_url).strip() if raw_health_url is not None else ""
+    healthcheck_status = _safe_healthcheck_status(str(result.get("healthcheck_status") or ""))
+    healthcheck_detail = _sanitize_line(str(result.get("healthcheck_detail") or ""), project_dir)
 
     payload["deploy_target"] = target[:40]
     payload["last_deploy_status"] = status
     payload["deploy_url"] = deploy_url[:300]
     payload["last_deploy_detail"] = detail[:220]
+    payload["healthcheck_url"] = healthcheck_url[:300]
+    payload["healthcheck_status"] = healthcheck_status
+    payload["healthcheck_detail"] = healthcheck_detail[:220]
     payload["last_action"] = _sanitize_line(action, project_dir)
 
     _append_history(
@@ -971,6 +991,9 @@ def format_state_text(project_dir: Path) -> str:
         f"Deploy status: {payload.get('last_deploy_status') or '(none)'}",
         f"Deploy URL: {payload.get('deploy_url') or '(none)'}",
         f"Deploy detail: {payload.get('last_deploy_detail') or '(none)'}",
+        f"Health URL: {payload.get('healthcheck_url') or '(none)'}",
+        f"Health status: {payload.get('healthcheck_status') or '(none)'}",
+        f"Health detail: {payload.get('healthcheck_detail') or '(none)'}",
         f"Progress: {progress_text}",
         f"Next action: {next_action}",
         f"Reason: {next_reason or '(none)'}",
@@ -1033,6 +1056,9 @@ def state_prompt_summary(project_dir: Path) -> list[str]:
         f"- last_deploy_status: {payload.get('last_deploy_status', '')}",
         f"- deploy_url: {payload.get('deploy_url', '')}",
         f"- last_deploy_detail: {payload.get('last_deploy_detail', '')}",
+        f"- healthcheck_url: {payload.get('healthcheck_url', '')}",
+        f"- healthcheck_status: {payload.get('healthcheck_status', '')}",
+        f"- healthcheck_detail: {payload.get('healthcheck_detail', '')}",
         "- recent_failures:",
     ]
     if failures:
