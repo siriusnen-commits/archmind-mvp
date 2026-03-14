@@ -1597,6 +1597,48 @@ def test_telegram_deploy_fullstack_output_sections(monkeypatch, tmp_path: Path) 
     assert "https://web-example.up.railway.app" in out
 
 
+def test_telegram_real_fullstack_shows_real_frontend_deploy_result(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "deploy_fullstack_real_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+
+    monkeypatch.setattr(
+        "archmind.deploy.deploy_project",
+        lambda *a, **k: {
+            "ok": True,
+            "target": "railway",
+            "mode": "real",
+            "kind": "fullstack",
+            "status": "SUCCESS",
+            "url": "https://web-real.up.railway.app",
+            "detail": "fullstack deploy completed",
+            "backend": {
+                "status": "SUCCESS",
+                "url": "https://api-real.up.railway.app",
+                "detail": "railway deploy success",
+            },
+            "frontend": {
+                "status": "SUCCESS",
+                "url": "https://web-real.up.railway.app",
+                "detail": "real frontend deploy success",
+            },
+            "healthcheck_url": "https://api-real.up.railway.app/health",
+            "healthcheck_status": "SUCCESS",
+            "healthcheck_detail": "health endpoint returned status ok",
+        },
+    )
+    monkeypatch.setattr("archmind.telegram_bot.update_after_deploy", lambda *a, **k: {})
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_deploy(update, DummyContext(args=["railway", "real"])))
+    out = msg.sent[-1]
+    assert "Mode: real" in out
+    assert "Kind:\nfullstack" in out
+    assert "Frontend:\nSUCCESS" in out
+    assert "https://web-real.up.railway.app" in out
+
+
 def test_watch_retry_accumulates_existing_fix_attempts(monkeypatch, tmp_path: Path) -> None:
     project_dir = tmp_path / "retry_project_existing_fix"
     archmind = project_dir / ".archmind"

@@ -220,6 +220,59 @@ def _placeholder_frontend_url(project_dir: Path) -> str:
     return f"https://web-{slug}.up.railway.app"
 
 
+def _slug_with_suffix(project_dir: Path, suffix: str) -> str:
+    base = generate_deploy_slug(project_dir.name or "archmind-app")
+    suffix_clean = re.sub(r"[^a-z0-9-]+", "-", str(suffix or "").strip().lower()).strip("-")
+    if not suffix_clean:
+        return base
+    candidate = f"{base}-{suffix_clean}"[:40].strip("-")
+    if not candidate:
+        return base
+    return candidate
+
+
+def get_frontend_deploy_dir(project_dir: Path) -> Path | None:
+    root = project_dir.expanduser().resolve()
+    frontend_pkg = root / "frontend" / "package.json"
+    root_pkg = root / "package.json"
+    if frontend_pkg.exists():
+        return frontend_pkg.parent
+    if root_pkg.exists():
+        return root
+    return None
+
+
+def deploy_frontend_to_railway_real(project_dir: Path) -> dict[str, Any]:
+    root = project_dir.expanduser().resolve()
+    frontend_dir = get_frontend_deploy_dir(root)
+    if frontend_dir is None:
+        return _service_result("FAIL", None, "frontend deploy directory not found")
+
+    can_deploy, detail = can_deploy_to_railway()
+    if not can_deploy:
+        return _service_result("FAIL", None, detail)
+
+    slug = _slug_with_suffix(root, "web")
+    init_result = _run_railway(["railway", "init", "--name", slug], cwd=frontend_dir)
+    if init_result.returncode != 0:
+        init_text = f"{init_result.stdout}\n{init_result.stderr}".lower()
+        already_exists = "already" in init_text and ("exist" in init_text or "linked" in init_text or "project" in init_text)
+        if not already_exists:
+            detail_text = (init_result.stderr or init_result.stdout or "").strip() or "railway init failed"
+            return _service_result("FAIL", None, detail_text)
+
+    up_result = _run_railway(["railway", "up", "--detach"], cwd=frontend_dir)
+    if up_result.returncode != 0:
+        detail_text = (up_result.stderr or up_result.stdout or "").strip() or "railway up failed"
+        return _service_result("FAIL", None, detail_text)
+
+    domain_result = _run_railway(["railway", "domain"], cwd=frontend_dir)
+    domain_text = f"{domain_result.stdout}\n{domain_result.stderr}"
+    domain_match = _RAILWAY_DOMAIN_RE.search(domain_text)
+    frontend_url = domain_match.group(0) if domain_match else None
+    return _service_result("SUCCESS", frontend_url, "real frontend deploy success")
+
+
 def deploy_to_railway_mock(project_dir: Path, kind: str = "backend") -> dict[str, Any]:
     project_dir = project_dir.expanduser().resolve()
     if not project_dir.exists() or not project_dir.is_dir():
@@ -277,30 +330,34 @@ def deploy_to_railway_mock(project_dir: Path, kind: str = "backend") -> dict[str
 
 def deploy_to_railway_real(project_dir: Path, kind: str = "backend") -> dict[str, Any]:
     if kind == "frontend":
+        frontend_result = deploy_frontend_to_railway_real(project_dir)
+        frontend_ok = str(frontend_result.get("status") or "").upper() == "SUCCESS"
         return {
-            "ok": True,
+            "ok": frontend_ok,
             "target": "railway",
             "mode": "real",
             "kind": "frontend",
-            "status": "SUCCESS",
-            "url": None,
-            "detail": "real frontend deploy not implemented yet",
+            "status": "SUCCESS" if frontend_ok else "FAIL",
+            "url": frontend_result.get("url"),
+            "detail": str(frontend_result.get("detail") or ""),
             "healthcheck_url": "",
             "healthcheck_status": "SKIPPED",
             "healthcheck_detail": "frontend health check not implemented",
         }
     if kind == "fullstack":
         backend_result = deploy_to_railway_real(project_dir, kind="backend")
-        frontend_result = _service_result("SKIPPED", None, "real frontend deploy not implemented yet")
-        top_status = "SUCCESS" if bool(backend_result.get("ok")) else "FAIL"
+        frontend_result = deploy_frontend_to_railway_real(project_dir)
+        backend_ok = bool(backend_result.get("ok"))
+        frontend_ok = str(frontend_result.get("status") or "").upper() == "SUCCESS"
+        top_status = "SUCCESS" if (backend_ok and frontend_ok) else "FAIL"
         return {
-            "ok": bool(backend_result.get("ok")),
+            "ok": backend_ok or frontend_ok,
             "target": "railway",
             "mode": "real",
             "kind": "fullstack",
             "status": top_status,
-            "url": backend_result.get("url"),
-            "detail": "fullstack deploy completed (frontend skipped)",
+            "url": frontend_result.get("url") or backend_result.get("url"),
+            "detail": "fullstack deploy completed",
             "backend": _service_result(
                 str(backend_result.get("status") or "FAIL"),
                 backend_result.get("url"),

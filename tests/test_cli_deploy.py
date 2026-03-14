@@ -113,3 +113,38 @@ def test_cli_deploy_fullstack_prints_backend_frontend_sections(monkeypatch, tmp_
     assert "[BACKEND] url=https://api-example.up.railway.app" in out
     assert "[FRONTEND] status=SUCCESS" in out
     assert "[FRONTEND] url=https://web-example.up.railway.app" in out
+
+
+def test_cli_real_fullstack_shows_real_frontend_deploy_result(monkeypatch, tmp_path: Path, capsys) -> None:
+    monkeypatch.setattr(
+        "archmind.deploy.deploy_project",
+        lambda *a, **k: {
+            "ok": True,
+            "target": "railway",
+            "mode": "real",
+            "kind": "fullstack",
+            "status": "SUCCESS",
+            "url": "https://web-real.up.railway.app",
+            "detail": "fullstack deploy completed",
+            "backend": {
+                "status": "SUCCESS",
+                "url": "https://api-real.up.railway.app",
+                "detail": "railway deploy success",
+            },
+            "frontend": {
+                "status": "SUCCESS",
+                "url": "https://web-real.up.railway.app",
+                "detail": "real frontend deploy success",
+            },
+            "healthcheck_url": "https://api-real.up.railway.app/health",
+            "healthcheck_status": "SUCCESS",
+            "healthcheck_detail": "health endpoint returned status ok",
+        },
+    )
+    exit_code = main(["deploy", "--path", str(tmp_path), "--target", "railway", "--allow-real-deploy"])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "[DEPLOY] mode=real" in out
+    assert "[DEPLOY] kind=fullstack" in out
+    assert "[FRONTEND] status=SUCCESS" in out
+    assert "[FRONTEND] url=https://web-real.up.railway.app" in out
