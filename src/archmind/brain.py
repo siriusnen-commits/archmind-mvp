@@ -14,11 +14,13 @@ def _has_any(text: str, keywords: list[str]) -> bool:
 def _extract_domains(text: str) -> list[str]:
     domains: list[str] = []
     mapping: list[tuple[str, list[str]]] = [
+        ("notes", [r"\bnote(s)?\b", r"메모"]),
         ("tasks", [r"\btask(s)?\b", r"\btodo(s)?\b", r"작업"]),
         ("expenses", [r"\bexpense(s)?\b", r"\bbudget\b", r"가계부"]),
         ("documents", [r"\bdocument(s)?\b", r"\bsummary\b", r"문서"]),
         ("defects", [r"\bdefect(s)?\b", r"\bbug(s)?\b", r"\bissue(s)?\b", r"결함"]),
         ("teams", [r"\bteam(s)?\b", r"\bcollaboration\b", r"협업"]),
+        ("inventory", [r"\binventory\b", r"\bstock\b", r"재고"]),
     ]
     for name, patterns in mapping:
         if _has_any(text, patterns):
@@ -51,6 +53,7 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
             r"\bdatabase\b",
             r"\bdb\b",
             r"\bcrud\b",
+            r"\bmanagement\b",
             r"저장",
             r"관리",
             r"추적",
@@ -101,6 +104,7 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
             r"\bcrud\b",
             r"\btracker\b",
             r"\bmanage\b",
+            r"\bmanagement\b",
             r"저장",
             r"관리",
             r"추적",
