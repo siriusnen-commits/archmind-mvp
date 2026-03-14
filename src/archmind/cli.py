@@ -255,6 +255,10 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--allow-real-deploy", action="store_true", help="Allow non-mock deploy path")
     d.set_defaults(func=run_deploy)
 
+    s = sub.add_parser("stop", help="Stop local services started by local deploy")
+    s.add_argument("--path", required=True, help="Project root path")
+    s.set_defaults(func=run_stop)
+
     pl = sub.add_parser("plan", help="Generate project plan artifacts")
     pl.add_argument("--idea", required=True, help="Plan idea / goal")
     pl.add_argument("--path", default=".", help="Existing project path")
@@ -531,6 +535,34 @@ def run_deploy(args: argparse.Namespace) -> int:
             print(f"[FRONTEND-SMOKE] detail={frontend_smoke_detail}")
 
     return 0 if bool(result.get("ok")) else 1
+
+
+def run_stop(args: argparse.Namespace) -> int:
+    from archmind.deploy import stop_local_services
+
+    project_dir = Path(args.path).expanduser().resolve()
+    if not project_dir.exists():
+        print(f"[ERROR] Path not found: {project_dir}", file=sys.stderr)
+        return 64
+    if not project_dir.is_dir():
+        print(f"[ERROR] Path is not a directory: {project_dir}", file=sys.stderr)
+        return 64
+
+    result = stop_local_services(project_dir)
+    backend = result.get("backend") if isinstance(result.get("backend"), dict) else {}
+    frontend = result.get("frontend") if isinstance(result.get("frontend"), dict) else {}
+
+    backend_status = str(backend.get("status") or "NOT RUNNING")
+    frontend_status = str(frontend.get("status") or "NOT RUNNING")
+    print(f"[STOP] backend {backend_status.lower()}")
+    backend_detail = str(backend.get("detail") or "").strip()
+    if backend_detail:
+        print(f"[STOP] backend detail={backend_detail}")
+    print(f"[STOP] frontend {frontend_status.lower()}")
+    frontend_detail = str(frontend.get("detail") or "").strip()
+    if frontend_detail:
+        print(f"[STOP] frontend detail={frontend_detail}")
+    return 0
 
 
 def run_plan(args: argparse.Namespace) -> int:

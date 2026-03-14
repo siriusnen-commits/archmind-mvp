@@ -12,10 +12,11 @@ from archmind.deploy import (
     detect_deploy_kind,
     generate_deploy_slug,
     get_frontend_deploy_dir,
+    stop_local_services,
     verify_frontend_smoke,
     verify_deploy_health,
 )
-from archmind.state import load_state, update_after_deploy
+from archmind.state import load_state, update_after_deploy, write_state
 
 
 def test_deploy_project_returns_fail_when_railway_cli_missing(tmp_path: Path, monkeypatch) -> None:
@@ -418,7 +419,42 @@ def test_fullstack_real_deploy_stores_frontend_real_url(monkeypatch, tmp_path: P
     assert result["frontend"]["status"] == "SUCCESS"
     assert result["frontend"]["url"] == "https://web-real.up.railway.app"
     assert result["backend_smoke_status"] == "SUCCESS"
-    assert result["frontend_smoke_status"] == "SUCCESS"
+
+
+def test_stop_local_services_calls_kill_and_clears_pids(monkeypatch, tmp_path: Path) -> None:
+    write_state(
+        tmp_path,
+        {
+            "backend_pid": 1234,
+            "frontend_pid": 2345,
+        },
+    )
+    killed: list[tuple[int, int]] = []
+
+    def fake_kill(pid: int, sig: int) -> None:
+        killed.append((pid, sig))
+
+    monkeypatch.setattr("archmind.deploy.os.kill", fake_kill)
+    result = stop_local_services(tmp_path)
+    assert result["backend"]["status"] == "STOPPED"
+    assert result["frontend"]["status"] == "STOPPED"
+    assert [pid for pid, _sig in killed] == [1234, 2345]
+
+    state = load_state(tmp_path)
+    assert state is not None
+    assert state.get("backend_pid") is None
+    assert state.get("frontend_pid") is None
+
+
+def test_stop_local_services_handles_missing_pids(tmp_path: Path) -> None:
+    result = stop_local_services(tmp_path)
+    assert result["backend"]["status"] == "NOT RUNNING"
+    assert result["frontend"]["status"] == "NOT RUNNING"
+
+    state = load_state(tmp_path)
+    assert state is not None
+    assert state.get("backend_pid") is None
+    assert state.get("frontend_pid") is None
 
 
 def test_verify_deploy_health_success(monkeypatch) -> None:

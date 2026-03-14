@@ -313,6 +313,7 @@ def _help_text() -> str:
         "/open <path> - open a file from the current project\n"
         "/diff - show recent diff for the current project\n"
         "/logs [backend|frontend|last] - show recent failure logs\n"
+        "/stop [local] - stop local services for current project\n"
         "/state - show latest project state\n"
         "/help - show this message"
     )
@@ -2019,6 +2020,49 @@ async def command_deploy(update: Any, context: Any) -> None:
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 
 
+async def command_stop(update: Any, context: Any) -> None:
+    running = _get_running_job()
+    if running is not None:
+        await update.message.reply_text(_busy_message(running))
+        return
+
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text("No project selected. Use /projects then /use <n>.")
+        return
+
+    args = [str(x).strip().lower() for x in getattr(context, "args", []) if str(x).strip()]
+    if args and args[0] not in ("local",):
+        await update.message.reply_text("Usage: /stop or /stop local")
+        return
+
+    from archmind.deploy import stop_local_services
+
+    result = stop_local_services(project_path)
+    backend = result.get("backend") if isinstance(result.get("backend"), dict) else {}
+    frontend = result.get("frontend") if isinstance(result.get("frontend"), dict) else {}
+
+    lines = [
+        "Local services stopped",
+        "",
+        "Project:",
+        project_path.name,
+        "",
+        "Backend:",
+        str(backend.get("status") or "NOT RUNNING"),
+        "",
+        "Frontend:",
+        str(frontend.get("status") or "NOT RUNNING"),
+    ]
+    backend_detail = str(backend.get("detail") or "").strip()
+    frontend_detail = str(frontend.get("detail") or "").strip()
+    if backend_detail:
+        lines.extend(["", "Backend detail:", backend_detail])
+    if frontend_detail:
+        lines.extend(["", "Frontend detail:", frontend_detail])
+    await update.message.reply_text(_truncate_message("\n".join(lines)))
+
+
 async def command_help(update: Any, context: Any) -> None:
     del context
     await update.message.reply_text(_help_text())
@@ -2051,5 +2095,6 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("state", command_state))
     app.add_handler(CommandHandler("status", command_status))
     app.add_handler(CommandHandler("deploy", command_deploy))
+    app.add_handler(CommandHandler("stop", command_stop))
     app.add_handler(CommandHandler("help", command_help))
     app.run_polling()

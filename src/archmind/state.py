@@ -138,6 +138,14 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _safe_pid(value: Any) -> Optional[int]:
+    try:
+        pid = int(value)
+    except Exception:
+        return None
+    return pid if pid > 0 else None
+
+
 def _is_fix_action(action: str) -> bool:
     normalized = (action or "").strip().lower()
     if not normalized:
@@ -338,8 +346,8 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "frontend_smoke_url": "",
         "frontend_smoke_status": "",
         "frontend_smoke_detail": "",
-        "backend_pid": 0,
-        "frontend_pid": 0,
+        "backend_pid": None,
+        "frontend_pid": None,
         "healthcheck_url": "",
         "healthcheck_status": "",
         "healthcheck_detail": "",
@@ -440,8 +448,8 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     payload["frontend_smoke_url"] = str(payload.get("frontend_smoke_url") or "").strip()[:300]
     payload["frontend_smoke_status"] = _safe_service_deploy_status(str(payload.get("frontend_smoke_status") or ""))
     payload["frontend_smoke_detail"] = str(payload.get("frontend_smoke_detail") or "").strip()[:220]
-    payload["backend_pid"] = _safe_int(payload.get("backend_pid"), 0)
-    payload["frontend_pid"] = _safe_int(payload.get("frontend_pid"), 0)
+    payload["backend_pid"] = _safe_pid(payload.get("backend_pid"))
+    payload["frontend_pid"] = _safe_pid(payload.get("frontend_pid"))
     payload["healthcheck_url"] = str(payload.get("healthcheck_url") or "").strip()[:300]
     payload["healthcheck_status"] = _safe_healthcheck_status(str(payload.get("healthcheck_status") or ""))
     payload["healthcheck_detail"] = str(payload.get("healthcheck_detail") or "").strip()[:220]
@@ -917,8 +925,8 @@ def update_after_deploy(
     payload["frontend_smoke_url"] = frontend_smoke_url[:300]
     payload["frontend_smoke_status"] = frontend_smoke_status
     payload["frontend_smoke_detail"] = frontend_smoke_detail[:220]
-    payload["backend_pid"] = _safe_int(result.get("backend_pid"), 0)
-    payload["frontend_pid"] = _safe_int(result.get("frontend_pid"), 0)
+    payload["backend_pid"] = _safe_pid(result.get("backend_pid"))
+    payload["frontend_pid"] = _safe_pid(result.get("frontend_pid"))
     backend = result.get("backend")
     if isinstance(backend, dict):
         payload["backend_deploy_url"] = str(backend.get("url") or "").strip()[:300]
@@ -1170,8 +1178,8 @@ def state_prompt_summary(project_dir: Path) -> list[str]:
         f"- frontend_smoke_status: {payload.get('frontend_smoke_status', '')}",
         f"- frontend_smoke_url: {payload.get('frontend_smoke_url', '')}",
         f"- frontend_smoke_detail: {payload.get('frontend_smoke_detail', '')}",
-        f"- backend_pid: {payload.get('backend_pid', 0)}",
-        f"- frontend_pid: {payload.get('frontend_pid', 0)}",
+        f"- backend_pid: {payload.get('backend_pid')}",
+        f"- frontend_pid: {payload.get('frontend_pid')}",
         f"- healthcheck_url: {payload.get('healthcheck_url', '')}",
         f"- healthcheck_status: {payload.get('healthcheck_status', '')}",
         f"- healthcheck_detail: {payload.get('healthcheck_detail', '')}",

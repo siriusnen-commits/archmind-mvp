@@ -239,3 +239,37 @@ def test_cli_default_target_is_railway(monkeypatch, tmp_path: Path) -> None:
     exit_code = main(["deploy", "--path", str(tmp_path)])
     assert exit_code == 0
     assert captured["target"] == "railway"
+
+
+def test_cli_stop_outputs_stopped(monkeypatch, tmp_path: Path, capsys) -> None:
+    monkeypatch.setattr(
+        "archmind.deploy.stop_local_services",
+        lambda _p: {
+            "ok": True,
+            "target": "local",
+            "backend": {"status": "STOPPED", "pid": 1111, "detail": ""},
+            "frontend": {"status": "STOPPED", "pid": 2222, "detail": ""},
+        },
+    )
+    exit_code = main(["stop", "--path", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "[STOP] backend stopped" in out
+    assert "[STOP] frontend stopped" in out
+
+
+def test_cli_stop_outputs_not_running(monkeypatch, tmp_path: Path, capsys) -> None:
+    monkeypatch.setattr(
+        "archmind.deploy.stop_local_services",
+        lambda _p: {
+            "ok": True,
+            "target": "local",
+            "backend": {"status": "NOT RUNNING", "pid": None, "detail": ""},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "detail": ""},
+        },
+    )
+    exit_code = main(["stop", "--path", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "[STOP] backend not running" in out
+    assert "[STOP] frontend not running" in out

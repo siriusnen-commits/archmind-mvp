@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import signal
 import socket
 import shutil
 import subprocess
@@ -9,6 +11,8 @@ import time
 from pathlib import Path
 from typing import Any
 from urllib import error, parse, request
+
+from archmind.state import ensure_state, load_state, write_state
 
 
 MOCK_RAILWAY_URL = "https://example.up.railway.app"
@@ -725,3 +729,52 @@ def deploy_project(
         f"unsupported deploy target: {resolved_target or 'unknown'}",
         mode="real" if allow_real_deploy else "mock",
     )
+
+
+def _to_pid(value: Any) -> int | None:
+    try:
+        pid = int(value)
+    except Exception:
+        return None
+    return pid if pid > 0 else None
+
+
+def _stop_pid(pid: int | None) -> tuple[str, str]:
+    if pid is None:
+        return "NOT RUNNING", ""
+    try:
+        os.kill(pid, signal.SIGTERM)
+        return "STOPPED", ""
+    except ProcessLookupError:
+        return "NOT RUNNING", ""
+    except Exception as exc:
+        return "WARNING", str(exc)
+
+
+def stop_local_services(project_dir: Path) -> dict[str, Any]:
+    root = project_dir.expanduser().resolve()
+    payload = load_state(root) or ensure_state(root)
+    backend_pid = _to_pid(payload.get("backend_pid"))
+    frontend_pid = _to_pid(payload.get("frontend_pid"))
+
+    backend_status, backend_detail = _stop_pid(backend_pid)
+    frontend_status, frontend_detail = _stop_pid(frontend_pid)
+
+    payload["backend_pid"] = None
+    payload["frontend_pid"] = None
+    write_state(root, payload)
+
+    return {
+        "ok": backend_status != "WARNING" and frontend_status != "WARNING",
+        "target": "local",
+        "backend": {
+            "status": backend_status,
+            "pid": backend_pid,
+            "detail": backend_detail,
+        },
+        "frontend": {
+            "status": frontend_status,
+            "pid": frontend_pid,
+            "detail": frontend_detail,
+        },
+    }
