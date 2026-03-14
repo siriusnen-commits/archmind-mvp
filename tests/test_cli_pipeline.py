@@ -210,6 +210,41 @@ def test_pipeline_frontend_web_routes_to_nextjs_without_fallback(tmp_path: Path,
     assert state_payload.get("template_fallback_reason") in ("", None)
 
 
+def test_pipeline_writes_architecture_reasoning_artifact_and_state_fields(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project)
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "fullstack simple task tracker with fastapi backend and nextjs frontend",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "brain_reasoning_demo",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+
+    project_dir = tmp_path / "brain_reasoning_demo"
+    reasoning_payload = json.loads(
+        (project_dir / ".archmind" / "architecture_reasoning.json").read_text(encoding="utf-8")
+    )
+    assert reasoning_payload.get("app_shape") == "fullstack"
+    assert reasoning_payload.get("recommended_template") == "fullstack-ddd"
+    assert "tasks" in (reasoning_payload.get("domains") or [])
+
+    state_payload = json.loads((project_dir / ".archmind" / "state.json").read_text(encoding="utf-8"))
+    assert state_payload.get("architecture_app_shape") == "fullstack"
+    assert state_payload.get("architecture_recommended_template") == "fullstack-ddd"
+    assert state_payload.get("architecture_reason_summary")
+
+
 def test_pipeline_cli_type_keeps_fallback_metadata(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project)
 

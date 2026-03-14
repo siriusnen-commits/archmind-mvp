@@ -360,6 +360,9 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "selected_template": "unknown",
         "effective_template": "unknown",
         "template_fallback_reason": "",
+        "architecture_app_shape": "",
+        "architecture_reason_summary": "",
+        "architecture_recommended_template": "",
         "derived_task_label": "",
         "recent_failures": [],
         "history": [],
@@ -424,6 +427,9 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     payload["selected_template"] = str(payload.get("selected_template") or "unknown").strip()[:60] or "unknown"
     payload["effective_template"] = str(payload.get("effective_template") or "unknown").strip()[:60] or "unknown"
     payload["template_fallback_reason"] = str(payload.get("template_fallback_reason") or "").strip()[:220]
+    payload["architecture_app_shape"] = str(payload.get("architecture_app_shape") or "").strip()[:40]
+    payload["architecture_reason_summary"] = str(payload.get("architecture_reason_summary") or "").strip()[:220]
+    payload["architecture_recommended_template"] = str(payload.get("architecture_recommended_template") or "").strip()[:60]
     payload["next_action"] = str(payload.get("next_action") or "STOP").strip()[:20]
     payload["next_action_reason"] = str(payload.get("next_action_reason") or "").strip()[:220]
     payload["github_repo_url"] = str(payload.get("github_repo_url") or "").strip()[:300]
@@ -1068,6 +1074,9 @@ def format_state_text(project_dir: Path) -> str:
         f"Selected template: {payload.get('selected_template') or 'unknown'}",
         f"Effective template: {payload.get('effective_template') or 'unknown'}",
         f"Template fallback: {payload.get('template_fallback_reason') or '(none)'}",
+        f"Architecture app shape: {payload.get('architecture_app_shape') or '(none)'}",
+        f"Architecture recommendation: {payload.get('architecture_recommended_template') or '(none)'}",
+        f"Architecture reasoning: {payload.get('architecture_reason_summary') or '(none)'}",
         f"Agent state: {agent_state}",
         f"Last status: {status}",
         f"Iterations: {iterations}",

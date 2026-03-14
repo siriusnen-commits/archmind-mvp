@@ -341,30 +341,63 @@ def run_state_command(project_dir: Path, timeout_s: int = 30) -> tuple[bool, str
 
 def _help_text() -> str:
     return (
-        "Commands:\n"
-        "/idea <text> - run archmind pipeline from an idea\n"
-        "/idea_local <text> - run /idea and auto deploy to local\n"
-        "/pipeline <text> - alias of /idea\n"
-        "/continue - continue the last project with pipeline\n"
-        "/fix - run fix on the last project\n"
-        "/retry - run fix and then continue on the last project\n"
-        "/deploy [target] [real] - deploy current project (targets: railway, local)\n"
-        "Long-running commands may take time; use /state for progress.\n"
-        "/status - quick summary of current project state\n"
-        "/projects - list recent ArchMind projects\n"
-        "/use <n|name> - select a project to work on\n"
-        "/current - show currently selected project\n"
-        "/tree [n] - show project directory tree\n"
-        "/open <path> - open a file from the current project\n"
-        "/diff - show recent diff for the current project\n"
-        "/logs [backend|frontend|last|local [backend|frontend]] - show logs\n"
-        "/running - list running local services\n"
-        "/stop [local] - stop local services for current project\n"
-        "/restart [local] - restart running local services for current project\n"
-        "/delete_project [local|repo|all] - delete project resources (repo/all require confirmation)\n"
-        "/state - show latest project state\n"
-        "/help - show this message"
+        "ArchMind commands\n\n"
+        "PROJECT\n"
+        "/idea <idea>           generate project\n"
+        "/idea_local <idea>     generate + run locally\n"
+        "/projects              list projects\n"
+        "/use <n>               select project\n"
+        "/status                show current status\n\n"
+        "LOCAL RUNTIME\n"
+        "/running               show running services\n"
+        "/logs                  show logs\n"
+        "/restart               restart services\n"
+        "/stop                  stop services\n\n"
+        "DEPLOY\n"
+        "/deploy local\n"
+        "/deploy railway\n\n"
+        "CODE\n"
+        "/tree                  show file tree\n"
+        "/open <file>           open file\n"
+        "/diff                  show changes\n\n"
+        "CLEANUP\n"
+        "/delete_project\n"
+        "/delete_project repo\n"
+        "/delete_project all"
     )
+
+
+def _help_topic_text(topic: str) -> str:
+    key = str(topic or "").strip().lower()
+    if key == "idea":
+        return (
+            "/idea <idea>\n\n"
+            "Generate a new project from an idea.\n\n"
+            "Example:\n"
+            " /idea simple notes api with fastapi"
+        )
+    if key == "deploy":
+        return (
+            "/deploy local\n"
+            "/deploy railway\n\n"
+            "Deploy current project to target runtime."
+        )
+    if key == "logs":
+        return (
+            "/logs\n"
+            "/logs backend\n"
+            "/logs frontend\n\n"
+            "Show local runtime logs (default: backend + frontend, last 20 lines)."
+        )
+    if key == "delete":
+        return (
+            "/delete_project\n"
+            "/delete_project repo\n"
+            "/delete_project all\n\n"
+            "Delete project resources.\n"
+            "repo/all requires confirmation: DELETE YES"
+        )
+    return _help_text()
 
 
 def _truncate_message(text: str, limit: int = 3900) -> str:
@@ -839,6 +872,8 @@ def format_status_text(project_dir: Path) -> str:
     fix_attempts = int(state_payload.get("fix_attempts") or 0)
     project_type = str(state_payload.get("project_type") or "unknown").strip() or "unknown"
     template = str(state_payload.get("effective_template") or "unknown").strip() or "unknown"
+    architecture_shape = str(state_payload.get("architecture_app_shape") or "").strip()
+    architecture_summary = str(state_payload.get("architecture_reason_summary") or "").strip()
     github_repo_url = str(state_payload.get("github_repo_url") or result_payload.get("github_repo_url") or "").strip()
     backend_status, frontend_status = _status_component_summary(project_dir, result_payload)
     if running is not None and running.project_dir == project_dir:
@@ -859,27 +894,31 @@ def format_status_text(project_dir: Path) -> str:
     lines = [
         "ArchMind status",
         "",
-        f"Project: {project_dir.name}",
-        f"State: {state_value}",
+        "Project:",
+        project_dir.name,
+        "",
+        "Status:",
+        state_value,
+        "",
+        "Backend:",
+        backend_status,
+        "",
+        "Frontend:",
+        frontend_status,
+        "",
+        "Next:",
+        next_action,
+        "",
         f"Progress: {progress}",
         f"Iterations: {iterations}",
         f"Fix attempts: {fix_attempts}",
         f"Project type: {project_type}",
         f"Template: {template}",
     ]
+    if architecture_shape or architecture_summary:
+        lines.append(f"Reasoning: {(architecture_shape or 'unknown')} / {(architecture_summary or '(none)')}")
     if github_repo_url:
         lines.append(f"GitHub repo: {github_repo_url}")
-    lines.extend(
-        [
-            "",
-            "Last result:",
-            f"Backend: {backend_status}",
-            f"Frontend: {frontend_status}",
-            "",
-            "Next action:",
-            next_action,
-        ]
-    )
     return _truncate_message("\n".join(lines), limit=1200)
 
 
@@ -1931,15 +1970,20 @@ async def command_logs(update: Any, context: Any) -> None:
         return
 
     args = [str(x).strip().lower() for x in getattr(context, "args", []) if str(x).strip()]
-    mode = args[0] if args else "last"
+    mode = args[0] if args else "local"
     if mode not in ("backend", "frontend", "last", "local"):
-        await update.message.reply_text("Usage: /logs [backend|frontend|last|local [backend|frontend]]")
+        await update.message.reply_text("Usage: /logs [backend|frontend|local [backend|frontend]|last]")
         return
 
-    if mode == "local":
+    if mode in ("local", "backend", "frontend"):
         from archmind.deploy import read_last_lines
 
-        local_scope = args[1] if len(args) > 1 else "all"
+        if mode == "backend":
+            local_scope = "backend"
+        elif mode == "frontend":
+            local_scope = "frontend"
+        else:
+            local_scope = args[1] if len(args) > 1 else "all"
         if local_scope not in ("all", "backend", "frontend"):
             await update.message.reply_text("Usage: /logs local [backend|frontend]")
             return
@@ -2343,7 +2387,10 @@ async def command_text(update: Any, context: Any) -> None:
 
 
 async def command_help(update: Any, context: Any) -> None:
-    del context
+    args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
+    if args:
+        await update.message.reply_text(_help_topic_text(args[0]))
+        return
     await update.message.reply_text(_help_text())
 
 

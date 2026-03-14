@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from archmind.fixer import run_fix_loop
+from archmind.brain import reason_architecture_from_idea
 from archmind.environment import ensure_environment_readiness
 from archmind.evaluator import write_evaluation
 from archmind.github_repo import create_github_repo
@@ -458,6 +459,27 @@ def _run_component_statuses(run_result: RunResult) -> dict[str, Any]:
     }
 
 
+def _project_type_from_app_shape(app_shape: str) -> str:
+    shape = str(app_shape or "").strip().lower()
+    if shape == "fullstack":
+        return "fullstack-web"
+    if shape == "backend":
+        return "backend-api"
+    if shape == "frontend":
+        return "frontend-web"
+    return "unknown"
+
+
+def _write_architecture_reasoning(project_dir: Path, payload: dict[str, Any]) -> Optional[Path]:
+    try:
+        out = project_dir / ".archmind" / "architecture_reasoning.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return out
+    except Exception:
+        return None
+
+
 def run_pipeline_command(opts: PipelineOptions) -> int:
     if opts.dry_run:
         steps = []
@@ -478,15 +500,24 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         return 64
 
     initial_idea = (opts.idea or "").strip()
+    architecture_reasoning: dict[str, Any] = {}
     selected_template = ""
     effective_template = opts.template
     template_fallback_reason = ""
     if initial_idea:
+        architecture_reasoning = reason_architecture_from_idea(initial_idea)
         routed_type = normalize_project_type(detect_project_type(initial_idea))
+        app_shape_type = _project_type_from_app_shape(str(architecture_reasoning.get("app_shape") or ""))
+        if app_shape_type != "unknown":
+            routed_type = app_shape_type
         if opts.template_explicit:
             selected_template = (opts.template or "").strip().lower() or "fastapi"
         else:
-            selected_template = select_template_for_project_type(routed_type, initial_idea)
+            brain_template = str(architecture_reasoning.get("recommended_template") or "").strip().lower()
+            if brain_template and app_shape_type != "unknown":
+                selected_template = brain_template
+            else:
+                selected_template = select_template_for_project_type(routed_type, initial_idea)
         default_template = resolve_default_template()
         effective_template, fallback_reason = resolve_effective_template(selected_template, default_template)
         template_fallback_reason = fallback_reason or ""
@@ -503,6 +534,12 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
     if not project_dir.exists() or not project_dir.is_dir():
         print(f"[ERROR] Path is not a directory: {project_dir}", file=sys.stderr)
         return 2
+
+    reasoning_path: Optional[Path] = None
+    if architecture_reasoning:
+        architecture_reasoning["selected_template"] = selected_template
+        architecture_reasoning["effective_template"] = effective_template
+        reasoning_path = _write_architecture_reasoning(project_dir, architecture_reasoning)
 
     plan_md_path: Optional[Path] = None
     plan_json_path: Optional[Path] = None
@@ -721,6 +758,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         "json_summary": str(last_run.json_summary_path) if last_run and last_run.json_summary_path else None,
         "plan_md": str(plan_md_path) if plan_md_path else None,
         "plan_json": str(plan_json_path) if plan_json_path else None,
+        "architecture_reasoning": str(reasoning_path) if reasoning_path else None,
     }
 
     payload = {
@@ -776,6 +814,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
             },
         },
         "artifacts": artifacts,
+        "architecture_reasoning": architecture_reasoning or None,
     }
     evaluation_payload = None
     evaluation_path: Optional[Path] = None
@@ -866,6 +905,9 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         synced_state["selected_template"] = selected_template
         synced_state["effective_template"] = effective_template
         synced_state["template_fallback_reason"] = template_fallback_reason
+        synced_state["architecture_app_shape"] = str(architecture_reasoning.get("app_shape") or "")
+        synced_state["architecture_reason_summary"] = str(architecture_reasoning.get("reason_summary") or "")
+        synced_state["architecture_recommended_template"] = str(architecture_reasoning.get("recommended_template") or "")
         synced_state["auto_deploy_enabled"] = bool(opts.auto_deploy)
         synced_state["auto_deploy_target"] = auto_deploy_target if opts.auto_deploy else ""
         synced_state["auto_deploy_status"] = auto_deploy_status if opts.auto_deploy else "SKIPPED"

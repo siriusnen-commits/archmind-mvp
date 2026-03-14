@@ -700,6 +700,22 @@ def test_logs_local_shows_backend_and_frontend(monkeypatch, tmp_path: Path) -> N
     assert "f1\nf2" in out
 
 
+def test_logs_without_args_uses_local_logs(tmp_path: Path) -> None:
+    project_dir = tmp_path / "local_logs_default"
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    set_current_project(project_dir)
+    (project_dir / ".archmind" / "backend.log").write_text("backend default\n", encoding="utf-8")
+    (project_dir / ".archmind" / "frontend.log").write_text("frontend default\n", encoding="utf-8")
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_logs(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "Local logs" in out
+    assert "backend default" in out
+    assert "frontend default" in out
+
+
 def test_logs_local_backend_only(tmp_path: Path) -> None:
     project_dir = tmp_path / "local_logs_backend"
     (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
@@ -1099,15 +1115,15 @@ def test_status_command_returns_summary(monkeypatch, tmp_path: Path) -> None:
 
     out = msg.sent[-1]
     assert "ArchMind status" in out
-    assert "Project: status_proj" in out
-    assert "State: IDLE" in out
+    assert "Project:\nstatus_proj" in out
+    assert "Status:\nIDLE" in out
     assert "Iterations: 3" in out
     assert "Fix attempts: 1" in out
     assert "Project type: frontend-web" in out
     assert "Template: nextjs" in out
-    assert "Backend: SKIP" in out
-    assert "Frontend: WARNING" in out
-    assert "Next action:\nrun /fix" in out
+    assert "Backend:\nSKIP" in out
+    assert "Frontend:\nWARNING" in out
+    assert "Next:\nrun /fix" in out
 
 
 def test_status_command_works_when_running(monkeypatch, tmp_path: Path) -> None:
@@ -1140,11 +1156,11 @@ def test_status_command_works_when_running(monkeypatch, tmp_path: Path) -> None:
     asyncio.run(command_status(update, ctx))
 
     out = msg.sent[-1]
-    assert "State: RUNNING" in out
+    assert "Status:\nRUNNING" in out
     assert "Progress: Running checks" in out
-    assert "Backend: FAIL" in out
-    assert "Frontend: ABSENT" in out
-    assert "Next action:\nrun /continue" in out
+    assert "Backend:\nFAIL" in out
+    assert "Frontend:\nABSENT" in out
+    assert "Next:\nrun /continue" in out
 
 
 def test_format_status_text_defaults_when_idle_without_artifacts(tmp_path: Path) -> None:
@@ -1152,10 +1168,29 @@ def test_format_status_text_defaults_when_idle_without_artifacts(tmp_path: Path)
     project_dir.mkdir(parents=True, exist_ok=True)
     out = format_status_text(project_dir)
     assert "ArchMind status" in out
-    assert "Project: status_idle_default" in out
-    assert "State: IDLE" in out
-    assert "Backend: UNKNOWN" in out
-    assert "Frontend: UNKNOWN" in out
+    assert "Project:\nstatus_idle_default" in out
+    assert "Status:\nIDLE" in out
+    assert "Backend:\nUNKNOWN" in out
+    assert "Frontend:\nUNKNOWN" in out
+
+
+def test_format_status_text_includes_architecture_reasoning(tmp_path: Path) -> None:
+    project_dir = tmp_path / "status_reasoning"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "agent_state": "IDLE",
+                "architecture_app_shape": "fullstack",
+                "architecture_reason_summary": "task tracking web app with separate backend and frontend",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    out = format_status_text(project_dir)
+    assert "Reasoning: fullstack / task tracking web app with separate backend and frontend" in out
 
 
 def test_projects_command_works_when_no_projects_exist(monkeypatch, tmp_path: Path) -> None:
@@ -1312,7 +1347,7 @@ def test_status_uses_current_project_when_set(monkeypatch, tmp_path: Path) -> No
     msg = DummyMessage()
     update = DummyUpdate(message=msg, effective_chat=DummyChat())
     asyncio.run(command_status(update, DummyContext()))
-    assert "Project: current_status_proj" in msg.sent[-1]
+    assert "Project:\ncurrent_status_proj" in msg.sent[-1]
 
 
 def test_fix_continue_retry_use_current_project_when_set(monkeypatch, tmp_path: Path) -> None:
@@ -1559,24 +1594,40 @@ def test_format_projects_list_limits_to_ten_projects(monkeypatch, tmp_path: Path
     assert out.count("Status: ") == 10
 
 
-def test_help_mentions_state_for_long_running_commands() -> None:
+def test_help_mentions_command_groups() -> None:
     msg = DummyMessage()
     update = DummyUpdate(message=msg, effective_chat=DummyChat())
     ctx = DummyContext()
     asyncio.run(command_help(update, ctx))
     assert msg.sent
-    assert "Long-running commands may take time; use /state for progress." in msg.sent[-1]
-    assert "/projects - list recent ArchMind projects" in msg.sent[-1]
-    assert "/use <n|name> - select a project to work on" in msg.sent[-1]
-    assert "/current - show currently selected project" in msg.sent[-1]
-    assert "/tree [n] - show project directory tree" in msg.sent[-1]
-    assert "/open <path> - open a file from the current project" in msg.sent[-1]
-    assert "/diff - show recent diff for the current project" in msg.sent[-1]
-    assert "/deploy [target] [real] - deploy current project (targets: railway, local)" in msg.sent[-1]
-    assert "/running - list running local services" in msg.sent[-1]
-    assert "/stop [local] - stop local services for current project" in msg.sent[-1]
-    assert "/restart [local] - restart running local services for current project" in msg.sent[-1]
-    assert "/delete_project [local|repo|all] - delete project resources (repo/all require confirmation)" in msg.sent[-1]
+    assert "ArchMind commands" in msg.sent[-1]
+    assert "PROJECT" in msg.sent[-1]
+    assert "/idea <idea>" in msg.sent[-1]
+    assert "LOCAL RUNTIME" in msg.sent[-1]
+    assert "/logs                  show logs" in msg.sent[-1]
+    assert "DEPLOY" in msg.sent[-1]
+    assert "/deploy local" in msg.sent[-1]
+    assert "CLEANUP" in msg.sent[-1]
+    assert "/delete_project all" in msg.sent[-1]
+
+
+def test_help_topic_idea() -> None:
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_help(update, DummyContext(args=["idea"])))
+    out = msg.sent[-1]
+    assert "/idea <idea>" in out
+    assert "Generate a new project from an idea." in out
+    assert "/idea simple notes api with fastapi" in out
+
+
+def test_help_topic_deploy() -> None:
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_help(update, DummyContext(args=["deploy"])))
+    out = msg.sent[-1]
+    assert "/deploy local" in out
+    assert "/deploy railway" in out
 
 
 def test_idea_local_starts_pipeline_with_auto_deploy_local(monkeypatch, tmp_path: Path) -> None:
