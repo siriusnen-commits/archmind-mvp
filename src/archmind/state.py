@@ -328,6 +328,12 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "frontend_deploy_url": "",
         "frontend_deploy_status": "",
         "frontend_deploy_detail": "",
+        "backend_smoke_url": "",
+        "backend_smoke_status": "",
+        "backend_smoke_detail": "",
+        "frontend_smoke_url": "",
+        "frontend_smoke_status": "",
+        "frontend_smoke_detail": "",
         "healthcheck_url": "",
         "healthcheck_status": "",
         "healthcheck_detail": "",
@@ -418,6 +424,12 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     payload["frontend_deploy_url"] = str(payload.get("frontend_deploy_url") or "").strip()[:300]
     payload["frontend_deploy_status"] = _safe_service_deploy_status(str(payload.get("frontend_deploy_status") or ""))
     payload["frontend_deploy_detail"] = str(payload.get("frontend_deploy_detail") or "").strip()[:220]
+    payload["backend_smoke_url"] = str(payload.get("backend_smoke_url") or "").strip()[:300]
+    payload["backend_smoke_status"] = _safe_service_deploy_status(str(payload.get("backend_smoke_status") or ""))
+    payload["backend_smoke_detail"] = str(payload.get("backend_smoke_detail") or "").strip()[:220]
+    payload["frontend_smoke_url"] = str(payload.get("frontend_smoke_url") or "").strip()[:300]
+    payload["frontend_smoke_status"] = _safe_service_deploy_status(str(payload.get("frontend_smoke_status") or ""))
+    payload["frontend_smoke_detail"] = str(payload.get("frontend_smoke_detail") or "").strip()[:220]
     payload["healthcheck_url"] = str(payload.get("healthcheck_url") or "").strip()[:300]
     payload["healthcheck_status"] = _safe_healthcheck_status(str(payload.get("healthcheck_status") or ""))
     payload["healthcheck_detail"] = str(payload.get("healthcheck_detail") or "").strip()[:220]
@@ -870,6 +882,12 @@ def update_after_deploy(
     healthcheck_url = str(raw_health_url).strip() if raw_health_url is not None else ""
     healthcheck_status = _safe_healthcheck_status(str(result.get("healthcheck_status") or ""))
     healthcheck_detail = _sanitize_line(str(result.get("healthcheck_detail") or ""), project_dir)
+    backend_smoke_url = str(result.get("backend_smoke_url") or "").strip()
+    backend_smoke_status = _safe_service_deploy_status(str(result.get("backend_smoke_status") or ""))
+    backend_smoke_detail = _sanitize_line(str(result.get("backend_smoke_detail") or ""), project_dir)
+    frontend_smoke_url = str(result.get("frontend_smoke_url") or "").strip()
+    frontend_smoke_status = _safe_service_deploy_status(str(result.get("frontend_smoke_status") or ""))
+    frontend_smoke_detail = _sanitize_line(str(result.get("frontend_smoke_detail") or ""), project_dir)
 
     payload["deploy_target"] = target[:40]
     payload["deploy_kind"] = kind[:20]
@@ -879,6 +897,12 @@ def update_after_deploy(
     payload["healthcheck_url"] = healthcheck_url[:300]
     payload["healthcheck_status"] = healthcheck_status
     payload["healthcheck_detail"] = healthcheck_detail[:220]
+    payload["backend_smoke_url"] = backend_smoke_url[:300]
+    payload["backend_smoke_status"] = backend_smoke_status
+    payload["backend_smoke_detail"] = backend_smoke_detail[:220]
+    payload["frontend_smoke_url"] = frontend_smoke_url[:300]
+    payload["frontend_smoke_status"] = frontend_smoke_status
+    payload["frontend_smoke_detail"] = frontend_smoke_detail[:220]
     backend = result.get("backend")
     if isinstance(backend, dict):
         payload["backend_deploy_url"] = str(backend.get("url") or "").strip()[:300]
@@ -1038,6 +1062,10 @@ def format_state_text(project_dir: Path) -> str:
         f"Backend deploy URL: {payload.get('backend_deploy_url') or '(none)'}",
         f"Frontend deploy status: {payload.get('frontend_deploy_status') or '(none)'}",
         f"Frontend deploy URL: {payload.get('frontend_deploy_url') or '(none)'}",
+        f"Backend smoke status: {payload.get('backend_smoke_status') or '(none)'}",
+        f"Backend smoke URL: {payload.get('backend_smoke_url') or '(none)'}",
+        f"Frontend smoke status: {payload.get('frontend_smoke_status') or '(none)'}",
+        f"Frontend smoke URL: {payload.get('frontend_smoke_url') or '(none)'}",
         f"Health URL: {payload.get('healthcheck_url') or '(none)'}",
         f"Health status: {payload.get('healthcheck_status') or '(none)'}",
         f"Health detail: {payload.get('healthcheck_detail') or '(none)'}",
@@ -1110,6 +1138,12 @@ def state_prompt_summary(project_dir: Path) -> list[str]:
         f"- frontend_deploy_status: {payload.get('frontend_deploy_status', '')}",
         f"- frontend_deploy_url: {payload.get('frontend_deploy_url', '')}",
         f"- frontend_deploy_detail: {payload.get('frontend_deploy_detail', '')}",
+        f"- backend_smoke_status: {payload.get('backend_smoke_status', '')}",
+        f"- backend_smoke_url: {payload.get('backend_smoke_url', '')}",
+        f"- backend_smoke_detail: {payload.get('backend_smoke_detail', '')}",
+        f"- frontend_smoke_status: {payload.get('frontend_smoke_status', '')}",
+        f"- frontend_smoke_url: {payload.get('frontend_smoke_url', '')}",
+        f"- frontend_smoke_detail: {payload.get('frontend_smoke_detail', '')}",
         f"- healthcheck_url: {payload.get('healthcheck_url', '')}",
         f"- healthcheck_status: {payload.get('healthcheck_status', '')}",
         f"- healthcheck_detail: {payload.get('healthcheck_detail', '')}",

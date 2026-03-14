@@ -1540,6 +1540,12 @@ def test_deploy_parses_real_flag(monkeypatch, tmp_path: Path) -> None:
             "healthcheck_url": "https://real-demo.up.railway.app/health",
             "healthcheck_status": "SUCCESS",
             "healthcheck_detail": "health endpoint returned status ok",
+            "backend_smoke_url": "https://real-demo.up.railway.app/health",
+            "backend_smoke_status": "SUCCESS",
+            "backend_smoke_detail": "health endpoint returned status ok",
+            "frontend_smoke_url": "",
+            "frontend_smoke_status": "SKIPPED",
+            "frontend_smoke_detail": "frontend not deployed",
         }
 
     monkeypatch.setattr("archmind.deploy.deploy_project", fake_deploy)
@@ -1555,6 +1561,7 @@ def test_deploy_parses_real_flag(monkeypatch, tmp_path: Path) -> None:
     assert "Deploy URL:\nhttps://real-demo.up.railway.app" in out
     assert "Health check:\nSUCCESS" in out
     assert "Health URL:\nhttps://real-demo.up.railway.app/health" in out
+    assert "Backend smoke:\nSUCCESS" in out
 
 
 def test_telegram_deploy_fullstack_output_sections(monkeypatch, tmp_path: Path) -> None:
@@ -1582,6 +1589,12 @@ def test_telegram_deploy_fullstack_output_sections(monkeypatch, tmp_path: Path) 
                 "url": "https://web-example.up.railway.app",
                 "detail": "mock frontend deploy success",
             },
+            "backend_smoke_url": "",
+            "backend_smoke_status": "SKIPPED",
+            "backend_smoke_detail": "mock deploy mode",
+            "frontend_smoke_url": "",
+            "frontend_smoke_status": "SKIPPED",
+            "frontend_smoke_detail": "mock deploy mode",
         },
     )
     monkeypatch.setattr("archmind.telegram_bot.update_after_deploy", lambda *a, **k: {})
@@ -1593,8 +1606,10 @@ def test_telegram_deploy_fullstack_output_sections(monkeypatch, tmp_path: Path) 
     assert "Kind:\nfullstack" in out
     assert "Backend:\nSUCCESS" in out
     assert "https://api-example.up.railway.app" in out
+    assert "Backend smoke:\nSKIPPED" in out
     assert "Frontend:\nSUCCESS" in out
     assert "https://web-example.up.railway.app" in out
+    assert "Frontend smoke:\nSKIPPED" in out
 
 
 def test_telegram_real_fullstack_shows_real_frontend_deploy_result(monkeypatch, tmp_path: Path) -> None:
@@ -1625,6 +1640,12 @@ def test_telegram_real_fullstack_shows_real_frontend_deploy_result(monkeypatch, 
             "healthcheck_url": "https://api-real.up.railway.app/health",
             "healthcheck_status": "SUCCESS",
             "healthcheck_detail": "health endpoint returned status ok",
+            "backend_smoke_url": "https://api-real.up.railway.app/health",
+            "backend_smoke_status": "SUCCESS",
+            "backend_smoke_detail": "health endpoint returned status ok",
+            "frontend_smoke_url": "https://web-real.up.railway.app",
+            "frontend_smoke_status": "SUCCESS",
+            "frontend_smoke_detail": "frontend URL returned HTTP 200",
         },
     )
     monkeypatch.setattr("archmind.telegram_bot.update_after_deploy", lambda *a, **k: {})
@@ -1637,6 +1658,8 @@ def test_telegram_real_fullstack_shows_real_frontend_deploy_result(monkeypatch, 
     assert "Kind:\nfullstack" in out
     assert "Frontend:\nSUCCESS" in out
     assert "https://web-real.up.railway.app" in out
+    assert "Backend smoke:\nSUCCESS" in out
+    assert "Frontend smoke:\nSUCCESS" in out
 
 
 def test_watch_retry_accumulates_existing_fix_attempts(monkeypatch, tmp_path: Path) -> None:

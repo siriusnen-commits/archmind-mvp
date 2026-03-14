@@ -19,6 +19,12 @@ def test_cli_deploy_success_outputs_summary(monkeypatch, tmp_path: Path, capsys)
             "healthcheck_url": "",
             "healthcheck_status": "SKIPPED",
             "healthcheck_detail": "mock deploy mode",
+            "backend_smoke_url": "",
+            "backend_smoke_status": "SKIPPED",
+            "backend_smoke_detail": "mock deploy mode",
+            "frontend_smoke_url": "",
+            "frontend_smoke_status": "SKIPPED",
+            "frontend_smoke_detail": "frontend not deployed",
         },
     )
     exit_code = main(["deploy", "--path", str(tmp_path), "--target", "railway"])
@@ -30,6 +36,7 @@ def test_cli_deploy_success_outputs_summary(monkeypatch, tmp_path: Path, capsys)
     assert "[DEPLOY] status=SUCCESS" in out
     assert "[DEPLOY] url=https://example.up.railway.app" in out
     assert "[HEALTH] status=SKIPPED" in out
+    assert "[BACKEND-SMOKE] status=SKIPPED" in out
 
 
 def test_cli_deploy_failure_returns_nonzero(monkeypatch, tmp_path: Path) -> None:
@@ -67,6 +74,12 @@ def test_cli_deploy_real_flag_is_forwarded(monkeypatch, tmp_path: Path, capsys) 
             "healthcheck_url": "https://real-demo.up.railway.app/health",
             "healthcheck_status": "SUCCESS",
             "healthcheck_detail": "health endpoint returned status ok",
+            "backend_smoke_url": "https://real-demo.up.railway.app/health",
+            "backend_smoke_status": "SUCCESS",
+            "backend_smoke_detail": "health endpoint returned status ok",
+            "frontend_smoke_url": "",
+            "frontend_smoke_status": "SKIPPED",
+            "frontend_smoke_detail": "frontend not deployed",
         }
 
     monkeypatch.setattr("archmind.deploy.deploy_project", fake_deploy)
@@ -80,6 +93,7 @@ def test_cli_deploy_real_flag_is_forwarded(monkeypatch, tmp_path: Path, capsys) 
     assert "[HEALTH] url=https://real-demo.up.railway.app/health" in out
     assert "[HEALTH] status=SUCCESS" in out
     assert "[HEALTH] detail=health endpoint returned status ok" in out
+    assert "[BACKEND-SMOKE] status=SUCCESS" in out
 
 
 def test_cli_deploy_fullstack_prints_backend_frontend_sections(monkeypatch, tmp_path: Path, capsys) -> None:
@@ -103,6 +117,12 @@ def test_cli_deploy_fullstack_prints_backend_frontend_sections(monkeypatch, tmp_
                 "url": "https://web-example.up.railway.app",
                 "detail": "mock frontend deploy success",
             },
+            "backend_smoke_url": "",
+            "backend_smoke_status": "SKIPPED",
+            "backend_smoke_detail": "mock deploy mode",
+            "frontend_smoke_url": "",
+            "frontend_smoke_status": "SKIPPED",
+            "frontend_smoke_detail": "mock deploy mode",
         },
     )
     exit_code = main(["deploy", "--path", str(tmp_path), "--target", "railway"])
@@ -111,8 +131,10 @@ def test_cli_deploy_fullstack_prints_backend_frontend_sections(monkeypatch, tmp_
     assert "[DEPLOY] kind=fullstack" in out
     assert "[BACKEND] status=SUCCESS" in out
     assert "[BACKEND] url=https://api-example.up.railway.app" in out
+    assert "[BACKEND-SMOKE] status=SKIPPED" in out
     assert "[FRONTEND] status=SUCCESS" in out
     assert "[FRONTEND] url=https://web-example.up.railway.app" in out
+    assert "[FRONTEND-SMOKE] status=SKIPPED" in out
 
 
 def test_cli_real_fullstack_shows_real_frontend_deploy_result(monkeypatch, tmp_path: Path, capsys) -> None:
@@ -139,6 +161,12 @@ def test_cli_real_fullstack_shows_real_frontend_deploy_result(monkeypatch, tmp_p
             "healthcheck_url": "https://api-real.up.railway.app/health",
             "healthcheck_status": "SUCCESS",
             "healthcheck_detail": "health endpoint returned status ok",
+            "backend_smoke_url": "https://api-real.up.railway.app/health",
+            "backend_smoke_status": "SUCCESS",
+            "backend_smoke_detail": "health endpoint returned status ok",
+            "frontend_smoke_url": "https://web-real.up.railway.app",
+            "frontend_smoke_status": "SUCCESS",
+            "frontend_smoke_detail": "frontend URL returned HTTP 200",
         },
     )
     exit_code = main(["deploy", "--path", str(tmp_path), "--target", "railway", "--allow-real-deploy"])
@@ -148,3 +176,5 @@ def test_cli_real_fullstack_shows_real_frontend_deploy_result(monkeypatch, tmp_p
     assert "[DEPLOY] kind=fullstack" in out
     assert "[FRONTEND] status=SUCCESS" in out
     assert "[FRONTEND] url=https://web-real.up.railway.app" in out
+    assert "[BACKEND-SMOKE] status=SUCCESS" in out
+    assert "[FRONTEND-SMOKE] status=SUCCESS" in out

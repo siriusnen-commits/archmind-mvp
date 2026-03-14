@@ -1877,6 +1877,15 @@ async def command_deploy(update: Any, context: Any) -> None:
         backend_detail = str(backend.get("detail") or "").strip()
         if backend_detail and str(backend.get("status") or "").upper() != "SUCCESS":
             lines.append(backend_detail)
+        backend_smoke_status = str(result.get("backend_smoke_status") or "").strip().upper()
+        backend_smoke_url = str(result.get("backend_smoke_url") or "").strip()
+        backend_smoke_detail = str(result.get("backend_smoke_detail") or "").strip()
+        if backend_smoke_status:
+            lines.extend(["", "Backend smoke:", backend_smoke_status])
+            if backend_smoke_url:
+                lines.append(backend_smoke_url)
+            if backend_smoke_detail and backend_smoke_status != "SUCCESS":
+                lines.extend(["", "Detail:", backend_smoke_detail])
 
         lines.extend(["", "Frontend:", str(frontend.get("status") or "UNKNOWN")])
         frontend_url = str(frontend.get("url") or "").strip()
@@ -1885,6 +1894,15 @@ async def command_deploy(update: Any, context: Any) -> None:
         frontend_detail = str(frontend.get("detail") or "").strip()
         if frontend_detail and str(frontend.get("status") or "").upper() != "SUCCESS":
             lines.append(frontend_detail)
+        frontend_smoke_status = str(result.get("frontend_smoke_status") or "").strip().upper()
+        frontend_smoke_url = str(result.get("frontend_smoke_url") or "").strip()
+        frontend_smoke_detail = str(result.get("frontend_smoke_detail") or "").strip()
+        if frontend_smoke_status:
+            lines.extend(["", "Frontend smoke:", frontend_smoke_status])
+            if frontend_smoke_url:
+                lines.append(frontend_smoke_url)
+            if frontend_smoke_detail and frontend_smoke_status != "SUCCESS":
+                lines.extend(["", "Detail:", frontend_smoke_detail])
     else:
         lines.extend(
             [
@@ -1909,6 +1927,24 @@ async def command_deploy(update: Any, context: Any) -> None:
         detail = str(result.get("detail") or "").strip()
         if detail:
             lines.extend(["", "Detail:", detail])
+        backend_smoke_status = str(result.get("backend_smoke_status") or "").strip().upper()
+        backend_smoke_url = str(result.get("backend_smoke_url") or "").strip()
+        backend_smoke_detail = str(result.get("backend_smoke_detail") or "").strip()
+        if backend_smoke_status:
+            lines.extend(["", "Backend smoke:", backend_smoke_status])
+            if backend_smoke_url:
+                lines.append(backend_smoke_url)
+            if backend_smoke_detail and backend_smoke_status != "SUCCESS":
+                lines.extend(["", "Detail:", backend_smoke_detail])
+        frontend_smoke_status = str(result.get("frontend_smoke_status") or "").strip().upper()
+        frontend_smoke_url = str(result.get("frontend_smoke_url") or "").strip()
+        frontend_smoke_detail = str(result.get("frontend_smoke_detail") or "").strip()
+        if frontend_smoke_status:
+            lines.extend(["", "Frontend smoke:", frontend_smoke_status])
+            if frontend_smoke_url:
+                lines.append(frontend_smoke_url)
+            if frontend_smoke_detail and frontend_smoke_status != "SUCCESS":
+                lines.extend(["", "Detail:", frontend_smoke_detail])
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 
 

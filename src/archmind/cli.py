@@ -464,6 +464,15 @@ def run_deploy(args: argparse.Namespace) -> int:
         backend_detail = str(backend.get("detail") or "").strip()
         if backend_detail:
             print(f"[BACKEND] detail={backend_detail}")
+        backend_smoke_url = str(result.get("backend_smoke_url") or "").strip()
+        backend_smoke_status = str(result.get("backend_smoke_status") or "").strip().upper()
+        backend_smoke_detail = str(result.get("backend_smoke_detail") or "").strip()
+        if backend_smoke_url:
+            print(f"[BACKEND-SMOKE] url={backend_smoke_url}")
+        if backend_smoke_status:
+            print(f"[BACKEND-SMOKE] status={backend_smoke_status}")
+        if backend_smoke_detail:
+            print(f"[BACKEND-SMOKE] detail={backend_smoke_detail}")
 
         print()
         print(f"[FRONTEND] status={frontend.get('status') or 'UNKNOWN'}")
@@ -473,6 +482,15 @@ def run_deploy(args: argparse.Namespace) -> int:
         frontend_detail = str(frontend.get("detail") or "").strip()
         if frontend_detail:
             print(f"[FRONTEND] detail={frontend_detail}")
+        frontend_smoke_url = str(result.get("frontend_smoke_url") or "").strip()
+        frontend_smoke_status = str(result.get("frontend_smoke_status") or "").strip().upper()
+        frontend_smoke_detail = str(result.get("frontend_smoke_detail") or "").strip()
+        if frontend_smoke_url:
+            print(f"[FRONTEND-SMOKE] url={frontend_smoke_url}")
+        if frontend_smoke_status:
+            print(f"[FRONTEND-SMOKE] status={frontend_smoke_status}")
+        if frontend_smoke_detail:
+            print(f"[FRONTEND-SMOKE] detail={frontend_smoke_detail}")
     else:
         print(f"[DEPLOY] status={result.get('status') or 'UNKNOWN'}")
         if result.get("url"):
@@ -489,6 +507,24 @@ def run_deploy(args: argparse.Namespace) -> int:
             health_detail = str(result.get("healthcheck_detail") or "").strip()
             if health_detail:
                 print(f"[HEALTH] detail={health_detail}")
+        backend_smoke_url = str(result.get("backend_smoke_url") or "").strip()
+        backend_smoke_status = str(result.get("backend_smoke_status") or "").strip().upper()
+        backend_smoke_detail = str(result.get("backend_smoke_detail") or "").strip()
+        frontend_smoke_url = str(result.get("frontend_smoke_url") or "").strip()
+        frontend_smoke_status = str(result.get("frontend_smoke_status") or "").strip().upper()
+        frontend_smoke_detail = str(result.get("frontend_smoke_detail") or "").strip()
+        if backend_smoke_url:
+            print(f"[BACKEND-SMOKE] url={backend_smoke_url}")
+        if backend_smoke_status:
+            print(f"[BACKEND-SMOKE] status={backend_smoke_status}")
+        if backend_smoke_detail:
+            print(f"[BACKEND-SMOKE] detail={backend_smoke_detail}")
+        if frontend_smoke_url:
+            print(f"[FRONTEND-SMOKE] url={frontend_smoke_url}")
+        if frontend_smoke_status:
+            print(f"[FRONTEND-SMOKE] status={frontend_smoke_status}")
+        if frontend_smoke_detail:
+            print(f"[FRONTEND-SMOKE] detail={frontend_smoke_detail}")
 
     return 0 if bool(result.get("ok")) else 1
 

@@ -9,6 +9,7 @@ from archmind.deploy import (
     detect_deploy_kind,
     generate_deploy_slug,
     get_frontend_deploy_dir,
+    verify_frontend_smoke,
     verify_deploy_health,
 )
 from archmind.state import load_state, update_after_deploy
@@ -147,6 +148,8 @@ def test_deploy_project_real_path_calls_railway_commands(monkeypatch, tmp_path: 
     assert result["mode"] == "real"
     assert result["status"] == "SUCCESS"
     assert result["url"] == "https://real-demo.up.railway.app"
+    assert result["backend_smoke_status"] == "SUCCESS"
+    assert result["backend_smoke_url"] == "https://real-demo.up.railway.app/health"
 
     commands = [cmd for cmd, _cwd in calls]
     assert ["railway", "--version"] in commands
@@ -199,6 +202,12 @@ def test_fullstack_state_stores_backend_frontend_fields(tmp_path: Path) -> None:
         "healthcheck_url": "",
         "healthcheck_status": "SKIPPED",
         "healthcheck_detail": "mock deploy mode",
+        "backend_smoke_url": "",
+        "backend_smoke_status": "SKIPPED",
+        "backend_smoke_detail": "mock deploy mode",
+        "frontend_smoke_url": "",
+        "frontend_smoke_status": "SKIPPED",
+        "frontend_smoke_detail": "mock deploy mode",
     }
     update_after_deploy(tmp_path, result, action="archmind deploy --path x --target railway")
     state = load_state(tmp_path)
@@ -208,6 +217,8 @@ def test_fullstack_state_stores_backend_frontend_fields(tmp_path: Path) -> None:
     assert state.get("backend_deploy_url") == "https://api-example.up.railway.app"
     assert state.get("frontend_deploy_status") == "SUCCESS"
     assert state.get("frontend_deploy_url") == "https://web-example.up.railway.app"
+    assert state.get("backend_smoke_status") == "SKIPPED"
+    assert state.get("frontend_smoke_status") == "SKIPPED"
 
 
 def test_frontend_real_deploy_returns_fail_when_railway_missing(monkeypatch, tmp_path: Path) -> None:
@@ -284,12 +295,22 @@ def test_fullstack_real_deploy_stores_frontend_real_url(monkeypatch, tmp_path: P
             "healthcheck_detail": "health endpoint returned status ok",
         },
     )
+    monkeypatch.setattr(
+        "archmind.deploy.verify_frontend_smoke",
+        lambda *_a, **_k: {
+            "url": "https://web-real.up.railway.app",
+            "status": "SUCCESS",
+            "detail": "frontend URL returned HTTP 200",
+        },
+    )
 
     result = deploy_project(tmp_path, target="railway", allow_real_deploy=True)
     assert result["kind"] == "fullstack"
     assert result["backend"]["status"] == "SUCCESS"
     assert result["frontend"]["status"] == "SUCCESS"
     assert result["frontend"]["url"] == "https://web-real.up.railway.app"
+    assert result["backend_smoke_status"] == "SUCCESS"
+    assert result["frontend_smoke_status"] == "SUCCESS"
 
 
 def test_verify_deploy_health_success(monkeypatch) -> None:
@@ -360,3 +381,47 @@ def test_verify_deploy_health_fail_on_request_exception(monkeypatch) -> None:
     result = verify_deploy_health("https://demo.up.railway.app")
     assert result["healthcheck_status"] == "FAIL"
     assert "health request failed" in result["healthcheck_detail"]
+
+
+def test_verify_frontend_smoke_success_on_http_200(monkeypatch) -> None:
+    class DummyResponse:
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def getcode(self) -> int:
+            return 200
+
+    monkeypatch.setattr("archmind.deploy.request.urlopen", lambda *_a, **_k: DummyResponse())
+    result = verify_frontend_smoke("https://web-demo.up.railway.app")
+    assert result["status"] == "SUCCESS"
+    assert result["url"] == "https://web-demo.up.railway.app"
+
+
+def test_verify_frontend_smoke_fail_on_non_200(monkeypatch) -> None:
+    class DummyResponse:
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
+            return False
+
+        def getcode(self) -> int:
+            return 503
+
+    monkeypatch.setattr("archmind.deploy.request.urlopen", lambda *_a, **_k: DummyResponse())
+    result = verify_frontend_smoke("https://web-demo.up.railway.app")
+    assert result["status"] == "FAIL"
+    assert "HTTP 503" in result["detail"]
+
+
+def test_verify_frontend_smoke_fail_on_request_exception(monkeypatch) -> None:
+    def fake_urlopen(*_a, **_k):  # type: ignore[no-untyped-def]
+        raise URLError("request timeout")
+
+    monkeypatch.setattr("archmind.deploy.request.urlopen", fake_urlopen)
+    result = verify_frontend_smoke("https://web-demo.up.railway.app")
+    assert result["status"] == "FAIL"
+    assert "request failed" in result["detail"]

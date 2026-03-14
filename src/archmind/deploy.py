@@ -50,6 +50,12 @@ def _deploy_fail(target: str, detail: str, *, mode: str = "mock") -> dict[str, A
         "healthcheck_url": "",
         "healthcheck_status": "SKIPPED",
         "healthcheck_detail": "deploy failed before health check",
+        "backend_smoke_url": "",
+        "backend_smoke_status": "SKIPPED",
+        "backend_smoke_detail": "deploy failed before smoke check",
+        "frontend_smoke_url": "",
+        "frontend_smoke_status": "SKIPPED",
+        "frontend_smoke_detail": "deploy failed before smoke check",
     }
 
 
@@ -202,6 +208,54 @@ def verify_deploy_health(
     }
 
 
+def verify_frontend_smoke(
+    deploy_url: str,
+    timeout_s: float = 10.0,
+) -> dict[str, Any]:
+    base = str(deploy_url or "").strip()
+    if not base:
+        return {
+            "url": "",
+            "status": "SKIPPED",
+            "detail": "frontend deploy URL missing",
+        }
+    parsed = parse.urlparse(base)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return {
+            "url": base,
+            "status": "FAIL",
+            "detail": "invalid frontend deploy URL",
+        }
+    req = request.Request(base, method="GET")
+    try:
+        with request.urlopen(req, timeout=timeout_s) as response:  # noqa: S310
+            status_code = int(response.getcode() or 0)
+    except error.URLError as exc:
+        return {
+            "url": base,
+            "status": "FAIL",
+            "detail": f"request failed: {exc.reason}",
+        }
+    except Exception as exc:
+        return {
+            "url": base,
+            "status": "FAIL",
+            "detail": f"request failed: {exc}",
+        }
+
+    if 200 <= status_code < 300:
+        return {
+            "url": base,
+            "status": "SUCCESS",
+            "detail": f"frontend URL returned HTTP {status_code}",
+        }
+    return {
+        "url": base,
+        "status": "FAIL",
+        "detail": f"frontend URL returned HTTP {status_code}",
+    }
+
+
 def _service_result(status: str, url: str | None, detail: str) -> dict[str, Any]:
     return {
         "status": status,
@@ -298,6 +352,12 @@ def deploy_to_railway_mock(project_dir: Path, kind: str = "backend") -> dict[str
             "healthcheck_url": "",
             "healthcheck_status": "SKIPPED",
             "healthcheck_detail": "mock deploy mode",
+            "backend_smoke_url": "",
+            "backend_smoke_status": "SKIPPED",
+            "backend_smoke_detail": "mock deploy mode",
+            "frontend_smoke_url": "",
+            "frontend_smoke_status": "SKIPPED",
+            "frontend_smoke_detail": "mock deploy mode",
         }
     if kind == "frontend":
         frontend_url = _placeholder_frontend_url(project_dir)
@@ -312,6 +372,12 @@ def deploy_to_railway_mock(project_dir: Path, kind: str = "backend") -> dict[str
             "healthcheck_url": "",
             "healthcheck_status": "SKIPPED",
             "healthcheck_detail": "frontend health check not implemented",
+            "backend_smoke_url": "",
+            "backend_smoke_status": "SKIPPED",
+            "backend_smoke_detail": "backend not deployed",
+            "frontend_smoke_url": "",
+            "frontend_smoke_status": "SKIPPED",
+            "frontend_smoke_detail": "mock deploy mode",
         }
 
     return {
@@ -325,6 +391,12 @@ def deploy_to_railway_mock(project_dir: Path, kind: str = "backend") -> dict[str
         "healthcheck_url": "",
         "healthcheck_status": "SKIPPED",
         "healthcheck_detail": "mock deploy mode",
+        "backend_smoke_url": "",
+        "backend_smoke_status": "SKIPPED",
+        "backend_smoke_detail": "mock deploy mode",
+        "frontend_smoke_url": "",
+        "frontend_smoke_status": "SKIPPED",
+        "frontend_smoke_detail": "frontend not deployed",
     }
 
 
@@ -332,6 +404,11 @@ def deploy_to_railway_real(project_dir: Path, kind: str = "backend") -> dict[str
     if kind == "frontend":
         frontend_result = deploy_frontend_to_railway_real(project_dir)
         frontend_ok = str(frontend_result.get("status") or "").upper() == "SUCCESS"
+        frontend_smoke = verify_frontend_smoke(str(frontend_result.get("url") or "")) if frontend_ok else {
+            "url": str(frontend_result.get("url") or ""),
+            "status": "SKIPPED",
+            "detail": "frontend deploy failed",
+        }
         return {
             "ok": frontend_ok,
             "target": "railway",
@@ -343,6 +420,12 @@ def deploy_to_railway_real(project_dir: Path, kind: str = "backend") -> dict[str
             "healthcheck_url": "",
             "healthcheck_status": "SKIPPED",
             "healthcheck_detail": "frontend health check not implemented",
+            "backend_smoke_url": "",
+            "backend_smoke_status": "SKIPPED",
+            "backend_smoke_detail": "backend not deployed",
+            "frontend_smoke_url": str(frontend_smoke.get("url") or ""),
+            "frontend_smoke_status": str(frontend_smoke.get("status") or "SKIPPED"),
+            "frontend_smoke_detail": str(frontend_smoke.get("detail") or ""),
         }
     if kind == "fullstack":
         backend_result = deploy_to_railway_real(project_dir, kind="backend")
@@ -350,6 +433,11 @@ def deploy_to_railway_real(project_dir: Path, kind: str = "backend") -> dict[str
         backend_ok = bool(backend_result.get("ok"))
         frontend_ok = str(frontend_result.get("status") or "").upper() == "SUCCESS"
         top_status = "SUCCESS" if (backend_ok and frontend_ok) else "FAIL"
+        frontend_smoke = verify_frontend_smoke(str(frontend_result.get("url") or "")) if frontend_ok else {
+            "url": str(frontend_result.get("url") or ""),
+            "status": "SKIPPED",
+            "detail": "frontend deploy failed",
+        }
         return {
             "ok": backend_ok or frontend_ok,
             "target": "railway",
@@ -367,6 +455,12 @@ def deploy_to_railway_real(project_dir: Path, kind: str = "backend") -> dict[str
             "healthcheck_url": str(backend_result.get("healthcheck_url") or ""),
             "healthcheck_status": str(backend_result.get("healthcheck_status") or "SKIPPED"),
             "healthcheck_detail": str(backend_result.get("healthcheck_detail") or ""),
+            "backend_smoke_url": str(backend_result.get("backend_smoke_url") or ""),
+            "backend_smoke_status": str(backend_result.get("backend_smoke_status") or "SKIPPED"),
+            "backend_smoke_detail": str(backend_result.get("backend_smoke_detail") or ""),
+            "frontend_smoke_url": str(frontend_smoke.get("url") or ""),
+            "frontend_smoke_status": str(frontend_smoke.get("status") or "SKIPPED"),
+            "frontend_smoke_detail": str(frontend_smoke.get("detail") or ""),
         }
 
     project_dir = project_dir.expanduser().resolve()
@@ -407,9 +501,19 @@ def deploy_to_railway_real(project_dir: Path, kind: str = "backend") -> dict[str
         "healthcheck_url": "",
         "healthcheck_status": "SKIPPED",
         "healthcheck_detail": "deploy URL missing",
+        "backend_smoke_url": "",
+        "backend_smoke_status": "SKIPPED",
+        "backend_smoke_detail": "backend deploy URL missing",
+        "frontend_smoke_url": "",
+        "frontend_smoke_status": "SKIPPED",
+        "frontend_smoke_detail": "frontend not deployed",
     }
     if deploy_url:
-        result.update(verify_deploy_health(deploy_url))
+        health = verify_deploy_health(deploy_url)
+        result.update(health)
+        result["backend_smoke_url"] = str(health.get("healthcheck_url") or "")
+        result["backend_smoke_status"] = str(health.get("healthcheck_status") or "FAIL")
+        result["backend_smoke_detail"] = str(health.get("healthcheck_detail") or "")
     return result
 
 
