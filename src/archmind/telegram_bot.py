@@ -11,8 +11,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from archmind.brain import reason_architecture_from_idea
 from archmind.decision import decide_next_action, next_action_suggestions
 from archmind.failure import classify_failure
+from archmind.idea_normalizer import normalize_idea
 from archmind.project_type import detect_project_type, normalize_project_type
 from archmind.state import derive_task_label_from_failure_signature, load_state, set_agent_state, update_after_deploy
 from archmind.template_selector import is_supported_template, select_template_for_project_type
@@ -345,9 +347,18 @@ def _help_text() -> str:
         "PROJECT\n"
         "/idea <idea>           generate project\n"
         "/idea_local <idea>     generate + run locally\n"
+        "/pipeline <idea>       alias of /idea\n"
+        "/preview <idea>        preview Brain reasoning\n"
+        "/suggest <idea>        show architecture suggestions\n"
         "/projects              list projects\n"
         "/use <n>               select project\n"
+        "/current               show selected project\n"
         "/status                show current status\n\n"
+        "/state                 show raw pipeline state\n\n"
+        "PIPELINE CONTROL\n"
+        "/continue              continue last project\n"
+        "/fix                   run fix step\n"
+        "/retry                 fix + continue\n\n"
         "LOCAL RUNTIME\n"
         "/running               show running services\n"
         "/logs                  show logs\n"
@@ -360,6 +371,8 @@ def _help_text() -> str:
         "/tree                  show file tree\n"
         "/open <file>           open file\n"
         "/diff                  show changes\n\n"
+        "INSPECT\n"
+        "/inspect               show project summary\n\n"
         "CLEANUP\n"
         "/delete_project\n"
         "/delete_project repo\n"
@@ -414,6 +427,84 @@ def _load_json(path: Path) -> Optional[dict[str, Any]]:
     except Exception:
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _format_brain_preview_text(idea: str) -> str:
+    normalized_payload = normalize_idea(idea)
+    normalized = str(normalized_payload.get("normalized") or idea)
+    language = str(normalized_payload.get("language") or "en")
+    reasoning = reason_architecture_from_idea(normalized)
+
+    shape = str(reasoning.get("app_shape") or "unknown")
+    template = str(reasoning.get("recommended_template") or "unknown")
+    reason = str(reasoning.get("reason_summary") or "n/a")
+    domains = [str(x) for x in (reasoning.get("domains") or []) if str(x).strip()]
+    modules = [str(x) for x in (reasoning.get("modules") or []) if str(x).strip()]
+    modules_text = "\n".join([f"- {m}" for m in modules]) if modules else "- (none)"
+
+    return (
+        "Idea analysis\n\n"
+        "Shape:\n"
+        f"{shape}\n\n"
+        "Domains:\n"
+        f"{', '.join(domains) if domains else '(none)'}\n\n"
+        "Template:\n"
+        f"{template}\n\n"
+        "Modules:\n"
+        f"{modules_text}\n\n"
+        "Reason:\n"
+        f"{reason}\n\n"
+        "Language:\n"
+        f"{language}"
+    )
+
+
+def get_template_suggestions(idea: str, reasoning: dict[str, Any]) -> list[str]:
+    text = str(idea or "").strip().lower()
+    domains = [str(x).lower() for x in (reasoning.get("domains") or [])]
+    recommended = str(reasoning.get("recommended_template") or "").strip().lower()
+    app_shape = str(reasoning.get("app_shape") or "unknown").strip().lower()
+    internal_tool = bool(reasoning.get("internal_tool"))
+    dashboard_needed = bool(reasoning.get("dashboard_needed"))
+    worker_needed = bool(reasoning.get("worker_needed"))
+    backend_needed = bool(reasoning.get("backend_needed"))
+    frontend_needed = bool(reasoning.get("frontend_needed"))
+    db_needed = bool(reasoning.get("db_needed"))
+    file_upload_needed = bool(reasoning.get("file_upload_needed"))
+
+    candidates: list[str] = []
+    if recommended:
+        candidates.append(recommended)
+    if internal_tool and dashboard_needed:
+        candidates.append("internal-tool")
+    if worker_needed and backend_needed and not frontend_needed:
+        candidates.append("worker-api")
+
+    data_domains = {"inventory", "reports", "analytics", "data"}
+    if (set(domains) & data_domains) and (dashboard_needed or db_needed or "tool" in text):
+        candidates.append("data-tool")
+
+    if app_shape == "fullstack":
+        candidates.append("fullstack-ddd")
+    elif app_shape == "backend":
+        candidates.append("fastapi")
+    elif app_shape == "frontend":
+        candidates.append("nextjs")
+    else:
+        candidates.extend(["internal-tool", "data-tool", "fullstack-ddd", "fastapi", "worker-api", "nextjs"])
+
+    if file_upload_needed and dashboard_needed:
+        candidates.extend(["internal-tool", "data-tool"])
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in candidates:
+        val = str(item).strip().lower()
+        if not val or val in seen:
+            continue
+        seen.add(val)
+        deduped.append(val)
+    return deduped[:6]
 
 
 def _status_from_sources(project_dir: Path) -> str:
@@ -1824,6 +1915,38 @@ async def command_pipeline(update: Any, context: Any) -> None:
     await _handle_idea_like(update, context, "pipeline")
 
 
+async def command_preview(update: Any, context: Any) -> None:
+    idea = extract_idea(getattr(context, "args", []))
+    if not idea:
+        await update.message.reply_text("Usage: /preview <idea>")
+        return
+    await update.message.reply_text(_truncate_message(_format_brain_preview_text(idea)))
+
+
+async def command_suggest(update: Any, context: Any) -> None:
+    idea = extract_idea(getattr(context, "args", []))
+    if not idea:
+        await update.message.reply_text("Usage: /suggest <idea>")
+        return
+
+    normalized_payload = normalize_idea(idea)
+    normalized = str(normalized_payload.get("normalized") or idea)
+    reasoning = reason_architecture_from_idea(normalized)
+    suggestions = get_template_suggestions(normalized, reasoning)
+    if not suggestions:
+        suggestions = [str(reasoning.get("recommended_template") or "fastapi")]
+
+    numbered = "\n".join([f"{i}. {name}" for i, name in enumerate(suggestions, start=1)])
+    reason = str(reasoning.get("reason_summary") or "unclear architecture")
+    message = (
+        "Possible architectures\n\n"
+        f"{numbered}\n\n"
+        "Reasoning:\n"
+        f"{reason}"
+    )
+    await update.message.reply_text(_truncate_message(message))
+
+
 async def command_continue(update: Any, context: Any) -> None:
     await _handle_continue(update, context)
 
@@ -1894,6 +2017,60 @@ async def command_current(update: Any, context: Any) -> None:
         f"Template: {template}"
     )
     await update.message.reply_text(message)
+
+
+async def command_inspect(update: Any, context: Any) -> None:
+    del context
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text("No project selected. Use /projects then /use <n>.")
+        return
+
+    archmind_dir = project_path / ".archmind"
+    spec = _load_json(archmind_dir / "project_spec.json") or {}
+    reasoning = _load_json(archmind_dir / "architecture_reasoning.json") or {}
+    state = _load_json(archmind_dir / "state.json") or {}
+
+    shape = str(spec.get("shape") or reasoning.get("app_shape") or "unknown").strip()
+    template = str(spec.get("template") or reasoning.get("recommended_template") or "unknown").strip()
+    domains = [str(x) for x in (spec.get("domains") or reasoning.get("domains") or []) if str(x).strip()]
+    modules = [str(x) for x in (spec.get("modules") or reasoning.get("modules") or []) if str(x).strip()]
+    reason_summary = str(spec.get("reason_summary") or reasoning.get("reason_summary") or "").strip()
+
+    lines = [
+        "Project:",
+        project_path.name,
+        "",
+        "Shape:",
+        shape or "unknown",
+        "",
+        "Template:",
+        template or "unknown",
+        "",
+        "Domains:",
+        ", ".join(domains) if domains else "(none)",
+        "",
+        "Modules:",
+        ", ".join(modules) if modules else "(none)",
+    ]
+    if reason_summary:
+        lines += ["", "Reasoning:", reason_summary]
+
+    backend_url = str(state.get("backend_deploy_url") or state.get("backend_url") or "").strip()
+    frontend_url = str(state.get("frontend_deploy_url") or state.get("frontend_url") or "").strip()
+    backend_status = str(state.get("backend_smoke_status") or state.get("backend_status") or "").strip()
+    frontend_status = str(state.get("frontend_smoke_status") or state.get("frontend_status") or "").strip()
+
+    if backend_url:
+        lines += ["", "Backend:", backend_url]
+    if frontend_url:
+        lines += ["", "Frontend:", frontend_url]
+    if backend_status:
+        lines += ["", "Backend status:", backend_status]
+    if frontend_status:
+        lines += ["", "Frontend status:", frontend_status]
+
+    await update.message.reply_text(_truncate_message("\n".join(lines)))
 
 
 async def command_use(update: Any, context: Any) -> None:
@@ -2408,11 +2585,14 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("idea", command_idea))
     app.add_handler(CommandHandler("idea_local", command_idea_local))
     app.add_handler(CommandHandler("pipeline", command_pipeline))
+    app.add_handler(CommandHandler("preview", command_preview))
+    app.add_handler(CommandHandler("suggest", command_suggest))
     app.add_handler(CommandHandler("continue", command_continue))
     app.add_handler(CommandHandler("fix", command_fix))
     app.add_handler(CommandHandler("retry", command_retry))
     app.add_handler(CommandHandler("use", command_use))
     app.add_handler(CommandHandler("current", command_current))
+    app.add_handler(CommandHandler("inspect", command_inspect))
     app.add_handler(CommandHandler("logs", command_logs))
     app.add_handler(CommandHandler("running", command_running))
     app.add_handler(CommandHandler("tree", command_tree))

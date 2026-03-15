@@ -31,7 +31,10 @@ from archmind.telegram_bot import (
     command_restart,
     command_stop,
     command_help,
+    command_inspect,
     command_retry,
+    command_preview,
+    command_suggest,
     command_state,
     extract_idea,
     load_last_project_path,
@@ -49,6 +52,7 @@ from archmind.telegram_bot import (
     sanitize_log_excerpt,
     save_last_project_path,
     set_current_project,
+    get_template_suggestions,
     get_current_project,
     start_pipeline_process,
     format_projects_list,
@@ -1603,12 +1607,122 @@ def test_help_mentions_command_groups() -> None:
     assert "ArchMind commands" in msg.sent[-1]
     assert "PROJECT" in msg.sent[-1]
     assert "/idea <idea>" in msg.sent[-1]
+    assert "/pipeline <idea>       alias of /idea" in msg.sent[-1]
+    assert "/preview <idea>        preview Brain reasoning" in msg.sent[-1]
+    assert "/suggest <idea>        show architecture suggestions" in msg.sent[-1]
+    assert "/current               show selected project" in msg.sent[-1]
+    assert "/state                 show raw pipeline state" in msg.sent[-1]
+    assert "PIPELINE CONTROL" in msg.sent[-1]
+    assert "/continue              continue last project" in msg.sent[-1]
+    assert "/fix                   run fix step" in msg.sent[-1]
+    assert "/retry                 fix + continue" in msg.sent[-1]
     assert "LOCAL RUNTIME" in msg.sent[-1]
     assert "/logs                  show logs" in msg.sent[-1]
     assert "DEPLOY" in msg.sent[-1]
     assert "/deploy local" in msg.sent[-1]
+    assert "INSPECT" in msg.sent[-1]
+    assert "/inspect               show project summary" in msg.sent[-1]
     assert "CLEANUP" in msg.sent[-1]
     assert "/delete_project all" in msg.sent[-1]
+
+
+def test_preview_command_outputs_brain_reasoning_fields() -> None:
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_preview(update, DummyContext(args=["team", "task", "tracker", "with", "login", "dashboard"])))
+    out = msg.sent[-1]
+    assert "Idea analysis" in out
+    assert "Shape:" in out
+    assert "Template:" in out
+    assert "Modules:" in out
+    assert "Reason:" in out
+    assert "Language:" in out
+    assert "auth" in out
+    assert "db" in out
+    assert "dashboard" in out
+
+
+def test_suggest_command_outputs_suggestion_list() -> None:
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_suggest(update, DummyContext(args=["document", "upload", "admin", "tool"])))
+    out = msg.sent[-1]
+    assert "Possible architectures" in out
+    assert "1." in out
+    assert "Reasoning:" in out
+
+
+def test_get_template_suggestions_ambiguous_case() -> None:
+    reasoning = {
+        "app_shape": "unknown",
+        "recommended_template": "fastapi",
+        "domains": ["documents"],
+        "dashboard_needed": True,
+        "internal_tool": True,
+        "worker_needed": False,
+        "backend_needed": True,
+        "frontend_needed": True,
+        "db_needed": False,
+        "file_upload_needed": True,
+    }
+    suggestions = get_template_suggestions("document upload admin tool", reasoning)
+    assert "internal-tool" in suggestions
+    assert len(suggestions) >= 2
+
+
+def test_inspect_command_summarizes_project_spec_reasoning_and_state(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "domains": ["tasks", "teams"],
+                "template": "fullstack-ddd",
+                "modules": ["auth", "db", "dashboard"],
+                "reason_summary": "fullstack app for tasks, teams with auth, db, dashboard",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "architecture_reasoning.json").write_text(
+        json.dumps(
+            {
+                "app_shape": "fullstack",
+                "domains": ["tasks", "teams"],
+                "recommended_template": "fullstack-ddd",
+                "reason_summary": "fullstack app for tasks, teams with auth, db, dashboard",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "backend_deploy_url": "http://127.0.0.1:8011",
+                "frontend_deploy_url": "http://127.0.0.1:3011",
+                "backend_smoke_status": "SUCCESS",
+                "frontend_smoke_status": "SUCCESS",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_inspect(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "Project:" in out
+    assert "task_tracker" in out
+    assert "Shape:" in out
+    assert "Template:" in out
+    assert "Domains:" in out
+    assert "Modules:" in out
+    assert "Reasoning:" in out
+    assert "Backend:" in out
+    assert "Frontend:" in out
 
 
 def test_help_topic_idea() -> None:
