@@ -28,6 +28,7 @@ from archmind.idea_normalizer import normalize_idea
 from archmind.next_suggester import suggest_next_commands
 from archmind.plan_suggester import build_plan_from_project_spec, build_plan_from_suggestion
 from archmind.project_type import detect_project_type, normalize_project_type
+from archmind.design_suggester import build_architecture_design
 from archmind.spec_suggester import suggest_project_spec
 from archmind.state import derive_task_label_from_failure_signature, load_state, set_agent_state, update_after_deploy
 from archmind.template_selector import is_supported_template, select_template_for_project_type
@@ -365,6 +366,7 @@ def _help_text() -> str:
         "/pipeline <idea>       alias of /idea\n"
         "/preview <idea>        preview Brain reasoning\n"
         "/suggest <idea>        show architecture suggestions\n"
+        "/design <idea>         generate architecture design document\n"
         "/plan <idea>           build development plan from an idea\n"
         "/plan                  build next development plan for current project\n"
         "/add_module <name>     add module to current project\n"
@@ -2319,6 +2321,77 @@ async def command_suggest(update: Any, context: Any) -> None:
     await update.message.reply_text(_truncate_message(message))
 
 
+async def command_design(update: Any, context: Any) -> None:
+    idea = extract_idea(getattr(context, "args", []))
+    if not idea:
+        await update.message.reply_text("Usage: /design <idea>")
+        return
+
+    normalized_payload = normalize_idea(idea)
+    normalized = str(normalized_payload.get("normalized") or idea)
+    reasoning = reason_architecture_from_idea(normalized)
+    suggestion = suggest_project_spec(normalized, reasoning)
+    design = build_architecture_design(idea, reasoning, suggestion)
+
+    modules = [str(x) for x in (design.get("modules") or []) if str(x).strip()]
+    domains = [str(x) for x in (design.get("domains") or []) if str(x).strip()]
+    entities = design.get("entities") if isinstance(design.get("entities"), list) else []
+    relationships = [str(x) for x in (design.get("relationships") or []) if str(x).strip()]
+    apis = [str(x) for x in (design.get("api_endpoints") or []) if str(x).strip()]
+    pages = [str(x) for x in (design.get("frontend_pages") or []) if str(x).strip()]
+
+    entity_lines: list[str] = []
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        name = str(entity.get("name") or "").strip()
+        if not name:
+            continue
+        fields = entity.get("fields") if isinstance(entity.get("fields"), list) else []
+        pairs: list[str] = []
+        for field in fields:
+            if not isinstance(field, dict):
+                continue
+            fname = str(field.get("name") or "").strip()
+            ftype = str(field.get("type") or "").strip().lower()
+            if fname and ftype:
+                pairs.append(f"{fname}:{ftype}")
+        entity_lines.append(f"- {name}({', '.join(pairs)})" if pairs else f"- {name}")
+
+    lines = [
+        "Architecture design",
+        "",
+        "Overview:",
+        str(design.get("overview") or idea),
+        "",
+        "Architecture:",
+        f"Shape: {str(design.get('shape') or 'unknown')}",
+        f"Template: {str(design.get('template') or 'unknown')}",
+        f"Modules: {', '.join(modules) if modules else '(none)'}",
+        "",
+        "Domains:",
+    ]
+    lines += [f"- {x}" for x in domains] if domains else ["- (none)"]
+    lines += ["", "Entities:"]
+    lines += entity_lines if entity_lines else ["- (none)"]
+    if relationships:
+        lines += ["", "Relationships:"] + [f"- {x}" for x in relationships]
+    lines += ["", "APIs:"]
+    lines += [f"- {x}" for x in apis] if apis else ["- (none)"]
+    lines += ["", "Frontend:"]
+    lines += [f"- {x}" for x in pages] if pages else ["- (none)"]
+    lines += [
+        "",
+        "Reasoning:",
+        str(design.get("reasoning") or reasoning.get("reason_summary") or "unclear architecture"),
+        "",
+        "Next:",
+        f"- /plan {idea}",
+        f"- /idea_local {idea}",
+    ]
+    await update.message.reply_text(_truncate_message("\n".join(lines)))
+
+
 def _format_plan_message(plan: dict[str, Any]) -> str:
     phases = plan.get("phases") if isinstance(plan.get("phases"), list) else []
     if not phases:
@@ -3781,6 +3854,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("pipeline", command_pipeline))
     app.add_handler(CommandHandler("preview", command_preview))
     app.add_handler(CommandHandler("suggest", command_suggest))
+    app.add_handler(CommandHandler("design", command_design))
     app.add_handler(CommandHandler("plan", command_plan))
     app.add_handler(CommandHandler("add_module", command_add_module))
     app.add_handler(CommandHandler("add_entity", command_add_entity))

@@ -44,6 +44,7 @@ from archmind.telegram_bot import (
     command_retry,
     command_preview,
     command_suggest,
+    command_design,
     command_state,
     extract_idea,
     load_last_project_path,
@@ -1797,6 +1798,7 @@ def test_help_mentions_command_groups() -> None:
     assert "/pipeline <idea>       alias of /idea" in msg.sent[-1]
     assert "/preview <idea>        preview Brain reasoning" in msg.sent[-1]
     assert "/suggest <idea>        show architecture suggestions" in msg.sent[-1]
+    assert "/design <idea>         generate architecture design document" in msg.sent[-1]
     assert "/plan <idea>           build development plan from an idea" in msg.sent[-1]
     assert "/plan                  build next development plan for current project" in msg.sent[-1]
     assert "/apply_plan            apply the latest saved development plan" in msg.sent[-1]
@@ -1849,6 +1851,56 @@ def test_suggest_command_outputs_suggestion_list() -> None:
     assert "Suggested APIs:" in out
     assert "Suggested pages:" in out
     assert "Reasoning:" in out
+
+
+def test_design_command_outputs_design_sections() -> None:
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(
+        command_design(
+            update,
+            DummyContext(
+                args=[
+                    "tv",
+                    "hardware",
+                    "qa",
+                    "defect",
+                    "tracker",
+                    "with",
+                    "dashboard,",
+                    "device",
+                    "management,",
+                    "test",
+                    "run",
+                    "history,",
+                    "and",
+                    "team",
+                    "collaboration",
+                ]
+            ),
+        )
+    )
+    out = msg.sent[-1]
+    assert "Architecture design" in out
+    assert "Overview:" in out
+    assert "Architecture:" in out
+    assert "Domains:" in out
+    assert "Entities:" in out
+    assert "APIs:" in out
+    assert "Frontend:" in out
+    assert "Reasoning:" in out
+    assert "- Device(" in out
+    assert "- TestRun(" in out
+    assert "- Defect(" in out
+    assert "Relationships:" in out
+    assert "Device has many TestRuns" in out
+
+
+def test_design_command_requires_idea() -> None:
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_design(update, DummyContext()))
+    assert msg.sent[-1] == "Usage: /design <idea>"
 
 
 def test_get_template_suggestions_ambiguous_case() -> None:
