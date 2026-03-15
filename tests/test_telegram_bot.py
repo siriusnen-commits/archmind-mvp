@@ -1674,6 +1674,10 @@ def test_inspect_command_summarizes_project_spec_reasoning_and_state(tmp_path: P
     project_dir = tmp_path / "task_tracker"
     archmind = project_dir / ".archmind"
     archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend").mkdir(parents=True, exist_ok=True)
+    (project_dir / "README.md").write_text("# demo\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
     (archmind / "project_spec.json").write_text(
         json.dumps(
             {
@@ -1702,8 +1706,12 @@ def test_inspect_command_summarizes_project_spec_reasoning_and_state(tmp_path: P
             {
                 "backend_deploy_url": "http://127.0.0.1:8011",
                 "frontend_deploy_url": "http://127.0.0.1:3011",
-                "backend_smoke_status": "SUCCESS",
-                "frontend_smoke_status": "SUCCESS",
+                "backend_pid": 12001,
+                "frontend_pid": 13001,
+                "backend_smoke_status": "RUNNING",
+                "frontend_smoke_status": "RUNNING",
+                "deploy_target": "local",
+                "last_deploy_status": "SUCCESS",
             }
         ),
         encoding="utf-8",
@@ -1721,8 +1729,19 @@ def test_inspect_command_summarizes_project_spec_reasoning_and_state(tmp_path: P
     assert "Domains:" in out
     assert "Modules:" in out
     assert "Reasoning:" in out
-    assert "Backend:" in out
-    assert "Frontend:" in out
+    assert "Structure:" in out
+    assert "backend + frontend" in out
+    assert "Files:" in out
+    assert "app/" in out
+    assert "frontend/" in out
+    assert "Runtime:" in out
+    assert "Backend: RUNNING" in out
+    assert "Frontend: RUNNING" in out
+    assert "Backend URL:" in out
+    assert "Frontend URL:" in out
+    assert "Deploy:" in out
+    assert "Target: local" in out
+    assert "Status: SUCCESS" in out
 
 
 def test_help_topic_idea() -> None:

@@ -2037,6 +2037,39 @@ async def command_inspect(update: Any, context: Any) -> None:
     modules = [str(x) for x in (spec.get("modules") or reasoning.get("modules") or []) if str(x).strip()]
     reason_summary = str(spec.get("reason_summary") or reasoning.get("reason_summary") or "").strip()
 
+    has_backend = (project_path / "app").is_dir() or (project_path / "requirements.txt").exists()
+    has_frontend = (
+        (project_path / "frontend").is_dir()
+        or (project_path / "package.json").exists()
+        or (project_path / "next.config.mjs").exists()
+    )
+    if has_backend and has_frontend:
+        structure = "backend + frontend"
+    elif has_backend:
+        structure = "backend"
+    elif has_frontend:
+        structure = "frontend"
+    else:
+        structure = ""
+
+    core_candidates = [
+        ("app", True),
+        ("frontend", True),
+        ("README.md", False),
+        ("requirements.txt", False),
+        ("package.json", False),
+        ("next.config.mjs", False),
+    ]
+    core_files: list[str] = []
+    for name, as_dir in core_candidates:
+        p = project_path / name
+        if not p.exists():
+            continue
+        if as_dir:
+            core_files.append(f"{name}/")
+        else:
+            core_files.append(name)
+
     lines = [
         "Project:",
         project_path.name,
@@ -2055,20 +2088,49 @@ async def command_inspect(update: Any, context: Any) -> None:
     ]
     if reason_summary:
         lines += ["", "Reasoning:", reason_summary]
+    if structure:
+        lines += ["", "Structure:", structure]
+    if core_files:
+        lines += ["", "Files:"] + core_files[:6]
 
     backend_url = str(state.get("backend_deploy_url") or state.get("backend_url") or "").strip()
     frontend_url = str(state.get("frontend_deploy_url") or state.get("frontend_url") or "").strip()
-    backend_status = str(state.get("backend_smoke_status") or state.get("backend_status") or "").strip()
-    frontend_status = str(state.get("frontend_smoke_status") or state.get("frontend_status") or "").strip()
+    backend_status = str(state.get("backend_smoke_status") or state.get("backend_status") or "").strip().upper()
+    frontend_status = str(state.get("frontend_smoke_status") or state.get("frontend_status") or "").strip().upper()
+    backend_pid = state.get("backend_pid")
+    frontend_pid = state.get("frontend_pid")
+
+    runtime_backend = ""
+    runtime_frontend = ""
+    if backend_status:
+        runtime_backend = backend_status
+    elif backend_pid:
+        runtime_backend = "RUNNING"
+    if frontend_status:
+        runtime_frontend = frontend_status
+    elif frontend_pid:
+        runtime_frontend = "RUNNING"
+
+    if runtime_backend or runtime_frontend:
+        lines += ["", "Runtime:"]
+        if runtime_backend:
+            lines.append(f"Backend: {runtime_backend}")
+        if runtime_frontend:
+            lines.append(f"Frontend: {runtime_frontend}")
 
     if backend_url:
-        lines += ["", "Backend:", backend_url]
+        lines += ["", "Backend URL:", backend_url]
     if frontend_url:
-        lines += ["", "Frontend:", frontend_url]
-    if backend_status:
-        lines += ["", "Backend status:", backend_status]
-    if frontend_status:
-        lines += ["", "Frontend status:", frontend_status]
+        lines += ["", "Frontend URL:", frontend_url]
+
+    deploy_target = str(state.get("deploy_target") or state.get("auto_deploy_target") or "").strip()
+    deploy_status = str(state.get("last_deploy_status") or state.get("auto_deploy_status") or "").strip().upper()
+    if deploy_target or deploy_status:
+        lines += ["", "Deploy:"]
+        if deploy_target:
+            lines.append(f"Target: {deploy_target}")
+        if deploy_status:
+            lines.append(f"Status: {deploy_status}")
 
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 
