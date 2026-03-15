@@ -1035,6 +1035,40 @@ def format_projects_list(projects_dir: Optional[Path] = None, limit: int = 10) -
         lines.append(f"   Status: {status}")
         lines.append(f"   Type: {project_type}")
         lines.append(f"   Template: {template}")
+
+        runtime_backend_running = False
+        runtime_frontend_running = False
+        backend_url = str(state_payload.get("backend_deploy_url") or "").strip()
+        frontend_url = str(state_payload.get("frontend_deploy_url") or "").strip()
+        try:
+            from archmind.deploy import get_local_runtime_status
+
+            runtime_payload = get_local_runtime_status(project_dir)
+            backend = runtime_payload.get("backend") if isinstance(runtime_payload, dict) else {}
+            frontend = runtime_payload.get("frontend") if isinstance(runtime_payload, dict) else {}
+            if isinstance(backend, dict):
+                runtime_backend_running = str(backend.get("status") or "").strip().upper() == "RUNNING"
+                backend_url = str(backend.get("url") or backend_url).strip()
+            if isinstance(frontend, dict):
+                runtime_frontend_running = str(frontend.get("status") or "").strip().upper() == "RUNNING"
+                frontend_url = str(frontend.get("url") or frontend_url).strip()
+        except Exception:
+            runtime_backend_running = bool(state_payload.get("backend_pid"))
+            runtime_frontend_running = bool(state_payload.get("frontend_pid"))
+
+        if runtime_backend_running and runtime_frontend_running:
+            runtime_line = "RUNNING"
+        elif runtime_backend_running:
+            runtime_line = "RUNNING (backend)"
+        elif runtime_frontend_running:
+            runtime_line = "RUNNING (frontend)"
+        else:
+            runtime_line = "STOPPED"
+        lines.append(f"   {runtime_line}")
+        if backend_url:
+            lines.append(f"   Backend: {backend_url}")
+        if frontend_url:
+            lines.append(f"   Frontend: {frontend_url}")
         if idx != len(picked):
             lines.append("")
     return _truncate_message("\n".join(lines), limit=3500)

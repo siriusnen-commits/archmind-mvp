@@ -1336,6 +1336,72 @@ def test_projects_marks_current_project(monkeypatch, tmp_path: Path) -> None:
     assert "p2 [current]" in out
 
 
+def test_projects_shows_runtime_status_and_urls(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(root))
+
+    p1 = root / "task-tracker"
+    p2 = root / "notes-api"
+    p3 = root / "worker-api-demo"
+    for name, ptype, tmpl in (
+        ("task-tracker", "fullstack-web", "fullstack-ddd"),
+        ("notes-api", "backend-api", "fastapi"),
+        ("worker-api-demo", "backend-api", "worker-api"),
+    ):
+        project = root / name
+        arch = project / ".archmind"
+        arch.mkdir(parents=True, exist_ok=True)
+        (arch / "state.json").write_text(
+            json.dumps(
+                {
+                    "last_status": "DONE",
+                    "project_type": ptype,
+                    "effective_template": tmpl,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    runtime_map = {
+        str(p1.resolve()): {
+            "backend": {"status": "RUNNING", "pid": 12001, "url": "http://127.0.0.1:8011"},
+            "frontend": {"status": "RUNNING", "pid": 13001, "url": "http://127.0.0.1:3011"},
+        },
+        str(p2.resolve()): {
+            "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+        str(p3.resolve()): {
+            "backend": {"status": "RUNNING", "pid": 15001, "url": "http://127.0.0.1:8050"},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    }
+
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda project_dir: runtime_map.get(
+            str(Path(project_dir).resolve()),
+            {"backend": {"status": "NOT RUNNING", "pid": None, "url": ""}, "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""}},
+        ),
+    )
+
+    set_current_project(p1)
+    out = format_projects_list()
+    assert "task-tracker [current]" in out
+    assert "Status: DONE" in out
+    assert "Type: fullstack-web" in out
+    assert "Template: fullstack-ddd" in out
+    assert "RUNNING" in out
+    assert "Backend: http://127.0.0.1:8011" in out
+    assert "Frontend: http://127.0.0.1:3011" in out
+    assert "notes-api" in out
+    assert "STOPPED" in out
+    assert "worker-api-demo" in out
+    assert "RUNNING (backend)" in out
+    assert "Backend: http://127.0.0.1:8050" in out
+
+
 def test_status_uses_current_project_when_set(monkeypatch, tmp_path: Path) -> None:
     current = tmp_path / "current_status_proj"
     other = tmp_path / "other_status_proj"
