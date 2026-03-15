@@ -1753,6 +1753,19 @@ def _extract_done_component_summary(result: dict[str, Any], fallback_lines: list
     return out[:4]
 
 
+def _reconcile_summary_with_smoke_status(summary_lines: list[str], state: dict[str, Any]) -> list[str]:
+    frontend_smoke = str(state.get("frontend_smoke_status") or "").strip().upper()
+    if frontend_smoke == "SUCCESS":
+        out: list[str] = []
+        for line in summary_lines:
+            if str(line).startswith("Frontend:"):
+                out.append("Frontend: SUCCESS")
+            else:
+                out.append(line)
+        return out
+    return summary_lines
+
+
 def _recommend_next_actions(
     status: str,
     summary_lines: list[str],
@@ -1802,6 +1815,7 @@ def build_finished_message(
             result=result,
             fallback_lines=fallback_lines,
         )
+    summary_lines = _reconcile_summary_with_smoke_status(summary_lines, state)
     auto_deploy_enabled = bool(state.get("auto_deploy_enabled"))
     auto_deploy_target = str(state.get("auto_deploy_target") or "").strip() or "local"
     auto_deploy_status = str(state.get("auto_deploy_status") or "").strip().upper() or "SKIPPED"
@@ -2998,7 +3012,18 @@ async def command_add_page(update: Any, context: Any) -> None:
 async def command_apply_suggestion(update: Any, context: Any) -> None:
     project_path = _resolve_target_project()
     if project_path is None:
-        await update.message.reply_text("No project selected. Use /projects then /use <n>.")
+        await update.message.reply_text(
+            "No active project.\n\n"
+            "If you want to generate a project from an idea:\n\n"
+            "1. run /idea_local <your idea>\n\n"
+            "If you want to apply suggestions to an existing project:\n\n"
+            "1. run /projects\n"
+            "2. run /use <n>\n"
+            "3. run /apply_suggestion\n\n"
+            "Next:\n"
+            "- /idea_local <idea>\n"
+            "- /projects"
+        )
         return
 
     args = [str(x).strip().lower() for x in getattr(context, "args", []) if str(x).strip()]

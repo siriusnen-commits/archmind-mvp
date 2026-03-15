@@ -38,3 +38,10 @@ def test_suggest_project_spec_backend_only_can_omit_pages() -> None:
     out = suggest_project_spec("backend api", {"domains": ["tasks"], "frontend_needed": False})
     assert out["frontend_pages"] == []
 
+
+def test_suggest_project_spec_keyword_inference_for_qa_hardware() -> None:
+    out = suggest_project_spec("tv hardware qa defect tracker", {"domains": [], "frontend_needed": True})
+    names = [entity["name"] for entity in out["entities"]]
+    assert "Device" in names
+    assert "TestRun" in names
+    assert "Defect" in names

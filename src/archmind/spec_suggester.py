@@ -17,6 +17,8 @@ DOMAIN_ENTITY_MAP: dict[str, str] = {
 ENTITY_FIELD_MAP: dict[str, list[dict[str, str]]] = {
     "Task": [{"name": "title", "type": "string"}, {"name": "status", "type": "string"}],
     "Defect": [{"name": "title", "type": "string"}, {"name": "status", "type": "string"}],
+    "Device": [{"name": "model_name", "type": "string"}, {"name": "firmware_version", "type": "string"}],
+    "TestRun": [{"name": "result", "type": "string"}, {"name": "executed_at", "type": "datetime"}],
     "Team": [{"name": "name", "type": "string"}],
     "Project": [{"name": "name", "type": "string"}],
     "Document": [{"name": "title", "type": "string"}],
@@ -35,7 +37,7 @@ def _entity_slug_and_plural(entity_name: str) -> tuple[str, str]:
 
 
 def suggest_project_spec(idea: str, reasoning: dict[str, Any]) -> dict[str, Any]:
-    del idea
+    text = str(idea or "").strip().lower()
     domains = [str(x).strip().lower() for x in (reasoning.get("domains") or []) if str(x).strip()]
     selected_entities: list[str] = []
     seen: set[str] = set()
@@ -52,6 +54,20 @@ def suggest_project_spec(idea: str, reasoning: dict[str, Any]) -> dict[str, Any]
     if has_team and has_work and "Project" not in seen:
         seen.add("Project")
         selected_entities.append("Project")
+
+    # Keyword inference for QA/hardware ideas.
+    if any(k in text for k in ("device", "hardware", "firmware")) and "Device" not in seen:
+        seen.add("Device")
+        selected_entities.append("Device")
+    if any(k in text for k in ("test run", "test history", "execution")) and "TestRun" not in seen:
+        seen.add("TestRun")
+        selected_entities.append("TestRun")
+    if "qa" in text and any(k in text for k in ("hardware", "defect", "bug", "issue", "tracker")) and "TestRun" not in seen:
+        seen.add("TestRun")
+        selected_entities.append("TestRun")
+    if any(k in text for k in ("defect", "bug", "issue")) and "Defect" not in seen:
+        seen.add("Defect")
+        selected_entities.append("Defect")
 
     selected_entities = selected_entities[:3]
 
@@ -78,4 +94,3 @@ def suggest_project_spec(idea: str, reasoning: dict[str, Any]) -> dict[str, Any]
         "api_endpoints": api_endpoints[:6],
         "frontend_pages": pages[:6],
     }
-

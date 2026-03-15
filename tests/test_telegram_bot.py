@@ -514,6 +514,30 @@ def test_not_done_still_shows_failure_class() -> None:
     assert "Failure class: backend-pytest:assertion" in msg
 
 
+def test_build_finished_message_prefers_frontend_smoke_success_in_summary() -> None:
+    msg = build_finished_message(
+        evaluation={"status": "DONE"},
+        state={
+            "last_status": "DONE",
+            "iterations": 1,
+            "fix_attempts": 0,
+            "auto_deploy_enabled": True,
+            "frontend_smoke_status": "SUCCESS",
+        },
+        result={
+            "status": "SUCCESS",
+            "steps": {
+                "run_after_fix": {
+                    "detail": {"backend_status": "SUCCESS", "frontend_status": "WARNING"}
+                }
+            },
+        },
+        project_name="demo",
+        status="DONE",
+    )
+    assert "- Frontend: SUCCESS" in msg
+
+
 @dataclass
 class DummyMessage:
     sent: list[str] = field(default_factory=list)
@@ -2640,6 +2664,18 @@ def test_apply_suggestion_missing_file_shows_message(tmp_path: Path, monkeypatch
     msg = DummyMessage()
     asyncio.run(command_apply_suggestion(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     assert "No suggestion available" in msg.sent[-1]
+
+
+def test_apply_suggestion_without_project_shows_guided_message(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: None)
+    msg = DummyMessage()
+    asyncio.run(command_apply_suggestion(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "No active project." in out
+    assert "/idea_local <your idea>" in out
+    assert "/projects" in out
+    assert "/use <n>" in out
+    assert "/apply_suggestion" in out
 
 
 def test_inspect_reflects_apply_suggestion_results(tmp_path: Path, monkeypatch) -> None:

@@ -45,6 +45,33 @@ def suggest_next_commands(spec: dict[str, Any], limit: int = 5) -> list[dict[str
     if "auth" in modules and "user" not in lower_entity_names:
         add("/add_entity User", "auth module present but User entity missing")
 
+    # Domain-specific field quality rules
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        name = str(entity.get("name") or "").strip()
+        fields = entity.get("fields") if isinstance(entity.get("fields"), list) else []
+        field_names = {str(item.get("name") or "").strip().lower() for item in fields if isinstance(item, dict)}
+        lower_name = name.lower()
+        if lower_name == "defect":
+            if "title" not in field_names:
+                add("/add_field Defect title:string", "Defect entity missing title field")
+            if "status" not in field_names:
+                add("/add_field Defect status:string", "Defect entity missing status field")
+        if lower_name == "device":
+            if "firmware_version" not in field_names:
+                add("/add_field Device firmware_version:string", "Device entity missing firmware_version field")
+            if "model_name" not in field_names:
+                add("/add_field Device model_name:string", "Device entity missing model_name field")
+        if lower_name == "testrun":
+            if "result" not in field_names:
+                add("/add_field TestRun result:string", "TestRun entity missing result field")
+            if "executed_at" not in field_names:
+                add("/add_field TestRun executed_at:datetime", "TestRun entity missing executed_at field")
+
+    if "dashboard" in modules and "dashboard/home" not in frontend_pages:
+        add("/add_page dashboard/home", "dashboard module present but dashboard page missing")
+
     for name in entity_names:
         slug = _entity_slug(name)
         plural = f"{slug}s"
@@ -68,9 +95,6 @@ def suggest_next_commands(spec: dict[str, Any], limit: int = 5) -> list[dict[str
             if detail_page not in frontend_pages:
                 add(f"/add_page {detail_page}", f"{name} entity exists but detail page missing")
 
-    if "dashboard" in modules and "dashboard/home" not in frontend_pages:
-        add("/add_page dashboard/home", "dashboard module present but dashboard page missing")
-
     for entity in entities:
         if not isinstance(entity, dict):
             continue
@@ -80,4 +104,3 @@ def suggest_next_commands(spec: dict[str, Any], limit: int = 5) -> list[dict[str
             add(f"/add_field {name} description:string", f"{name} entity has few fields")
 
     return suggestions
-
