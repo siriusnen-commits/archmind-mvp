@@ -39,6 +39,7 @@ from archmind.telegram_bot import (
     command_add_page,
     command_apply_suggestion,
     command_next,
+    command_plan,
     command_retry,
     command_preview,
     command_suggest,
@@ -1771,6 +1772,8 @@ def test_help_mentions_command_groups() -> None:
     assert "/pipeline <idea>       alias of /idea" in msg.sent[-1]
     assert "/preview <idea>        preview Brain reasoning" in msg.sent[-1]
     assert "/suggest <idea>        show architecture suggestions" in msg.sent[-1]
+    assert "/plan <idea>           build development plan from an idea" in msg.sent[-1]
+    assert "/plan                  build next development plan for current project" in msg.sent[-1]
     assert "/add_module <name>     add module to current project" in msg.sent[-1]
     assert "/add_entity <name>     add entity metadata" in msg.sent[-1]
     assert "/add_field <E> <f:t>   add entity field metadata" in msg.sent[-1]
@@ -2773,6 +2776,54 @@ def test_next_command_without_selected_project_shows_error(monkeypatch) -> None:
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: None)
     msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    assert msg.sent[-1] == "No project selected\n\nRun:\n/projects\n/use <n>"
+
+
+def test_plan_command_from_idea_includes_phases() -> None:
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_plan(update, DummyContext(args=["defect", "tracker", "dashboard"])))
+    out = msg.sent[-1]
+    assert "Development plan" in out
+    assert "Phase 1 - Core entities" in out
+    assert "Phase 2 - Core fields" in out
+    assert "Phase 3 - APIs" in out
+    assert "Phase 4 - Frontend" in out
+
+
+def test_plan_command_from_current_project_works_and_limits_steps(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    entities = [{"name": f"Entity{i}", "fields": [{"name": "name", "type": "string"}]} for i in range(20)]
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "domains": ["tasks"],
+                "template": "fullstack-ddd",
+                "modules": ["auth", "dashboard"],
+                "entities": entities,
+                "api_endpoints": [],
+                "frontend_pages": [],
+                "reason_summary": "demo",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_plan(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Development plan" in out
+    numbered = [line for line in out.splitlines() if line.startswith(tuple(str(i) + "." for i in range(1, 20)))]
+    assert len(numbered) <= 15
+
+
+def test_plan_command_without_project_shows_error(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: None)
+    msg = DummyMessage()
+    asyncio.run(command_plan(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     assert msg.sent[-1] == "No project selected\n\nRun:\n/projects\n/use <n>"
 
 

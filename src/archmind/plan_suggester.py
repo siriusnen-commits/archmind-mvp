@@ -1,0 +1,125 @@
+from __future__ import annotations
+
+import re
+from typing import Any
+
+
+def _entity_slug(name: str) -> str:
+    value = str(name or "").strip()
+    if not value:
+        return ""
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", value).lower()
+
+
+def _limit_steps(phases: list[dict[str, Any]], max_steps: int = 15) -> list[dict[str, Any]]:
+    used = 0
+    out: list[dict[str, Any]] = []
+    for phase in phases:
+        title = str(phase.get("title") or "").strip()
+        steps = [str(x).strip() for x in (phase.get("steps") or []) if str(x).strip()]
+        if not title or not steps:
+            continue
+        remain = max_steps - used
+        if remain <= 0:
+            break
+        selected = steps[:remain]
+        if selected:
+            out.append({"title": title, "steps": selected})
+            used += len(selected)
+    return out
+
+
+def build_plan_from_suggestion(idea: str, reasoning: dict[str, Any], suggestion: dict[str, Any]) -> dict[str, Any]:
+    del idea
+    del reasoning
+    entities = suggestion.get("entities") if isinstance(suggestion.get("entities"), list) else []
+    apis = [str(x).strip() for x in (suggestion.get("api_endpoints") or []) if str(x).strip()]
+    pages = [str(x).strip().strip("/") for x in (suggestion.get("frontend_pages") or []) if str(x).strip()]
+
+    entity_steps: list[str] = []
+    field_steps: list[str] = []
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        name = str(entity.get("name") or "").strip()
+        if not name:
+            continue
+        entity_steps.append(f"/add_entity {name}")
+        fields = entity.get("fields") if isinstance(entity.get("fields"), list) else []
+        for field in fields:
+            if not isinstance(field, dict):
+                continue
+            fname = str(field.get("name") or "").strip()
+            ftype = str(field.get("type") or "").strip().lower()
+            if fname and ftype:
+                field_steps.append(f"/add_field {name} {fname}:{ftype}")
+
+    api_steps = [f"/add_api {endpoint}" for endpoint in apis]
+    page_steps = [f"/add_page {page}" for page in pages]
+
+    phases = [
+        {"title": "Core entities", "steps": entity_steps},
+        {"title": "Core fields", "steps": field_steps},
+        {"title": "APIs", "steps": api_steps},
+        {"title": "Frontend", "steps": page_steps},
+    ]
+    return {"phases": _limit_steps(phases, max_steps=15)}
+
+
+def build_plan_from_project_spec(spec: dict[str, Any]) -> dict[str, Any]:
+    modules = [str(x).strip().lower() for x in (spec.get("modules") or []) if str(x).strip()]
+    entities = spec.get("entities") if isinstance(spec.get("entities"), list) else []
+    api_endpoints = {str(x).strip() for x in (spec.get("api_endpoints") or []) if str(x).strip()}
+    pages = {str(x).strip().strip("/") for x in (spec.get("frontend_pages") or []) if str(x).strip()}
+    shape = str(spec.get("shape") or "").strip().lower()
+    frontend_enabled = shape == "fullstack" or bool(pages)
+
+    names: list[str] = []
+    for entity in entities:
+        if isinstance(entity, dict):
+            name = str(entity.get("name") or "").strip()
+            if name:
+                names.append(name)
+    lower_names = {n.lower() for n in names}
+
+    phase1: list[str] = []
+    if "auth" in modules and "user" not in lower_names:
+        phase1.append("/add_entity User")
+
+    phase2: list[str] = []
+    phase3: list[str] = []
+    phase4: list[str] = []
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        name = str(entity.get("name") or "").strip()
+        if not name:
+            continue
+        fields = entity.get("fields") if isinstance(entity.get("fields"), list) else []
+        if len(fields) <= 1:
+            phase2.append(f"/add_field {name} description:string")
+
+        slug = _entity_slug(name)
+        plural = f"{slug}s"
+        if slug and f"GET /{plural}/{{id}}" not in api_endpoints:
+            phase3.append(f"/add_api GET /{plural}/{{id}}")
+
+        if frontend_enabled and slug:
+            list_page = f"{plural}/list"
+            detail_page = f"{plural}/detail"
+            if list_page not in pages:
+                phase4.append(f"/add_page {list_page}")
+            if detail_page not in pages:
+                phase4.append(f"/add_page {detail_page}")
+
+    if "dashboard" in modules and "dashboard/home" not in pages:
+        phase4.append("/add_page dashboard/home")
+
+    phases = [
+        {"title": "Core entities", "steps": phase1},
+        {"title": "Core fields", "steps": phase2},
+        {"title": "APIs", "steps": phase3},
+        {"title": "Frontend", "steps": phase4},
+    ]
+    return {"phases": _limit_steps(phases, max_steps=15)}
+

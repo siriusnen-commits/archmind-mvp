@@ -26,6 +26,7 @@ from archmind.generator import (
 )
 from archmind.idea_normalizer import normalize_idea
 from archmind.next_suggester import suggest_next_commands
+from archmind.plan_suggester import build_plan_from_project_spec, build_plan_from_suggestion
 from archmind.project_type import detect_project_type, normalize_project_type
 from archmind.spec_suggester import suggest_project_spec
 from archmind.state import derive_task_label_from_failure_signature, load_state, set_agent_state, update_after_deploy
@@ -364,6 +365,8 @@ def _help_text() -> str:
         "/pipeline <idea>       alias of /idea\n"
         "/preview <idea>        preview Brain reasoning\n"
         "/suggest <idea>        show architecture suggestions\n"
+        "/plan <idea>           build development plan from an idea\n"
+        "/plan                  build next development plan for current project\n"
         "/add_module <name>     add module to current project\n"
         "/add_entity <name>     add entity metadata\n"
         "/add_field <E> <f:t>   add entity field metadata\n"
@@ -2300,6 +2303,54 @@ async def command_suggest(update: Any, context: Any) -> None:
     await update.message.reply_text(_truncate_message(message))
 
 
+def _format_plan_message(plan: dict[str, Any]) -> str:
+    phases = plan.get("phases") if isinstance(plan.get("phases"), list) else []
+    if not phases:
+        return "No plan suggestions available.\n\nNext:\n- /inspect\n- /next"
+    lines = ["Development plan", ""]
+    step_no = 1
+    for phase in phases:
+        if not isinstance(phase, dict):
+            continue
+        title = str(phase.get("title") or "").strip()
+        steps = [str(x).strip() for x in (phase.get("steps") or []) if str(x).strip()]
+        if not title or not steps:
+            continue
+        lines.append(f"Phase {len([x for x in lines if str(x).startswith('Phase ')]) + 1} - {title}")
+        for step in steps:
+            lines.append(f"{step_no}. {step}")
+            step_no += 1
+        lines.append("")
+    if step_no == 1:
+        return "No plan suggestions available.\n\nNext:\n- /inspect\n- /next"
+    lines += ["Next:", "- run suggested commands", "- /inspect"]
+    return "\n".join(lines)
+
+
+async def command_plan(update: Any, context: Any) -> None:
+    args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
+    if args:
+        idea = " ".join(args).strip()
+        normalized_payload = normalize_idea(idea)
+        normalized = str(normalized_payload.get("normalized") or idea)
+        reasoning = reason_architecture_from_idea(normalized)
+        suggestion = suggest_project_spec(normalized, reasoning)
+        plan = build_plan_from_suggestion(normalized, reasoning, suggestion)
+        await update.message.reply_text(_truncate_message(_format_plan_message(plan)))
+        return
+
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text("No project selected\n\nRun:\n/projects\n/use <n>")
+        return
+    spec_path = project_path / ".archmind" / "project_spec.json"
+    raw = _load_json(spec_path) or {}
+    if not raw:
+        raw, _ = _read_or_init_project_spec(project_path)
+    plan = build_plan_from_project_spec(raw)
+    await update.message.reply_text(_truncate_message(_format_plan_message(plan)))
+
+
 async def command_continue(update: Any, context: Any) -> None:
     await _handle_continue(update, context)
 
@@ -3555,6 +3606,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("pipeline", command_pipeline))
     app.add_handler(CommandHandler("preview", command_preview))
     app.add_handler(CommandHandler("suggest", command_suggest))
+    app.add_handler(CommandHandler("plan", command_plan))
     app.add_handler(CommandHandler("add_module", command_add_module))
     app.add_handler(CommandHandler("add_entity", command_add_entity))
     app.add_handler(CommandHandler("add_field", command_add_field))
