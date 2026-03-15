@@ -2169,6 +2169,78 @@ async def command_inspect(update: Any, context: Any) -> None:
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 
 
+def _build_selected_project_summary(project_path: Path) -> str:
+    archmind_dir = project_path / ".archmind"
+    spec = _load_json(archmind_dir / "project_spec.json") or {}
+    reasoning = _load_json(archmind_dir / "architecture_reasoning.json") or {}
+    state = _load_json(archmind_dir / "state.json") or {}
+
+    shape = str(spec.get("shape") or reasoning.get("app_shape") or "unknown").strip() or "unknown"
+    template = str(spec.get("template") or reasoning.get("recommended_template") or "unknown").strip() or "unknown"
+    domains = [str(x) for x in (spec.get("domains") or reasoning.get("domains") or []) if str(x).strip()]
+    modules = [str(x) for x in (spec.get("modules") or reasoning.get("modules") or []) if str(x).strip()]
+
+    lines = [
+        f"Selected project: {project_path.name}",
+        "",
+        "Shape:",
+        shape,
+        "",
+        "Template:",
+        template,
+    ]
+
+    if domains:
+        lines += ["", "Domains:", ", ".join(domains)]
+    if modules:
+        lines += ["", "Modules:", ", ".join(modules)]
+
+    runtime_backend = ""
+    runtime_frontend = ""
+    backend_url = str(state.get("backend_deploy_url") or "").strip()
+    frontend_url = str(state.get("frontend_deploy_url") or "").strip()
+    try:
+        from archmind.deploy import get_local_runtime_status
+
+        runtime_payload = get_local_runtime_status(project_path)
+        backend = runtime_payload.get("backend") if isinstance(runtime_payload, dict) else {}
+        frontend = runtime_payload.get("frontend") if isinstance(runtime_payload, dict) else {}
+        if isinstance(backend, dict):
+            runtime_backend = "RUNNING" if str(backend.get("status") or "").strip().upper() == "RUNNING" else "STOPPED"
+            backend_url = str(backend.get("url") or backend_url).strip()
+        if isinstance(frontend, dict):
+            runtime_frontend = "RUNNING" if str(frontend.get("status") or "").strip().upper() == "RUNNING" else "STOPPED"
+            frontend_url = str(frontend.get("url") or frontend_url).strip()
+    except Exception:
+        if state.get("backend_pid") is not None:
+            runtime_backend = "RUNNING"
+        if state.get("frontend_pid") is not None:
+            runtime_frontend = "RUNNING"
+
+    if runtime_backend or runtime_frontend:
+        lines += ["", "Runtime:"]
+        if runtime_backend:
+            lines.append(f"Backend: {runtime_backend}")
+        if runtime_frontend:
+            lines.append(f"Frontend: {runtime_frontend}")
+
+    if backend_url:
+        lines += ["", "Backend URL:", backend_url]
+    if frontend_url:
+        lines += ["", "Frontend URL:", frontend_url]
+
+    deploy_target = str(state.get("deploy_target") or state.get("auto_deploy_target") or "").strip()
+    deploy_status = str(state.get("last_deploy_status") or state.get("auto_deploy_status") or "").strip().upper()
+    if deploy_target or deploy_status:
+        lines += ["", "Deploy:"]
+        if deploy_target:
+            lines.append(f"Target: {deploy_target}")
+        if deploy_status:
+            lines.append(f"Status: {deploy_status}")
+
+    return "\n".join(lines)
+
+
 async def command_use(update: Any, context: Any) -> None:
     args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
     if not args:
@@ -2187,7 +2259,7 @@ async def command_use(update: Any, context: Any) -> None:
 
     set_current_project(target)
     save_last_project_path(target)
-    await update.message.reply_text(f"selected current project: {target.name}")
+    await update.message.reply_text(_truncate_message(_build_selected_project_summary(target), limit=1500))
 
 
 async def command_projects(update: Any, context: Any) -> None:

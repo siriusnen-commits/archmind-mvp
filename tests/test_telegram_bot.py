@@ -1251,11 +1251,24 @@ def test_use_by_index_works(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(root))
     for name in ("20260312_p1", "20260312_p2"):
         project = root / name
-        (project / ".archmind").mkdir(parents=True, exist_ok=True)
+        arch = project / ".archmind"
+        arch.mkdir(parents=True, exist_ok=True)
+        (arch / "project_spec.json").write_text(
+            json.dumps({"shape": "backend", "template": "fastapi", "domains": ["notes"], "modules": ["db"]}),
+            encoding="utf-8",
+        )
         (project / ".archmind" / "state.json").write_text(
             json.dumps({"last_status": "NOT_DONE", "project_type": "backend-api", "effective_template": "fastapi"}),
             encoding="utf-8",
         )
+
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
 
     msg = DummyMessage()
     update = DummyUpdate(message=msg, effective_chat=DummyChat())
@@ -1263,7 +1276,9 @@ def test_use_by_index_works(monkeypatch, tmp_path: Path) -> None:
     asyncio.run(command_use(update, ctx))
 
     assert msg.sent
-    assert "selected current project:" in msg.sent[-1]
+    assert "Selected project:" in msg.sent[-1]
+    assert "Shape:" in msg.sent[-1]
+    assert "Template:" in msg.sent[-1]
     assert get_current_project() is not None
 
 
@@ -1272,10 +1287,39 @@ def test_use_by_project_name_works(monkeypatch, tmp_path: Path) -> None:
     root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(root))
     project = root / "20260312_named_proj"
-    (project / ".archmind").mkdir(parents=True, exist_ok=True)
-    (project / ".archmind" / "state.json").write_text(
-        json.dumps({"last_status": "DONE", "project_type": "frontend-web", "effective_template": "nextjs"}),
+    arch = project / ".archmind"
+    arch.mkdir(parents=True, exist_ok=True)
+    (arch / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "domains": ["tasks", "teams"],
+                "modules": ["auth", "db", "dashboard"],
+            }
+        ),
         encoding="utf-8",
+    )
+    (project / ".archmind" / "state.json").write_text(
+        json.dumps(
+            {
+                "last_status": "DONE",
+                "project_type": "frontend-web",
+                "effective_template": "nextjs",
+                "backend_deploy_url": "http://127.0.0.1:8011",
+                "frontend_deploy_url": "http://127.0.0.1:3011",
+                "deploy_target": "local",
+                "last_deploy_status": "SUCCESS",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "RUNNING", "pid": 12001, "url": "http://127.0.0.1:8011"},
+            "frontend": {"status": "RUNNING", "pid": 13001, "url": "http://127.0.0.1:3011"},
+        },
     )
 
     msg = DummyMessage()
@@ -1284,8 +1328,52 @@ def test_use_by_project_name_works(monkeypatch, tmp_path: Path) -> None:
     asyncio.run(command_use(update, ctx))
 
     assert msg.sent
-    assert "selected current project: 20260312_named_proj" in msg.sent[-1]
+    out = msg.sent[-1]
+    assert "Selected project: 20260312_named_proj" in out
+    assert "Shape:" in out
+    assert "Template:" in out
+    assert "Domains:" in out
+    assert "tasks, teams" in out
+    assert "Modules:" in out
+    assert "auth, db, dashboard" in out
+    assert "Runtime:" in out
+    assert "Backend: RUNNING" in out
+    assert "Frontend: RUNNING" in out
+    assert "Backend URL:" in out
+    assert "Frontend URL:" in out
+    assert "Deploy:" in out
+    assert "Target: local" in out
+    assert "Status: SUCCESS" in out
     assert get_current_project() == project.resolve()
+
+
+def test_use_summary_shows_backend_running_frontend_stopped(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(root))
+    project = root / "worker_api_proj"
+    arch = project / ".archmind"
+    arch.mkdir(parents=True, exist_ok=True)
+    (arch / "project_spec.json").write_text(
+        json.dumps({"shape": "backend", "template": "worker-api", "modules": ["worker"]}),
+        encoding="utf-8",
+    )
+    (arch / "state.json").write_text(json.dumps({"last_status": "DONE"}), encoding="utf-8")
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "RUNNING", "pid": 22001, "url": "http://127.0.0.1:8050"},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_use(update, DummyContext(args=["worker_api_proj"])))
+    out = msg.sent[-1]
+    assert "Runtime:" in out
+    assert "Backend: RUNNING" in out
+    assert "Frontend: STOPPED" in out
 
 
 def test_invalid_use_returns_error(monkeypatch, tmp_path: Path) -> None:
