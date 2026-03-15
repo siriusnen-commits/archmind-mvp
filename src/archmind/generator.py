@@ -651,11 +651,11 @@ def _render_entity_router_content(slug: str, plural: str) -> str:
     )
 
 
-def _ensure_main_router_registration(main_py: Path, entity_slug: str, generated: list[str], project_dir: Path) -> None:
+def _ensure_named_router_registration(main_py: Path, module_name: str, router_name: str, generated: list[str], project_dir: Path) -> None:
     if not main_py.exists():
         return
-    import_line = f"from app.routers.{entity_slug} import router as {entity_slug}_router"
-    include_line = f"app.include_router({entity_slug}_router)"
+    import_line = f"from app.routers.{module_name} import router as {router_name}"
+    include_line = f"app.include_router({router_name})"
     text = main_py.read_text(encoding="utf-8")
     changed = False
 
@@ -675,6 +675,10 @@ def _ensure_main_router_registration(main_py: Path, entity_slug: str, generated:
         rel = str(main_py.relative_to(project_dir)).replace("\\", "/")
         if rel not in generated:
             generated.append(rel)
+
+
+def _ensure_main_router_registration(main_py: Path, entity_slug: str, generated: list[str], project_dir: Path) -> None:
+    _ensure_named_router_registration(main_py, entity_slug, f"{entity_slug}_router", generated, project_dir)
 
 
 def apply_entity_scaffold(project_dir: Path, entity_name: str) -> list[str]:
@@ -713,6 +717,56 @@ def apply_entity_scaffold(project_dir: Path, entity_name: str) -> list[str]:
     _write_if_changed(routers_file, _render_entity_router_content(slug, plural), generated, project_dir)
 
     _ensure_main_router_registration(project_dir / "app" / "main.py", slug, generated, project_dir)
+    return generated
+
+
+def apply_api_scaffold(project_dir: Path, method: str, path: str) -> list[str]:
+    """
+    Create or update a shared custom router with explicit API endpoints.
+    Returns changed files. Backend-only check is enforced by structure presence.
+    """
+    if not _has_backend_structure(project_dir):
+        return []
+
+    method_up = str(method or "").strip().upper()
+    route_path = str(path or "").strip()
+    if not method_up or not route_path:
+        return []
+
+    router_file = project_dir / "app" / "routers" / "custom.py"
+    decorator = f'@router.{method_up.lower()}("{route_path}")'
+    safe = route_path.strip("/").replace("/", "_").replace("{", "").replace("}", "").replace("-", "_")
+    safe = re.sub(r"[^a-zA-Z0-9_]", "", safe) or "root"
+    fn_name = f"{method_up.lower()}_{safe}"
+    needs_id = "{id}" in route_path
+    signature = "(id: int)" if needs_id else "()"
+    response = f'{{"endpoint": "{method_up} {route_path}"}}'
+
+    content = (
+        "from fastapi import APIRouter\n\n"
+        'router = APIRouter(tags=["custom"])\n'
+    )
+    if router_file.exists():
+        content = router_file.read_text(encoding="utf-8")
+        if decorator in content:
+            generated: list[str] = []
+            _ensure_named_router_registration(project_dir / "app" / "main.py", "custom", "custom_router", generated, project_dir)
+            return generated
+        if content and not content.endswith("\n"):
+            content += "\n"
+    else:
+        router_file.parent.mkdir(parents=True, exist_ok=True)
+
+    content += (
+        "\n"
+        f"{decorator}\n"
+        f"def {fn_name}{signature}:\n"
+        f"    return {response}\n"
+    )
+
+    generated = []
+    _write_if_changed(router_file, content, generated, project_dir)
+    _ensure_named_router_registration(project_dir / "app" / "main.py", "custom", "custom_router", generated, project_dir)
     return generated
 
 
@@ -763,6 +817,47 @@ def apply_frontend_page_scaffold(project_dir: Path, entity_name: str) -> list[st
         + " Detail</h1>\n"
         "      <p>Detail page placeholder for "
         + class_name
+        + "</p>\n"
+        "    </div>\n"
+        "  );\n"
+        "}\n",
+        generated,
+        project_dir,
+    )
+    return generated
+
+
+def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
+    """
+    Create a frontend page placeholder from explicit page path (e.g., reports/list).
+    Returns generated files only; existing files are preserved.
+    """
+    app_root = _resolve_frontend_app_root(project_dir)
+    if app_root is None:
+        return []
+    rel = str(page_path or "").strip().strip("/")
+    if not rel or " " in rel:
+        return []
+    target = app_root / rel / "page.tsx"
+    segments = [seg for seg in rel.split("/") if seg]
+    if not segments:
+        return []
+    title = " ".join(seg.replace("-", " ").replace("_", " ").title() for seg in segments)
+    comp_name = "".join(seg.replace("-", " ").replace("_", " ").title().replace(" ", "") for seg in segments) + "Page"
+
+    generated: list[str] = []
+    _write_if_missing(
+        target,
+        "export default function "
+        + comp_name
+        + "() {\n"
+        "  return (\n"
+        "    <div>\n"
+        "      <h1>"
+        + title
+        + "</h1>\n"
+        "      <p>Page placeholder for "
+        + rel
         + "</p>\n"
         "    </div>\n"
         "  );\n"

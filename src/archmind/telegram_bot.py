@@ -16,10 +16,12 @@ from archmind.decision import decide_next_action, next_action_suggestions
 from archmind.failure import classify_failure
 from archmind.generator import (
     SUPPORTED_MODULES,
+    apply_api_scaffold,
     apply_entity_fields_to_scaffold,
     apply_entity_scaffold,
     apply_frontend_page_scaffold,
     apply_modules_to_project,
+    apply_page_scaffold,
     has_frontend_structure,
 )
 from archmind.idea_normalizer import normalize_idea
@@ -32,6 +34,7 @@ DEFAULT_BASE_DIR = Path.home() / "archmind-telegram-projects"
 DEFAULT_PROJECTS_DIR = Path.home() / "archmind-telegram-projects"
 DEFAULT_TEMPLATE = "fullstack-ddd"
 SUPPORTED_FIELD_TYPES = ("string", "int", "float", "bool", "datetime")
+SUPPORTED_API_METHODS = ("GET", "POST", "PATCH", "DELETE")
 
 
 @dataclass
@@ -362,6 +365,8 @@ def _help_text() -> str:
         "/add_module <name>     add module to current project\n"
         "/add_entity <name>     add entity metadata\n"
         "/add_field <E> <f:t>   add entity field metadata\n"
+        "/add_api <M> <path>    add API endpoint metadata\n"
+        "/add_page <path>       add frontend page metadata\n"
         "/projects              list projects\n"
         "/use <n>               select project\n"
         "/current               show selected project\n"
@@ -576,6 +581,14 @@ def _entity_endpoint_set(entity_name: str) -> list[str]:
 def _rebuild_api_endpoints(spec: dict[str, Any]) -> list[str]:
     endpoints: list[str] = []
     seen: set[str] = set()
+    existing = spec.get("api_endpoints")
+    if isinstance(existing, list):
+        for item in existing:
+            endpoint = str(item).strip()
+            if not endpoint or endpoint in seen:
+                continue
+            seen.add(endpoint)
+            endpoints.append(endpoint)
     for entity in _normalize_entities(spec.get("entities")):
         name = str(entity.get("name") or "").strip()
         for endpoint in _entity_endpoint_set(name):
@@ -599,6 +612,14 @@ def _entity_frontend_pages(entity_name: str) -> list[str]:
 def _rebuild_frontend_pages(spec: dict[str, Any]) -> list[str]:
     pages: list[str] = []
     seen: set[str] = set()
+    existing = spec.get("frontend_pages")
+    if isinstance(existing, list):
+        for item in existing:
+            page = str(item).strip().strip("/")
+            if not page or " " in page or page in seen:
+                continue
+            seen.add(page)
+            pages.append(page)
     for entity in _normalize_entities(spec.get("entities")):
         name = str(entity.get("name") or "").strip()
         for page in _entity_frontend_pages(name):
@@ -2731,6 +2752,120 @@ async def command_add_field(update: Any, context: Any) -> None:
     )
 
 
+async def command_add_api(update: Any, context: Any) -> None:
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text("No project selected. Use /projects then /use <n>.")
+        return
+
+    args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
+    if len(args) < 2:
+        await update.message.reply_text("Usage: /add_api <METHOD> <path>")
+        return
+
+    method = args[0].upper()
+    path = args[1].strip()
+    if method not in set(SUPPORTED_API_METHODS):
+        await update.message.reply_text(
+            "Unknown method: " + method + "\n\nAvailable methods:\n" + ", ".join(SUPPORTED_API_METHODS)
+        )
+        return
+    if not path.startswith("/") or " " in path:
+        await update.message.reply_text("Invalid path. Use /add_api <METHOD> /path")
+        return
+
+    endpoint = f"{method} {path}"
+    spec, spec_path = _read_or_init_project_spec(project_path)
+    current = [str(x).strip() for x in (spec.get("api_endpoints") or []) if str(x).strip()]
+    if endpoint in current:
+        await update.message.reply_text(
+            "API already exists\n\n"
+            "Project:\n"
+            f"{project_path.name}\n\n"
+            "Endpoint:\n"
+            f"{endpoint}"
+        )
+        return
+
+    spec["api_endpoints"] = current + [endpoint]
+    _rebuild_api_endpoints(spec)
+    evolution = _ensure_evolution_block(spec)
+    history = evolution.get("history") if isinstance(evolution.get("history"), list) else []
+    history.append({"action": "add_api", "method": method, "path": path})
+    evolution["history"] = history
+
+    apply_api_scaffold(project_path, method, path)
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
+    spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    await update.message.reply_text(
+        "API added\n\n"
+        "Project:\n"
+        f"{project_path.name}\n\n"
+        "Endpoint:\n"
+        f"{endpoint}\n\n"
+        "Next:\n"
+        "- /inspect\n"
+        "- /restart"
+    )
+
+
+async def command_add_page(update: Any, context: Any) -> None:
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text("No project selected. Use /projects then /use <n>.")
+        return
+
+    args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
+    if not args:
+        await update.message.reply_text("Usage: /add_page <path>")
+        return
+    page_path = args[0].strip().strip("/")
+    if not page_path or " " in page_path:
+        await update.message.reply_text("Invalid page path. Use /add_page reports/list")
+        return
+
+    spec, spec_path = _read_or_init_project_spec(project_path)
+    current = [str(x).strip().strip("/") for x in (spec.get("frontend_pages") or []) if str(x).strip()]
+    if page_path in current:
+        await update.message.reply_text(
+            "Page already exists\n\n"
+            "Project:\n"
+            f"{project_path.name}\n\n"
+            "Page:\n"
+            f"{page_path}"
+        )
+        return
+
+    spec["frontend_pages"] = current + [page_path]
+    _rebuild_frontend_pages(spec)
+    evolution = _ensure_evolution_block(spec)
+    history = evolution.get("history") if isinstance(evolution.get("history"), list) else []
+    history.append({"action": "add_page", "page": page_path})
+    evolution["history"] = history
+
+    generated = apply_page_scaffold(project_path, page_path)
+    frontend_exists = has_frontend_structure(project_path)
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
+    spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    lines = [
+        "Page added",
+        "",
+        "Project:",
+        project_path.name,
+        "",
+        "Page:",
+        page_path,
+    ]
+    if not frontend_exists:
+        lines += ["", "Frontend scaffold:", "SKIPPED (no frontend structure)"]
+    elif generated:
+        lines += ["", "Generated:"] + [f"- {item}" for item in generated]
+    lines += ["", "Next:", "- /inspect", "- /restart"]
+    await update.message.reply_text("\n".join(lines))
+
+
 async def command_use(update: Any, context: Any) -> None:
     args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
     if not args:
@@ -3248,6 +3383,8 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("add_module", command_add_module))
     app.add_handler(CommandHandler("add_entity", command_add_entity))
     app.add_handler(CommandHandler("add_field", command_add_field))
+    app.add_handler(CommandHandler("add_api", command_add_api))
+    app.add_handler(CommandHandler("add_page", command_add_page))
     app.add_handler(CommandHandler("continue", command_continue))
     app.add_handler(CommandHandler("fix", command_fix))
     app.add_handler(CommandHandler("retry", command_retry))

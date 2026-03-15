@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from archmind.generator import apply_entity_fields_to_scaffold, apply_entity_scaffold, apply_frontend_page_scaffold
+from archmind.generator import (
+    apply_api_scaffold,
+    apply_entity_fields_to_scaffold,
+    apply_entity_scaffold,
+    apply_frontend_page_scaffold,
+    apply_page_scaffold,
+)
 
 
 def test_apply_entity_scaffold_creates_backend_placeholder_files(tmp_path: Path) -> None:
@@ -123,3 +129,35 @@ def test_apply_frontend_page_scaffold_is_idempotent_and_skips_backend_only(tmp_p
     assert "app/tasks/page.tsx" in first
     assert "app/tasks/[id]/page.tsx" in first
     assert second == []
+
+
+def test_apply_api_scaffold_creates_custom_router_and_registers_main(tmp_path: Path) -> None:
+    project_dir = tmp_path / "backend_demo"
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\n\napp = FastAPI()\n", encoding="utf-8")
+
+    first = apply_api_scaffold(project_dir, "GET", "/reports")
+    second = apply_api_scaffold(project_dir, "GET", "/reports")
+    assert "app/routers/custom.py" in first
+    assert first.count("app/main.py") <= 1
+    assert second == []
+    custom_text = (project_dir / "app" / "routers" / "custom.py").read_text(encoding="utf-8")
+    assert '@router.get("/reports")' in custom_text
+    assert custom_text.count('@router.get("/reports")') == 1
+    main_text = (project_dir / "app" / "main.py").read_text(encoding="utf-8")
+    assert "from app.routers.custom import router as custom_router" in main_text
+    assert main_text.count("app.include_router(custom_router)") == 1
+
+
+def test_apply_page_scaffold_creates_explicit_page_and_is_idempotent(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_demo"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    first = apply_page_scaffold(project_dir, "reports/list")
+    second = apply_page_scaffold(project_dir, "reports/list")
+    assert "frontend/app/reports/list/page.tsx" in first
+    assert second == []
+    page_text = (project_dir / "frontend" / "app" / "reports" / "list" / "page.tsx").read_text(encoding="utf-8")
+    assert "Page placeholder for reports/list" in page_text

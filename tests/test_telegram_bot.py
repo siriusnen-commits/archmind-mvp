@@ -35,6 +35,8 @@ from archmind.telegram_bot import (
     command_add_module,
     command_add_entity,
     command_add_field,
+    command_add_api,
+    command_add_page,
     command_retry,
     command_preview,
     command_suggest,
@@ -1770,6 +1772,8 @@ def test_help_mentions_command_groups() -> None:
     assert "/add_module <name>     add module to current project" in msg.sent[-1]
     assert "/add_entity <name>     add entity metadata" in msg.sent[-1]
     assert "/add_field <E> <f:t>   add entity field metadata" in msg.sent[-1]
+    assert "/add_api <M> <path>    add API endpoint metadata" in msg.sent[-1]
+    assert "/add_page <path>       add frontend page metadata" in msg.sent[-1]
     assert "/current               show selected project" in msg.sent[-1]
     assert "/state                 show raw pipeline state" in msg.sent[-1]
     assert "PIPELINE CONTROL" in msg.sent[-1]
@@ -2356,6 +2360,197 @@ def test_add_field_unknown_type_shows_available_types(tmp_path: Path, monkeypatc
     assert "Unknown field type: text" in out
     assert "Available types:" in out
     assert "string, int, float, bool, datetime" in out
+
+
+def test_add_api_updates_spec_and_generates_custom_router(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\n\napp = FastAPI()\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "domains": ["tasks"],
+                "template": "fastapi",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+                "reason_summary": "task api",
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_add_api(update, DummyContext(args=["GET", "/reports"])))
+    out = msg.sent[-1]
+    assert "API added" in out
+    assert "Endpoint:\nGET /reports" in out
+
+    payload = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
+    assert "GET /reports" in (payload.get("api_endpoints") or [])
+    assert payload.get("evolution", {}).get("history", [])[-1] == {"action": "add_api", "method": "GET", "path": "/reports"}
+
+    custom_text = (project_dir / "app" / "routers" / "custom.py").read_text(encoding="utf-8")
+    assert '@router.get("/reports")' in custom_text
+    main_text = (project_dir / "app" / "main.py").read_text(encoding="utf-8")
+    assert "from app.routers.custom import router as custom_router" in main_text
+    assert "app.include_router(custom_router)" in main_text
+
+
+def test_add_api_prevents_duplicate_and_invalid_method(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "domains": ["tasks"],
+                "template": "fastapi",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": ["GET /reports"],
+                "frontend_pages": [],
+                "reason_summary": "task api",
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_add_api(update, DummyContext(args=["GET", "/reports"])))
+    assert "API already exists" in msg.sent[-1]
+
+    msg2 = DummyMessage()
+    update2 = DummyUpdate(message=msg2, effective_chat=DummyChat())
+    asyncio.run(command_add_api(update2, DummyContext(args=["PUT", "/reports"])))
+    assert "Unknown method: PUT" in msg2.sent[-1]
+    assert "GET, POST, PATCH, DELETE" in msg2.sent[-1]
+
+
+def test_add_page_updates_spec_and_generates_frontend_page(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "domains": ["tasks"],
+                "template": "fullstack-ddd",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+                "reason_summary": "task app",
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_add_page(update, DummyContext(args=["reports/list"])))
+    out = msg.sent[-1]
+    assert "Page added" in out
+    assert "Page:\nreports/list" in out
+    assert "- frontend/app/reports/list/page.tsx" in out
+
+    payload = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
+    assert "reports/list" in (payload.get("frontend_pages") or [])
+    assert payload.get("evolution", {}).get("history", [])[-1] == {"action": "add_page", "page": "reports/list"}
+    assert (project_dir / "frontend" / "app" / "reports" / "list" / "page.tsx").exists()
+
+
+def test_add_page_skips_frontend_scaffold_for_backend_only_and_prevents_duplicate(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "worker_api_demo"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "domains": ["tasks"],
+                "template": "worker-api",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": ["reports/list"],
+                "reason_summary": "worker api",
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_add_page(update, DummyContext(args=["reports/list"])))
+    assert "Page already exists" in msg.sent[-1]
+
+    msg2 = DummyMessage()
+    update2 = DummyUpdate(message=msg2, effective_chat=DummyChat())
+    asyncio.run(command_add_page(update2, DummyContext(args=["admin/overview"])))
+    out = msg2.sent[-1]
+    assert "Frontend scaffold:" in out
+    assert "SKIPPED (no frontend structure)" in out
+
+
+def test_inspect_reflects_explicitly_added_api_and_page(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\n\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "domains": ["tasks"],
+                "template": "fullstack-ddd",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+                "reason_summary": "demo",
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    update1 = DummyUpdate(message=DummyMessage(), effective_chat=DummyChat())
+    asyncio.run(command_add_api(update1, DummyContext(args=["GET", "/healthz/custom"])))
+    update2 = DummyUpdate(message=DummyMessage(), effective_chat=DummyChat())
+    asyncio.run(command_add_page(update2, DummyContext(args=["reports/list"])))
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_inspect(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "- GET /healthz/custom" in out
+    assert "- reports/list" in out
 
 
 def test_help_topic_idea() -> None:
