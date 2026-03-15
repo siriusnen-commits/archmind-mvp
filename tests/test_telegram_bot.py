@@ -33,6 +33,7 @@ from archmind.telegram_bot import (
     command_help,
     command_inspect,
     command_add_module,
+    command_add_entity,
     command_retry,
     command_preview,
     command_suggest,
@@ -1766,6 +1767,7 @@ def test_help_mentions_command_groups() -> None:
     assert "/preview <idea>        preview Brain reasoning" in msg.sent[-1]
     assert "/suggest <idea>        show architecture suggestions" in msg.sent[-1]
     assert "/add_module <name>     add module to current project" in msg.sent[-1]
+    assert "/add_entity <name>     add entity metadata" in msg.sent[-1]
     assert "/current               show selected project" in msg.sent[-1]
     assert "/state                 show raw pipeline state" in msg.sent[-1]
     assert "PIPELINE CONTROL" in msg.sent[-1]
@@ -1841,6 +1843,7 @@ def test_inspect_command_summarizes_project_spec_reasoning_and_state(tmp_path: P
                 "domains": ["tasks", "teams"],
                 "template": "fullstack-ddd",
                 "modules": ["auth", "db", "dashboard"],
+                "entities": [{"name": "Task", "fields": []}],
                 "reason_summary": "fullstack app for tasks, teams with auth, db, dashboard",
                 "evolution": {"version": 1, "added_modules": ["auth"], "history": [{"action": "add_module", "module": "auth"}]},
             }
@@ -1885,6 +1888,8 @@ def test_inspect_command_summarizes_project_spec_reasoning_and_state(tmp_path: P
     assert "Template:" in out
     assert "Domains:" in out
     assert "Modules:" in out
+    assert "Entities:" in out
+    assert "Task" in out
     assert "Reasoning:" in out
     assert "Evolution:" in out
     assert "Version: 1" in out
@@ -1996,6 +2001,72 @@ def test_add_module_unknown_module_shows_available_list(tmp_path: Path, monkeypa
     assert "Unknown module: cache" in out
     assert "Available modules:" in out
     assert "auth, db, dashboard, worker, file-upload" in out
+
+
+def test_add_entity_updates_spec_and_evolution_history(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "domains": ["tasks"],
+                "template": "fullstack-ddd",
+                "modules": ["db"],
+                "entities": [],
+                "reason_summary": "task tracker",
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_add_entity(update, DummyContext(args=["task"])))
+
+    out = msg.sent[-1]
+    assert "Entity added" in out
+    assert "Entity:\nTask" in out
+    assert "Entities:\nTask" in out
+
+    payload = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
+    assert payload.get("entities") == [{"name": "Task", "fields": []}]
+    assert payload.get("evolution", {}).get("history", [])[-1] == {"action": "add_entity", "entity": "Task"}
+
+
+def test_add_entity_prevents_duplicate_case_insensitive(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "domains": ["tasks"],
+                "template": "fullstack-ddd",
+                "modules": [],
+                "entities": [{"name": "Task", "fields": []}],
+                "reason_summary": "task tracker",
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_add_entity(update, DummyContext(args=["task"])))
+
+    out = msg.sent[-1]
+    assert "Entity already exists" in out
+    assert "Entity:\nTask" in out
+
+    payload = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
+    assert payload.get("entities") == [{"name": "Task", "fields": []}]
 
 
 def test_help_topic_idea() -> None:

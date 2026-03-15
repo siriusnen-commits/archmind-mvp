@@ -352,6 +352,7 @@ def _help_text() -> str:
         "/preview <idea>        preview Brain reasoning\n"
         "/suggest <idea>        show architecture suggestions\n"
         "/add_module <name>     add module to current project\n"
+        "/add_entity <name>     add entity metadata\n"
         "/projects              list projects\n"
         "/use <n>               select project\n"
         "/current               show selected project\n"
@@ -446,6 +447,41 @@ def _ordered_modules(values: list[str]) -> list[str]:
     return ordered
 
 
+def _normalize_entity_name(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return text[0].upper() + text[1:]
+
+
+def _normalize_entities(values: Any) -> list[dict[str, Any]]:
+    if not isinstance(values, list):
+        return []
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in values:
+        name = ""
+        fields: list[Any] = []
+        if isinstance(item, dict):
+            name = _normalize_entity_name(str(item.get("name") or ""))
+            fields_raw = item.get("fields")
+            fields = fields_raw if isinstance(fields_raw, list) else []
+        elif isinstance(item, str):
+            name = _normalize_entity_name(item)
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append({"name": name, "fields": fields})
+    return normalized
+
+
+def _entity_names(entities: Any) -> list[str]:
+    return [str(item.get("name")) for item in _normalize_entities(entities) if str(item.get("name") or "").strip()]
+
+
 def _ensure_evolution_block(spec: dict[str, Any]) -> dict[str, Any]:
     evolution_raw = spec.get("evolution")
     evolution = evolution_raw if isinstance(evolution_raw, dict) else {}
@@ -478,8 +514,7 @@ def _read_or_init_project_spec(project_path: Path) -> tuple[dict[str, Any], Path
     spec["modules"] = _ordered_modules([str(x) for x in (spec.get("modules") or [])])
     if "reason_summary" not in spec:
         spec["reason_summary"] = str(reasoning.get("reason_summary") or "")
-    if "entities" not in spec or not isinstance(spec.get("entities"), list):
-        spec["entities"] = []
+    spec["entities"] = _normalize_entities(spec.get("entities"))
     if "api_endpoints" not in spec or not isinstance(spec.get("api_endpoints"), list):
         spec["api_endpoints"] = []
     if "frontend_pages" not in spec or not isinstance(spec.get("frontend_pages"), list):
@@ -2128,6 +2163,7 @@ async def command_inspect(update: Any, context: Any) -> None:
     template = str(spec.get("template") or reasoning.get("recommended_template") or "unknown").strip()
     domains = [str(x) for x in (spec.get("domains") or reasoning.get("domains") or []) if str(x).strip()]
     modules = [str(x) for x in (spec.get("modules") or reasoning.get("modules") or []) if str(x).strip()]
+    entities = _entity_names(spec.get("entities"))
     reason_summary = str(spec.get("reason_summary") or reasoning.get("reason_summary") or "").strip()
     evolution = spec.get("evolution") if isinstance(spec.get("evolution"), dict) else {}
     evolution_version = int(evolution.get("version") or 1) if evolution else 1
@@ -2182,6 +2218,8 @@ async def command_inspect(update: Any, context: Any) -> None:
         "Modules:",
         ", ".join(modules) if modules else "(none)",
     ]
+    if entities:
+        lines += ["", "Entities:", ", ".join(entities)]
     if reason_summary:
         lines += ["", "Reasoning:", reason_summary]
     if evolution_added:
@@ -2377,6 +2415,58 @@ async def command_add_module(update: Any, context: Any) -> None:
         f"{module_name}\n\n"
         "Modules:\n"
         f"{', '.join(modules)}"
+    )
+
+
+async def command_add_entity(update: Any, context: Any) -> None:
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text("No project selected. Use /projects then /use <n>.")
+        return
+
+    args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
+    if not args:
+        await update.message.reply_text("Usage: /add_entity <name>")
+        return
+
+    entity_name = _normalize_entity_name(args[0])
+    if not entity_name:
+        await update.message.reply_text("Usage: /add_entity <name>")
+        return
+
+    spec, spec_path = _read_or_init_project_spec(project_path)
+    entities = _normalize_entities(spec.get("entities"))
+    entity_keys = {str(item.get("name") or "").strip().lower() for item in entities}
+    if entity_name.lower() in entity_keys:
+        await update.message.reply_text(
+            "Entity already exists\n\n"
+            "Project:\n"
+            f"{project_path.name}\n\n"
+            "Entity:\n"
+            f"{entity_name}"
+        )
+        return
+
+    entities.append({"name": entity_name, "fields": []})
+    spec["entities"] = _normalize_entities(entities)
+    evolution = _ensure_evolution_block(spec)
+    history = evolution.get("history") if isinstance(evolution.get("history"), list) else []
+    history.append({"action": "add_entity", "entity": entity_name})
+    evolution["history"] = history
+
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
+    spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    await update.message.reply_text(
+        "Entity added\n\n"
+        "Project:\n"
+        f"{project_path.name}\n\n"
+        "Entity:\n"
+        f"{entity_name}\n\n"
+        "Entities:\n"
+        f"{', '.join(_entity_names(spec.get('entities')))}\n\n"
+        "Next:\n"
+        "- /inspect"
     )
 
 
@@ -2895,6 +2985,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("preview", command_preview))
     app.add_handler(CommandHandler("suggest", command_suggest))
     app.add_handler(CommandHandler("add_module", command_add_module))
+    app.add_handler(CommandHandler("add_entity", command_add_entity))
     app.add_handler(CommandHandler("continue", command_continue))
     app.add_handler(CommandHandler("fix", command_fix))
     app.add_handler(CommandHandler("retry", command_retry))
