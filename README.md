@@ -1,13 +1,35 @@
-# ArchMind v0.5.0
+# ArchMind v0.6.0
 
-ArchMind converts natural language ideas into runnable software projects.
+ArchMind is an AI-driven architecture and development workflow engine.
 
-Key capabilities:
-- Brain-based architecture reasoning
-- module-aware project generation
-- multilingual ideas
-- local runtime execution
-- automatic project scaffolding
+Key workflow:
+- design from idea
+- suggest project structure
+- build development plan
+- apply development plan
+- evolve the project
+- inspect and continue with next suggestions
+
+Core command set:
+- `/design <idea>`
+- `/suggest <idea>`
+- `/plan <idea>`
+- `/apply_plan`
+- `/inspect`
+- `/next`
+
+Example workflow:
+1. `/design tv hardware qa defect tracker with dashboard, device management, test run history, and team collaboration`
+2. `/suggest tv hardware qa defect tracker with dashboard, device management, test run history, and team collaboration`
+3. `/idea_local tv hardware qa defect tracker with dashboard, device management, test run history, and team collaboration`
+4. `/plan`
+5. `/apply_plan`
+6. `/inspect`
+7. `/next`
+
+Release summary:
+- v0.5: project generation and evolution primitives
+- v0.6: architecture design documents, development planning, automatic plan execution, stronger loop guidance
 
 ## Real-world validation example
 
