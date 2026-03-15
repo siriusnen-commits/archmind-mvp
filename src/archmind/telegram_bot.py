@@ -14,6 +14,7 @@ from typing import Any, Optional
 from archmind.brain import reason_architecture_from_idea
 from archmind.decision import decide_next_action, next_action_suggestions
 from archmind.failure import classify_failure
+from archmind.generator import SUPPORTED_MODULES, apply_modules_to_project
 from archmind.idea_normalizer import normalize_idea
 from archmind.project_type import detect_project_type, normalize_project_type
 from archmind.state import derive_task_label_from_failure_signature, load_state, set_agent_state, update_after_deploy
@@ -350,6 +351,7 @@ def _help_text() -> str:
         "/pipeline <idea>       alias of /idea\n"
         "/preview <idea>        preview Brain reasoning\n"
         "/suggest <idea>        show architecture suggestions\n"
+        "/add_module <name>     add module to current project\n"
         "/projects              list projects\n"
         "/use <n>               select project\n"
         "/current               show selected project\n"
@@ -427,6 +429,63 @@ def _load_json(path: Path) -> Optional[dict[str, Any]]:
     except Exception:
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _ordered_modules(values: list[str]) -> list[str]:
+    requested = [str(item).strip().lower() for item in values if str(item).strip()]
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for mod in SUPPORTED_MODULES:
+        if mod in requested and mod not in seen:
+            seen.add(mod)
+            ordered.append(mod)
+    for mod in requested:
+        if mod not in seen:
+            seen.add(mod)
+            ordered.append(mod)
+    return ordered
+
+
+def _ensure_evolution_block(spec: dict[str, Any]) -> dict[str, Any]:
+    evolution_raw = spec.get("evolution")
+    evolution = evolution_raw if isinstance(evolution_raw, dict) else {}
+    version = int(evolution.get("version") or 1)
+    added_modules = evolution.get("added_modules")
+    history = evolution.get("history")
+    evolution["version"] = version if version > 0 else 1
+    evolution["added_modules"] = _ordered_modules(added_modules if isinstance(added_modules, list) else [])
+    evolution["history"] = history if isinstance(history, list) else []
+    spec["evolution"] = evolution
+    return evolution
+
+
+def _read_or_init_project_spec(project_path: Path) -> tuple[dict[str, Any], Path]:
+    spec_path = project_path / ".archmind" / "project_spec.json"
+    spec = _load_json(spec_path) or {}
+    reasoning = _load_json(project_path / ".archmind" / "architecture_reasoning.json") or {}
+    state = _load_json(project_path / ".archmind" / "state.json") or {}
+
+    if "shape" not in spec:
+        spec["shape"] = str(reasoning.get("app_shape") or "unknown")
+    if "domains" not in spec or not isinstance(spec.get("domains"), list):
+        spec["domains"] = [str(x) for x in (reasoning.get("domains") or []) if str(x).strip()]
+    if "template" not in spec or not str(spec.get("template") or "").strip():
+        spec["template"] = str(
+            state.get("effective_template") or reasoning.get("recommended_template") or state.get("selected_template") or "fastapi"
+        )
+    if "modules" not in spec or not isinstance(spec.get("modules"), list):
+        spec["modules"] = [str(x) for x in (reasoning.get("modules") or []) if str(x).strip()]
+    spec["modules"] = _ordered_modules([str(x) for x in (spec.get("modules") or [])])
+    if "reason_summary" not in spec:
+        spec["reason_summary"] = str(reasoning.get("reason_summary") or "")
+    if "entities" not in spec or not isinstance(spec.get("entities"), list):
+        spec["entities"] = []
+    if "api_endpoints" not in spec or not isinstance(spec.get("api_endpoints"), list):
+        spec["api_endpoints"] = []
+    if "frontend_pages" not in spec or not isinstance(spec.get("frontend_pages"), list):
+        spec["frontend_pages"] = []
+    _ensure_evolution_block(spec)
+    return spec, spec_path
 
 
 def _format_brain_preview_text(idea: str) -> str:
@@ -2070,6 +2129,9 @@ async def command_inspect(update: Any, context: Any) -> None:
     domains = [str(x) for x in (spec.get("domains") or reasoning.get("domains") or []) if str(x).strip()]
     modules = [str(x) for x in (spec.get("modules") or reasoning.get("modules") or []) if str(x).strip()]
     reason_summary = str(spec.get("reason_summary") or reasoning.get("reason_summary") or "").strip()
+    evolution = spec.get("evolution") if isinstance(spec.get("evolution"), dict) else {}
+    evolution_version = int(evolution.get("version") or 1) if evolution else 1
+    evolution_added = _ordered_modules([str(x) for x in (evolution.get("added_modules") or [])]) if evolution else []
 
     has_backend = (project_path / "app").is_dir() or (project_path / "requirements.txt").exists()
     has_frontend = (
@@ -2122,6 +2184,10 @@ async def command_inspect(update: Any, context: Any) -> None:
     ]
     if reason_summary:
         lines += ["", "Reasoning:", reason_summary]
+    if evolution_added:
+        lines += ["", "Evolution:", f"Version: {evolution_version}", f"Added modules: {', '.join(evolution_added)}"]
+    elif evolution:
+        lines += ["", "Evolution:", f"Version: {evolution_version}"]
     if structure:
         lines += ["", "Structure:", structure]
     if core_files:
@@ -2171,7 +2237,7 @@ async def command_inspect(update: Any, context: Any) -> None:
 
 def _build_selected_project_summary(project_path: Path) -> str:
     archmind_dir = project_path / ".archmind"
-    spec = _load_json(archmind_dir / "project_spec.json") or {}
+    spec, _ = _read_or_init_project_spec(project_path)
     reasoning = _load_json(archmind_dir / "architecture_reasoning.json") or {}
     state = _load_json(archmind_dir / "state.json") or {}
 
@@ -2179,6 +2245,9 @@ def _build_selected_project_summary(project_path: Path) -> str:
     template = str(spec.get("template") or reasoning.get("recommended_template") or "unknown").strip() or "unknown"
     domains = [str(x) for x in (spec.get("domains") or reasoning.get("domains") or []) if str(x).strip()]
     modules = [str(x) for x in (spec.get("modules") or reasoning.get("modules") or []) if str(x).strip()]
+    evolution = spec.get("evolution") if isinstance(spec.get("evolution"), dict) else {}
+    evolution_version = int(evolution.get("version") or 1) if evolution else 1
+    evolution_added = _ordered_modules([str(x) for x in (evolution.get("added_modules") or [])]) if evolution else []
 
     lines = [
         f"Selected project: {project_path.name}",
@@ -2194,6 +2263,8 @@ def _build_selected_project_summary(project_path: Path) -> str:
         lines += ["", "Domains:", ", ".join(domains)]
     if modules:
         lines += ["", "Modules:", ", ".join(modules)]
+    if evolution_added:
+        lines += ["", "Evolution:", f"Version: {evolution_version}", f"Added modules: {', '.join(evolution_added)}"]
 
     runtime_backend = ""
     runtime_frontend = ""
@@ -2239,6 +2310,74 @@ def _build_selected_project_summary(project_path: Path) -> str:
             lines.append(f"Status: {deploy_status}")
 
     return "\n".join(lines)
+
+
+async def command_add_module(update: Any, context: Any) -> None:
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text("No project selected. Use /projects then /use <n>.")
+        return
+
+    args = [str(x).strip().lower() for x in getattr(context, "args", []) if str(x).strip()]
+    if not args:
+        await update.message.reply_text("Usage: /add_module <name>")
+        return
+    module_name = args[0]
+    if module_name not in set(SUPPORTED_MODULES):
+        await update.message.reply_text(
+            "Unknown module: "
+            + module_name
+            + "\n\nAvailable modules:\n"
+            + ", ".join(SUPPORTED_MODULES)
+        )
+        return
+
+    spec, spec_path = _read_or_init_project_spec(project_path)
+    modules = _ordered_modules([str(x) for x in (spec.get("modules") or [])])
+    already_present = module_name in modules
+    if not already_present:
+        modules.append(module_name)
+        modules = _ordered_modules(modules)
+        spec["modules"] = modules
+        evolution = _ensure_evolution_block(spec)
+        added_modules = _ordered_modules([str(x) for x in (evolution.get("added_modules") or [])] + [module_name])
+        evolution["added_modules"] = added_modules
+        history = evolution.get("history") if isinstance(evolution.get("history"), list) else []
+        history.append({"action": "add_module", "module": module_name})
+        evolution["history"] = history
+
+        template_name = str(spec.get("template") or "").strip().lower()
+        if not template_name:
+            state = _load_json(project_path / ".archmind" / "state.json") or {}
+            template_name = str(state.get("effective_template") or state.get("selected_template") or "fastapi").strip().lower()
+            spec["template"] = template_name
+
+        apply_modules_to_project(project_path, template_name, modules)
+        spec_path.parent.mkdir(parents=True, exist_ok=True)
+        spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+        await update.message.reply_text(
+            "Module added\n\n"
+            "Project:\n"
+            f"{project_path.name}\n\n"
+            "Added module:\n"
+            f"{module_name}\n\n"
+            "Modules:\n"
+            f"{', '.join(modules)}\n\n"
+            "Next:\n"
+            "- /inspect\n"
+            "- /restart"
+        )
+        return
+
+    await update.message.reply_text(
+        "Module already present\n\n"
+        "Project:\n"
+        f"{project_path.name}\n\n"
+        "Module:\n"
+        f"{module_name}\n\n"
+        "Modules:\n"
+        f"{', '.join(modules)}"
+    )
 
 
 async def command_use(update: Any, context: Any) -> None:
@@ -2755,6 +2894,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("pipeline", command_pipeline))
     app.add_handler(CommandHandler("preview", command_preview))
     app.add_handler(CommandHandler("suggest", command_suggest))
+    app.add_handler(CommandHandler("add_module", command_add_module))
     app.add_handler(CommandHandler("continue", command_continue))
     app.add_handler(CommandHandler("fix", command_fix))
     app.add_handler(CommandHandler("retry", command_retry))

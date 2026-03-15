@@ -108,3 +108,4 @@ def test_pipeline_project_spec_modules_match_reasoning(tmp_path: Path, monkeypat
     reasoning = json.loads((project_dir / ".archmind" / "architecture_reasoning.json").read_text(encoding="utf-8"))
     project_spec = json.loads((project_dir / ".archmind" / "project_spec.json").read_text(encoding="utf-8"))
     assert project_spec.get("modules") == reasoning.get("modules")
+    assert project_spec.get("evolution", {}).get("version") == 1

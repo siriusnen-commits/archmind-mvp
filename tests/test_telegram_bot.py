@@ -32,6 +32,7 @@ from archmind.telegram_bot import (
     command_stop,
     command_help,
     command_inspect,
+    command_add_module,
     command_retry,
     command_preview,
     command_suggest,
@@ -1764,6 +1765,7 @@ def test_help_mentions_command_groups() -> None:
     assert "/pipeline <idea>       alias of /idea" in msg.sent[-1]
     assert "/preview <idea>        preview Brain reasoning" in msg.sent[-1]
     assert "/suggest <idea>        show architecture suggestions" in msg.sent[-1]
+    assert "/add_module <name>     add module to current project" in msg.sent[-1]
     assert "/current               show selected project" in msg.sent[-1]
     assert "/state                 show raw pipeline state" in msg.sent[-1]
     assert "PIPELINE CONTROL" in msg.sent[-1]
@@ -1840,6 +1842,7 @@ def test_inspect_command_summarizes_project_spec_reasoning_and_state(tmp_path: P
                 "template": "fullstack-ddd",
                 "modules": ["auth", "db", "dashboard"],
                 "reason_summary": "fullstack app for tasks, teams with auth, db, dashboard",
+                "evolution": {"version": 1, "added_modules": ["auth"], "history": [{"action": "add_module", "module": "auth"}]},
             }
         ),
         encoding="utf-8",
@@ -1883,6 +1886,9 @@ def test_inspect_command_summarizes_project_spec_reasoning_and_state(tmp_path: P
     assert "Domains:" in out
     assert "Modules:" in out
     assert "Reasoning:" in out
+    assert "Evolution:" in out
+    assert "Version: 1" in out
+    assert "Added modules: auth" in out
     assert "Structure:" in out
     assert "backend + frontend" in out
     assert "Files:" in out
@@ -1896,6 +1902,100 @@ def test_inspect_command_summarizes_project_spec_reasoning_and_state(tmp_path: P
     assert "Deploy:" in out
     assert "Target: local" in out
     assert "Status: SUCCESS" in out
+
+
+def test_add_module_updates_spec_and_reuses_apply_hook(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "domains": ["tasks", "teams"],
+                "template": "fullstack-ddd",
+                "modules": ["db", "dashboard"],
+                "reason_summary": "task tracker",
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_apply_modules(project_path: Path, template_name: str, modules: list[str]) -> None:
+        captured["project_path"] = project_path
+        captured["template_name"] = template_name
+        captured["modules"] = list(modules)
+
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr("archmind.telegram_bot.apply_modules_to_project", fake_apply_modules)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_add_module(update, DummyContext(args=["auth"])))
+
+    assert "Module added" in msg.sent[-1]
+    assert "Added module:\nauth" in msg.sent[-1]
+    assert captured["project_path"] == project_dir
+    assert captured["template_name"] == "fullstack-ddd"
+    assert captured["modules"] == ["auth", "db", "dashboard"]
+
+    payload = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
+    assert payload.get("modules") == ["auth", "db", "dashboard"]
+    assert payload.get("evolution", {}).get("added_modules") == ["auth"]
+    assert payload.get("evolution", {}).get("history", [])[-1] == {"action": "add_module", "module": "auth"}
+
+
+def test_add_module_avoids_duplicate_and_does_not_reapply(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "domains": ["tasks"],
+                "template": "fullstack-ddd",
+                "modules": ["auth", "db"],
+                "reason_summary": "task tracker",
+                "evolution": {"version": 1, "added_modules": ["auth"], "history": [{"action": "add_module", "module": "auth"}]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    called = {"count": 0}
+
+    def fake_apply_modules(*_args, **_kwargs) -> None:  # type: ignore[no-untyped-def]
+        called["count"] += 1
+
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr("archmind.telegram_bot.apply_modules_to_project", fake_apply_modules)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_add_module(update, DummyContext(args=["auth"])))
+
+    assert "Module already present" in msg.sent[-1]
+    assert called["count"] == 0
+    payload = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
+    assert payload.get("modules") == ["auth", "db"]
+
+
+def test_add_module_unknown_module_shows_available_list(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_add_module(update, DummyContext(args=["cache"])))
+
+    out = msg.sent[-1]
+    assert "Unknown module: cache" in out
+    assert "Available modules:" in out
+    assert "auth, db, dashboard, worker, file-upload" in out
 
 
 def test_help_topic_idea() -> None:

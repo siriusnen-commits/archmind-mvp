@@ -72,7 +72,7 @@ def _templates_choices() -> list[str]:
     """
     Provide template choices. If a template module exists, include it.
     """
-    base = ["fastapi", "fastapi-ddd", "nextjs"]
+    base = ["fastapi", "fastapi-ddd", "nextjs", "internal-tool", "worker-api", "data-tool"]
     try:
         # optional template
         import archmind.templates.fullstack_ddd  # noqa: F401
@@ -626,10 +626,6 @@ def run_logs(args: argparse.Namespace) -> int:
         return 64
     if not project_dir.is_dir():
         print(f"[ERROR] Path is not a directory: {project_dir}", file=sys.stderr)
-        return 64
-
-    if not args.local:
-        print("[ERROR] Only --local logs are supported in this command.", file=sys.stderr)
         return 64
 
     show_backend = bool(args.backend)

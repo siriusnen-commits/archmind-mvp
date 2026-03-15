@@ -522,6 +522,14 @@ def _write_project_spec(
             "template": preferred_template,
             "modules": [str(item) for item in (architecture_reasoning.get("modules") or []) if str(item).strip()],
             "reason_summary": str(architecture_reasoning.get("reason_summary") or ""),
+            "entities": [],
+            "api_endpoints": [],
+            "frontend_pages": [],
+            "evolution": {
+                "version": 1,
+                "added_modules": [],
+                "history": [],
+            },
         }
         out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return out

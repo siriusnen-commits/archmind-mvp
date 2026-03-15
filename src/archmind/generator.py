@@ -20,6 +20,7 @@ from .templates.data_tool import enforce_data_tool
 
 DEBUG_RAW_OUTPUT = Path("examples/last_raw_output.txt")
 DEBUG_REPAIRED_OUTPUT = Path("examples/last_repaired_output.txt")
+SUPPORTED_MODULES = ("auth", "db", "dashboard", "worker", "file-upload")
 
 
 @dataclass
@@ -441,14 +442,17 @@ def apply_modules_to_project(project_dir: Path, template_name: str, modules: lis
     - create minimal module placeholder structure
     - reflect selected modules in README
     """
-    normalized: List[str] = []
     seen: set[str] = set()
-    for item in modules:
-        mod = str(item).strip()
-        if not mod or mod in seen:
-            continue
-        seen.add(mod)
-        normalized.append(mod)
+    requested = [str(item).strip().lower() for item in modules if str(item).strip()]
+    normalized: List[str] = []
+    for mod in SUPPORTED_MODULES:
+        if mod in requested and mod not in seen:
+            seen.add(mod)
+            normalized.append(mod)
+    for mod in requested:
+        if mod not in seen:
+            seen.add(mod)
+            normalized.append(mod)
     if not normalized:
         return
 
@@ -462,13 +466,17 @@ def apply_modules_to_project(project_dir: Path, template_name: str, modules: lis
     tmpl = str(template_name or "").strip().lower()
     backend_root = project_dir / "app"
     frontend_root = project_dir / "app"
-    if tmpl == "fullstack-ddd":
+    if tmpl in {"fullstack-ddd", "internal-tool", "data-tool"}:
         frontend_root = project_dir / "frontend" / "app"
     elif tmpl == "nextjs":
         frontend_root = project_dir / "app"
 
-    is_backend_project = tmpl in {"fastapi", "fastapi-ddd", "fullstack-ddd"} or (backend_root / "main.py").exists()
-    is_frontend_project = tmpl in {"nextjs", "fullstack-ddd"} or (project_dir / "package.json").exists()
+    is_backend_project = tmpl in {"fastapi", "fastapi-ddd", "fullstack-ddd", "worker-api", "internal-tool", "data-tool"} or (
+        backend_root / "main.py"
+    ).exists()
+    is_frontend_project = tmpl in {"nextjs", "fullstack-ddd", "internal-tool", "data-tool"} or (
+        (project_dir / "package.json").exists() or (project_dir / "frontend" / "package.json").exists()
+    )
 
     if "auth" in normalized:
         if is_backend_project:
@@ -525,6 +533,43 @@ def apply_modules_to_project(project_dir: Path, template_name: str, modules: lis
             "}\n",
             encoding="utf-8",
         )
+
+    if "worker" in normalized and is_backend_project:
+        worker_file = backend_root / "workers" / "worker_placeholder.py"
+        worker_file.parent.mkdir(parents=True, exist_ok=True)
+        worker_file.write_text(
+            "from __future__ import annotations\n\n"
+            "def run_worker_placeholder() -> dict[str, str]:\n"
+            '    return {"status": "queued", "detail": "worker placeholder"}\n',
+            encoding="utf-8",
+        )
+
+    if "file-upload" in normalized:
+        if is_backend_project:
+            upload_router = backend_root / "uploads" / "router.py"
+            upload_router.parent.mkdir(parents=True, exist_ok=True)
+            upload_router.write_text(
+                "from fastapi import APIRouter\n\n"
+                'router = APIRouter(prefix="/uploads")\n\n'
+                '@router.post("/file")\n'
+                "def upload_placeholder() -> dict[str, str]:\n"
+                '    return {"status": "ok", "detail": "file-upload placeholder"}\n',
+                encoding="utf-8",
+            )
+        if is_frontend_project:
+            upload_page = frontend_root / "upload" / "page.tsx"
+            upload_page.parent.mkdir(parents=True, exist_ok=True)
+            upload_page.write_text(
+                "export default function UploadPage() {\n"
+                "  return (\n"
+                "    <div>\n"
+                "      <h1>Upload</h1>\n"
+                "      <p>File upload module placeholder</p>\n"
+                "    </div>\n"
+                "  );\n"
+                "}\n",
+                encoding="utf-8",
+            )
 
     readme_path = project_dir / "README.md"
     if not readme_path.exists():

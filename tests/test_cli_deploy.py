@@ -316,6 +316,18 @@ def test_cli_logs_local_prints_backend_and_frontend(monkeypatch, tmp_path: Path,
     assert "frontend line" in out
 
 
+def test_cli_logs_without_local_flag_prints_local_logs(monkeypatch, tmp_path: Path, capsys) -> None:
+    monkeypatch.setattr(
+        "archmind.deploy.read_last_lines",
+        lambda path, lines=20: "backend line" if str(path).endswith("backend.log") else "frontend line",
+    )
+    exit_code = main(["logs", "--path", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "[BACKEND LOGS]" in out
+    assert "[FRONTEND LOGS]" in out
+
+
 def test_cli_logs_local_backend_only(monkeypatch, tmp_path: Path, capsys) -> None:
     monkeypatch.setattr("archmind.deploy.read_last_lines", lambda *_a, **_k: "backend only line")
     exit_code = main(["logs", "--path", str(tmp_path), "--local", "--backend"])

@@ -323,6 +323,13 @@ def test_pipeline_writes_project_spec_and_module_alignment(tmp_path: Path, monke
     assert spec_payload.get("modules") == reasoning_payload.get("modules")
     assert spec_payload.get("template")
     assert spec_payload.get("reason_summary")
+    assert spec_payload.get("entities") == []
+    assert spec_payload.get("api_endpoints") == []
+    assert spec_payload.get("frontend_pages") == []
+    evolution = spec_payload.get("evolution") or {}
+    assert evolution.get("version") == 1
+    assert evolution.get("added_modules") == []
+    assert evolution.get("history") == []
 
 
 def test_pipeline_cli_type_keeps_fallback_metadata(tmp_path: Path, monkeypatch) -> None:
