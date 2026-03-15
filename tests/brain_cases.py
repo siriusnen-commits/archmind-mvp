@@ -15,26 +15,26 @@ BRAIN_CASES = [
     },
     {
         "idea": "expense tracker dashboard",
-        "expected_shape": "frontend",
-        "expected_template": "nextjs",
+        "expected_shape": "fullstack",
+        "expected_template": "fullstack-ddd",
         "expected_domains": ["expenses"],
     },
     {
         "idea": "document summary api job tracker",
         "expected_shape": "backend",
-        "expected_template": "fastapi-ddd",
+        "expected_template": "fastapi",
         "expected_domains": ["documents"],
     },
     {
         "idea": "team collaboration defect tracker dashboard",
-        "expected_shape": "frontend",
-        "expected_template": "nextjs",
+        "expected_shape": "fullstack",
+        "expected_template": "fullstack-ddd",
         "expected_domains": ["teams", "defects"],
     },
     {
         "idea": "personal habit tracker with analytics",
-        "expected_shape": "unknown",
-        "expected_template": "fastapi",
+        "expected_shape": "fullstack",
+        "expected_template": "fullstack-ddd",
         "expected_domains": [],
     },
     {
@@ -58,7 +58,7 @@ BRAIN_CASES = [
     {
         "idea": "inventory management api tool for small business",
         "expected_shape": "backend",
-        "expected_template": "fastapi-ddd",
+        "expected_template": "fastapi",
         "expected_domains": ["inventory"],
     },
 ]

@@ -193,7 +193,29 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
     if file_upload_needed:
         modules.append("file-upload")
 
-    if backend_needed and frontend_needed:
+    frontend_only_explicit = _has_any(
+        text,
+        [
+            r"\bfrontend only\b",
+            r"\bfrontend-only\b",
+            r"프론트엔드만",
+        ],
+    )
+
+    # RULE 1 + RULE 3
+    if (auth_needed or db_needed) and not frontend_only_explicit:
+        backend_needed = True
+    if file_upload_needed:
+        backend_needed = True
+
+    # RULE 4
+    if dashboard_needed and backend_needed:
+        frontend_needed = True
+
+    # RULE 2
+    if auth_needed and db_needed:
+        app_shape = "fullstack"
+    elif backend_needed and frontend_needed:
         app_shape = "fullstack"
     elif backend_needed and not frontend_needed:
         app_shape = "backend"
@@ -202,10 +224,17 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
     else:
         app_shape = "unknown"
 
+    # RULE 5
+    if app_shape == "unknown":
+        if backend_needed and frontend_needed:
+            app_shape = "fullstack"
+        elif backend_needed:
+            app_shape = "backend"
+        elif frontend_needed:
+            app_shape = "frontend"
+
     if app_shape == "fullstack":
         recommended_template = "fullstack-ddd"
-    elif app_shape == "backend" and persistence_needed:
-        recommended_template = "fastapi-ddd"
     elif app_shape == "backend":
         recommended_template = "fastapi"
     elif app_shape == "frontend":
@@ -213,11 +242,11 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
     else:
         recommended_template = "fastapi"
 
-    if frontend_needed and not backend_needed:
+    if app_shape == "fullstack":
         deployment_intent = "web-app"
-    elif backend_needed and frontend_needed:
+    elif app_shape == "frontend":
         deployment_intent = "web-app"
-    elif backend_needed:
+    elif app_shape == "backend":
         deployment_intent = "api"
     else:
         deployment_intent = "unknown"

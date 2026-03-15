@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -384,12 +385,19 @@ def write_project(spec: Dict[str, Any], opt: GenerateOptions) -> Path:
 
 def apply_modules_to_project(project_dir: Path, template_name: str, modules: list[str]) -> None:
     """
-    Sprint 1 module hook:
-    - keep a lightweight artifact for selected modules
-    - reflect selected modules in README when present
+    Sprint 2 module hook:
+    - keep selected module artifact
+    - create minimal module placeholder structure
+    - reflect selected modules in README
     """
-    del template_name
-    normalized = [str(item).strip() for item in modules if str(item).strip()]
+    normalized: List[str] = []
+    seen: set[str] = set()
+    for item in modules:
+        mod = str(item).strip()
+        if not mod or mod in seen:
+            continue
+        seen.add(mod)
+        normalized.append(mod)
     if not normalized:
         return
 
@@ -400,14 +408,90 @@ def apply_modules_to_project(project_dir: Path, template_name: str, modules: lis
         encoding="utf-8",
     )
 
+    tmpl = str(template_name or "").strip().lower()
+    backend_root = project_dir / "app"
+    frontend_root = project_dir / "app"
+    if tmpl == "fullstack-ddd":
+        frontend_root = project_dir / "frontend" / "app"
+    elif tmpl == "nextjs":
+        frontend_root = project_dir / "app"
+
+    is_backend_project = tmpl in {"fastapi", "fastapi-ddd", "fullstack-ddd"} or (backend_root / "main.py").exists()
+    is_frontend_project = tmpl in {"nextjs", "fullstack-ddd"} or (project_dir / "package.json").exists()
+
+    if "auth" in normalized:
+        if is_backend_project:
+            auth_router = backend_root / "auth" / "router.py"
+            auth_router.parent.mkdir(parents=True, exist_ok=True)
+            auth_router.write_text(
+                "from fastapi import APIRouter\n\n"
+                'router = APIRouter(prefix="/auth")\n\n'
+                '@router.get("/login")\n'
+                "def login_placeholder():\n"
+                '    return {"message": "auth placeholder"}\n',
+                encoding="utf-8",
+            )
+        if is_frontend_project:
+            login_page = frontend_root / "login" / "page.tsx"
+            login_page.parent.mkdir(parents=True, exist_ok=True)
+            login_page.write_text(
+                "export default function LoginPage() {\n"
+                "  return (\n"
+                "    <div>\n"
+                "      <h1>Login Page</h1>\n"
+                "      <p>Auth module placeholder</p>\n"
+                "    </div>\n"
+                "  );\n"
+                "}\n",
+                encoding="utf-8",
+            )
+
+    if "db" in normalized and is_backend_project:
+        db_file = backend_root / "db" / "database.py"
+        db_file.parent.mkdir(parents=True, exist_ok=True)
+        db_file.write_text('DATABASE_URL = "env:DATABASE_URL"\n', encoding="utf-8")
+
+        env_example = project_dir / ".env.example"
+        if env_example.exists():
+            env_text = env_example.read_text(encoding="utf-8")
+            if "DATABASE_URL=" not in env_text:
+                if env_text and not env_text.endswith("\n"):
+                    env_text += "\n"
+                env_text += "DATABASE_URL=\n"
+                env_example.write_text(env_text, encoding="utf-8")
+
+    if "dashboard" in normalized and is_frontend_project:
+        dashboard_page = frontend_root / "dashboard" / "page.tsx"
+        dashboard_page.parent.mkdir(parents=True, exist_ok=True)
+        dashboard_page.write_text(
+            "export default function DashboardPage() {\n"
+            "  return (\n"
+            "    <div>\n"
+            "      <h1>Dashboard</h1>\n"
+            "      <p>Dashboard module placeholder</p>\n"
+            "    </div>\n"
+            "  );\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
     readme_path = project_dir / "README.md"
     if not readme_path.exists():
         return
 
     content = readme_path.read_text(encoding="utf-8")
-    if "## Selected modules" in content:
+    section = (
+        "## Selected modules\n\n"
+        + "\n".join([f"- {item}" for item in normalized])
+        + "\n\n"
+        + "This project was generated with modules selected by ArchMind reasoning.\n"
+    )
+    pattern = re.compile(r"(?ms)^## Selected modules\n.*?(?=^## |\Z)")
+    if pattern.search(content):
+        content = pattern.sub(section, content)
+        readme_path.write_text(content, encoding="utf-8")
         return
-    section = "## Selected modules\n" + "\n".join([f"- {item}" for item in normalized]) + "\n"
+
     if content and not content.endswith("\n"):
         content += "\n"
     readme_path.write_text(content + "\n" + section, encoding="utf-8")
