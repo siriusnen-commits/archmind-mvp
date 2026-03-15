@@ -54,6 +54,21 @@ def test_reason_architecture_modules_worker() -> None:
     assert "worker" in modules
 
 
+def test_reason_architecture_recommends_internal_tool_template() -> None:
+    out = reason_architecture_from_idea("internal admin dashboard for device status")
+    assert out["recommended_template"] == "internal-tool"
+
+
+def test_reason_architecture_recommends_worker_api_template() -> None:
+    out = reason_architecture_from_idea("background batch processing api")
+    assert out["recommended_template"] == "worker-api"
+
+
+def test_reason_architecture_recommends_data_tool_template() -> None:
+    out = reason_architecture_from_idea("inventory management tool for small business")
+    assert out["recommended_template"] == "data-tool"
+
+
 def test_reason_architecture_unknown_fallback_defaults() -> None:
     out = reason_architecture_from_idea("hello")
     assert out["app_shape"] == "unknown"

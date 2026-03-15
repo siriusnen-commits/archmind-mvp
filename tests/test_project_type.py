@@ -28,6 +28,18 @@ def test_detect_project_type_automation_script() -> None:
     assert detect_project_type("telegram automation script for reminders") == "automation-script"
 
 
+def test_detect_project_type_internal_tool() -> None:
+    assert detect_project_type("internal admin dashboard for device status") == "internal-tool"
+
+
+def test_detect_project_type_worker_api() -> None:
+    assert detect_project_type("background batch processing api") == "worker-api"
+
+
+def test_detect_project_type_data_tool() -> None:
+    assert detect_project_type("inventory management tool for small business") == "data-tool"
+
+
 def test_detect_project_type_unknown() -> None:
     assert detect_project_type("something helpful for teams") == "unknown"
 

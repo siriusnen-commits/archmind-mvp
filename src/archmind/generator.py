@@ -14,6 +14,9 @@ import requests
 from .templates.fastapi import enforce_fastapi_runtime
 from .templates.fastapi_ddd import enforce_fastapi_ddd
 from .templates.nextjs import enforce_nextjs_runtime
+from .templates.internal_tool import enforce_internal_tool
+from .templates.worker_api import enforce_worker_api
+from .templates.data_tool import enforce_data_tool
 
 DEBUG_RAW_OUTPUT = Path("examples/last_raw_output.txt")
 DEBUG_REPAIRED_OUTPUT = Path("examples/last_repaired_output.txt")
@@ -311,6 +314,54 @@ def apply_template(spec: Dict[str, Any], opt: GenerateOptions) -> Dict[str, Any]
         spec["directories"] = [
             "app",
         ]
+    elif opt.template == "internal-tool":
+        files = enforce_internal_tool({}, project_name)
+        spec["directories"] = [
+            "app",
+            "app/api",
+            "app/api/routers",
+            "app/core",
+            "app/db",
+            "app/domain",
+            "app/repositories",
+            "app/services",
+            "tests",
+            "frontend",
+            "frontend/app",
+            "frontend/app/ui",
+            "scripts",
+        ]
+    elif opt.template == "worker-api":
+        files = enforce_worker_api({}, project_name)
+        spec["directories"] = [
+            "app",
+            "app/api",
+            "app/api/routers",
+            "app/core",
+            "app/db",
+            "app/domain",
+            "app/repositories",
+            "app/services",
+            "app/workers",
+            "tests",
+        ]
+    elif opt.template == "data-tool":
+        files = enforce_data_tool({}, project_name)
+        spec["directories"] = [
+            "app",
+            "app/api",
+            "app/api/routers",
+            "app/core",
+            "app/db",
+            "app/domain",
+            "app/repositories",
+            "app/services",
+            "tests",
+            "frontend",
+            "frontend/app",
+            "frontend/app/ui",
+            "scripts",
+        ]
 
     else:
         files = enforce_fastapi_runtime(files, project_name)
@@ -510,7 +561,7 @@ def generate_project(idea: str, opt: GenerateOptions):
     returns: Path to generated project root
     """
     # Deterministic templates should not require model access.
-    if opt.template in {"fastapi-ddd", "fullstack-ddd", "nextjs"}:
+    if opt.template in {"fastapi-ddd", "fullstack-ddd", "nextjs", "internal-tool", "worker-api", "data-tool"}:
         project_name = (opt.name or "archmind_project").strip() or "archmind_project"
         spec = fallback_spec(project_name=project_name)
     else:

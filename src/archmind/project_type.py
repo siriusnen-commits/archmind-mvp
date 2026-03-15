@@ -6,6 +6,9 @@ PROJECT_TYPES = (
     "backend-api",
     "frontend-web",
     "fullstack-web",
+    "internal-tool",
+    "worker-api",
+    "data-tool",
     "cli-tool",
     "automation-script",
     "unknown",
@@ -71,12 +74,46 @@ def detect_project_type(idea: str) -> str:
         r"\bapi with frontend\b",
         r"\bweb app with api\b",
     ]
+    internal_tool_patterns = [
+        r"\binternal\b",
+        r"\binternal tool\b",
+        r"\badmin tool\b",
+        r"\binternal admin\b",
+        r"사내용",
+        r"내부용",
+    ]
+    worker_api_patterns = [
+        r"\bworker\b",
+        r"\bbackground\b",
+        r"\bbatch\b",
+        r"\bqueue\b",
+        r"\basync job\b",
+        r"백그라운드",
+        r"배치",
+    ]
+    data_tool_patterns = [
+        r"\binventory\b",
+        r"\breport(s)?\b",
+        r"\banalytics?\b",
+        r"\bdata viewer\b",
+        r"\bdata tool\b",
+    ]
 
     backend_hits = _contains_any(text, backend_patterns)
     frontend_hits = _contains_any(text, frontend_patterns)
     cli_hits = _contains_any(text, cli_patterns)
     automation_hits = _contains_any(text, automation_patterns)
     fullstack_hits = _contains_any(text, fullstack_patterns)
+    internal_hits = _contains_any(text, internal_tool_patterns)
+    worker_hits = _contains_any(text, worker_api_patterns)
+    data_hits = _contains_any(text, data_tool_patterns)
+
+    if internal_hits > 0 and frontend_hits > 0:
+        return "internal-tool"
+    if worker_hits > 0 and backend_hits > 0 and frontend_hits == 0:
+        return "worker-api"
+    if data_hits > 0 and (frontend_hits > 0 or backend_hits > 0 or "tool" in text):
+        return "data-tool"
 
     if fullstack_hits > 0 or (backend_hits > 0 and frontend_hits > 0):
         return "fullstack-web"

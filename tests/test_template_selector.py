@@ -31,6 +31,18 @@ def test_select_template_automation_script() -> None:
     assert select_template_for_project_type("automation-script") == "automation"
 
 
+def test_select_template_internal_tool_type() -> None:
+    assert select_template_for_project_type("internal-tool") == "internal-tool"
+
+
+def test_select_template_worker_api_type() -> None:
+    assert select_template_for_project_type("worker-api") == "worker-api"
+
+
+def test_select_template_data_tool_type() -> None:
+    assert select_template_for_project_type("data-tool") == "data-tool"
+
+
 def test_select_template_unknown_uses_default(monkeypatch) -> None:
     monkeypatch.setenv("ARCHMIND_DEFAULT_TEMPLATE", "fastapi-ddd")
     assert select_template_for_project_type("unknown") == "fastapi-ddd"
@@ -56,6 +68,9 @@ def test_supported_templates_truthy() -> None:
     assert "fastapi-ddd" in supported
     assert "fullstack-ddd" in supported
     assert "nextjs" in supported
+    assert "internal-tool" in supported
+    assert "worker-api" in supported
+    assert "data-tool" in supported
 
 
 def test_state_shows_selected_template_from_result(tmp_path: Path) -> None:

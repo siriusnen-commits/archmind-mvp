@@ -18,6 +18,9 @@ def _extract_domains(text: str) -> list[str]:
         ("tasks", [r"\btask(s)?\b", r"\btodo(s)?\b", r"작업"]),
         ("expenses", [r"\bexpense(s)?\b", r"\bbudget\b", r"가계부"]),
         ("documents", [r"\bdocument(s)?\b", r"\bsummary\b", r"문서"]),
+        ("reports", [r"\breport(s)?\b", r"리포트", r"보고서"]),
+        ("analytics", [r"\banalytics?\b", r"분석", r"통계"]),
+        ("data", [r"\bdata\b", r"데이터"]),
         ("defects", [r"\bdefect(s)?\b", r"\bbug(s)?\b", r"\bissue(s)?\b", r"결함"]),
         ("teams", [r"\bteam(s)?\b", r"\bcollaboration\b", r"협업"]),
         ("inventory", [r"\binventory\b", r"\bstock\b", r"재고"]),
@@ -241,6 +244,15 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
         recommended_template = "nextjs"
     else:
         recommended_template = "fastapi"
+
+    is_data_tool = any(domain in domains for domain in ("inventory", "reports", "analytics", "data"))
+    data_tool_intent = is_data_tool and (_has_any(text, [r"\btool\b", r"\bviewer\b", r"관리", r"조회"]) or dashboard_needed)
+    if internal_tool and dashboard_needed:
+        recommended_template = "internal-tool"
+    elif worker_needed and backend_needed and not frontend_needed:
+        recommended_template = "worker-api"
+    elif data_tool_intent:
+        recommended_template = "data-tool"
 
     if app_shape == "fullstack":
         deployment_intent = "web-app"

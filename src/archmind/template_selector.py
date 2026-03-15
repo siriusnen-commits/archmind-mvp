@@ -4,7 +4,15 @@ import os
 
 
 def get_supported_templates() -> list[str]:
-    return ["fastapi", "fastapi-ddd", "fullstack-ddd", "nextjs"]
+    return [
+        "fastapi",
+        "fastapi-ddd",
+        "fullstack-ddd",
+        "nextjs",
+        "internal-tool",
+        "worker-api",
+        "data-tool",
+    ]
 
 
 def resolve_default_template() -> str:
@@ -19,6 +27,9 @@ def select_template_for_project_type(project_type: str, idea: str | None = None)
         "backend-api": "fastapi",
         "frontend-web": "nextjs",
         "fullstack-web": "fullstack-ddd",
+        "internal-tool": "internal-tool",
+        "worker-api": "worker-api",
+        "data-tool": "data-tool",
         "cli-tool": "cli",
         "automation-script": "automation",
     }

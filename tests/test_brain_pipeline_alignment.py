@@ -28,7 +28,7 @@ def _fake_generate_project(idea: str, opt) -> Path:  # type: ignore[no-untyped-d
     project_dir.joinpath("pytest.ini").write_text("[pytest]\naddopts = -q\n", encoding="utf-8")
     project_dir.joinpath("test_ok.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
 
-    if template in ("fastapi", "fastapi-ddd", "fullstack-ddd"):
+    if template in ("fastapi", "fastapi-ddd", "fullstack-ddd", "worker-api", "internal-tool", "data-tool"):
         (project_dir / "app").mkdir(parents=True, exist_ok=True)
         (project_dir / "app" / "__init__.py").write_text("", encoding="utf-8")
         (project_dir / "app" / "main.py").write_text(
@@ -37,8 +37,10 @@ def _fake_generate_project(idea: str, opt) -> Path:  # type: ignore[no-untyped-d
         )
         (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
 
-    if template in ("nextjs", "fullstack-ddd"):
+    if template in ("nextjs", "fullstack-ddd", "internal-tool", "data-tool"):
         frontend_dir = project_dir / "frontend" if template == "fullstack-ddd" else project_dir
+        if template in ("internal-tool", "data-tool"):
+            frontend_dir = project_dir / "frontend"
         frontend_dir.mkdir(parents=True, exist_ok=True)
         (frontend_dir / "package.json").write_text(
             json.dumps({"name": "demo", "scripts": {"dev": "next dev", "start": "next start"}}),

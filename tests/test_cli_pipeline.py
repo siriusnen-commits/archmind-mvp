@@ -177,6 +177,53 @@ def test_pipeline_idea_generator_receives_effective_template_for_frontend_web(tm
     assert result_payload.get("template_fallback_reason") in ("", None)
 
 
+@pytest.mark.parametrize(
+    ("idea", "expected_template"),
+    [
+        ("internal admin dashboard for device status", "internal-tool"),
+        ("background batch processing api", "worker-api"),
+        ("inventory management tool for small business", "data-tool"),
+    ],
+)
+def test_pipeline_idea_routes_to_new_templates(
+    tmp_path: Path,
+    monkeypatch,
+    idea: str,
+    expected_template: str,
+) -> None:
+    captured: dict[str, str] = {}
+
+    def fake_generate_project(local_idea: str, opt) -> Path:  # type: ignore[no-untyped-def]
+        captured["idea"] = local_idea
+        captured["template"] = str(getattr(opt, "template", ""))
+        project_name = (opt.name or "archmind_project").strip() or "archmind_project"
+        project_dir = Path(opt.out) / project_name
+        project_dir.mkdir(parents=True, exist_ok=True)
+        project_dir.joinpath("pytest.ini").write_text("[pytest]\naddopts = -q\n", encoding="utf-8")
+        project_dir.joinpath("test_ok.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+        return project_dir
+
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: fake_generate_project)
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            idea,
+            "--out",
+            str(tmp_path),
+            "--name",
+            f"route_{expected_template.replace('-', '_')}",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+    assert captured.get("template") == expected_template
+
+
 def test_pipeline_frontend_web_routes_to_nextjs_without_fallback(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project)
 
