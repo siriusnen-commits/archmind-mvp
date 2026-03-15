@@ -9,6 +9,27 @@ Key capabilities:
 - local runtime execution
 - automatic project scaffolding
 
+## Real-world validation example
+
+ArchMind was validated with a practical project:
+`tv hardware qa defect tracker with dashboard, device management, test run history, and team collaboration`.
+
+Workflow used in Telegram:
+- `/idea_local`
+- `/suggest`
+- `/apply_suggestion`
+- `/add_entity`
+- `/add_field`
+- `/add_page`
+- `/inspect`
+- `/next`
+
+The project was evolved to include QA-focused entities (`Device`, `TestRun`, `Defect`), CRUD API sets, and matching frontend pages (`devices/*`, `test_runs/*`, `defects/*`, `dashboard/home`).
+
+Final check:
+- `/next` returned `No immediate suggestions.`
+- This indicates ArchMind considered the architecture sufficiently complete under current suggestion rules.
+
 Idea → Architecture → Working Project
 
 Current capabilities:
