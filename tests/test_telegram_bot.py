@@ -1894,6 +1894,9 @@ def test_inspect_command_summarizes_project_spec_reasoning_and_state(tmp_path: P
     assert "Task(title:string)" in out
     assert "API endpoints:" in out
     assert "GET /tasks" in out
+    assert "Frontend pages:" in out
+    assert "tasks/list" in out
+    assert "tasks/detail" in out
     assert "Reasoning:" in out
     assert "Evolution:" in out
     assert "Version: 1" in out
@@ -2111,7 +2114,8 @@ def test_add_entity_generates_backend_scaffold_and_main_router_registration(tmp_
     assert "- app/schemas/task.py" in out
     assert "- app/routers/task.py" in out
     assert "- app/main.py" in out
-    assert "- /restart" in out
+    assert "Frontend scaffold:" in out
+    assert "SKIPPED (no frontend structure)" in out
 
     assert (project_dir / "app" / "models" / "task.py").exists()
     assert (project_dir / "app" / "schemas" / "task.py").exists()
@@ -2134,6 +2138,43 @@ def test_add_entity_generates_backend_scaffold_and_main_router_registration(tmp_
         "PATCH /tasks/{id}",
         "DELETE /tasks/{id}",
     ]
+    assert payload.get("frontend_pages") == ["tasks/list", "tasks/detail"]
+
+
+def test_add_entity_generates_frontend_pages_when_frontend_structure_exists(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\n\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "domains": ["tasks"],
+                "template": "fullstack-ddd",
+                "modules": [],
+                "entities": [],
+                "reason_summary": "task app",
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_add_entity(update, DummyContext(args=["Task"])))
+    out = msg.sent[-1]
+    assert "- frontend/app/tasks/page.tsx" in out
+    assert "- frontend/app/tasks/[id]/page.tsx" in out
+    assert "- /restart" in out
+    assert (project_dir / "frontend" / "app" / "tasks" / "page.tsx").exists()
+    assert (project_dir / "frontend" / "app" / "tasks" / "[id]" / "page.tsx").exists()
 
 
 def test_add_field_updates_spec_and_scaffold_files(tmp_path: Path, monkeypatch) -> None:
@@ -2178,6 +2219,7 @@ def test_add_field_updates_spec_and_scaffold_files(tmp_path: Path, monkeypatch) 
         "PATCH /tasks/{id}",
         "DELETE /tasks/{id}",
     ]
+    assert payload.get("frontend_pages") == ["tasks/list", "tasks/detail"]
     assert payload.get("evolution", {}).get("history", [])[-1] == {
         "action": "add_field",
         "entity": "Task",
@@ -2229,6 +2271,7 @@ def test_add_field_prevents_duplicate(tmp_path: Path, monkeypatch) -> None:
         "DELETE /tasks/{id}",
     ]
     assert len(endpoints) == len(set(endpoints))
+    assert payload.get("frontend_pages") == ["tasks/list", "tasks/detail"]
 
 
 def test_add_field_entity_not_found_shows_hint(tmp_path: Path, monkeypatch) -> None:

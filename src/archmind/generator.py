@@ -598,6 +598,19 @@ def _has_backend_structure(project_dir: Path) -> bool:
     return app_dir.is_dir() and ((app_dir / "main.py").exists() or (project_dir / "requirements.txt").exists())
 
 
+def _resolve_frontend_app_root(project_dir: Path) -> Optional[Path]:
+    frontend_dir = project_dir / "frontend"
+    if frontend_dir.is_dir() or (frontend_dir / "package.json").exists() or (frontend_dir / "app").exists():
+        return frontend_dir / "app"
+    if (project_dir / "package.json").exists() or (project_dir / "next.config.mjs").exists():
+        return project_dir / "app"
+    return None
+
+
+def has_frontend_structure(project_dir: Path) -> bool:
+    return _resolve_frontend_app_root(project_dir) is not None
+
+
 def _entity_identity(entity_name: str) -> tuple[str, str, str]:
     safe_name = re.sub(r"[^a-zA-Z0-9_]", "", str(entity_name or "").strip())
     if not safe_name:
@@ -700,6 +713,63 @@ def apply_entity_scaffold(project_dir: Path, entity_name: str) -> list[str]:
     _write_if_changed(routers_file, _render_entity_router_content(slug, plural), generated, project_dir)
 
     _ensure_main_router_registration(project_dir / "app" / "main.py", slug, generated, project_dir)
+    return generated
+
+
+def apply_frontend_page_scaffold(project_dir: Path, entity_name: str) -> list[str]:
+    """
+    Create minimal frontend list/detail page placeholders for an entity.
+    Returns generated file paths. If frontend structure is missing, returns [].
+    """
+    app_root = _resolve_frontend_app_root(project_dir)
+    if app_root is None:
+        return []
+    class_name, _, plural = _entity_identity(entity_name)
+    if not class_name:
+        return []
+    plural_title = plural.replace("_", " ").title().replace(" ", "")
+    list_page = app_root / plural / "page.tsx"
+    detail_page = app_root / plural / "[id]" / "page.tsx"
+    generated: list[str] = []
+
+    _write_if_missing(
+        list_page,
+        "export default function "
+        + plural_title
+        + "Page() {\n"
+        "  return (\n"
+        "    <div>\n"
+        "      <h1>"
+        + plural_title
+        + "</h1>\n"
+        "      <p>List page placeholder for "
+        + class_name
+        + "</p>\n"
+        "    </div>\n"
+        "  );\n"
+        "}\n",
+        generated,
+        project_dir,
+    )
+    _write_if_missing(
+        detail_page,
+        "export default function "
+        + class_name
+        + "DetailPage() {\n"
+        "  return (\n"
+        "    <div>\n"
+        "      <h1>"
+        + class_name
+        + " Detail</h1>\n"
+        "      <p>Detail page placeholder for "
+        + class_name
+        + "</p>\n"
+        "    </div>\n"
+        "  );\n"
+        "}\n",
+        generated,
+        project_dir,
+    )
     return generated
 
 

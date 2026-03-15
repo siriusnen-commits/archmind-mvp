@@ -14,7 +14,14 @@ from typing import Any, Optional
 from archmind.brain import reason_architecture_from_idea
 from archmind.decision import decide_next_action, next_action_suggestions
 from archmind.failure import classify_failure
-from archmind.generator import SUPPORTED_MODULES, apply_entity_fields_to_scaffold, apply_entity_scaffold, apply_modules_to_project
+from archmind.generator import (
+    SUPPORTED_MODULES,
+    apply_entity_fields_to_scaffold,
+    apply_entity_scaffold,
+    apply_frontend_page_scaffold,
+    apply_modules_to_project,
+    has_frontend_structure,
+)
 from archmind.idea_normalizer import normalize_idea
 from archmind.project_type import detect_project_type, normalize_project_type
 from archmind.state import derive_task_label_from_failure_signature, load_state, set_agent_state, update_after_deploy
@@ -544,6 +551,29 @@ def _rebuild_api_endpoints(spec: dict[str, Any]) -> list[str]:
     return endpoints
 
 
+def _entity_frontend_pages(entity_name: str) -> list[str]:
+    normalized = _normalize_entity_name(entity_name)
+    if not normalized:
+        return []
+    slug = re.sub(r"(?<!^)(?=[A-Z])", "_", normalized).lower()
+    plural = f"{slug}s"
+    return [f"{plural}/list", f"{plural}/detail"]
+
+
+def _rebuild_frontend_pages(spec: dict[str, Any]) -> list[str]:
+    pages: list[str] = []
+    seen: set[str] = set()
+    for entity in _normalize_entities(spec.get("entities")):
+        name = str(entity.get("name") or "").strip()
+        for page in _entity_frontend_pages(name):
+            if page in seen:
+                continue
+            seen.add(page)
+            pages.append(page)
+    spec["frontend_pages"] = pages
+    return pages
+
+
 def _ensure_evolution_block(spec: dict[str, Any]) -> dict[str, Any]:
     evolution_raw = spec.get("evolution")
     evolution = evolution_raw if isinstance(evolution_raw, dict) else {}
@@ -578,8 +608,7 @@ def _read_or_init_project_spec(project_path: Path) -> tuple[dict[str, Any], Path
         spec["reason_summary"] = str(reasoning.get("reason_summary") or "")
     spec["entities"] = _normalize_entities(spec.get("entities"))
     _rebuild_api_endpoints(spec)
-    if "frontend_pages" not in spec or not isinstance(spec.get("frontend_pages"), list):
-        spec["frontend_pages"] = []
+    _rebuild_frontend_pages(spec)
     _ensure_evolution_block(spec)
     return spec, spec_path
 
@@ -2226,6 +2255,7 @@ async def command_inspect(update: Any, context: Any) -> None:
     modules = [str(x) for x in (spec.get("modules") or reasoning.get("modules") or []) if str(x).strip()]
     entities = _entity_summaries(spec.get("entities"))
     api_endpoints = [str(x) for x in (spec.get("api_endpoints") or []) if str(x).strip()]
+    frontend_pages = [str(x) for x in (spec.get("frontend_pages") or []) if str(x).strip()]
     reason_summary = str(spec.get("reason_summary") or reasoning.get("reason_summary") or "").strip()
     evolution = spec.get("evolution") if isinstance(spec.get("evolution"), dict) else {}
     evolution_version = int(evolution.get("version") or 1) if evolution else 1
@@ -2284,6 +2314,8 @@ async def command_inspect(update: Any, context: Any) -> None:
         lines += ["", "Entities:", ", ".join(entities)]
     if api_endpoints:
         lines += ["", "API endpoints:"] + api_endpoints[:10]
+    if frontend_pages:
+        lines += ["", "Frontend pages:"] + frontend_pages[:10]
     if reason_summary:
         lines += ["", "Reasoning:", reason_summary]
     if evolution_added:
@@ -2514,12 +2546,18 @@ async def command_add_entity(update: Any, context: Any) -> None:
     entities.append({"name": entity_name, "fields": []})
     spec["entities"] = _normalize_entities(entities)
     _rebuild_api_endpoints(spec)
+    _rebuild_frontend_pages(spec)
     evolution = _ensure_evolution_block(spec)
     history = evolution.get("history") if isinstance(evolution.get("history"), list) else []
     history.append({"action": "add_entity", "entity": entity_name})
     evolution["history"] = history
 
     generated_files = apply_entity_scaffold(project_path, entity_name)
+    frontend_generated = apply_frontend_page_scaffold(project_path, entity_name)
+    for path in frontend_generated:
+        if path not in generated_files:
+            generated_files.append(path)
+    frontend_exists = has_frontend_structure(project_path)
 
     spec_path.parent.mkdir(parents=True, exist_ok=True)
     spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -2527,10 +2565,13 @@ async def command_add_entity(update: Any, context: Any) -> None:
     code_lines = []
     if generated_files:
         code_lines = ["Generated:"] + [f"- {path}" for path in generated_files]
-        next_lines = ["Next:", "- /inspect", "- /restart"]
+        next_lines = ["Next:", "- /inspect"] + (["- /restart"] if frontend_exists else [])
     else:
         code_lines = ["Code scaffold:", "SKIPPED (no backend structure)"]
         next_lines = ["Next:", "- /inspect"]
+
+    if not frontend_exists:
+        code_lines += ["", "Frontend scaffold:", "SKIPPED (no frontend structure)"]
 
     await update.message.reply_text(
         "Entity added\n\n"
@@ -2591,6 +2632,7 @@ async def command_add_field(update: Any, context: Any) -> None:
     existing_names = {str(item.get("name") or "").strip().lower() for item in existing_fields if isinstance(item, dict)}
     if field_name.lower() in existing_names:
         _rebuild_api_endpoints(spec)
+        _rebuild_frontend_pages(spec)
         spec_path.parent.mkdir(parents=True, exist_ok=True)
         spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
         pairs = []
@@ -2618,6 +2660,7 @@ async def command_add_field(update: Any, context: Any) -> None:
     target_entity["fields"] = existing_fields
     spec["entities"] = _normalize_entities(entities)
     _rebuild_api_endpoints(spec)
+    _rebuild_frontend_pages(spec)
     evolution = _ensure_evolution_block(spec)
     history = evolution.get("history") if isinstance(evolution.get("history"), list) else []
     history.append({"action": "add_field", "entity": entity_name, "field": field_name, "type": field_type})

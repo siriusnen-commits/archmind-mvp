@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from archmind.generator import apply_entity_fields_to_scaffold, apply_entity_scaffold
+from archmind.generator import apply_entity_fields_to_scaffold, apply_entity_scaffold, apply_frontend_page_scaffold
 
 
 def test_apply_entity_scaffold_creates_backend_placeholder_files(tmp_path: Path) -> None:
@@ -94,4 +94,32 @@ def test_apply_entity_fields_to_scaffold_is_idempotent_for_same_fields(tmp_path:
     second = apply_entity_fields_to_scaffold(project_dir, "Task", [{"name": "title", "type": "string"}])
     assert "app/models/task.py" in first
     assert "app/schemas/task.py" in first
+    assert second == []
+
+
+def test_apply_frontend_page_scaffold_creates_pages_for_frontend_structure(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_demo"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    generated = apply_frontend_page_scaffold(project_dir, "Task")
+    assert "frontend/app/tasks/page.tsx" in generated
+    assert "frontend/app/tasks/[id]/page.tsx" in generated
+    assert (project_dir / "frontend" / "app" / "tasks" / "page.tsx").exists()
+    assert (project_dir / "frontend" / "app" / "tasks" / "[id]" / "page.tsx").exists()
+
+
+def test_apply_frontend_page_scaffold_is_idempotent_and_skips_backend_only(tmp_path: Path) -> None:
+    backend_only = tmp_path / "backend_demo"
+    (backend_only / "app").mkdir(parents=True, exist_ok=True)
+    (backend_only / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    assert apply_frontend_page_scaffold(backend_only, "Task") == []
+
+    frontend = tmp_path / "next_demo"
+    (frontend / "app").mkdir(parents=True, exist_ok=True)
+    (frontend / "package.json").write_text('{"name":"next-demo"}\n', encoding="utf-8")
+    first = apply_frontend_page_scaffold(frontend, "Task")
+    second = apply_frontend_page_scaffold(frontend, "Task")
+    assert "app/tasks/page.tsx" in first
+    assert "app/tasks/[id]/page.tsx" in first
     assert second == []
