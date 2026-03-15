@@ -397,6 +397,8 @@ def _help_text() -> str:
         "/diff                  show changes\n\n"
         "INSPECT\n"
         "/inspect               show project summary\n\n"
+        "AI GUIDE\n"
+        "/apply_plan            apply the latest saved development plan\n\n"
         "CLEANUP\n"
         "/delete_project\n"
         "/delete_project repo\n"
@@ -2341,6 +2343,96 @@ def _format_plan_message(plan: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _save_plan_execution(project_path: Path, plan: dict[str, Any]) -> None:
+    plan_path = project_path / ".archmind" / "plan_execution.json"
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _flatten_plan_steps(plan: dict[str, Any], max_steps: int = 20) -> list[str]:
+    out: list[str] = []
+    phases = plan.get("phases") if isinstance(plan.get("phases"), list) else []
+    for phase in phases:
+        if not isinstance(phase, dict):
+            continue
+        steps = phase.get("steps") if isinstance(phase.get("steps"), list) else []
+        for step in steps:
+            cmd = str(step).strip()
+            if cmd:
+                out.append(cmd)
+            if len(out) >= max_steps:
+                return out
+    return out
+
+
+class _PlanExecMessage:
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+
+    async def reply_text(self, text: str) -> None:
+        self.sent.append(text)
+
+
+class _PlanExecUpdate:
+    def __init__(self, message: _PlanExecMessage) -> None:
+        self.message = message
+
+
+class _PlanExecContext:
+    def __init__(self, args: list[str]) -> None:
+        self.args = args
+
+
+async def _execute_plan_step(step: str) -> tuple[str, str]:
+    parts = [x for x in str(step).strip().split(" ") if x]
+    if not parts:
+        return "SKIPPED", "empty step"
+    command = parts[0].strip()
+    args = parts[1:]
+
+    message = _PlanExecMessage()
+    update = _PlanExecUpdate(message)
+    ctx = _PlanExecContext(args)
+
+    if command == "/add_entity":
+        await command_add_entity(update, ctx)
+    elif command == "/add_field":
+        await command_add_field(update, ctx)
+    elif command == "/add_api":
+        await command_add_api(update, ctx)
+    elif command == "/add_page":
+        await command_add_page(update, ctx)
+    else:
+        return "SKIPPED", "unsupported step"
+
+    result = message.sent[-1] if message.sent else ""
+    text = str(result or "")
+    lower = text.lower()
+    skip_markers = (
+        "entity already exists",
+        "field already exists",
+        "api already exists",
+        "page already exists",
+        "module already present",
+    )
+    if any(marker in lower for marker in skip_markers):
+        return "SKIPPED", text
+    fail_markers = (
+        "usage:",
+        "unknown module",
+        "unknown field type",
+        "unknown method",
+        "invalid path",
+        "invalid page path",
+        "entity not found",
+        "no project selected",
+        "no active project",
+    )
+    if any(marker in lower for marker in fail_markers):
+        return "FAILED", text
+    return "SUCCESS", text
+
+
 async def command_plan(update: Any, context: Any) -> None:
     args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
     if args:
@@ -2350,6 +2442,9 @@ async def command_plan(update: Any, context: Any) -> None:
         reasoning = reason_architecture_from_idea(normalized)
         suggestion = suggest_project_spec(normalized, reasoning)
         plan = build_plan_from_suggestion(normalized, reasoning, suggestion)
+        target_project = _resolve_target_project()
+        if target_project is not None:
+            _save_plan_execution(target_project, plan)
         await update.message.reply_text(_truncate_message(_format_plan_message(plan)))
         return
 
@@ -2362,7 +2457,62 @@ async def command_plan(update: Any, context: Any) -> None:
     if not raw:
         raw, _ = _read_or_init_project_spec(project_path)
     plan = build_plan_from_project_spec(raw)
+    _save_plan_execution(project_path, plan)
     await update.message.reply_text(_truncate_message(_format_plan_message(plan)))
+
+
+async def command_apply_plan(update: Any, context: Any) -> None:
+    del context
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text("No active project.\n\nRun:\n- /projects\n- /use <n>\n- /plan")
+        return
+
+    plan_path = project_path / ".archmind" / "plan_execution.json"
+    plan_payload = _load_json(plan_path)
+    if plan_payload is None:
+        await update.message.reply_text("No saved plan available.\n\nRun:\n- /plan <idea>\nor\n- /plan")
+        return
+
+    steps = _flatten_plan_steps(plan_payload, max_steps=20)
+    if not steps:
+        await update.message.reply_text("No saved plan available.\n\nRun:\n- /plan <idea>\nor\n- /plan")
+        return
+
+    lines = ["Applying development plan...", ""]
+    success = 0
+    skipped = 0
+    failed = 0
+    for i, step in enumerate(steps, start=1):
+        status, detail = await _execute_plan_step(step)
+        lines.append(f"{i}. {step}")
+        if status == "SUCCESS":
+            success += 1
+            lines.append("✓ SUCCESS")
+        elif status == "SKIPPED":
+            skipped += 1
+            lines.append("~ SKIPPED")
+        else:
+            failed += 1
+            lines.append("✗ FAILED")
+        if status == "FAILED":
+            reason = str(detail).strip().splitlines()[0] if str(detail).strip() else "unknown"
+            lines.append(f"reason: {reason}")
+        lines.append("")
+
+    lines += [
+        "Plan execution complete.",
+        "",
+        "Applied:",
+        f"Success: {success}",
+        f"Skipped: {skipped}",
+        f"Failed: {failed}",
+        "",
+        "Next:",
+        "- /inspect",
+        "- /next",
+    ]
+    await update.message.reply_text(_truncate_message("\n".join(lines)))
 
 
 async def command_continue(update: Any, context: Any) -> None:
@@ -3638,6 +3788,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("add_api", command_add_api))
     app.add_handler(CommandHandler("add_page", command_add_page))
     app.add_handler(CommandHandler("apply_suggestion", command_apply_suggestion))
+    app.add_handler(CommandHandler("apply_plan", command_apply_plan))
     app.add_handler(CommandHandler("next", command_next))
     app.add_handler(CommandHandler("continue", command_continue))
     app.add_handler(CommandHandler("fix", command_fix))

@@ -38,6 +38,7 @@ from archmind.telegram_bot import (
     command_add_api,
     command_add_page,
     command_apply_suggestion,
+    command_apply_plan,
     command_next,
     command_plan,
     command_retry,
@@ -1798,6 +1799,7 @@ def test_help_mentions_command_groups() -> None:
     assert "/suggest <idea>        show architecture suggestions" in msg.sent[-1]
     assert "/plan <idea>           build development plan from an idea" in msg.sent[-1]
     assert "/plan                  build next development plan for current project" in msg.sent[-1]
+    assert "/apply_plan            apply the latest saved development plan" in msg.sent[-1]
     assert "/add_module <name>     add module to current project" in msg.sent[-1]
     assert "/add_entity <name>     add entity metadata" in msg.sent[-1]
     assert "/add_field <E> <f:t>   add entity field metadata" in msg.sent[-1]
@@ -2855,6 +2857,164 @@ def test_plan_command_from_current_project_works_and_limits_steps(tmp_path: Path
     numbered = [line for line in out.splitlines() if line.startswith(tuple(str(i) + "." for i in range(1, 20)))]
     assert len(numbered) <= 15
 
+
+def test_plan_command_saves_plan_execution_json_for_current_project(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "plan_save_proj"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "domains": ["tasks"],
+                "template": "fullstack-ddd",
+                "modules": ["auth", "db", "dashboard"],
+                "entities": [{"name": "Task", "fields": []}],
+                "api_endpoints": [],
+                "frontend_pages": [],
+                "reason_summary": "demo",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    asyncio.run(command_plan(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+
+    plan_path = archmind / "plan_execution.json"
+    assert plan_path.exists()
+    payload = json.loads(plan_path.read_text(encoding="utf-8"))
+    assert isinstance(payload.get("phases"), list)
+    assert payload["phases"]
+
+
+def test_apply_plan_executes_supported_steps(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "apply_plan_proj"
+    archmind = project_dir / ".archmind"
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text(
+        "from fastapi import FastAPI\n\napp = FastAPI()\n",
+        encoding="utf-8",
+    )
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "domains": ["defects"],
+                "template": "fullstack-ddd",
+                "modules": ["db", "dashboard"],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+                "reason_summary": "demo",
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "plan_execution.json").write_text(
+        json.dumps(
+            {
+                "phases": [
+                    {"title": "Core entities", "steps": ["/add_entity Defect"]},
+                    {"title": "Core fields", "steps": ["/add_field Defect title:string"]},
+                    {"title": "APIs", "steps": ["/add_api GET /reports"]},
+                    {"title": "Frontend", "steps": ["/add_page reports/list"]},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    asyncio.run(command_apply_plan(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Applying development plan..." in out
+    assert "Plan execution complete." in out
+    assert "Success: 4" in out
+    assert "Failed: 0" in out
+
+    spec = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
+    assert any(str(e.get("name")) == "Defect" for e in (spec.get("entities") or []))
+    defect = [e for e in (spec.get("entities") or []) if str(e.get("name")) == "Defect"][0]
+    assert any(str(f.get("name")) == "title" and str(f.get("type")) == "string" for f in (defect.get("fields") or []))
+    assert "GET /reports" in (spec.get("api_endpoints") or [])
+    assert "reports/list" in (spec.get("frontend_pages") or [])
+
+
+def test_apply_plan_continues_after_failed_step_and_tracks_skip(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "apply_plan_fail_continue"
+    archmind = project_dir / ".archmind"
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text(
+        "from fastapi import FastAPI\n\napp = FastAPI()\n",
+        encoding="utf-8",
+    )
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "domains": ["tasks"],
+                "template": "fastapi",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+                "reason_summary": "demo",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "plan_execution.json").write_text(
+        json.dumps(
+            {
+                "phases": [
+                    {"title": "Bad", "steps": ["/add_field UnknownEntity title:string"]},
+                    {"title": "Skip", "steps": ["/unknown_command something"]},
+                    {"title": "Good", "steps": ["/add_entity Task"]},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    asyncio.run(command_apply_plan(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "✗ FAILED" in out
+    assert "~ SKIPPED" in out
+    assert "Success: 1" in out
+    assert "Skipped: 1" in out
+    assert "Failed: 1" in out
+
+    spec = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
+    assert any(str(e.get("name")) == "Task" for e in (spec.get("entities") or []))
+
+
+def test_apply_plan_without_project_shows_error(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: None)
+    msg = DummyMessage()
+    asyncio.run(command_apply_plan(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    assert msg.sent[-1] == "No active project.\n\nRun:\n- /projects\n- /use <n>\n- /plan"
+
+
+def test_apply_plan_without_saved_plan_shows_error(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "apply_plan_no_file"
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps({"shape": "backend", "domains": [], "template": "fastapi", "modules": []}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_apply_plan(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    assert msg.sent[-1] == "No saved plan available.\n\nRun:\n- /plan <idea>\nor\n- /plan"
 
 def test_plan_command_without_project_shows_error(monkeypatch) -> None:
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: None)
