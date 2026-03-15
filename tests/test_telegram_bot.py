@@ -1378,6 +1378,8 @@ def test_use_by_project_name_works(monkeypatch, tmp_path: Path) -> None:
     assert "Deploy:" in out
     assert "Target: local" in out
     assert "Status: SUCCESS" in out
+    assert "Try next:" in out
+    assert "- /next" in out
     assert get_current_project() == project.resolve()
 
 
@@ -1793,35 +1795,26 @@ def test_help_mentions_command_groups() -> None:
     asyncio.run(command_help(update, ctx))
     assert msg.sent
     assert "ArchMind commands" in msg.sent[-1]
-    assert "PROJECT" in msg.sent[-1]
-    assert "/idea <idea>" in msg.sent[-1]
-    assert "/pipeline <idea>       alias of /idea" in msg.sent[-1]
-    assert "/preview <idea>        preview Brain reasoning" in msg.sent[-1]
-    assert "/suggest <idea>        show architecture suggestions" in msg.sent[-1]
-    assert "/design <idea>         generate architecture design document" in msg.sent[-1]
-    assert "/plan <idea>           build development plan from an idea" in msg.sent[-1]
-    assert "/plan                  build next development plan for current project" in msg.sent[-1]
-    assert "/apply_plan            apply the latest saved development plan" in msg.sent[-1]
-    assert "/add_module <name>     add module to current project" in msg.sent[-1]
-    assert "/add_entity <name>     add entity metadata" in msg.sent[-1]
-    assert "/add_field <E> <f:t>   add entity field metadata" in msg.sent[-1]
-    assert "/add_api <M> <path>    add API endpoint metadata" in msg.sent[-1]
-    assert "/add_page <path>       add frontend page metadata" in msg.sent[-1]
-    assert "/next                  suggest next dev commands" in msg.sent[-1]
-    assert "/current               show selected project" in msg.sent[-1]
-    assert "/state                 show raw pipeline state" in msg.sent[-1]
-    assert "PIPELINE CONTROL" in msg.sent[-1]
-    assert "/continue              continue last project" in msg.sent[-1]
-    assert "/fix                   run fix step" in msg.sent[-1]
-    assert "/retry                 fix + continue" in msg.sent[-1]
-    assert "LOCAL RUNTIME" in msg.sent[-1]
-    assert "/logs                  show logs" in msg.sent[-1]
-    assert "DEPLOY" in msg.sent[-1]
-    assert "/deploy local" in msg.sent[-1]
-    assert "INSPECT" in msg.sent[-1]
-    assert "/inspect               show project summary" in msg.sent[-1]
-    assert "CLEANUP" in msg.sent[-1]
-    assert "/delete_project all" in msg.sent[-1]
+    assert "IDEA" in msg.sent[-1]
+    assert "/design <idea>        generate architecture design" in msg.sent[-1]
+    assert "/suggest <idea>       suggest architecture" in msg.sent[-1]
+    assert "/plan <idea>          generate development plan" in msg.sent[-1]
+    assert "EXECUTION" in msg.sent[-1]
+    assert "/apply_plan           execute saved development plan" in msg.sent[-1]
+    assert "PROJECT EVOLUTION" in msg.sent[-1]
+    assert "/add_entity <name>" in msg.sent[-1]
+    assert "/add_field <Entity> <field>:<type>" in msg.sent[-1]
+    assert "/add_api <method> <path>" in msg.sent[-1]
+    assert "/add_page <page>" in msg.sent[-1]
+    assert "INSPECTION" in msg.sent[-1]
+    assert "/inspect              show project overview" in msg.sent[-1]
+    assert "/next                 suggest next development steps" in msg.sent[-1]
+    assert "PROJECT MANAGEMENT" in msg.sent[-1]
+    assert "/projects" in msg.sent[-1]
+    assert "/use <n>" in msg.sent[-1]
+    assert "Example workflow" in msg.sent[-1]
+    assert "/design defect tracker" in msg.sent[-1]
+    assert "/apply_plan" in msg.sent[-1]
 
 
 def test_preview_command_outputs_brain_reasoning_fields() -> None:
@@ -1894,6 +1887,9 @@ def test_design_command_outputs_design_sections() -> None:
     assert "- Defect(" in out
     assert "Relationships:" in out
     assert "Device has many TestRuns" in out
+    assert "Next step" in out
+    assert "1. generate development plan" in out
+    assert "2. generate project" in out
 
 
 def test_design_command_requires_idea() -> None:
@@ -2862,11 +2858,44 @@ def test_next_command_limits_suggestions_to_five(tmp_path: Path, monkeypatch) ->
     assert len(numbered) <= 5
 
 
+def test_next_command_no_suggestions_shows_guidance(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "next_done_proj"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "domains": ["notes"],
+                "template": "fastapi",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+                "reason_summary": "demo",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "No immediate suggestions." in out
+    assert "Next:" in out
+    assert "- /inspect" in out
+    assert "- continue evolving the project" in out
+
+
 def test_next_command_without_selected_project_shows_error(monkeypatch) -> None:
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: None)
     msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
-    assert msg.sent[-1] == "No project selected\n\nRun:\n/projects\n/use <n>"
+    out = msg.sent[-1]
+    assert "No active project." in out
+    assert "1. /design <idea>" in out
+    assert "2. /plan <idea>" in out
+    assert "3. /idea_local <idea>" in out
 
 
 def test_plan_command_from_idea_includes_phases() -> None:
@@ -3053,7 +3082,11 @@ def test_apply_plan_without_project_shows_error(monkeypatch) -> None:
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: None)
     msg = DummyMessage()
     asyncio.run(command_apply_plan(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
-    assert msg.sent[-1] == "No active project.\n\nRun:\n- /projects\n- /use <n>\n- /plan"
+    out = msg.sent[-1]
+    assert "No active project." in out
+    assert "1. /design <idea>" in out
+    assert "1. /projects" in out
+    assert "2. /use <n>" in out
 
 
 def test_apply_plan_without_saved_plan_shows_error(tmp_path: Path, monkeypatch) -> None:
@@ -3072,7 +3105,10 @@ def test_plan_command_without_project_shows_error(monkeypatch) -> None:
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: None)
     msg = DummyMessage()
     asyncio.run(command_plan(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
-    assert msg.sent[-1] == "No project selected\n\nRun:\n/projects\n/use <n>"
+    out = msg.sent[-1]
+    assert "No active project." in out
+    assert "1. /design <idea>" in out
+    assert "1. /projects" in out
 
 
 def test_help_topic_idea() -> None:

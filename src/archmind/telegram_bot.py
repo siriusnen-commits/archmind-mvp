@@ -360,51 +360,29 @@ def run_state_command(project_dir: Path, timeout_s: int = 30) -> tuple[bool, str
 def _help_text() -> str:
     return (
         "ArchMind commands\n\n"
-        "PROJECT\n"
-        "/idea <idea>           generate project\n"
-        "/idea_local <idea>     generate + run locally\n"
-        "/pipeline <idea>       alias of /idea\n"
-        "/preview <idea>        preview Brain reasoning\n"
-        "/suggest <idea>        show architecture suggestions\n"
-        "/design <idea>         generate architecture design document\n"
-        "/plan <idea>           build development plan from an idea\n"
-        "/plan                  build next development plan for current project\n"
-        "/add_module <name>     add module to current project\n"
-        "/add_entity <name>     add entity metadata\n"
-        "/add_field <E> <f:t>   add entity field metadata\n"
-        "/add_api <M> <path>    add API endpoint metadata\n"
-        "/add_page <path>       add frontend page metadata\n"
-        "/apply_suggestion      apply last suggestion to spec\n"
-        "/next                  suggest next dev commands\n"
-        "/projects              list projects\n"
-        "/use <n>               select project\n"
-        "/current               show selected project\n"
-        "/status                show current status\n\n"
-        "/state                 show raw pipeline state\n\n"
-        "PIPELINE CONTROL\n"
-        "/continue              continue last project\n"
-        "/fix                   run fix step\n"
-        "/retry                 fix + continue\n\n"
-        "LOCAL RUNTIME\n"
-        "/running               show running services\n"
-        "/logs                  show logs\n"
-        "/restart               restart services\n"
-        "/stop                  stop services\n\n"
-        "DEPLOY\n"
-        "/deploy local\n"
-        "/deploy railway\n\n"
-        "CODE\n"
-        "/tree                  show file tree\n"
-        "/open <file>           open file\n"
-        "/diff                  show changes\n\n"
-        "INSPECT\n"
-        "/inspect               show project summary\n\n"
-        "AI GUIDE\n"
-        "/apply_plan            apply the latest saved development plan\n\n"
-        "CLEANUP\n"
-        "/delete_project\n"
-        "/delete_project repo\n"
-        "/delete_project all"
+        "IDEA\n"
+        "/design <idea>        generate architecture design\n"
+        "/suggest <idea>       suggest architecture\n"
+        "/plan <idea>          generate development plan\n\n"
+        "EXECUTION\n"
+        "/apply_plan           execute saved development plan\n\n"
+        "PROJECT EVOLUTION\n"
+        "/add_entity <name>\n"
+        "/add_field <Entity> <field>:<type>\n"
+        "/add_api <method> <path>\n"
+        "/add_page <page>\n\n"
+        "INSPECTION\n"
+        "/inspect              show project overview\n"
+        "/next                 suggest next development steps\n\n"
+        "PROJECT MANAGEMENT\n"
+        "/projects\n"
+        "/use <n>\n\n"
+        "Example workflow\n\n"
+        "/design defect tracker\n"
+        "/plan defect tracker\n"
+        "/apply_plan\n"
+        "/inspect\n"
+        "/next"
     )
 
 
@@ -445,6 +423,19 @@ def _truncate_message(text: str, limit: int = 3900) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 3] + "..."
+
+
+def _no_active_project_guidance() -> str:
+    return (
+        "No active project.\n\n"
+        "To start a project:\n\n"
+        "1. /design <idea>\n"
+        "2. /plan <idea>\n"
+        "3. /idea_local <idea>\n\n"
+        "or\n\n"
+        "1. /projects\n"
+        "2. /use <n>"
+    )
 
 
 def _load_json(path: Path) -> Optional[dict[str, Any]]:
@@ -1894,6 +1885,7 @@ def build_finished_message(
             "Next:",
         ]
         lines.extend(f"- {line}" for line in next_actions[:3])
+    lines += ["", "Next:", "- /inspect", "- /next"]
     return _truncate_message("\n".join(lines), limit=max_len)
 
 
@@ -2385,9 +2377,13 @@ async def command_design(update: Any, context: Any) -> None:
         "Reasoning:",
         str(design.get("reasoning") or reasoning.get("reason_summary") or "unclear architecture"),
         "",
-        "Next:",
-        f"- /plan {idea}",
-        f"- /idea_local {idea}",
+        "Next step",
+        "",
+        "1. generate development plan",
+        f"   /plan {idea}",
+        "",
+        "2. generate project",
+        f"   /idea_local {idea}",
     ]
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 
@@ -2523,7 +2519,7 @@ async def command_plan(update: Any, context: Any) -> None:
 
     project_path = _resolve_target_project()
     if project_path is None:
-        await update.message.reply_text("No project selected\n\nRun:\n/projects\n/use <n>")
+        await update.message.reply_text(_no_active_project_guidance())
         return
     spec_path = project_path / ".archmind" / "project_spec.json"
     raw = _load_json(spec_path) or {}
@@ -2538,7 +2534,7 @@ async def command_apply_plan(update: Any, context: Any) -> None:
     del context
     project_path = _resolve_target_project()
     if project_path is None:
-        await update.message.reply_text("No active project.\n\nRun:\n- /projects\n- /use <n>\n- /plan")
+        await update.message.reply_text(_no_active_project_guidance())
         return
 
     plan_path = project_path / ".archmind" / "plan_execution.json"
@@ -2664,7 +2660,7 @@ async def command_inspect(update: Any, context: Any) -> None:
     del context
     project_path = _resolve_target_project()
     if project_path is None:
-        await update.message.reply_text("No project selected. Use /projects then /use <n>.")
+        await update.message.reply_text(_no_active_project_guidance())
         return
 
     archmind_dir = project_path / ".archmind"
@@ -2782,6 +2778,13 @@ async def command_inspect(update: Any, context: Any) -> None:
         if evolution_added:
             lines.append(f"Added modules: {', '.join(evolution_added)}")
         lines.append(f"History count: {evolution_history_count}")
+    lines += [
+        "",
+        "Try next:",
+        "- /next",
+        "- /add_entity <name>",
+        "- /add_field <Entity> <field>:<type>",
+    ]
 
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 
@@ -2860,13 +2863,15 @@ def _build_selected_project_summary(project_path: Path) -> str:
         if deploy_status:
             lines.append(f"Status: {deploy_status}")
 
+    lines += ["", "Try next:", "- /inspect", "- /next"]
+
     return "\n".join(lines)
 
 
 async def command_add_module(update: Any, context: Any) -> None:
     project_path = _resolve_target_project()
     if project_path is None:
-        await update.message.reply_text("No project selected. Use /projects then /use <n>.")
+        await update.message.reply_text(_no_active_project_guidance())
         return
 
     args = [str(x).strip().lower() for x in getattr(context, "args", []) if str(x).strip()]
@@ -2934,7 +2939,7 @@ async def command_add_module(update: Any, context: Any) -> None:
 async def command_add_entity(update: Any, context: Any) -> None:
     project_path = _resolve_target_project()
     if project_path is None:
-        await update.message.reply_text("No project selected. Use /projects then /use <n>.")
+        await update.message.reply_text(_no_active_project_guidance())
         return
 
     args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
@@ -3005,7 +3010,7 @@ async def command_add_entity(update: Any, context: Any) -> None:
 async def command_add_field(update: Any, context: Any) -> None:
     project_path = _resolve_target_project()
     if project_path is None:
-        await update.message.reply_text("No project selected. Use /projects then /use <n>.")
+        await update.message.reply_text(_no_active_project_guidance())
         return
 
     args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
@@ -3121,7 +3126,7 @@ async def command_add_field(update: Any, context: Any) -> None:
 async def command_add_api(update: Any, context: Any) -> None:
     project_path = _resolve_target_project()
     if project_path is None:
-        await update.message.reply_text("No project selected. Use /projects then /use <n>.")
+        await update.message.reply_text(_no_active_project_guidance())
         return
 
     args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
@@ -3179,7 +3184,7 @@ async def command_add_api(update: Any, context: Any) -> None:
 async def command_add_page(update: Any, context: Any) -> None:
     project_path = _resolve_target_project()
     if project_path is None:
-        await update.message.reply_text("No project selected. Use /projects then /use <n>.")
+        await update.message.reply_text(_no_active_project_guidance())
         return
 
     args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
@@ -3306,7 +3311,7 @@ async def command_next(update: Any, context: Any) -> None:
     del context
     project_path = _resolve_target_project()
     if project_path is None:
-        await update.message.reply_text("No project selected\n\nRun:\n/projects\n/use <n>")
+        await update.message.reply_text(_no_active_project_guidance())
         return
 
     spec_path = project_path / ".archmind" / "project_spec.json"
@@ -3325,7 +3330,9 @@ async def command_next(update: Any, context: Any) -> None:
 
     suggestions = suggest_next_commands(spec, limit=5)
     if not suggestions:
-        await update.message.reply_text("Next development suggestions\n\nNo immediate suggestions.\n\nNext:\n- /inspect")
+        await update.message.reply_text(
+            "Next development suggestions\n\nNo immediate suggestions.\n\nNext:\n- /inspect\n- continue evolving the project"
+        )
         return
 
     lines = ["Next development suggestions", ""]
