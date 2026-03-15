@@ -522,6 +522,42 @@ def _entity_summaries(entities: Any) -> list[str]:
     return summaries
 
 
+def _entity_summaries_for_inspect(entities: Any, max_fields: int = 5) -> list[str]:
+    summaries: list[str] = []
+    for entity in _normalize_entities(entities):
+        name = str(entity.get("name") or "").strip()
+        if not name:
+            continue
+        fields = entity.get("fields") if isinstance(entity.get("fields"), list) else []
+        pairs: list[str] = []
+        for field in fields:
+            if not isinstance(field, dict):
+                continue
+            field_name = str(field.get("name") or "").strip()
+            field_type = str(field.get("type") or "").strip().lower()
+            if field_name and field_type:
+                pairs.append(f"{field_name}:{field_type}")
+        if len(pairs) > max_fields:
+            shown = ", ".join(pairs[:max_fields])
+            summaries.append(f"{name}({shown}, ... +{len(pairs) - max_fields} more)")
+        elif pairs:
+            summaries.append(f"{name}({', '.join(pairs)})")
+        else:
+            summaries.append(name)
+    return summaries
+
+
+def _append_truncated_bullets(lines: list[str], title: str, items: list[str], limit: int, suffix_label: str) -> None:
+    if not items:
+        return
+    lines += ["", title]
+    for item in items[:limit]:
+        lines.append(f"- {item}")
+    extra = len(items) - limit
+    if extra > 0:
+        lines.append(f"- ... +{extra} more {suffix_label}")
+
+
 def _entity_endpoint_set(entity_name: str) -> list[str]:
     normalized = _normalize_entity_name(entity_name)
     if not normalized:
@@ -2249,17 +2285,18 @@ async def command_inspect(update: Any, context: Any) -> None:
     reasoning = _load_json(archmind_dir / "architecture_reasoning.json") or {}
     state = _load_json(archmind_dir / "state.json") or {}
 
-    shape = str(spec.get("shape") or reasoning.get("app_shape") or "unknown").strip()
-    template = str(spec.get("template") or reasoning.get("recommended_template") or "unknown").strip()
+    shape = str(spec.get("shape") or reasoning.get("app_shape") or "unknown").strip() or "unknown"
+    template = str(spec.get("template") or reasoning.get("recommended_template") or "unknown").strip() or "unknown"
     domains = [str(x) for x in (spec.get("domains") or reasoning.get("domains") or []) if str(x).strip()]
     modules = [str(x) for x in (spec.get("modules") or reasoning.get("modules") or []) if str(x).strip()]
-    entities = _entity_summaries(spec.get("entities"))
+    entities = _entity_summaries_for_inspect(spec.get("entities"), max_fields=5)
     api_endpoints = [str(x) for x in (spec.get("api_endpoints") or []) if str(x).strip()]
     frontend_pages = [str(x) for x in (spec.get("frontend_pages") or []) if str(x).strip()]
     reason_summary = str(spec.get("reason_summary") or reasoning.get("reason_summary") or "").strip()
     evolution = spec.get("evolution") if isinstance(spec.get("evolution"), dict) else {}
     evolution_version = int(evolution.get("version") or 1) if evolution else 1
     evolution_added = _ordered_modules([str(x) for x in (evolution.get("added_modules") or [])]) if evolution else []
+    evolution_history_count = len(evolution.get("history") or []) if isinstance(evolution.get("history"), list) else 0
 
     has_backend = (project_path / "app").is_dir() or (project_path / "requirements.txt").exists()
     has_frontend = (
@@ -2298,30 +2335,17 @@ async def command_inspect(update: Any, context: Any) -> None:
         "Project:",
         project_path.name,
         "",
-        "Shape:",
-        shape or "unknown",
-        "",
-        "Template:",
-        template or "unknown",
-        "",
-        "Domains:",
-        ", ".join(domains) if domains else "(none)",
-        "",
-        "Modules:",
-        ", ".join(modules) if modules else "(none)",
+        "Architecture:",
+        f"Shape: {shape}",
+        f"Template: {template}",
+        f"Domains: {', '.join(domains) if domains else '(none)'}",
+        f"Modules: {', '.join(modules) if modules else '(none)'}",
     ]
-    if entities:
-        lines += ["", "Entities:", ", ".join(entities)]
-    if api_endpoints:
-        lines += ["", "API endpoints:"] + api_endpoints[:10]
-    if frontend_pages:
-        lines += ["", "Frontend pages:"] + frontend_pages[:10]
+    _append_truncated_bullets(lines, "Entities:", entities, limit=10, suffix_label="entities")
+    _append_truncated_bullets(lines, "API:", api_endpoints, limit=10, suffix_label="endpoints")
+    _append_truncated_bullets(lines, "Frontend:", frontend_pages, limit=10, suffix_label="pages")
     if reason_summary:
         lines += ["", "Reasoning:", reason_summary]
-    if evolution_added:
-        lines += ["", "Evolution:", f"Version: {evolution_version}", f"Added modules: {', '.join(evolution_added)}"]
-    elif evolution:
-        lines += ["", "Evolution:", f"Version: {evolution_version}"]
     if structure:
         lines += ["", "Structure:", structure]
     if core_files:
@@ -2365,6 +2389,12 @@ async def command_inspect(update: Any, context: Any) -> None:
             lines.append(f"Target: {deploy_target}")
         if deploy_status:
             lines.append(f"Status: {deploy_status}")
+
+    if evolution:
+        lines += ["", "Evolution:", f"Version: {evolution_version}"]
+        if evolution_added:
+            lines.append(f"Added modules: {', '.join(evolution_added)}")
+        lines.append(f"History count: {evolution_history_count}")
 
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 

@@ -1886,21 +1886,23 @@ def test_inspect_command_summarizes_project_spec_reasoning_and_state(tmp_path: P
     out = msg.sent[-1]
     assert "Project:" in out
     assert "task_tracker" in out
-    assert "Shape:" in out
-    assert "Template:" in out
-    assert "Domains:" in out
-    assert "Modules:" in out
+    assert "Architecture:" in out
+    assert "Shape: fullstack" in out
+    assert "Template: fullstack-ddd" in out
+    assert "Domains: tasks, teams" in out
+    assert "Modules: auth, db, dashboard" in out
     assert "Entities:" in out
-    assert "Task(title:string)" in out
-    assert "API endpoints:" in out
-    assert "GET /tasks" in out
-    assert "Frontend pages:" in out
-    assert "tasks/list" in out
-    assert "tasks/detail" in out
+    assert "- Task(title:string)" in out
+    assert "API:" in out
+    assert "- GET /tasks" in out
+    assert "Frontend:" in out
+    assert "- tasks/list" in out
+    assert "- tasks/detail" in out
     assert "Reasoning:" in out
     assert "Evolution:" in out
     assert "Version: 1" in out
     assert "Added modules: auth" in out
+    assert "History count: 1" in out
     assert "Structure:" in out
     assert "backend + frontend" in out
     assert "Files:" in out
@@ -1914,6 +1916,46 @@ def test_inspect_command_summarizes_project_spec_reasoning_and_state(tmp_path: P
     assert "Deploy:" in out
     assert "Target: local" in out
     assert "Status: SUCCESS" in out
+
+
+def test_inspect_command_truncates_entity_api_and_page_lists(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "big_proj"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend").mkdir(parents=True, exist_ok=True)
+    entities = [{"name": "Task", "fields": [{"name": f"f{i}", "type": "string"} for i in range(7)]}]
+    entities += [{"name": f"Entity{i}", "fields": []} for i in range(1, 7)]
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "domains": ["tasks"],
+                "template": "fullstack-ddd",
+                "modules": ["db"],
+                "entities": entities,
+                "reason_summary": "demo",
+                "evolution": {
+                    "version": 1,
+                    "added_modules": ["db"],
+                    "history": [{"action": "add_module", "module": "db"} for _ in range(3)],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_inspect(update, DummyContext()))
+    out = msg.sent[-1]
+
+    assert "Task(f0:string, f1:string, f2:string, f3:string, f4:string, ... +2 more)" in out
+    assert "more endpoints" in out
+    assert "more pages" in out
+    assert "History count: 3" in out
 
 
 def test_add_module_updates_spec_and_reuses_apply_hook(tmp_path: Path, monkeypatch) -> None:
