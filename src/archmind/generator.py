@@ -616,6 +616,28 @@ def _write_if_missing(path: Path, content: str, generated: list[str], project_di
     generated.append(str(path.relative_to(project_dir)).replace("\\", "/"))
 
 
+def _render_entity_router_content(slug: str, plural: str) -> str:
+    return (
+        "from fastapi import APIRouter\n\n"
+        f'router = APIRouter(prefix="/{plural}", tags=["{plural}"])\n\n'
+        '@router.get("/")\n'
+        f"def list_{plural}():\n"
+        "    return []\n\n"
+        '@router.post("/")\n'
+        f"def create_{slug}():\n"
+        f'    return {{"message": "{slug} created"}}\n\n'
+        '@router.get("/{id}")\n'
+        f"def get_{slug}(id: int):\n"
+        '    return {"id": id}\n\n'
+        '@router.patch("/{id}")\n'
+        f"def update_{slug}(id: int):\n"
+        f'    return {{"id": id, "message": "{slug} updated"}}\n\n'
+        '@router.delete("/{id}")\n'
+        f"def delete_{slug}(id: int):\n"
+        f'    return {{"id": id, "message": "{slug} deleted"}}\n'
+    )
+
+
 def _ensure_main_router_registration(main_py: Path, entity_slug: str, generated: list[str], project_dir: Path) -> None:
     if not main_py.exists():
         return
@@ -675,19 +697,7 @@ def apply_entity_scaffold(project_dir: Path, entity_name: str) -> list[str]:
         generated,
         project_dir,
     )
-    _write_if_missing(
-        routers_file,
-        "from fastapi import APIRouter\n\n"
-        f'router = APIRouter(prefix="/{plural}", tags=["{plural}"])\n\n'
-        '@router.get("/")\n'
-        f"def list_{plural}():\n"
-        "    return []\n\n"
-        '@router.post("/")\n'
-        f"def create_{slug}():\n"
-        f'    return {{"message": "{slug} created"}}\n',
-        generated,
-        project_dir,
-    )
+    _write_if_changed(routers_file, _render_entity_router_content(slug, plural), generated, project_dir)
 
     _ensure_main_router_registration(project_dir / "app" / "main.py", slug, generated, project_dir)
     return generated

@@ -515,6 +515,35 @@ def _entity_summaries(entities: Any) -> list[str]:
     return summaries
 
 
+def _entity_endpoint_set(entity_name: str) -> list[str]:
+    normalized = _normalize_entity_name(entity_name)
+    if not normalized:
+        return []
+    slug = re.sub(r"(?<!^)(?=[A-Z])", "_", normalized).lower()
+    plural = f"{slug}s"
+    return [
+        f"GET /{plural}",
+        f"POST /{plural}",
+        f"GET /{plural}/{{id}}",
+        f"PATCH /{plural}/{{id}}",
+        f"DELETE /{plural}/{{id}}",
+    ]
+
+
+def _rebuild_api_endpoints(spec: dict[str, Any]) -> list[str]:
+    endpoints: list[str] = []
+    seen: set[str] = set()
+    for entity in _normalize_entities(spec.get("entities")):
+        name = str(entity.get("name") or "").strip()
+        for endpoint in _entity_endpoint_set(name):
+            if endpoint in seen:
+                continue
+            seen.add(endpoint)
+            endpoints.append(endpoint)
+    spec["api_endpoints"] = endpoints
+    return endpoints
+
+
 def _ensure_evolution_block(spec: dict[str, Any]) -> dict[str, Any]:
     evolution_raw = spec.get("evolution")
     evolution = evolution_raw if isinstance(evolution_raw, dict) else {}
@@ -548,8 +577,7 @@ def _read_or_init_project_spec(project_path: Path) -> tuple[dict[str, Any], Path
     if "reason_summary" not in spec:
         spec["reason_summary"] = str(reasoning.get("reason_summary") or "")
     spec["entities"] = _normalize_entities(spec.get("entities"))
-    if "api_endpoints" not in spec or not isinstance(spec.get("api_endpoints"), list):
-        spec["api_endpoints"] = []
+    _rebuild_api_endpoints(spec)
     if "frontend_pages" not in spec or not isinstance(spec.get("frontend_pages"), list):
         spec["frontend_pages"] = []
     _ensure_evolution_block(spec)
@@ -2188,7 +2216,7 @@ async def command_inspect(update: Any, context: Any) -> None:
         return
 
     archmind_dir = project_path / ".archmind"
-    spec = _load_json(archmind_dir / "project_spec.json") or {}
+    spec, _ = _read_or_init_project_spec(project_path)
     reasoning = _load_json(archmind_dir / "architecture_reasoning.json") or {}
     state = _load_json(archmind_dir / "state.json") or {}
 
@@ -2197,6 +2225,7 @@ async def command_inspect(update: Any, context: Any) -> None:
     domains = [str(x) for x in (spec.get("domains") or reasoning.get("domains") or []) if str(x).strip()]
     modules = [str(x) for x in (spec.get("modules") or reasoning.get("modules") or []) if str(x).strip()]
     entities = _entity_summaries(spec.get("entities"))
+    api_endpoints = [str(x) for x in (spec.get("api_endpoints") or []) if str(x).strip()]
     reason_summary = str(spec.get("reason_summary") or reasoning.get("reason_summary") or "").strip()
     evolution = spec.get("evolution") if isinstance(spec.get("evolution"), dict) else {}
     evolution_version = int(evolution.get("version") or 1) if evolution else 1
@@ -2253,6 +2282,8 @@ async def command_inspect(update: Any, context: Any) -> None:
     ]
     if entities:
         lines += ["", "Entities:", ", ".join(entities)]
+    if api_endpoints:
+        lines += ["", "API endpoints:"] + api_endpoints[:10]
     if reason_summary:
         lines += ["", "Reasoning:", reason_summary]
     if evolution_added:
@@ -2482,6 +2513,7 @@ async def command_add_entity(update: Any, context: Any) -> None:
 
     entities.append({"name": entity_name, "fields": []})
     spec["entities"] = _normalize_entities(entities)
+    _rebuild_api_endpoints(spec)
     evolution = _ensure_evolution_block(spec)
     history = evolution.get("history") if isinstance(evolution.get("history"), list) else []
     history.append({"action": "add_entity", "entity": entity_name})
@@ -2558,6 +2590,9 @@ async def command_add_field(update: Any, context: Any) -> None:
     existing_fields = target_entity.get("fields") if isinstance(target_entity.get("fields"), list) else []
     existing_names = {str(item.get("name") or "").strip().lower() for item in existing_fields if isinstance(item, dict)}
     if field_name.lower() in existing_names:
+        _rebuild_api_endpoints(spec)
+        spec_path.parent.mkdir(parents=True, exist_ok=True)
+        spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
         pairs = []
         for item in existing_fields:
             if not isinstance(item, dict):
@@ -2582,6 +2617,7 @@ async def command_add_field(update: Any, context: Any) -> None:
     existing_fields.append({"name": field_name, "type": field_type})
     target_entity["fields"] = existing_fields
     spec["entities"] = _normalize_entities(entities)
+    _rebuild_api_endpoints(spec)
     evolution = _ensure_evolution_block(spec)
     history = evolution.get("history") if isinstance(evolution.get("history"), list) else []
     history.append({"action": "add_field", "entity": entity_name, "field": field_name, "type": field_type})

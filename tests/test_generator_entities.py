@@ -20,6 +20,12 @@ def test_apply_entity_scaffold_creates_backend_placeholder_files(tmp_path: Path)
     assert (project_dir / "app" / "models" / "task.py").exists()
     assert (project_dir / "app" / "schemas" / "task.py").exists()
     assert (project_dir / "app" / "routers" / "task.py").exists()
+    router_text = (project_dir / "app" / "routers" / "task.py").read_text(encoding="utf-8")
+    assert "def list_tasks()" in router_text
+    assert "def create_task()" in router_text
+    assert "def get_task(id: int)" in router_text
+    assert "def update_task(id: int)" in router_text
+    assert "def delete_task(id: int)" in router_text
 
 
 def test_apply_entity_scaffold_is_idempotent_and_does_not_overwrite_existing_files(tmp_path: Path) -> None:

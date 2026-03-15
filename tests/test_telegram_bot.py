@@ -1892,6 +1892,8 @@ def test_inspect_command_summarizes_project_spec_reasoning_and_state(tmp_path: P
     assert "Modules:" in out
     assert "Entities:" in out
     assert "Task(title:string)" in out
+    assert "API endpoints:" in out
+    assert "GET /tasks" in out
     assert "Reasoning:" in out
     assert "Evolution:" in out
     assert "Version: 1" in out
@@ -2114,10 +2116,24 @@ def test_add_entity_generates_backend_scaffold_and_main_router_registration(tmp_
     assert (project_dir / "app" / "models" / "task.py").exists()
     assert (project_dir / "app" / "schemas" / "task.py").exists()
     assert (project_dir / "app" / "routers" / "task.py").exists()
+    router_text = (project_dir / "app" / "routers" / "task.py").read_text(encoding="utf-8")
+    assert "def list_tasks()" in router_text
+    assert "def create_task()" in router_text
+    assert "def get_task(id: int)" in router_text
+    assert "def update_task(id: int)" in router_text
+    assert "def delete_task(id: int)" in router_text
 
     main_text = (project_dir / "app" / "main.py").read_text(encoding="utf-8")
     assert "from app.routers.task import router as task_router" in main_text
     assert "app.include_router(task_router)" in main_text
+    payload = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
+    assert payload.get("api_endpoints") == [
+        "GET /tasks",
+        "POST /tasks",
+        "GET /tasks/{id}",
+        "PATCH /tasks/{id}",
+        "DELETE /tasks/{id}",
+    ]
 
 
 def test_add_field_updates_spec_and_scaffold_files(tmp_path: Path, monkeypatch) -> None:
@@ -2155,6 +2171,13 @@ def test_add_field_updates_spec_and_scaffold_files(tmp_path: Path, monkeypatch) 
     payload = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
     entities = payload.get("entities") or []
     assert entities[0]["fields"] == [{"name": "title", "type": "string"}]
+    assert payload.get("api_endpoints") == [
+        "GET /tasks",
+        "POST /tasks",
+        "GET /tasks/{id}",
+        "PATCH /tasks/{id}",
+        "DELETE /tasks/{id}",
+    ]
     assert payload.get("evolution", {}).get("history", [])[-1] == {
         "action": "add_field",
         "entity": "Task",
@@ -2197,6 +2220,15 @@ def test_add_field_prevents_duplicate(tmp_path: Path, monkeypatch) -> None:
     payload = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
     fields = payload.get("entities", [{}])[0].get("fields", [])
     assert fields == [{"name": "title", "type": "string"}]
+    endpoints = payload.get("api_endpoints") or []
+    assert endpoints == [
+        "GET /tasks",
+        "POST /tasks",
+        "GET /tasks/{id}",
+        "PATCH /tasks/{id}",
+        "DELETE /tasks/{id}",
+    ]
+    assert len(endpoints) == len(set(endpoints))
 
 
 def test_add_field_entity_not_found_shows_hint(tmp_path: Path, monkeypatch) -> None:
