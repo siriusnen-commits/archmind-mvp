@@ -14,7 +14,7 @@ from typing import Any, Optional
 from archmind.brain import reason_architecture_from_idea
 from archmind.decision import decide_next_action, next_action_suggestions
 from archmind.failure import classify_failure
-from archmind.generator import SUPPORTED_MODULES, apply_modules_to_project
+from archmind.generator import SUPPORTED_MODULES, apply_entity_scaffold, apply_modules_to_project
 from archmind.idea_normalizer import normalize_idea
 from archmind.project_type import detect_project_type, normalize_project_type
 from archmind.state import derive_task_label_from_failure_signature, load_state, set_agent_state, update_after_deploy
@@ -2454,8 +2454,18 @@ async def command_add_entity(update: Any, context: Any) -> None:
     history.append({"action": "add_entity", "entity": entity_name})
     evolution["history"] = history
 
+    generated_files = apply_entity_scaffold(project_path, entity_name)
+
     spec_path.parent.mkdir(parents=True, exist_ok=True)
     spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    code_lines = []
+    if generated_files:
+        code_lines = ["Generated:"] + [f"- {path}" for path in generated_files]
+        next_lines = ["Next:", "- /inspect", "- /restart"]
+    else:
+        code_lines = ["Code scaffold:", "SKIPPED (no backend structure)"]
+        next_lines = ["Next:", "- /inspect"]
 
     await update.message.reply_text(
         "Entity added\n\n"
@@ -2463,10 +2473,9 @@ async def command_add_entity(update: Any, context: Any) -> None:
         f"{project_path.name}\n\n"
         "Entity:\n"
         f"{entity_name}\n\n"
-        "Entities:\n"
-        f"{', '.join(_entity_names(spec.get('entities')))}\n\n"
-        "Next:\n"
-        "- /inspect"
+        + "\n".join(code_lines)
+        + "\n\n"
+        + "\n".join(next_lines)
     )
 
 

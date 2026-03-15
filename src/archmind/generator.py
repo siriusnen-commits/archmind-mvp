@@ -593,6 +593,99 @@ def apply_modules_to_project(project_dir: Path, template_name: str, modules: lis
     readme_path.write_text(content + "\n" + section, encoding="utf-8")
 
 
+def _has_backend_structure(project_dir: Path) -> bool:
+    app_dir = project_dir / "app"
+    return app_dir.is_dir() and ((app_dir / "main.py").exists() or (project_dir / "requirements.txt").exists())
+
+
+def _write_if_missing(path: Path, content: str, generated: list[str], project_dir: Path) -> None:
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    generated.append(str(path.relative_to(project_dir)).replace("\\", "/"))
+
+
+def _ensure_main_router_registration(main_py: Path, entity_slug: str, generated: list[str], project_dir: Path) -> None:
+    if not main_py.exists():
+        return
+    import_line = f"from app.routers.{entity_slug} import router as {entity_slug}_router"
+    include_line = f"app.include_router({entity_slug}_router)"
+    text = main_py.read_text(encoding="utf-8")
+    changed = False
+
+    if import_line not in text:
+        if text and not text.endswith("\n"):
+            text += "\n"
+        text += f"\n{import_line}\n"
+        changed = True
+    if include_line not in text:
+        if text and not text.endswith("\n"):
+            text += "\n"
+        text += f"{include_line}\n"
+        changed = True
+
+    if changed:
+        main_py.write_text(text, encoding="utf-8")
+        rel = str(main_py.relative_to(project_dir)).replace("\\", "/")
+        if rel not in generated:
+            generated.append(rel)
+
+
+def apply_entity_scaffold(project_dir: Path, entity_name: str) -> list[str]:
+    """
+    Create minimal backend CRUD scaffold placeholders for an entity.
+    Returns generated or updated file paths. If backend structure is missing, returns [].
+    """
+    if not _has_backend_structure(project_dir):
+        return []
+
+    safe_name = re.sub(r"[^a-zA-Z0-9_]", "", str(entity_name or "").strip())
+    if not safe_name:
+        return []
+    class_name = safe_name[0].upper() + safe_name[1:]
+    slug = re.sub(r"(?<!^)(?=[A-Z])", "_", class_name).lower()
+    plural = f"{slug}s"
+
+    generated: list[str] = []
+    models_file = project_dir / "app" / "models" / f"{slug}.py"
+    schemas_file = project_dir / "app" / "schemas" / f"{slug}.py"
+    routers_file = project_dir / "app" / "routers" / f"{slug}.py"
+
+    _write_if_missing(
+        models_file,
+        f"class {class_name}:\n"
+        "    pass\n",
+        generated,
+        project_dir,
+    )
+    _write_if_missing(
+        schemas_file,
+        f"class {class_name}Create:\n"
+        "    pass\n\n"
+        f"class {class_name}Read:\n"
+        "    pass\n",
+        generated,
+        project_dir,
+    )
+    _write_if_missing(
+        routers_file,
+        "from fastapi import APIRouter\n\n"
+        f'router = APIRouter(prefix="/{plural}", tags=["{plural}"])\n\n'
+        '@router.get("/")\n'
+        f"def list_{plural}():\n"
+        "    return []\n\n"
+        '@router.post("/")\n'
+        f"def create_{slug}():\n"
+        f'    return {{"message": "{slug} created"}}\n',
+        generated,
+        project_dir,
+    )
+
+    _ensure_main_router_registration(project_dir / "app" / "main.py", slug, generated, project_dir)
+    return generated
+
+
 # -----------------------------
 # Public entrypoint (CLI calls this)
 # -----------------------------

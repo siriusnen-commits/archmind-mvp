@@ -2030,7 +2030,8 @@ def test_add_entity_updates_spec_and_evolution_history(tmp_path: Path, monkeypat
     out = msg.sent[-1]
     assert "Entity added" in out
     assert "Entity:\nTask" in out
-    assert "Entities:\nTask" in out
+    assert "Code scaffold:" in out
+    assert "SKIPPED (no backend structure)" in out
 
     payload = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
     assert payload.get("entities") == [{"name": "Task", "fields": []}]
@@ -2067,6 +2068,54 @@ def test_add_entity_prevents_duplicate_case_insensitive(tmp_path: Path, monkeypa
 
     payload = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
     assert payload.get("entities") == [{"name": "Task", "fields": []}]
+
+
+def test_add_entity_generates_backend_scaffold_and_main_router_registration(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "app" / "main.py").write_text(
+        "from fastapi import FastAPI\n\napp = FastAPI()\n",
+        encoding="utf-8",
+    )
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "domains": ["tasks"],
+                "template": "fastapi",
+                "modules": [],
+                "entities": [],
+                "reason_summary": "task api",
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_add_entity(update, DummyContext(args=["Task"])))
+
+    out = msg.sent[-1]
+    assert "Entity added" in out
+    assert "Generated:" in out
+    assert "- app/models/task.py" in out
+    assert "- app/schemas/task.py" in out
+    assert "- app/routers/task.py" in out
+    assert "- app/main.py" in out
+    assert "- /restart" in out
+
+    assert (project_dir / "app" / "models" / "task.py").exists()
+    assert (project_dir / "app" / "schemas" / "task.py").exists()
+    assert (project_dir / "app" / "routers" / "task.py").exists()
+
+    main_text = (project_dir / "app" / "main.py").read_text(encoding="utf-8")
+    assert "from app.routers.task import router as task_router" in main_text
+    assert "app.include_router(task_router)" in main_text
 
 
 def test_help_topic_idea() -> None:
