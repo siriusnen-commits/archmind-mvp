@@ -25,6 +25,7 @@ from archmind.generator import (
     has_frontend_structure,
 )
 from archmind.idea_normalizer import normalize_idea
+from archmind.next_suggester import suggest_next_commands
 from archmind.project_type import detect_project_type, normalize_project_type
 from archmind.spec_suggester import suggest_project_spec
 from archmind.state import derive_task_label_from_failure_signature, load_state, set_agent_state, update_after_deploy
@@ -369,6 +370,7 @@ def _help_text() -> str:
         "/add_api <M> <path>    add API endpoint metadata\n"
         "/add_page <path>       add frontend page metadata\n"
         "/apply_suggestion      apply last suggestion to spec\n"
+        "/next                  suggest next dev commands\n"
         "/projects              list projects\n"
         "/use <n>               select project\n"
         "/current               show selected project\n"
@@ -3001,6 +3003,44 @@ async def command_apply_suggestion(update: Any, context: Any) -> None:
     )
 
 
+async def command_next(update: Any, context: Any) -> None:
+    del context
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text("No project selected\n\nRun:\n/projects\n/use <n>")
+        return
+
+    spec_path = project_path / ".archmind" / "project_spec.json"
+    raw = _load_json(spec_path) or {}
+    if not raw:
+        raw, _ = _read_or_init_project_spec(project_path)
+    spec = dict(raw)
+    if not isinstance(spec.get("modules"), list):
+        spec["modules"] = []
+    spec["entities"] = _normalize_entities(spec.get("entities"))
+    if not isinstance(spec.get("api_endpoints"), list):
+        spec["api_endpoints"] = []
+    if not isinstance(spec.get("frontend_pages"), list):
+        spec["frontend_pages"] = []
+    spec["shape"] = str(spec.get("shape") or "unknown")
+
+    suggestions = suggest_next_commands(spec, limit=5)
+    if not suggestions:
+        await update.message.reply_text("Next development suggestions\n\nNo immediate suggestions.\n\nNext:\n- /inspect")
+        return
+
+    lines = ["Next development suggestions", ""]
+    for i, item in enumerate(suggestions, start=1):
+        command = str(item.get("command") or "").strip()
+        reason = str(item.get("reason") or "").strip()
+        lines.append(f"{i}. {command}")
+        if reason:
+            lines.append(f"   reason: {reason}")
+        lines.append("")
+    lines += ["Next:", "- run suggested commands", "- /inspect"]
+    await update.message.reply_text(_truncate_message("\n".join(lines)))
+
+
 async def command_use(update: Any, context: Any) -> None:
     args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
     if not args:
@@ -3521,6 +3561,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("add_api", command_add_api))
     app.add_handler(CommandHandler("add_page", command_add_page))
     app.add_handler(CommandHandler("apply_suggestion", command_apply_suggestion))
+    app.add_handler(CommandHandler("next", command_next))
     app.add_handler(CommandHandler("continue", command_continue))
     app.add_handler(CommandHandler("fix", command_fix))
     app.add_handler(CommandHandler("retry", command_retry))

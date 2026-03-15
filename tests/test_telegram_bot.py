@@ -38,6 +38,7 @@ from archmind.telegram_bot import (
     command_add_api,
     command_add_page,
     command_apply_suggestion,
+    command_next,
     command_retry,
     command_preview,
     command_suggest,
@@ -1775,6 +1776,7 @@ def test_help_mentions_command_groups() -> None:
     assert "/add_field <E> <f:t>   add entity field metadata" in msg.sent[-1]
     assert "/add_api <M> <path>    add API endpoint metadata" in msg.sent[-1]
     assert "/add_page <path>       add frontend page metadata" in msg.sent[-1]
+    assert "/next                  suggest next dev commands" in msg.sent[-1]
     assert "/current               show selected project" in msg.sent[-1]
     assert "/state                 show raw pipeline state" in msg.sent[-1]
     assert "PIPELINE CONTROL" in msg.sent[-1]
@@ -2678,6 +2680,100 @@ def test_inspect_reflects_apply_suggestion_results(tmp_path: Path, monkeypatch) 
     assert "- Defect(title:string)" in out
     assert "- GET /defects" in out
     assert "- defects/list" in out
+
+
+def test_next_command_recommends_user_entity_for_auth_module(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "domains": ["tasks"],
+                "template": "fullstack-ddd",
+                "modules": ["auth"],
+                "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": ["GET /tasks"],
+                "frontend_pages": ["tasks/list"],
+                "reason_summary": "demo",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Next development suggestions" in out
+    assert "/add_entity User" in out
+
+
+def test_next_command_recommends_api_and_pages_for_entity(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "domains": ["tasks"],
+                "template": "fullstack-ddd",
+                "modules": [],
+                "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": ["GET /tasks"],
+                "frontend_pages": [],
+                "reason_summary": "demo",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "/add_api GET /tasks/{id}" in out
+    assert "/add_page tasks/list" in out
+    assert "/add_page tasks/detail" in out
+
+
+def test_next_command_limits_suggestions_to_five(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "big_proj"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    entities = [
+        {"name": "Task", "fields": [{"name": "title", "type": "string"}]},
+        {"name": "Project", "fields": [{"name": "name", "type": "string"}]},
+        {"name": "Defect", "fields": [{"name": "title", "type": "string"}]},
+    ]
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "domains": ["tasks", "teams"],
+                "template": "fullstack-ddd",
+                "modules": ["auth", "dashboard"],
+                "entities": entities,
+                "api_endpoints": [],
+                "frontend_pages": [],
+                "reason_summary": "demo",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    numbered = [line for line in out.splitlines() if line.startswith(tuple(str(i) + "." for i in range(1, 10)))]
+    assert len(numbered) <= 5
+
+
+def test_next_command_without_selected_project_shows_error(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: None)
+    msg = DummyMessage()
+    asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    assert msg.sent[-1] == "No project selected\n\nRun:\n/projects\n/use <n>"
 
 
 def test_help_topic_idea() -> None:
