@@ -33,7 +33,31 @@ def test_reason_architecture_realtime_signal() -> None:
     assert out["realtime_needed"] is True
 
 
+def test_reason_architecture_modules_auth_db_dashboard() -> None:
+    out = reason_architecture_from_idea("team task tracker with login dashboard")
+    modules = list(out.get("modules") or [])
+    assert "auth" in modules
+    assert "db" in modules
+    assert "dashboard" in modules
+
+
+def test_reason_architecture_modules_file_upload_and_internal_tool_signal() -> None:
+    out = reason_architecture_from_idea("document upload admin tool")
+    modules = list(out.get("modules") or [])
+    assert "file-upload" in modules
+    assert ("dashboard" in modules) or bool(out.get("internal_tool"))
+
+
+def test_reason_architecture_modules_worker() -> None:
+    out = reason_architecture_from_idea("background batch processing api")
+    modules = list(out.get("modules") or [])
+    assert "worker" in modules
+
+
 def test_reason_architecture_unknown_fallback_defaults() -> None:
     out = reason_architecture_from_idea("hello")
     assert out["app_shape"] == "unknown"
     assert out["recommended_template"] == "fastapi"
+    assert out["modules"] == []
+    assert out["db_needed"] is False
+    assert out["dashboard_needed"] is False

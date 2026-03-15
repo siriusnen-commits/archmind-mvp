@@ -34,10 +34,16 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
         return {
             "app_shape": "unknown",
             "domains": [],
+            "modules": [],
             "backend_needed": False,
             "frontend_needed": False,
             "persistence_needed": False,
             "auth_needed": False,
+            "db_needed": False,
+            "dashboard_needed": False,
+            "worker_needed": False,
+            "file_upload_needed": False,
+            "internal_tool": False,
             "realtime_needed": False,
             "deployment_intent": "unknown",
             "recommended_template": "fastapi",
@@ -80,8 +86,69 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
             r"\bauth\b",
             r"\bauthentication\b",
             r"\buser account\b",
+            r"\buser\b",
             r"회원",
             r"로그인",
+            r"사용자",
+        ],
+    )
+    db_needed = _has_any(
+        text,
+        [
+            r"\bdb\b",
+            r"\bdatabase\b",
+            r"저장",
+            r"관리",
+            r"추적",
+            r"\btracker\b",
+            r"\bcrud\b",
+            r"\bpersistence\b",
+        ],
+    )
+    dashboard_needed = _has_any(
+        text,
+        [
+            r"\bdashboard\b",
+            r"\badmin\b",
+            r"\bpanel\b",
+            r"\banalytics\b",
+            r"대시보드",
+            r"관리화면",
+            r"관리자",
+            r"통계",
+        ],
+    )
+    worker_needed = _has_any(
+        text,
+        [
+            r"\bworker\b",
+            r"\bqueue\b",
+            r"\bbackground\b",
+            r"\bbatch\b",
+            r"\basync job\b",
+            r"백그라운드",
+            r"배치",
+        ],
+    )
+    file_upload_needed = _has_any(
+        text,
+        [
+            r"\bupload\b",
+            r"\bfile\b",
+            r"\battachment\b",
+            r"첨부",
+            r"업로드",
+            r"\bdocument upload\b",
+        ],
+    )
+    internal_tool = _has_any(
+        text,
+        [
+            r"\binternal\b",
+            r"\badmin tool\b",
+            r"사내용",
+            r"내부용",
+            r"관리툴",
         ],
     )
     realtime_needed = _has_any(
@@ -110,8 +177,21 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
             r"추적",
         ],
     )
+    if db_needed:
+        persistence_needed = True
 
     domains = _extract_domains(text)
+    modules: list[str] = []
+    if auth_needed:
+        modules.append("auth")
+    if db_needed:
+        modules.append("db")
+    if dashboard_needed:
+        modules.append("dashboard")
+    if worker_needed:
+        modules.append("worker")
+    if file_upload_needed:
+        modules.append("file-upload")
 
     if backend_needed and frontend_needed:
         app_shape = "fullstack"
@@ -144,14 +224,22 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
 
     domain_text = ", ".join(domains) if domains else "general"
     reason_summary = f"{app_shape} app for {domain_text}" if app_shape != "unknown" else "unclear architecture from idea"
+    if modules:
+        reason_summary = f"{reason_summary} with {', '.join(modules)}"
 
     return {
         "app_shape": app_shape,
         "domains": domains,
+        "modules": modules,
         "backend_needed": backend_needed,
         "frontend_needed": frontend_needed,
         "persistence_needed": persistence_needed,
         "auth_needed": auth_needed,
+        "db_needed": db_needed,
+        "dashboard_needed": dashboard_needed,
+        "worker_needed": worker_needed,
+        "file_upload_needed": file_upload_needed,
+        "internal_tool": internal_tool,
         "realtime_needed": realtime_needed,
         "deployment_intent": deployment_intent,
         "recommended_template": recommended_template,

@@ -245,6 +245,39 @@ def test_pipeline_writes_architecture_reasoning_artifact_and_state_fields(tmp_pa
     assert state_payload.get("architecture_reason_summary")
 
 
+def test_pipeline_writes_project_spec_and_module_alignment(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project)
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "team task tracker with login dashboard",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "project_spec_demo",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+
+    project_dir = tmp_path / "project_spec_demo"
+    reasoning_payload = json.loads(
+        (project_dir / ".archmind" / "architecture_reasoning.json").read_text(encoding="utf-8")
+    )
+    spec_payload = json.loads((project_dir / ".archmind" / "project_spec.json").read_text(encoding="utf-8"))
+
+    assert spec_payload.get("shape") == reasoning_payload.get("app_shape")
+    assert spec_payload.get("modules") == reasoning_payload.get("modules")
+    assert spec_payload.get("template")
+    assert spec_payload.get("reason_summary")
+
+
 def test_pipeline_cli_type_keeps_fallback_metadata(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project)
 

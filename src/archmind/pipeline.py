@@ -102,10 +102,11 @@ def _make_generate_options(opt_kwargs: dict[str, Any]):
     return GenerateOptions(**filtered)
 
 
-def _resolve_project_dir(opts: PipelineOptions) -> Optional[Path]:
+def _resolve_project_dir(opts: PipelineOptions, modules: Optional[list[str]] = None) -> Optional[Path]:
     if opts.idea:
         opt_kwargs = _build_generate_options_kwargs(opts)
         opt = _make_generate_options(opt_kwargs)
+        setattr(opt, "modules", list(modules or []))
         gen_entry = _resolve_generator_entry()
 
         # positional-first call attempt
@@ -480,6 +481,34 @@ def _write_architecture_reasoning(project_dir: Path, payload: dict[str, Any]) ->
         return None
 
 
+def _write_project_spec(
+    project_dir: Path,
+    architecture_reasoning: dict[str, Any],
+    selected_template: str,
+    effective_template: str,
+) -> Optional[Path]:
+    try:
+        out = project_dir / ".archmind" / "project_spec.json"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        preferred_template = (
+            selected_template
+            or str(architecture_reasoning.get("recommended_template") or "").strip()
+            or effective_template
+            or "fastapi"
+        )
+        payload = {
+            "shape": str(architecture_reasoning.get("app_shape") or "unknown"),
+            "domains": [str(item) for item in (architecture_reasoning.get("domains") or []) if str(item).strip()],
+            "template": preferred_template,
+            "modules": [str(item) for item in (architecture_reasoning.get("modules") or []) if str(item).strip()],
+            "reason_summary": str(architecture_reasoning.get("reason_summary") or ""),
+        }
+        out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return out
+    except Exception:
+        return None
+
+
 def run_pipeline_command(opts: PipelineOptions) -> int:
     if opts.dry_run:
         steps = []
@@ -526,7 +555,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         fallback_template = resolve_default_template()
         effective_template = opts.template or fallback_template or "fastapi"
 
-    project_dir = _resolve_project_dir(opts)
+    project_dir = _resolve_project_dir(opts, modules=list(architecture_reasoning.get("modules") or []))
     if project_dir is None:
         print("[ERROR] Provide --path or --idea for pipeline.", file=sys.stderr)
         return 2
@@ -536,10 +565,12 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         return 2
 
     reasoning_path: Optional[Path] = None
+    project_spec_path: Optional[Path] = None
     if architecture_reasoning:
         architecture_reasoning["selected_template"] = selected_template
         architecture_reasoning["effective_template"] = effective_template
         reasoning_path = _write_architecture_reasoning(project_dir, architecture_reasoning)
+        project_spec_path = _write_project_spec(project_dir, architecture_reasoning, selected_template, effective_template)
 
     plan_md_path: Optional[Path] = None
     plan_json_path: Optional[Path] = None
@@ -759,6 +790,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         "plan_md": str(plan_md_path) if plan_md_path else None,
         "plan_json": str(plan_json_path) if plan_json_path else None,
         "architecture_reasoning": str(reasoning_path) if reasoning_path else None,
+        "project_spec": str(project_spec_path) if project_spec_path else None,
     }
 
     payload = {

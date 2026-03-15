@@ -382,6 +382,37 @@ def write_project(spec: Dict[str, Any], opt: GenerateOptions) -> Path:
     return project_root
 
 
+def apply_modules_to_project(project_dir: Path, template_name: str, modules: list[str]) -> None:
+    """
+    Sprint 1 module hook:
+    - keep a lightweight artifact for selected modules
+    - reflect selected modules in README when present
+    """
+    del template_name
+    normalized = [str(item).strip() for item in modules if str(item).strip()]
+    if not normalized:
+        return
+
+    archmind_dir = project_dir / ".archmind"
+    archmind_dir.mkdir(parents=True, exist_ok=True)
+    (archmind_dir / "selected_modules.json").write_text(
+        json.dumps({"modules": normalized}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    readme_path = project_dir / "README.md"
+    if not readme_path.exists():
+        return
+
+    content = readme_path.read_text(encoding="utf-8")
+    if "## Selected modules" in content:
+        return
+    section = "## Selected modules\n" + "\n".join([f"- {item}" for item in normalized]) + "\n"
+    if content and not content.endswith("\n"):
+        content += "\n"
+    readme_path.write_text(content + "\n" + section, encoding="utf-8")
+
+
 # -----------------------------
 # Public entrypoint (CLI calls this)
 # -----------------------------
@@ -416,4 +447,6 @@ def generate_project(idea: str, opt: GenerateOptions):
 
         spec = generate_valid_spec(prompt_text, idea, opt)
     spec = apply_template(spec, opt)
-    return write_project(spec, opt)
+    project_dir = write_project(spec, opt)
+    apply_modules_to_project(project_dir, opt.template, list(getattr(opt, "modules", []) or []))
+    return project_dir
