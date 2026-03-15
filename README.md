@@ -1,6 +1,13 @@
-# ArchMind v0.4.0
+# ArchMind v0.5.0
 
-ArchMind v0.4 introduces the Brain v1 architecture reasoning layer, target-based runtime/deploy abstraction, and a local runtime management workflow that enables idea-to-running-app development.
+ArchMind converts natural language ideas into runnable software projects.
+
+Key capabilities:
+- Brain-based architecture reasoning
+- module-aware project generation
+- multilingual ideas
+- local runtime execution
+- automatic project scaffolding
 
 Idea → Architecture → Working Project
 
