@@ -1794,27 +1794,48 @@ def test_help_mentions_command_groups() -> None:
     ctx = DummyContext()
     asyncio.run(command_help(update, ctx))
     assert msg.sent
-    assert "ArchMind commands" in msg.sent[-1]
-    assert "IDEA" in msg.sent[-1]
-    assert "/design <idea>        generate architecture design" in msg.sent[-1]
-    assert "/suggest <idea>       suggest architecture" in msg.sent[-1]
-    assert "/plan <idea>          generate development plan" in msg.sent[-1]
-    assert "EXECUTION" in msg.sent[-1]
-    assert "/apply_plan           execute saved development plan" in msg.sent[-1]
-    assert "PROJECT EVOLUTION" in msg.sent[-1]
-    assert "/add_entity <name>" in msg.sent[-1]
-    assert "/add_field <Entity> <field>:<type>" in msg.sent[-1]
-    assert "/add_api <method> <path>" in msg.sent[-1]
-    assert "/add_page <page>" in msg.sent[-1]
-    assert "INSPECTION" in msg.sent[-1]
-    assert "/inspect              show project overview" in msg.sent[-1]
-    assert "/next                 suggest next development steps" in msg.sent[-1]
-    assert "PROJECT MANAGEMENT" in msg.sent[-1]
-    assert "/projects" in msg.sent[-1]
-    assert "/use <n>" in msg.sent[-1]
-    assert "Example workflow" in msg.sent[-1]
-    assert "/design defect tracker" in msg.sent[-1]
-    assert "/apply_plan" in msg.sent[-1]
+    out = msg.sent[-1]
+    assert "ArchMind commands" in out
+    assert "PROJECT" in out
+    assert "PIPELINE CONTROL" in out
+    assert "LOCAL RUNTIME" in out
+    assert "DEPLOY" in out
+    assert "CODE" in out
+    assert "INSPECT" in out
+    assert "AI GUIDE" in out
+    assert "CLEANUP" in out
+    assert "/idea <idea>" in out
+    assert "/idea_local <idea>" in out
+    assert "/pipeline <idea>" in out
+    assert "/preview <idea>" in out
+    assert "/suggest <idea>" in out
+    assert "/design <idea>" in out
+    assert "/plan <idea>" in out
+    assert "/add_entity <name>" in out
+    assert "/add_field <E> <f:t>" in out
+    assert "/add_api <M> <path>" in out
+    assert "/add_page <path>" in out
+    assert "/apply_suggestion" in out
+    assert "/next" in out
+    assert "/projects" in out
+    assert "/use <n>" in out
+    assert "/status" in out
+    assert "/state" in out
+    assert "/continue" in out
+    assert "/fix" in out
+    assert "/retry" in out
+    assert "/running" in out
+    assert "/logs" in out
+    assert "/restart" in out
+    assert "/stop" in out
+    assert "/deploy local" in out
+    assert "/tree" in out
+    assert "/open <file>" in out
+    assert "/diff" in out
+    assert "/inspect" in out
+    assert "/apply_plan" in out
+    assert "/delete_project" in out
+    assert "Example workflow" in out
 
 
 def test_preview_command_outputs_brain_reasoning_fields() -> None:

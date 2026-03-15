@@ -39,6 +39,69 @@ DEFAULT_PROJECTS_DIR = Path.home() / "archmind-telegram-projects"
 DEFAULT_TEMPLATE = "fullstack-ddd"
 SUPPORTED_FIELD_TYPES = ("string", "int", "float", "bool", "datetime")
 SUPPORTED_API_METHODS = ("GET", "POST", "PATCH", "DELETE")
+HELP_TEXT = """ArchMind commands
+
+PROJECT
+/idea <idea>           generate project
+/idea_local <idea>     generate + run locally
+/pipeline <idea>       alias of /idea
+/preview <idea>        preview Brain reasoning
+/suggest <idea>        show architecture suggestions
+/design <idea>         generate architecture design document
+/plan <idea>           build development plan from an idea
+/plan                  build next development plan for current project
+/add_module <name>     add module to current project
+/add_entity <name>     add entity metadata
+/add_field <E> <f:t>   add entity field metadata
+/add_api <M> <path>    add API endpoint metadata
+/add_page <path>       add frontend page metadata
+/apply_suggestion      apply last suggestion to spec
+/next                  suggest next dev commands
+/projects              list projects
+/use <n>               select project
+/current               show selected project
+/status                show current status
+
+/state                 show raw pipeline state
+
+PIPELINE CONTROL
+/continue              continue last project
+/fix                   run fix step
+/retry                 fix + continue
+
+LOCAL RUNTIME
+/running               show running services
+/logs                  show logs
+/restart               restart services
+/stop                  stop services
+
+DEPLOY
+/deploy local
+/deploy railway
+
+CODE
+/tree                  show file tree
+/open <file>           open file
+/diff                  show changes
+
+INSPECT
+/inspect               show project summary
+
+AI GUIDE
+/apply_plan            apply the latest saved development plan
+
+CLEANUP
+/delete_project
+/delete_project repo
+/delete_project all
+
+Example workflow
+
+/design defect tracker
+/plan defect tracker
+/apply_plan
+/inspect
+/next"""
 
 
 @dataclass
@@ -358,32 +421,7 @@ def run_state_command(project_dir: Path, timeout_s: int = 30) -> tuple[bool, str
 
 
 def _help_text() -> str:
-    return (
-        "ArchMind commands\n\n"
-        "IDEA\n"
-        "/design <idea>        generate architecture design\n"
-        "/suggest <idea>       suggest architecture\n"
-        "/plan <idea>          generate development plan\n\n"
-        "EXECUTION\n"
-        "/apply_plan           execute saved development plan\n\n"
-        "PROJECT EVOLUTION\n"
-        "/add_entity <name>\n"
-        "/add_field <Entity> <field>:<type>\n"
-        "/add_api <method> <path>\n"
-        "/add_page <page>\n\n"
-        "INSPECTION\n"
-        "/inspect              show project overview\n"
-        "/next                 suggest next development steps\n\n"
-        "PROJECT MANAGEMENT\n"
-        "/projects\n"
-        "/use <n>\n\n"
-        "Example workflow\n\n"
-        "/design defect tracker\n"
-        "/plan defect tracker\n"
-        "/apply_plan\n"
-        "/inspect\n"
-        "/next"
-    )
+    return HELP_TEXT
 
 
 def _help_topic_text(topic: str) -> str:
