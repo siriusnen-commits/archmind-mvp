@@ -10,6 +10,8 @@ from typing import Any, Optional
 
 from archmind.fixer import run_fix_loop
 from archmind.brain import reason_architecture_from_idea
+from archmind.failure_memory import append_failure_memory, get_failure_hints
+from archmind.idea_normalizer import normalize_idea
 from archmind.environment import ensure_environment_readiness
 from archmind.evaluator import write_evaluation
 from archmind.github_repo import create_github_repo
@@ -481,6 +483,24 @@ def _write_architecture_reasoning(project_dir: Path, payload: dict[str, Any]) ->
         return None
 
 
+def _failure_memory_path(opts: PipelineOptions, project_dir: Optional[Path] = None) -> Path:
+    if project_dir is not None:
+        base = project_dir
+    elif opts.path is not None:
+        base = opts.path.resolve()
+    else:
+        base = Path(opts.out or "generated").resolve()
+    return base / ".archmind" / "failure_memory.json"
+
+
+def _build_failure_hint(modules: list[str]) -> str:
+    if "worker" in modules:
+        return "similar idea may require worker module"
+    if modules:
+        return f"previous similar case suggested module {modules[0]}"
+    return "review template/modules for similar failing ideas"
+
+
 def _write_project_spec(
     project_dir: Path,
     architecture_reasoning: dict[str, Any],
@@ -529,13 +549,28 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         return 64
 
     initial_idea = (opts.idea or "").strip()
+    normalized_idea = initial_idea
+    idea_language = "en"
     architecture_reasoning: dict[str, Any] = {}
     selected_template = ""
     effective_template = opts.template
     template_fallback_reason = ""
     if initial_idea:
-        architecture_reasoning = reason_architecture_from_idea(initial_idea)
-        routed_type = normalize_project_type(detect_project_type(initial_idea))
+        normalized_payload = normalize_idea(initial_idea)
+        normalized_idea = str(normalized_payload.get("normalized") or initial_idea)
+        idea_language = str(normalized_payload.get("language") or "en")
+
+        memory_path = _failure_memory_path(opts)
+        for hint in get_failure_hints(normalized_idea, memory_path):
+            print("Failure memory hint:")
+            print(f"- {hint}")
+
+        architecture_reasoning = reason_architecture_from_idea(normalized_idea)
+        architecture_reasoning["idea_original"] = initial_idea
+        architecture_reasoning["idea_normalized"] = normalized_idea
+        architecture_reasoning["idea_language"] = idea_language
+
+        routed_type = normalize_project_type(detect_project_type(normalized_idea))
         app_shape_type = _project_type_from_app_shape(str(architecture_reasoning.get("app_shape") or ""))
         if app_shape_type != "unknown":
             routed_type = app_shape_type
@@ -546,7 +581,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
             if brain_template and app_shape_type != "unknown":
                 selected_template = brain_template
             else:
-                selected_template = select_template_for_project_type(routed_type, initial_idea)
+                selected_template = select_template_for_project_type(routed_type, normalized_idea)
         default_template = resolve_default_template()
         effective_template, fallback_reason = resolve_effective_template(selected_template, default_template)
         template_fallback_reason = fallback_reason or ""
@@ -555,8 +590,29 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         fallback_template = resolve_default_template()
         effective_template = opts.template or fallback_template or "fastapi"
 
-    project_dir = _resolve_project_dir(opts, modules=list(architecture_reasoning.get("modules") or []))
+    try:
+        project_dir = _resolve_project_dir(opts, modules=list(architecture_reasoning.get("modules") or []))
+    except Exception as exc:
+        append_failure_memory(
+            _failure_memory_path(opts),
+            idea=initial_idea or normalized_idea,
+            template=effective_template or opts.template,
+            modules=[str(item) for item in (architecture_reasoning.get("modules") or [])],
+            error=str(exc),
+            hint=_build_failure_hint([str(item) for item in (architecture_reasoning.get("modules") or [])]),
+        )
+        print(f"[ERROR] generation failed: {exc}", file=sys.stderr)
+        return 1
     if project_dir is None:
+        if initial_idea:
+            append_failure_memory(
+                _failure_memory_path(opts),
+                idea=initial_idea or normalized_idea,
+                template=effective_template or opts.template,
+                modules=[str(item) for item in (architecture_reasoning.get("modules") or [])],
+                error="generation returned no project directory",
+                hint=_build_failure_hint([str(item) for item in (architecture_reasoning.get("modules") or [])]),
+            )
         print("[ERROR] Provide --path or --idea for pipeline.", file=sys.stderr)
         return 2
 
