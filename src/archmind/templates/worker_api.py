@@ -7,6 +7,37 @@ from archmind.templates.fastapi_ddd import enforce_fastapi_ddd
 
 def enforce_worker_api(_: Dict[str, str], project_name: str) -> Dict[str, str]:
     files = enforce_fastapi_ddd({}, project_name)
+    files["data/.gitkeep"] = ""
+
+    files["app/db/session.py"] = """from __future__ import annotations
+
+from pathlib import Path
+from sqlmodel import SQLModel, Session, create_engine
+
+from app.core.config import settings
+
+
+def _ensure_sqlite_parent_dir(db_url: str) -> None:
+    value = str(db_url or "").strip()
+    if not value.startswith("sqlite:///"):
+        return
+    db_path = value.replace("sqlite:///", "", 1).strip()
+    if not db_path or db_path == ":memory:":
+        return
+    Path(db_path).expanduser().parent.mkdir(parents=True, exist_ok=True)
+
+
+engine = create_engine(settings.db_url, echo=False)
+
+
+def init_db() -> None:
+    _ensure_sqlite_parent_dir(settings.db_url)
+    SQLModel.metadata.create_all(engine)
+
+
+def get_session() -> Session:
+    return Session(engine)
+"""
 
     files["app/workers/__init__.py"] = ""
     files["app/workers/tasks.py"] = """from __future__ import annotations
@@ -66,6 +97,7 @@ python -m uvicorn app.main:app --reload --host 0.0.0.0 --port ${{PORT:-8000}}
 
 ## Worker endpoint
 - `POST /worker/run` : triggers a placeholder background batch task
+- sqlite file DB defaults to `./data/app.db` and parent directory is auto-created at init
 
 ## Tests
 ```bash
