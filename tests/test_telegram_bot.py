@@ -34,6 +34,7 @@ from archmind.telegram_bot import (
     command_inspect,
     command_add_module,
     command_add_entity,
+    command_add_field,
     command_retry,
     command_preview,
     command_suggest,
@@ -1768,6 +1769,7 @@ def test_help_mentions_command_groups() -> None:
     assert "/suggest <idea>        show architecture suggestions" in msg.sent[-1]
     assert "/add_module <name>     add module to current project" in msg.sent[-1]
     assert "/add_entity <name>     add entity metadata" in msg.sent[-1]
+    assert "/add_field <E> <f:t>   add entity field metadata" in msg.sent[-1]
     assert "/current               show selected project" in msg.sent[-1]
     assert "/state                 show raw pipeline state" in msg.sent[-1]
     assert "PIPELINE CONTROL" in msg.sent[-1]
@@ -1843,7 +1845,7 @@ def test_inspect_command_summarizes_project_spec_reasoning_and_state(tmp_path: P
                 "domains": ["tasks", "teams"],
                 "template": "fullstack-ddd",
                 "modules": ["auth", "db", "dashboard"],
-                "entities": [{"name": "Task", "fields": []}],
+                "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}],
                 "reason_summary": "fullstack app for tasks, teams with auth, db, dashboard",
                 "evolution": {"version": 1, "added_modules": ["auth"], "history": [{"action": "add_module", "module": "auth"}]},
             }
@@ -1889,7 +1891,7 @@ def test_inspect_command_summarizes_project_spec_reasoning_and_state(tmp_path: P
     assert "Domains:" in out
     assert "Modules:" in out
     assert "Entities:" in out
-    assert "Task" in out
+    assert "Task(title:string)" in out
     assert "Reasoning:" in out
     assert "Evolution:" in out
     assert "Version: 1" in out
@@ -2116,6 +2118,127 @@ def test_add_entity_generates_backend_scaffold_and_main_router_registration(tmp_
     main_text = (project_dir / "app" / "main.py").read_text(encoding="utf-8")
     assert "from app.routers.task import router as task_router" in main_text
     assert "app.include_router(task_router)" in main_text
+
+
+def test_add_field_updates_spec_and_scaffold_files(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\n\napp = FastAPI()\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "domains": ["tasks"],
+                "template": "fastapi",
+                "modules": [],
+                "entities": [{"name": "Task", "fields": []}],
+                "reason_summary": "task api",
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_add_field(update, DummyContext(args=["Task", "title:string"])))
+
+    out = msg.sent[-1]
+    assert "Field added" in out
+    assert "Field:\ntitle:string" in out
+    assert "Fields:\ntitle:string" in out
+
+    payload = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
+    entities = payload.get("entities") or []
+    assert entities[0]["fields"] == [{"name": "title", "type": "string"}]
+    assert payload.get("evolution", {}).get("history", [])[-1] == {
+        "action": "add_field",
+        "entity": "Task",
+        "field": "title",
+        "type": "string",
+    }
+
+    model_text = (project_dir / "app" / "models" / "task.py").read_text(encoding="utf-8")
+    schema_text = (project_dir / "app" / "schemas" / "task.py").read_text(encoding="utf-8")
+    assert "title: str" in model_text
+    assert "title: str" in schema_text
+
+
+def test_add_field_prevents_duplicate(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "domains": ["tasks"],
+                "template": "fastapi",
+                "modules": [],
+                "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}],
+                "reason_summary": "task api",
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_add_field(update, DummyContext(args=["Task", "title:string"])))
+    out = msg.sent[-1]
+    assert "Field already exists" in out
+
+    payload = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
+    fields = payload.get("entities", [{}])[0].get("fields", [])
+    assert fields == [{"name": "title", "type": "string"}]
+
+
+def test_add_field_entity_not_found_shows_hint(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "domains": ["tasks"],
+                "template": "fastapi",
+                "modules": [],
+                "entities": [],
+                "reason_summary": "task api",
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_add_field(update, DummyContext(args=["Task", "title:string"])))
+    out = msg.sent[-1]
+    assert "Entity not found: Task" in out
+    assert "/add_entity Task" in out
+
+
+def test_add_field_unknown_type_shows_available_types(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_add_field(update, DummyContext(args=["Task", "title:text"])))
+    out = msg.sent[-1]
+    assert "Unknown field type: text" in out
+    assert "Available types:" in out
+    assert "string, int, float, bool, datetime" in out
 
 
 def test_help_topic_idea() -> None:

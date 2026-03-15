@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from archmind.generator import apply_entity_scaffold
+from archmind.generator import apply_entity_fields_to_scaffold, apply_entity_scaffold
 
 
 def test_apply_entity_scaffold_creates_backend_placeholder_files(tmp_path: Path) -> None:
@@ -51,3 +51,41 @@ def test_apply_entity_scaffold_skips_frontend_only_projects(tmp_path: Path) -> N
 
     assert generated == []
     assert not (project_dir / "app" / "models" / "task.py").exists()
+
+
+def test_apply_entity_fields_to_scaffold_updates_models_and_schemas(tmp_path: Path) -> None:
+    project_dir = tmp_path / "backend_demo"
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\n\napp = FastAPI()\n", encoding="utf-8")
+    apply_entity_scaffold(project_dir, "Task")
+
+    changed = apply_entity_fields_to_scaffold(
+        project_dir,
+        "Task",
+        [{"name": "title", "type": "string"}, {"name": "due_date", "type": "datetime"}],
+    )
+
+    assert "app/models/task.py" in changed
+    assert "app/schemas/task.py" in changed
+    model_text = (project_dir / "app" / "models" / "task.py").read_text(encoding="utf-8")
+    schema_text = (project_dir / "app" / "schemas" / "task.py").read_text(encoding="utf-8")
+    assert "from datetime import datetime" in model_text
+    assert "title: str" in model_text
+    assert "due_date: datetime" in model_text
+    assert "class TaskCreate" in schema_text
+    assert "class TaskRead" in schema_text
+
+
+def test_apply_entity_fields_to_scaffold_is_idempotent_for_same_fields(tmp_path: Path) -> None:
+    project_dir = tmp_path / "backend_demo"
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\n\napp = FastAPI()\n", encoding="utf-8")
+    apply_entity_scaffold(project_dir, "Task")
+
+    first = apply_entity_fields_to_scaffold(project_dir, "Task", [{"name": "title", "type": "string"}])
+    second = apply_entity_fields_to_scaffold(project_dir, "Task", [{"name": "title", "type": "string"}])
+    assert "app/models/task.py" in first
+    assert "app/schemas/task.py" in first
+    assert second == []

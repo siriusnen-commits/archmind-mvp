@@ -598,6 +598,16 @@ def _has_backend_structure(project_dir: Path) -> bool:
     return app_dir.is_dir() and ((app_dir / "main.py").exists() or (project_dir / "requirements.txt").exists())
 
 
+def _entity_identity(entity_name: str) -> tuple[str, str, str]:
+    safe_name = re.sub(r"[^a-zA-Z0-9_]", "", str(entity_name or "").strip())
+    if not safe_name:
+        return "", "", ""
+    class_name = safe_name[0].upper() + safe_name[1:]
+    slug = re.sub(r"(?<!^)(?=[A-Z])", "_", class_name).lower()
+    plural = f"{slug}s"
+    return class_name, slug, plural
+
+
 def _write_if_missing(path: Path, content: str, generated: list[str], project_dir: Path) -> None:
     if path.exists():
         return
@@ -640,12 +650,9 @@ def apply_entity_scaffold(project_dir: Path, entity_name: str) -> list[str]:
     if not _has_backend_structure(project_dir):
         return []
 
-    safe_name = re.sub(r"[^a-zA-Z0-9_]", "", str(entity_name or "").strip())
-    if not safe_name:
+    class_name, slug, plural = _entity_identity(entity_name)
+    if not class_name:
         return []
-    class_name = safe_name[0].upper() + safe_name[1:]
-    slug = re.sub(r"(?<!^)(?=[A-Z])", "_", class_name).lower()
-    plural = f"{slug}s"
 
     generated: list[str] = []
     models_file = project_dir / "app" / "models" / f"{slug}.py"
@@ -684,6 +691,77 @@ def apply_entity_scaffold(project_dir: Path, entity_name: str) -> list[str]:
 
     _ensure_main_router_registration(project_dir / "app" / "main.py", slug, generated, project_dir)
     return generated
+
+
+def _normalize_field_entries(fields: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    normalized: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for item in fields:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        ftype = str(item.get("type") or "").strip().lower()
+        if not name or not ftype:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append((name, ftype))
+    return normalized
+
+
+def _python_type(field_type: str) -> str:
+    mapping = {
+        "string": "str",
+        "int": "int",
+        "float": "float",
+        "bool": "bool",
+        "datetime": "datetime",
+    }
+    return mapping.get(str(field_type).strip().lower(), "str")
+
+
+def _write_if_changed(path: Path, content: str, changed: list[str], project_dir: Path) -> None:
+    existing = path.read_text(encoding="utf-8") if path.exists() else None
+    if existing == content:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    rel = str(path.relative_to(project_dir)).replace("\\", "/")
+    if rel not in changed:
+        changed.append(rel)
+
+
+def apply_entity_fields_to_scaffold(project_dir: Path, entity_name: str, fields: list[dict[str, Any]]) -> list[str]:
+    """
+    Update model/schema placeholders with field metadata for an existing entity scaffold.
+    Returns files that were changed. Frontend-only projects return [].
+    """
+    if not _has_backend_structure(project_dir):
+        return []
+    class_name, slug, _ = _entity_identity(entity_name)
+    if not class_name:
+        return []
+
+    normalized_fields = _normalize_field_entries(fields)
+    need_datetime = any(ftype == "datetime" for _, ftype in normalized_fields)
+    field_lines = [f"    {name}: {_python_type(ftype)}" for name, ftype in normalized_fields]
+    body = "\n".join(field_lines) if field_lines else "    pass"
+    prefix = "from datetime import datetime\n\n" if need_datetime else ""
+
+    model_content = f"{prefix}class {class_name}:\n{body}\n"
+    schema_content = (
+        f"{prefix}class {class_name}Create:\n"
+        f"{body}\n\n"
+        f"class {class_name}Read:\n"
+        f"{body}\n"
+    )
+
+    changed: list[str] = []
+    _write_if_changed(project_dir / "app" / "models" / f"{slug}.py", model_content, changed, project_dir)
+    _write_if_changed(project_dir / "app" / "schemas" / f"{slug}.py", schema_content, changed, project_dir)
+    return changed
 
 
 # -----------------------------

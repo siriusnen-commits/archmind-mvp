@@ -14,7 +14,7 @@ from typing import Any, Optional
 from archmind.brain import reason_architecture_from_idea
 from archmind.decision import decide_next_action, next_action_suggestions
 from archmind.failure import classify_failure
-from archmind.generator import SUPPORTED_MODULES, apply_entity_scaffold, apply_modules_to_project
+from archmind.generator import SUPPORTED_MODULES, apply_entity_fields_to_scaffold, apply_entity_scaffold, apply_modules_to_project
 from archmind.idea_normalizer import normalize_idea
 from archmind.project_type import detect_project_type, normalize_project_type
 from archmind.state import derive_task_label_from_failure_signature, load_state, set_agent_state, update_after_deploy
@@ -24,6 +24,7 @@ LAST_PROJECT_PATH_FILE = Path.home() / ".archmind_telegram_last_project"
 DEFAULT_BASE_DIR = Path.home() / "archmind-telegram-projects"
 DEFAULT_PROJECTS_DIR = Path.home() / "archmind-telegram-projects"
 DEFAULT_TEMPLATE = "fullstack-ddd"
+SUPPORTED_FIELD_TYPES = ("string", "int", "float", "bool", "datetime")
 
 
 @dataclass
@@ -353,6 +354,7 @@ def _help_text() -> str:
         "/suggest <idea>        show architecture suggestions\n"
         "/add_module <name>     add module to current project\n"
         "/add_entity <name>     add entity metadata\n"
+        "/add_field <E> <f:t>   add entity field metadata\n"
         "/projects              list projects\n"
         "/use <n>               select project\n"
         "/current               show selected project\n"
@@ -461,11 +463,23 @@ def _normalize_entities(values: Any) -> list[dict[str, Any]]:
     seen: set[str] = set()
     for item in values:
         name = ""
-        fields: list[Any] = []
+        fields: list[dict[str, str]] = []
         if isinstance(item, dict):
             name = _normalize_entity_name(str(item.get("name") or ""))
-            fields_raw = item.get("fields")
-            fields = fields_raw if isinstance(fields_raw, list) else []
+            fields_raw = item.get("fields") if isinstance(item.get("fields"), list) else []
+            seen_fields: set[str] = set()
+            for field in fields_raw:
+                if not isinstance(field, dict):
+                    continue
+                field_name = str(field.get("name") or "").strip()
+                field_type = str(field.get("type") or "").strip().lower()
+                if not field_name or not field_type:
+                    continue
+                key = field_name.lower()
+                if key in seen_fields:
+                    continue
+                seen_fields.add(key)
+                fields.append({"name": field_name, "type": field_type})
         elif isinstance(item, str):
             name = _normalize_entity_name(item)
         if not name:
@@ -480,6 +494,25 @@ def _normalize_entities(values: Any) -> list[dict[str, Any]]:
 
 def _entity_names(entities: Any) -> list[str]:
     return [str(item.get("name")) for item in _normalize_entities(entities) if str(item.get("name") or "").strip()]
+
+
+def _entity_summaries(entities: Any) -> list[str]:
+    summaries: list[str] = []
+    for entity in _normalize_entities(entities):
+        name = str(entity.get("name") or "").strip()
+        if not name:
+            continue
+        fields = entity.get("fields") if isinstance(entity.get("fields"), list) else []
+        pairs: list[str] = []
+        for field in fields:
+            if not isinstance(field, dict):
+                continue
+            field_name = str(field.get("name") or "").strip()
+            field_type = str(field.get("type") or "").strip().lower()
+            if field_name and field_type:
+                pairs.append(f"{field_name}:{field_type}")
+        summaries.append(f"{name}({', '.join(pairs)})" if pairs else name)
+    return summaries
 
 
 def _ensure_evolution_block(spec: dict[str, Any]) -> dict[str, Any]:
@@ -2163,7 +2196,7 @@ async def command_inspect(update: Any, context: Any) -> None:
     template = str(spec.get("template") or reasoning.get("recommended_template") or "unknown").strip()
     domains = [str(x) for x in (spec.get("domains") or reasoning.get("domains") or []) if str(x).strip()]
     modules = [str(x) for x in (spec.get("modules") or reasoning.get("modules") or []) if str(x).strip()]
-    entities = _entity_names(spec.get("entities"))
+    entities = _entity_summaries(spec.get("entities"))
     reason_summary = str(spec.get("reason_summary") or reasoning.get("reason_summary") or "").strip()
     evolution = spec.get("evolution") if isinstance(spec.get("evolution"), dict) else {}
     evolution_version = int(evolution.get("version") or 1) if evolution else 1
@@ -2476,6 +2509,116 @@ async def command_add_entity(update: Any, context: Any) -> None:
         + "\n".join(code_lines)
         + "\n\n"
         + "\n".join(next_lines)
+    )
+
+
+async def command_add_field(update: Any, context: Any) -> None:
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text("No project selected. Use /projects then /use <n>.")
+        return
+
+    args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
+    if len(args) < 2 or ":" not in args[1]:
+        await update.message.reply_text("Usage: /add_field <Entity> <field_name>:<field_type>")
+        return
+
+    entity_name = _normalize_entity_name(args[0])
+    field_name, field_type = [part.strip() for part in args[1].split(":", 1)]
+    field_type = field_type.lower()
+    if not entity_name or not field_name or not field_type:
+        await update.message.reply_text("Usage: /add_field <Entity> <field_name>:<field_type>")
+        return
+
+    if field_type not in set(SUPPORTED_FIELD_TYPES):
+        await update.message.reply_text(
+            "Unknown field type: "
+            + field_type
+            + "\n\nAvailable types:\n"
+            + ", ".join(SUPPORTED_FIELD_TYPES)
+        )
+        return
+
+    spec, spec_path = _read_or_init_project_spec(project_path)
+    entities = _normalize_entities(spec.get("entities"))
+    target_entity: Optional[dict[str, Any]] = None
+    for entity in entities:
+        if str(entity.get("name") or "").strip().lower() == entity_name.lower():
+            target_entity = entity
+            break
+
+    if target_entity is None:
+        await update.message.reply_text(
+            f"Entity not found: {entity_name}\n\n"
+            "Use:\n"
+            f" /add_entity {entity_name}"
+        )
+        return
+
+    existing_fields = target_entity.get("fields") if isinstance(target_entity.get("fields"), list) else []
+    existing_names = {str(item.get("name") or "").strip().lower() for item in existing_fields if isinstance(item, dict)}
+    if field_name.lower() in existing_names:
+        pairs = []
+        for item in existing_fields:
+            if not isinstance(item, dict):
+                continue
+            n = str(item.get("name") or "").strip()
+            t = str(item.get("type") or "").strip().lower()
+            if n and t:
+                pairs.append(f"{n}:{t}")
+        await update.message.reply_text(
+            "Field already exists\n\n"
+            "Project:\n"
+            f"{project_path.name}\n\n"
+            "Entity:\n"
+            f"{entity_name}\n\n"
+            "Field:\n"
+            f"{field_name}:{field_type}\n\n"
+            "Fields:\n"
+            f"{', '.join(pairs)}"
+        )
+        return
+
+    existing_fields.append({"name": field_name, "type": field_type})
+    target_entity["fields"] = existing_fields
+    spec["entities"] = _normalize_entities(entities)
+    evolution = _ensure_evolution_block(spec)
+    history = evolution.get("history") if isinstance(evolution.get("history"), list) else []
+    history.append({"action": "add_field", "entity": entity_name, "field": field_name, "type": field_type})
+    evolution["history"] = history
+
+    apply_entity_scaffold(project_path, entity_name)
+    apply_entity_fields_to_scaffold(
+        project_path,
+        entity_name,
+        target_entity.get("fields") if isinstance(target_entity.get("fields"), list) else [],
+    )
+
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
+    spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    fields_after = []
+    for item in target_entity.get("fields") if isinstance(target_entity.get("fields"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        n = str(item.get("name") or "").strip()
+        t = str(item.get("type") or "").strip().lower()
+        if n and t:
+            fields_after.append(f"{n}:{t}")
+
+    await update.message.reply_text(
+        "Field added\n\n"
+        "Project:\n"
+        f"{project_path.name}\n\n"
+        "Entity:\n"
+        f"{entity_name}\n\n"
+        "Field:\n"
+        f"{field_name}:{field_type}\n\n"
+        "Fields:\n"
+        f"{', '.join(fields_after)}\n\n"
+        "Next:\n"
+        "- /inspect\n"
+        "- /restart"
     )
 
 
@@ -2995,6 +3138,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("suggest", command_suggest))
     app.add_handler(CommandHandler("add_module", command_add_module))
     app.add_handler(CommandHandler("add_entity", command_add_entity))
+    app.add_handler(CommandHandler("add_field", command_add_field))
     app.add_handler(CommandHandler("continue", command_continue))
     app.add_handler(CommandHandler("fix", command_fix))
     app.add_handler(CommandHandler("retry", command_retry))
