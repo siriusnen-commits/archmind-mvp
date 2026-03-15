@@ -1811,8 +1811,11 @@ def test_suggest_command_outputs_suggestion_list() -> None:
     update = DummyUpdate(message=msg, effective_chat=DummyChat())
     asyncio.run(command_suggest(update, DummyContext(args=["document", "upload", "admin", "tool"])))
     out = msg.sent[-1]
-    assert "Possible architectures" in out
-    assert "1." in out
+    assert "Architecture suggestion" in out
+    assert "Template candidates:" in out
+    assert "Suggested entities:" in out
+    assert "Suggested APIs:" in out
+    assert "Suggested pages:" in out
     assert "Reasoning:" in out
 
 

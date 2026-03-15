@@ -26,6 +26,7 @@ from archmind.generator import (
 )
 from archmind.idea_normalizer import normalize_idea
 from archmind.project_type import detect_project_type, normalize_project_type
+from archmind.spec_suggester import suggest_project_spec
 from archmind.state import derive_task_label_from_failure_signature, load_state, set_agent_state, update_after_deploy
 from archmind.template_selector import is_supported_template, select_template_for_project_type
 
@@ -2207,15 +2208,51 @@ async def command_suggest(update: Any, context: Any) -> None:
     normalized_payload = normalize_idea(idea)
     normalized = str(normalized_payload.get("normalized") or idea)
     reasoning = reason_architecture_from_idea(normalized)
-    suggestions = get_template_suggestions(normalized, reasoning)
-    if not suggestions:
-        suggestions = [str(reasoning.get("recommended_template") or "fastapi")]
+    suggestions = get_template_suggestions(normalized, reasoning) or [str(reasoning.get("recommended_template") or "fastapi")]
+    spec_suggestion = suggest_project_spec(normalized, reasoning)
 
-    numbered = "\n".join([f"{i}. {name}" for i, name in enumerate(suggestions, start=1)])
+    shape = str(reasoning.get("app_shape") or "unknown")
+    template = str(reasoning.get("recommended_template") or "unknown")
+    modules = [str(x) for x in (reasoning.get("modules") or []) if str(x).strip()]
+    entities = spec_suggestion.get("entities") if isinstance(spec_suggestion.get("entities"), list) else []
+    apis = [str(x) for x in (spec_suggestion.get("api_endpoints") or []) if str(x).strip()]
+    pages = [str(x) for x in (spec_suggestion.get("frontend_pages") or []) if str(x).strip()]
+
+    entity_lines: list[str] = []
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        name = str(entity.get("name") or "").strip()
+        fields = entity.get("fields") if isinstance(entity.get("fields"), list) else []
+        pairs = []
+        for field in fields:
+            if not isinstance(field, dict):
+                continue
+            field_name = str(field.get("name") or "").strip()
+            field_type = str(field.get("type") or "").strip()
+            if field_name and field_type:
+                pairs.append(f"{field_name}:{field_type}")
+        if name:
+            entity_lines.append(f"- {name}({', '.join(pairs)})" if pairs else f"- {name}")
+
+    template_lines = "\n".join([f"- {name}" for name in suggestions[:3]])
     reason = str(reasoning.get("reason_summary") or "unclear architecture")
     message = (
-        "Possible architectures\n\n"
-        f"{numbered}\n\n"
+        "Architecture suggestion\n\n"
+        "Shape:\n"
+        f"{shape}\n\n"
+        "Template:\n"
+        f"{template}\n\n"
+        "Modules:\n"
+        f"{', '.join(modules) if modules else '(none)'}\n\n"
+        "Template candidates:\n"
+        f"{template_lines}\n\n"
+        "Suggested entities:\n"
+        f"{chr(10).join(entity_lines) if entity_lines else '- (none)'}\n\n"
+        "Suggested APIs:\n"
+        f"{chr(10).join([f'- {x}' for x in apis]) if apis else '- (none)'}\n\n"
+        "Suggested pages:\n"
+        f"{chr(10).join([f'- {x}' for x in pages]) if pages else '- (none)'}\n\n"
         "Reasoning:\n"
         f"{reason}"
     )
