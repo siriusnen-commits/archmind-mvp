@@ -37,6 +37,7 @@ from archmind.telegram_bot import (
     command_add_field,
     command_add_api,
     command_add_page,
+    command_apply_suggestion,
     command_retry,
     command_preview,
     command_suggest,
@@ -2554,6 +2555,129 @@ def test_inspect_reflects_explicitly_added_api_and_page(tmp_path: Path, monkeypa
     out = msg.sent[-1]
     assert "- GET /healthz/custom" in out
     assert "- reports/list" in out
+
+
+def test_suggest_writes_suggestion_json_for_current_project(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_suggest(update, DummyContext(args=["team", "defect", "tracker"])))
+
+    suggestion_path = project_dir / ".archmind" / "suggestion.json"
+    assert suggestion_path.exists()
+    payload = json.loads(suggestion_path.read_text(encoding="utf-8"))
+    assert isinstance(payload.get("entities"), list)
+    assert isinstance(payload.get("api_endpoints"), list)
+    assert isinstance(payload.get("frontend_pages"), list)
+
+
+def test_apply_suggestion_entities_api_pages_modes_and_history(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "domains": ["tasks"],
+                "template": "fullstack-ddd",
+                "modules": [],
+                "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": ["GET /tasks"],
+                "frontend_pages": ["tasks/list"],
+                "reason_summary": "demo",
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "suggestion.json").write_text(
+        json.dumps(
+            {
+                "entities": [
+                    {"name": "Task", "fields": [{"name": "title", "type": "string"}]},
+                    {"name": "Defect", "fields": [{"name": "title", "type": "string"}]},
+                ],
+                "api_endpoints": ["GET /tasks", "POST /defects"],
+                "frontend_pages": ["tasks/list", "defects/list"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    m1 = DummyMessage()
+    asyncio.run(command_apply_suggestion(DummyUpdate(message=m1, effective_chat=DummyChat()), DummyContext(args=["entities"])))
+    m2 = DummyMessage()
+    asyncio.run(command_apply_suggestion(DummyUpdate(message=m2, effective_chat=DummyChat()), DummyContext(args=["api"])))
+    m3 = DummyMessage()
+    asyncio.run(command_apply_suggestion(DummyUpdate(message=m3, effective_chat=DummyChat()), DummyContext(args=["pages"])))
+
+    payload = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
+    names = [entity["name"] for entity in (payload.get("entities") or [])]
+    assert names.count("Task") == 1
+    assert "Defect" in names
+    assert "POST /defects" in (payload.get("api_endpoints") or [])
+    assert "defects/list" in (payload.get("frontend_pages") or [])
+    history = payload.get("evolution", {}).get("history", [])
+    assert any(item.get("action") == "apply_suggestion" and item.get("type") == "entities" for item in history if isinstance(item, dict))
+    assert any(item.get("action") == "apply_suggestion" and item.get("type") == "api" for item in history if isinstance(item, dict))
+    assert any(item.get("action") == "apply_suggestion" and item.get("type") == "pages" for item in history if isinstance(item, dict))
+
+
+def test_apply_suggestion_missing_file_shows_message(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_apply_suggestion(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    assert "No suggestion available" in msg.sent[-1]
+
+
+def test_inspect_reflects_apply_suggestion_results(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend").mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "domains": ["tasks"],
+                "template": "fullstack-ddd",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+                "reason_summary": "demo",
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "suggestion.json").write_text(
+        json.dumps(
+            {
+                "entities": [{"name": "Defect", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": ["GET /defects"],
+                "frontend_pages": ["defects/list"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    asyncio.run(command_apply_suggestion(DummyUpdate(message=DummyMessage(), effective_chat=DummyChat()), DummyContext(args=["all"])))
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "- Defect(title:string)" in out
+    assert "- GET /defects" in out
+    assert "- defects/list" in out
 
 
 def test_help_topic_idea() -> None:

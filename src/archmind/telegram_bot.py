@@ -368,6 +368,7 @@ def _help_text() -> str:
         "/add_field <E> <f:t>   add entity field metadata\n"
         "/add_api <M> <path>    add API endpoint metadata\n"
         "/add_page <path>       add frontend page metadata\n"
+        "/apply_suggestion      apply last suggestion to spec\n"
         "/projects              list projects\n"
         "/use <n>               select project\n"
         "/current               show selected project\n"
@@ -630,6 +631,39 @@ def _rebuild_frontend_pages(spec: dict[str, Any]) -> list[str]:
             pages.append(page)
     spec["frontend_pages"] = pages
     return pages
+
+
+def _merge_entities(existing: Any, incoming: Any) -> tuple[list[dict[str, Any]], int]:
+    base = _normalize_entities(existing)
+    add = _normalize_entities(incoming)
+    seen = {str(item.get("name") or "").strip().lower() for item in base}
+    merged = list(base)
+    added = 0
+    for entity in add:
+        name = str(entity.get("name") or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(entity)
+        added += 1
+    return merged, added
+
+
+def _merge_string_list(existing: Any, incoming: Any) -> tuple[list[str], int]:
+    current = [str(x).strip() for x in (existing or []) if str(x).strip()] if isinstance(existing, list) else []
+    to_add = [str(x).strip() for x in (incoming or []) if str(x).strip()] if isinstance(incoming, list) else []
+    seen = set(current)
+    added = 0
+    for item in to_add:
+        if item in seen:
+            continue
+        seen.add(item)
+        current.append(item)
+        added += 1
+    return current, added
 
 
 def _ensure_evolution_block(spec: dict[str, Any]) -> dict[str, Any]:
@@ -2210,6 +2244,11 @@ async def command_suggest(update: Any, context: Any) -> None:
     reasoning = reason_architecture_from_idea(normalized)
     suggestions = get_template_suggestions(normalized, reasoning) or [str(reasoning.get("recommended_template") or "fastapi")]
     spec_suggestion = suggest_project_spec(normalized, reasoning)
+    target_project = _resolve_target_project()
+    if target_project is not None:
+        suggestion_path = target_project / ".archmind" / "suggestion.json"
+        suggestion_path.parent.mkdir(parents=True, exist_ok=True)
+        suggestion_path.write_text(json.dumps(spec_suggestion, ensure_ascii=False, indent=2), encoding="utf-8")
 
     shape = str(reasoning.get("app_shape") or "unknown")
     template = str(reasoning.get("recommended_template") or "unknown")
@@ -2903,6 +2942,65 @@ async def command_add_page(update: Any, context: Any) -> None:
     await update.message.reply_text("\n".join(lines))
 
 
+async def command_apply_suggestion(update: Any, context: Any) -> None:
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text("No project selected. Use /projects then /use <n>.")
+        return
+
+    args = [str(x).strip().lower() for x in getattr(context, "args", []) if str(x).strip()]
+    mode = args[0] if args else "all"
+    if mode not in {"all", "entities", "api", "pages"}:
+        await update.message.reply_text("Usage: /apply_suggestion [entities|api|pages|all]")
+        return
+
+    suggestion_path = project_path / ".archmind" / "suggestion.json"
+    suggestion_payload = _load_json(suggestion_path)
+    if suggestion_payload is None:
+        await update.message.reply_text("No suggestion available\n\nRun:\n/suggest <idea>")
+        return
+
+    spec, spec_path = _read_or_init_project_spec(project_path)
+    evolution = _ensure_evolution_block(spec)
+    history = evolution.get("history") if isinstance(evolution.get("history"), list) else []
+
+    applied_entities = 0
+    applied_api = 0
+    applied_pages = 0
+
+    if mode in {"all", "entities"}:
+        merged_entities, applied_entities = _merge_entities(spec.get("entities"), suggestion_payload.get("entities"))
+        spec["entities"] = merged_entities
+        history.append({"action": "apply_suggestion", "type": "entities", "count": applied_entities})
+    if mode in {"all", "api"}:
+        merged_api, applied_api = _merge_string_list(spec.get("api_endpoints"), suggestion_payload.get("api_endpoints"))
+        spec["api_endpoints"] = merged_api
+        history.append({"action": "apply_suggestion", "type": "api", "count": applied_api})
+    if mode in {"all", "pages"}:
+        merged_pages, applied_pages = _merge_string_list(spec.get("frontend_pages"), suggestion_payload.get("frontend_pages"))
+        spec["frontend_pages"] = merged_pages
+        history.append({"action": "apply_suggestion", "type": "pages", "count": applied_pages})
+
+    evolution["history"] = history
+    _rebuild_api_endpoints(spec)
+    _rebuild_frontend_pages(spec)
+    spec_path.parent.mkdir(parents=True, exist_ok=True)
+    spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    await update.message.reply_text(
+        "Suggestion applied\n\n"
+        "Project:\n"
+        f"{project_path.name}\n\n"
+        "Applied:\n"
+        f"Entities: {applied_entities}\n"
+        f"APIs: {applied_api}\n"
+        f"Pages: {applied_pages}\n\n"
+        "Next:\n"
+        "- /inspect\n"
+        "- /restart"
+    )
+
+
 async def command_use(update: Any, context: Any) -> None:
     args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
     if not args:
@@ -3422,6 +3520,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("add_field", command_add_field))
     app.add_handler(CommandHandler("add_api", command_add_api))
     app.add_handler(CommandHandler("add_page", command_add_page))
+    app.add_handler(CommandHandler("apply_suggestion", command_apply_suggestion))
     app.add_handler(CommandHandler("continue", command_continue))
     app.add_handler(CommandHandler("fix", command_fix))
     app.add_handler(CommandHandler("retry", command_retry))
