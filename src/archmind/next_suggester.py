@@ -22,11 +22,27 @@ def _entity_name_list(spec: dict[str, Any]) -> list[str]:
     return out
 
 
+def _normalized_api_endpoints(values: Any) -> set[str]:
+    out: set[str] = set()
+    if not isinstance(values, list):
+        return out
+    for raw in values:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        parts = text.split(maxsplit=1)
+        if len(parts) != 2:
+            continue
+        method, path = parts
+        out.add(f"{method.upper()} {path.strip()}")
+    return out
+
+
 def suggest_next_commands(spec: dict[str, Any], limit: int = 5) -> list[dict[str, str]]:
     modules = [str(x).strip().lower() for x in (spec.get("modules") or []) if str(x).strip()]
     shape = str(spec.get("shape") or "").strip().lower()
     entities = spec.get("entities") if isinstance(spec.get("entities"), list) else []
-    api_endpoints = {str(x).strip() for x in (spec.get("api_endpoints") or []) if str(x).strip()}
+    api_endpoints = _normalized_api_endpoints(spec.get("api_endpoints"))
     frontend_pages = {str(x).strip() for x in (spec.get("frontend_pages") or []) if str(x).strip()}
     entity_names = _entity_name_list(spec)
     lower_entity_names = {name.lower() for name in entity_names}
@@ -72,14 +88,31 @@ def suggest_next_commands(spec: dict[str, Any], limit: int = 5) -> list[dict[str
     if "dashboard" in modules and "dashboard/home" not in frontend_pages:
         add("/add_page dashboard/home", "dashboard module present but dashboard page missing")
 
-    for name in entity_names:
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        name = str(entity.get("name") or "").strip()
         slug = _entity_slug(name)
         plural = f"{slug}s"
-        if not slug:
+        if not name or not slug:
             continue
-        read_api = f"GET /{plural}/{{id}}"
-        if read_api not in api_endpoints:
-            add(f"/add_api GET /{plural}/{{id}}", f"{name} entity exists but read API missing")
+
+        expected_apis = [
+            ("GET", f"/{plural}/{{id}}", "read API missing"),
+            ("PUT", f"/{plural}/{{id}}", "update API missing"),
+            ("DELETE", f"/{plural}/{{id}}", "delete API missing"),
+        ]
+        for method, path, reason in expected_apis:
+            endpoint = f"{method} {path}"
+            if endpoint not in api_endpoints:
+                add(f"/add_api {method} {path}", f"{name} entity exists but {reason}")
+
+        fields = entity.get("fields") if isinstance(entity.get("fields"), list) else []
+        field_names = {str(item.get("name") or "").strip().lower() for item in fields if isinstance(item, dict)}
+        if "created_at" not in field_names:
+            add(f"/add_field {name} created_at:datetime", f"{name} entity missing created_at timestamp")
+        if "updated_at" not in field_names:
+            add(f"/add_field {name} updated_at:datetime", f"{name} entity missing updated_at timestamp")
 
     frontend_enabled = shape == "fullstack" or bool(frontend_pages)
     if frontend_enabled:

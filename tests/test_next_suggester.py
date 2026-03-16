@@ -45,3 +45,16 @@ def test_next_suggester_recommends_testrun_fields() -> None:
     assert "/add_field TestRun result:string" in cmds
     assert "/add_field TestRun executed_at:datetime" in cmds
 
+
+def test_next_suggester_recommends_missing_crud_and_timestamp_for_partial_note_api() -> None:
+    spec = {
+        "shape": "backend",
+        "modules": [],
+        "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": ["GET /notes", "POST /notes"],
+        "frontend_pages": [],
+    }
+    cmds = _commands(spec)
+    assert "/add_api PUT /notes/{id}" in cmds
+    assert "/add_api DELETE /notes/{id}" in cmds
+    assert "/add_field Note created_at:datetime" in cmds
