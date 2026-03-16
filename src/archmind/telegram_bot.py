@@ -2701,12 +2701,38 @@ async def command_current(update: Any, context: Any) -> None:
     )
     project_type = str(state_payload.get("project_type") or "unknown").strip() or "unknown"
     template = str(state_payload.get("effective_template") or "unknown").strip() or "unknown"
+    runtime_backend = "STOPPED"
+    runtime_frontend = "NOT RUNNING"
+    try:
+        from archmind.deploy import get_local_runtime_status
+
+        runtime_payload = get_local_runtime_status(project_path)
+        backend = runtime_payload.get("backend") if isinstance(runtime_payload, dict) else {}
+        frontend = runtime_payload.get("frontend") if isinstance(runtime_payload, dict) else {}
+        if isinstance(backend, dict):
+            runtime_backend = "RUNNING" if str(backend.get("status") or "").strip().upper() == "RUNNING" else "STOPPED"
+        if isinstance(frontend, dict):
+            runtime_frontend = (
+                "RUNNING" if str(frontend.get("status") or "").strip().upper() == "RUNNING" else "NOT RUNNING"
+            )
+    except Exception:
+        if state_payload.get("backend_pid") is not None:
+            runtime_backend = "RUNNING"
+        if state_payload.get("frontend_pid") is not None:
+            runtime_frontend = "RUNNING"
+
     message = (
         "Current project\n\n"
         f"Project: {project_path.name}\n"
         f"Status: {status}\n"
         f"Type: {project_type}\n"
-        f"Template: {template}"
+        f"Template: {template}\n\n"
+        "Runtime\n"
+        f"Backend: {runtime_backend}\n"
+        f"Frontend: {runtime_frontend}\n\n"
+        "Next:\n"
+        "- /inspect\n"
+        "- /next"
     )
     await update.message.reply_text(message)
 

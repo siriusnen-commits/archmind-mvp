@@ -1434,6 +1434,13 @@ def test_current_shows_selected_project(monkeypatch, tmp_path: Path) -> None:
         json.dumps({"last_status": "DONE", "project_type": "frontend-web", "effective_template": "nextjs"}),
         encoding="utf-8",
     )
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "RUNNING", "pid": 22001, "url": "http://127.0.0.1:8050"},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
     set_current_project(project)
 
     msg = DummyMessage()
@@ -1445,6 +1452,11 @@ def test_current_shows_selected_project(monkeypatch, tmp_path: Path) -> None:
     assert "Status: DONE" in out
     assert "Type: frontend-web" in out
     assert "Template: nextjs" in out
+    assert "Runtime" in out
+    assert "Backend: RUNNING" in out
+    assert "Frontend: NOT RUNNING" in out
+    assert "/inspect" in out
+    assert "/next" in out
 
 
 def test_projects_marks_current_project(monkeypatch, tmp_path: Path) -> None:
