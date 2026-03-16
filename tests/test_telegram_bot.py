@@ -1454,7 +1454,36 @@ def test_current_shows_selected_project(monkeypatch, tmp_path: Path) -> None:
     assert "Template: nextjs" in out
     assert "Runtime" in out
     assert "Backend: RUNNING" in out
+    assert "Backend URL: http://127.0.0.1:8050" in out
     assert "Frontend: NOT RUNNING" in out
+    assert "Frontend URL:" not in out
+    assert "/inspect" in out
+    assert "/next" in out
+
+
+def test_current_shows_frontend_url_when_frontend_running(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "current_frontend_proj"
+    archmind = project / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "state.json").write_text(
+        json.dumps({"last_status": "DONE", "project_type": "fullstack-web", "effective_template": "fullstack-ddd"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "RUNNING", "pid": 22001, "url": "http://127.0.0.1:8050"},
+            "frontend": {"status": "RUNNING", "pid": 22002, "url": "http://127.0.0.1:3000"},
+        },
+    )
+    set_current_project(project)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_current(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "Frontend: RUNNING" in out
+    assert "Frontend URL: http://127.0.0.1:3000" in out
     assert "/inspect" in out
     assert "/next" in out
 
