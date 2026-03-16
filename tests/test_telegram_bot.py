@@ -3112,9 +3112,13 @@ def test_apply_plan_without_project_shows_error(monkeypatch) -> None:
     asyncio.run(command_apply_plan(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     out = msg.sent[-1]
     assert "No active project." in out
-    assert "1. /design <idea>" in out
-    assert "1. /projects" in out
+    assert "To execute a development plan" in out
+    assert "/design <idea>" in out
+    assert "/plan <idea>" in out
+    assert "/idea_local <idea>" in out
+    assert "/projects" in out
     assert "2. /use <n>" in out
+    assert "/apply_plan" in out
 
 
 def test_apply_plan_without_saved_plan_shows_error(tmp_path: Path, monkeypatch) -> None:

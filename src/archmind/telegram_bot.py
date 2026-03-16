@@ -2574,7 +2574,22 @@ async def command_apply_plan(update: Any, context: Any) -> None:
     del context
     project_path = _resolve_target_project()
     if project_path is None:
-        await update.message.reply_text(_no_active_project_guidance())
+        await update.message.reply_text(
+            "No active project.\n\n"
+            "To execute a development plan, first create or select a project.\n\n"
+            "Recommended workflow:\n\n"
+            "1. /design <idea>\n"
+            "2. /plan <idea>\n"
+            "3. /idea_local <idea>\n"
+            "4. /apply_plan\n\n"
+            "Or use an existing project:\n\n"
+            "1. /projects\n"
+            "2. /use <n>\n"
+            "3. /apply_plan\n\n"
+            "Next:\n"
+            "- /idea_local <idea>\n"
+            "- /projects"
+        )
         return
 
     plan_path = project_path / ".archmind" / "plan_execution.json"
