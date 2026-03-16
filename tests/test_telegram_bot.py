@@ -1796,13 +1796,14 @@ def test_help_mentions_command_groups() -> None:
     assert msg.sent
     out = msg.sent[-1]
     assert "ArchMind commands" in out
-    assert "PROJECT" in out
+    assert "PROJECT CREATION" in out
+    assert "PROJECT EVOLUTION" in out
+    assert "PROJECT MANAGEMENT" in out
     assert "PIPELINE CONTROL" in out
     assert "LOCAL RUNTIME" in out
     assert "DEPLOY" in out
     assert "CODE" in out
-    assert "INSPECT" in out
-    assert "AI GUIDE" in out
+    assert "INSPECTION" in out
     assert "CLEANUP" in out
     assert "/idea <idea>" in out
     assert "/idea_local <idea>" in out
@@ -1818,7 +1819,9 @@ def test_help_mentions_command_groups() -> None:
     assert "/apply_suggestion" in out
     assert "/next" in out
     assert "/projects" in out
+    assert "/help" in out
     assert "/use <n>" in out
+    assert "/current" in out
     assert "/status" in out
     assert "/state" in out
     assert "/continue" in out
@@ -1836,6 +1839,10 @@ def test_help_mentions_command_groups() -> None:
     assert "/apply_plan" in out
     assert "/delete_project" in out
     assert "Example workflow" in out
+    assert "/design defect tracker" in out
+    assert "/idea_local defect tracker" in out
+    assert "/inspect" in out
+    assert "/next" in out
 
 
 def test_preview_command_outputs_brain_reasoning_fields() -> None:

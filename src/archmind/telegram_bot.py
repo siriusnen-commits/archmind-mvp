@@ -41,7 +41,7 @@ SUPPORTED_FIELD_TYPES = ("string", "int", "float", "bool", "datetime")
 SUPPORTED_API_METHODS = ("GET", "POST", "PATCH", "DELETE")
 HELP_TEXT = """ArchMind commands
 
-PROJECT
+PROJECT CREATION
 /idea <idea>           generate project
 /idea_local <idea>     generate + run locally
 /pipeline <idea>       alias of /idea
@@ -50,18 +50,23 @@ PROJECT
 /design <idea>         generate architecture design document
 /plan <idea>           build development plan from an idea
 /plan                  build next development plan for current project
+/apply_plan            execute saved development plan
+
+PROJECT EVOLUTION
 /add_module <name>     add module to current project
 /add_entity <name>     add entity metadata
 /add_field <E> <f:t>   add entity field metadata
 /add_api <M> <path>    add API endpoint metadata
 /add_page <path>       add frontend page metadata
 /apply_suggestion      apply last suggestion to spec
-/next                  suggest next dev commands
+/next                  suggest next development steps
+
+PROJECT MANAGEMENT
+/help                  show command guide
 /projects              list projects
 /use <n>               select project
 /current               show selected project
 /status                show current status
-
 /state                 show raw pipeline state
 
 PIPELINE CONTROL
@@ -84,11 +89,8 @@ CODE
 /open <file>           open file
 /diff                  show changes
 
-INSPECT
+INSPECTION
 /inspect               show project summary
-
-AI GUIDE
-/apply_plan            apply the latest saved development plan
 
 CLEANUP
 /delete_project
@@ -99,7 +101,7 @@ Example workflow
 
 /design defect tracker
 /plan defect tracker
-/apply_plan
+/idea_local defect tracker
 /inspect
 /next"""
 
