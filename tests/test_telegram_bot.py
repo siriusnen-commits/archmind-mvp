@@ -2890,9 +2890,18 @@ def test_next_command_recommends_api_and_pages_for_entity(tmp_path: Path, monkey
     msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     out = msg.sent[-1]
-    assert "/add_api GET /tasks/{id}" in out
-    assert "/add_page tasks/list" in out
-    assert "/add_page tasks/detail" in out
+    expected_candidates = [
+        "/add_api GET /tasks/{id}",
+        "/add_api PUT /tasks/{id}",
+        "/add_api PATCH /tasks/{id}",
+        "/add_field Task created_at:datetime",
+        "/add_field Task updated_at:datetime",
+        "/add_page tasks/list",
+        "/add_page tasks/detail",
+    ]
+    assert any("/add_api " in cmd for cmd in out.splitlines())
+    assert any("/add_field " in cmd for cmd in out.splitlines())
+    assert any(candidate in out for candidate in expected_candidates)
 
 
 def test_next_command_limits_suggestions_to_five(tmp_path: Path, monkeypatch) -> None:
