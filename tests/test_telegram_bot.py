@@ -1968,6 +1968,17 @@ def test_design_command_requires_idea() -> None:
     assert msg.sent[-1] == "Usage: /design <idea>"
 
 
+def test_design_command_simple_todo_app_is_fullstack_and_has_frontend() -> None:
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_design(update, DummyContext(args=["simple", "todo", "app"])))
+    out = msg.sent[-1]
+    assert "Shape: fullstack" in out
+    assert "Template: fullstack-ddd" in out
+    assert "Frontend:" in out
+    assert "Frontend:\n- (none)" not in out
+
+
 def test_get_template_suggestions_ambiguous_case() -> None:
     reasoning = {
         "app_shape": "unknown",
