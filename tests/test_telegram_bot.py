@@ -2735,6 +2735,97 @@ def test_add_field_uses_generated_files_as_entity_existence_signal(tmp_path: Pat
     assert payload.get("entities") == [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}]
 
 
+def test_add_field_auto_restart_when_backend_running(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\n\napp = FastAPI()\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "domains": ["tasks"],
+                "template": "fastapi",
+                "modules": [],
+                "entities": [{"name": "Task", "fields": []}],
+                "reason_summary": "task api",
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    calls = {"status": 0, "restart": 0}
+
+    def fake_runtime(_p):  # type: ignore[no-untyped-def]
+        calls["status"] += 1
+        return {"backend": {"status": "RUNNING", "url": "http://127.0.0.1:8011"}, "frontend": {"status": "NOT RUNNING", "url": ""}}
+
+    def fake_restart(_p):  # type: ignore[no-untyped-def]
+        calls["restart"] += 1
+        return {
+            "backend": {"status": "RESTARTED", "detail": ""},
+            "frontend": {"status": "NOT RUNNING", "detail": ""},
+        }
+
+    monkeypatch.setattr("archmind.deploy.get_local_runtime_status", fake_runtime)
+    monkeypatch.setattr("archmind.deploy.restart_local_services", fake_restart)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_add_field(update, DummyContext(args=["Task", "priority:int"])))
+    out = msg.sent[-1]
+    assert calls["restart"] == 1
+    assert "Auto-restart:" in out
+    assert "Backend: RESTARTED" in out
+
+
+def test_add_field_auto_restart_skipped_when_backend_not_running(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\n\napp = FastAPI()\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "domains": ["tasks"],
+                "template": "fastapi",
+                "modules": [],
+                "entities": [{"name": "Task", "fields": []}],
+                "reason_summary": "task api",
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    calls = {"restart": 0}
+
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {"backend": {"status": "NOT RUNNING", "url": ""}, "frontend": {"status": "NOT RUNNING", "url": ""}},
+    )
+
+    def fake_restart(_p):  # type: ignore[no-untyped-def]
+        calls["restart"] += 1
+        return {"backend": {"status": "RESTARTED", "detail": ""}, "frontend": {"status": "NOT RUNNING", "detail": ""}}
+
+    monkeypatch.setattr("archmind.deploy.restart_local_services", fake_restart)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_add_field(update, DummyContext(args=["Task", "priority:int"])))
+    out = msg.sent[-1]
+    assert calls["restart"] == 0
+    assert "Auto-restart:" in out
+    assert "Skipped (backend not running)" in out
+
+
 def test_add_field_unknown_type_shows_available_types(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "task_tracker"
     (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)

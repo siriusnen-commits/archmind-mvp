@@ -732,6 +732,34 @@ def _merge_string_list(existing: Any, incoming: Any) -> tuple[list[str], int]:
     return current, added
 
 
+def _auto_restart_backend_lines(project_path: Path) -> tuple[list[str], bool]:
+    try:
+        from archmind.deploy import get_local_runtime_status, restart_local_services
+    except Exception:
+        return (["Auto-restart:", "Skipped (runtime unavailable)"], False)
+
+    runtime = get_local_runtime_status(project_path)
+    backend = runtime.get("backend") if isinstance(runtime, dict) else {}
+    backend_status = str((backend or {}).get("status") or "").strip().upper()
+    if backend_status != "RUNNING":
+        return (["Auto-restart:", "Skipped (backend not running)"], False)
+
+    result = restart_local_services(project_path)
+    runtime_after = get_local_runtime_status(project_path)
+    backend_after = runtime_after.get("backend") if isinstance(runtime_after, dict) else {}
+    after_status = str((backend_after or {}).get("status") or "").strip().upper()
+
+    if after_status == "RUNNING":
+        return (["Auto-restart:", "Backend: RESTARTED"], False)
+
+    restart_backend = result.get("backend") if isinstance(result, dict) and isinstance(result.get("backend"), dict) else {}
+    detail = str(restart_backend.get("detail") or "").strip()
+    lines = ["Auto-restart:", f"Backend: {after_status or 'FAILED'}"]
+    if detail:
+        lines += ["Detail:", detail]
+    return (lines, True)
+
+
 def _ensure_evolution_block(spec: dict[str, Any]) -> dict[str, Any]:
     evolution_raw = spec.get("evolution")
     evolution = evolution_raw if isinstance(evolution_raw, dict) else {}
@@ -3164,6 +3192,10 @@ async def command_add_entity(update: Any, context: Any) -> None:
     if not frontend_exists:
         code_lines += ["", "Frontend scaffold:", "SKIPPED (no frontend structure)"]
 
+    auto_restart_lines, restart_failed = _auto_restart_backend_lines(project_path)
+    if restart_failed and "- /logs" not in next_lines:
+        next_lines.append("- /logs")
+
     await update.message.reply_text(
         "Entity added\n\n"
         "Project:\n"
@@ -3171,6 +3203,8 @@ async def command_add_entity(update: Any, context: Any) -> None:
         "Entity:\n"
         f"{entity_name}\n\n"
         + "\n".join(code_lines)
+        + "\n\n"
+        + "\n".join(auto_restart_lines)
         + "\n\n"
         + "\n".join(next_lines)
     )
@@ -3276,6 +3310,11 @@ async def command_add_field(update: Any, context: Any) -> None:
         if n and t:
             fields_after.append(f"{n}:{t}")
 
+    auto_restart_lines, restart_failed = _auto_restart_backend_lines(project_path)
+    next_lines = ["- /inspect", "- /restart"]
+    if restart_failed:
+        next_lines.append("- /logs")
+
     await update.message.reply_text(
         "Field added\n\n"
         "Project:\n"
@@ -3286,9 +3325,10 @@ async def command_add_field(update: Any, context: Any) -> None:
         f"{field_name}:{field_type}\n\n"
         "Fields:\n"
         f"{', '.join(fields_after)}\n\n"
+        + "\n".join(auto_restart_lines)
+        + "\n\n"
         "Next:\n"
-        "- /inspect\n"
-        "- /restart"
+        + "\n".join(next_lines)
     )
 
 
@@ -3338,15 +3378,21 @@ async def command_add_api(update: Any, context: Any) -> None:
     spec_path.parent.mkdir(parents=True, exist_ok=True)
     spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    auto_restart_lines, restart_failed = _auto_restart_backend_lines(project_path)
+    next_lines = ["- /inspect", "- /restart"]
+    if restart_failed:
+        next_lines.append("- /logs")
+
     await update.message.reply_text(
         "API added\n\n"
         "Project:\n"
         f"{project_path.name}\n\n"
         "Endpoint:\n"
         f"{endpoint}\n\n"
+        + "\n".join(auto_restart_lines)
+        + "\n\n"
         "Next:\n"
-        "- /inspect\n"
-        "- /restart"
+        + "\n".join(next_lines)
     )
 
 
@@ -3389,6 +3435,7 @@ async def command_add_page(update: Any, context: Any) -> None:
     spec_path.parent.mkdir(parents=True, exist_ok=True)
     spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    auto_restart_lines, restart_failed = _auto_restart_backend_lines(project_path)
     lines = [
         "Page added",
         "",
@@ -3402,7 +3449,9 @@ async def command_add_page(update: Any, context: Any) -> None:
         lines += ["", "Frontend scaffold:", "SKIPPED (no frontend structure)"]
     elif generated:
         lines += ["", "Generated:"] + [f"- {item}" for item in generated]
-    lines += ["", "Next:", "- /inspect", "- /restart"]
+    lines += ["", *auto_restart_lines, "", "Next:", "- /inspect", "- /restart"]
+    if restart_failed:
+        lines.append("- /logs")
     await update.message.reply_text("\n".join(lines))
 
 
