@@ -550,6 +550,32 @@ def _entity_names(entities: Any) -> list[str]:
     return [str(item.get("name")) for item in _normalize_entities(entities) if str(item.get("name") or "").strip()]
 
 
+def _entity_slug(entity_name: str) -> str:
+    normalized = _normalize_entity_name(entity_name)
+    if not normalized:
+        return ""
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", normalized).lower()
+
+
+def _entity_exists_in_files(project_path: Path, entity_name: str) -> bool:
+    slug = _entity_slug(entity_name)
+    if not slug:
+        return False
+    model_path = project_path / "app" / "models" / f"{slug}.py"
+    schema_path = project_path / "app" / "schemas" / f"{slug}.py"
+    return model_path.exists() or schema_path.exists()
+
+
+def _find_entity_in_spec(entities: list[dict[str, Any]], entity_name: str) -> Optional[dict[str, Any]]:
+    key = _normalize_entity_name(entity_name).lower()
+    if not key:
+        return None
+    for entity in entities:
+        if str(entity.get("name") or "").strip().lower() == key:
+            return entity
+    return None
+
+
 def _entity_summaries(entities: Any) -> list[str]:
     summaries: list[str] = []
     for entity in _normalize_entities(entities):
@@ -3048,8 +3074,16 @@ async def command_add_entity(update: Any, context: Any) -> None:
 
     spec, spec_path = _read_or_init_project_spec(project_path)
     entities = _normalize_entities(spec.get("entities"))
-    entity_keys = {str(item.get("name") or "").strip().lower() for item in entities}
-    if entity_name.lower() in entity_keys:
+    exists_in_spec = _find_entity_in_spec(entities, entity_name) is not None
+    exists_in_files = _entity_exists_in_files(project_path, entity_name)
+    if exists_in_spec or exists_in_files:
+        if not exists_in_spec:
+            entities.append({"name": entity_name, "fields": []})
+            spec["entities"] = _normalize_entities(entities)
+            _rebuild_api_endpoints(spec)
+            _rebuild_frontend_pages(spec)
+            spec_path.parent.mkdir(parents=True, exist_ok=True)
+            spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
         await update.message.reply_text(
             "Entity already exists\n\n"
             "Project:\n"
@@ -3130,11 +3164,11 @@ async def command_add_field(update: Any, context: Any) -> None:
 
     spec, spec_path = _read_or_init_project_spec(project_path)
     entities = _normalize_entities(spec.get("entities"))
-    target_entity: Optional[dict[str, Any]] = None
-    for entity in entities:
-        if str(entity.get("name") or "").strip().lower() == entity_name.lower():
-            target_entity = entity
-            break
+    target_entity = _find_entity_in_spec(entities, entity_name)
+    if target_entity is None and _entity_exists_in_files(project_path, entity_name):
+        entities.append({"name": entity_name, "fields": []})
+        entities = _normalize_entities(entities)
+        target_entity = _find_entity_in_spec(entities, entity_name)
 
     if target_entity is None:
         await update.message.reply_text(
