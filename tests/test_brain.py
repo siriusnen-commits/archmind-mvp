@@ -71,8 +71,15 @@ def test_reason_architecture_recommends_data_tool_template() -> None:
 
 def test_reason_architecture_unknown_fallback_defaults() -> None:
     out = reason_architecture_from_idea("hello")
-    assert out["app_shape"] == "unknown"
+    assert out["app_shape"] == "backend"
     assert out["recommended_template"] == "fastapi"
     assert out["modules"] == []
     assert out["db_needed"] is False
     assert out["dashboard_needed"] is False
+
+
+def test_reason_architecture_simple_todo_app_defaults_to_fullstack() -> None:
+    out = reason_architecture_from_idea("simple todo app")
+    assert out["app_shape"] == "fullstack"
+    assert out["recommended_template"] == "fullstack-ddd"
+    assert out["frontend_needed"] is True

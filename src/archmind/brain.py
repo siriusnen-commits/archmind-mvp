@@ -236,6 +236,54 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
         elif frontend_needed:
             app_shape = "frontend"
 
+    # RULE 6: keyword-based fallback to avoid unknown for common app ideas.
+    if app_shape == "unknown":
+        non_web_hint = _has_any(
+            text,
+            [
+                r"\bcli\b",
+                r"\bcommand line\b",
+                r"\bterminal tool\b",
+                r"\bscript\b",
+                r"\bautomation\b",
+            ],
+        )
+        if non_web_hint:
+            pass
+        else:
+            backend_hint = _has_any(
+                text,
+                [
+                    r"\bapi\b",
+                    r"\bbackend\b",
+                    r"\bfastapi\b",
+                    r"\bworker\b",
+                    r"\bbatch\b",
+                ],
+            )
+            fullstack_hint = _has_any(
+                text,
+                [
+                    r"\bdashboard\b",
+                    r"\badmin\b",
+                    r"\bweb\b",
+                    r"\bapp\b",
+                    r"\btodo app\b",
+                    r"\btracker\b",
+                    r"\bmanager\b",
+                ],
+            )
+            if fullstack_hint:
+                backend_needed = True
+                frontend_needed = True
+                app_shape = "fullstack"
+            elif backend_hint or worker_needed:
+                backend_needed = True
+                app_shape = "backend"
+            else:
+                backend_needed = True
+                app_shape = "backend"
+
     if app_shape == "fullstack":
         recommended_template = "fullstack-ddd"
     elif app_shape == "backend":
