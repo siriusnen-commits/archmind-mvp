@@ -3729,16 +3729,26 @@ def test_restart_local_restarts_services_and_displays_urls(monkeypatch, tmp_path
             "frontend": {"status": "RESTARTED", "url": "http://127.0.0.1:3011", "detail": ""},
         },
     )
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "RUNNING", "url": "http://127.0.0.1:8011"},
+            "frontend": {"status": "RUNNING", "url": "http://127.0.0.1:3011"},
+        },
+    )
     msg = DummyMessage()
     update = DummyUpdate(message=msg, effective_chat=DummyChat())
     asyncio.run(command_restart(update, DummyContext(args=["local"])))
     out = msg.sent[-1]
-    assert "Local services restarted" in out
+    assert "Restart result" in out
     assert "Project:\nrestart_local_proj" in out
-    assert "Backend:\nRESTARTED" in out
+    assert "Backend:\nRUNNING" in out
+    assert "Backend URL:\nhttp://127.0.0.1:8011" in out
     assert "http://127.0.0.1:8011" in out
-    assert "Frontend:\nRESTARTED" in out
+    assert "Frontend:\nRUNNING" in out
+    assert "Frontend URL:\nhttp://127.0.0.1:3011" in out
     assert "http://127.0.0.1:3011" in out
+    assert "Next:\n- /running\n- /logs" in out
 
 
 def test_restart_local_when_not_running(monkeypatch, tmp_path: Path) -> None:
@@ -3754,12 +3764,21 @@ def test_restart_local_when_not_running(monkeypatch, tmp_path: Path) -> None:
             "frontend": {"status": "NOT RUNNING", "url": "", "detail": ""},
         },
     )
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "NOT RUNNING", "url": ""},
+            "frontend": {"status": "NOT RUNNING", "url": ""},
+        },
+    )
     msg = DummyMessage()
     update = DummyUpdate(message=msg, effective_chat=DummyChat())
     asyncio.run(command_restart(update, DummyContext()))
     out = msg.sent[-1]
+    assert "Restart result" in out
     assert "Backend:\nNOT RUNNING" in out
     assert "Frontend:\nNOT RUNNING" in out
+    assert "Next:\n- /running\n- /logs" in out
 
 
 def test_delete_project_local_executes_and_reports(monkeypatch, tmp_path: Path) -> None:

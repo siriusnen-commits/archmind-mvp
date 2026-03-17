@@ -3813,14 +3813,15 @@ async def command_restart(update: Any, context: Any) -> None:
         await update.message.reply_text("Usage: /restart or /restart local")
         return
 
-    from archmind.deploy import restart_local_services
+    from archmind.deploy import get_local_runtime_status, restart_local_services
 
     result = restart_local_services(project_path)
-    backend = result.get("backend") if isinstance(result.get("backend"), dict) else {}
-    frontend = result.get("frontend") if isinstance(result.get("frontend"), dict) else {}
+    runtime = get_local_runtime_status(project_path)
+    backend = runtime.get("backend") if isinstance(runtime.get("backend"), dict) else {}
+    frontend = runtime.get("frontend") if isinstance(runtime.get("frontend"), dict) else {}
 
     lines = [
-        "Local services restarted",
+        "Restart result",
         "",
         "Project:",
         project_path.name,
@@ -3829,8 +3830,8 @@ async def command_restart(update: Any, context: Any) -> None:
         str(backend.get("status") or "NOT RUNNING"),
     ]
     backend_url = str(backend.get("url") or "").strip()
-    if backend_url:
-        lines.append(backend_url)
+    if str(backend.get("status") or "").upper() == "RUNNING" and backend_url:
+        lines += ["Backend URL:", backend_url]
     lines.extend(
         [
             "",
@@ -3839,15 +3840,18 @@ async def command_restart(update: Any, context: Any) -> None:
         ]
     )
     frontend_url = str(frontend.get("url") or "").strip()
-    if frontend_url:
-        lines.append(frontend_url)
+    if str(frontend.get("status") or "").upper() == "RUNNING" and frontend_url:
+        lines += ["Frontend URL:", frontend_url]
 
-    backend_detail = str(backend.get("detail") or "").strip()
-    frontend_detail = str(frontend.get("detail") or "").strip()
-    if backend_detail and str(backend.get("status") or "").upper() == "FAIL":
+    restart_backend = result.get("backend") if isinstance(result.get("backend"), dict) else {}
+    restart_frontend = result.get("frontend") if isinstance(result.get("frontend"), dict) else {}
+    backend_detail = str(restart_backend.get("detail") or "").strip()
+    frontend_detail = str(restart_frontend.get("detail") or "").strip()
+    if backend_detail and str(backend.get("status") or "").upper() != "RUNNING":
         lines.extend(["", "Backend detail:", backend_detail])
-    if frontend_detail and str(frontend.get("status") or "").upper() == "FAIL":
+    if frontend_detail and str(frontend.get("status") or "").upper() != "RUNNING":
         lines.extend(["", "Frontend detail:", frontend_detail])
+    lines += ["", "Next:", "- /running", "- /logs"]
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 
 
