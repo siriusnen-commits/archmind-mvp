@@ -1567,6 +1567,80 @@ def test_projects_shows_runtime_status_and_urls(monkeypatch, tmp_path: Path) -> 
     assert "Backend: http://127.0.0.1:8050" in out
 
 
+def test_projects_type_fallback_from_template_and_shape(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(root))
+
+    cases = [
+        ("fastapi_proj", "", "fastapi", "", "backend-api"),
+        ("worker_proj", "", "worker-api", "", "worker-api"),
+        ("fullstack_proj", "", "fullstack-ddd", "", "fullstack-web"),
+        ("explicit_proj", "frontend-web", "fastapi", "backend", "frontend-web"),
+    ]
+    for name, ptype, template, shape, _expected in cases:
+        project = root / name
+        arch = project / ".archmind"
+        arch.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "last_status": "DONE",
+            "project_type": ptype,
+            "effective_template": template,
+        }
+        if shape:
+            payload["architecture_app_shape"] = shape
+        (arch / "state.json").write_text(json.dumps(payload), encoding="utf-8")
+        if name == "fullstack_proj":
+            (project / "frontend").mkdir(parents=True, exist_ok=True)
+            (project / "app").mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+
+    out = format_projects_list()
+    assert "Type: backend-api" in out
+    assert "Type: worker-api" in out
+    assert "Type: fullstack-web" in out
+    assert "1. explicit_proj" in out or "explicit_proj" in out
+    assert "Type: frontend-web" in out
+
+
+def test_current_type_fallback_uses_template_when_project_type_unknown(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "current_fallback_proj"
+    archmind = project / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "last_status": "DONE",
+                "project_type": "unknown",
+                "effective_template": "fastapi",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+    set_current_project(project)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_current(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "Type: backend-api" in out
+    assert "Template: fastapi" in out
+
+
 def test_status_uses_current_project_when_set(monkeypatch, tmp_path: Path) -> None:
     current = tmp_path / "current_status_proj"
     other = tmp_path / "other_status_proj"

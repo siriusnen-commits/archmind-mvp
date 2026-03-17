@@ -1286,6 +1286,47 @@ def _status_component_summary(project_dir: Path, result_payload: dict[str, Any])
     return (_normalize_component_status(backend), _normalize_component_status(frontend))
 
 
+def _resolve_project_type(state_payload: dict[str, Any], project_path: Optional[Path] = None) -> str:
+    explicit = normalize_project_type(str(state_payload.get("project_type") or "").strip())
+    if explicit != "unknown":
+        return explicit
+
+    template = str(state_payload.get("effective_template") or state_payload.get("selected_template") or "").strip().lower()
+    shape = str(state_payload.get("architecture_app_shape") or state_payload.get("shape") or "").strip().lower()
+
+    has_backend = False
+    has_frontend = False
+    if project_path is not None:
+        root = project_path.expanduser().resolve()
+        has_backend = (root / "app").is_dir() or (root / "requirements.txt").exists()
+        has_frontend = (root / "frontend").is_dir() or (root / "package.json").exists() or (root / "next.config.mjs").exists()
+
+    if template in ("worker-api",):
+        return "worker-api"
+    if template in ("fastapi", "fastapi-ddd"):
+        return "backend-api"
+    if template in ("nextjs",):
+        return "frontend-web"
+    if template in ("fullstack-ddd",):
+        if has_frontend or shape == "fullstack":
+            return "fullstack-web"
+
+    if shape == "backend":
+        return "backend-api"
+    if shape == "fullstack":
+        return "fullstack-web"
+    if shape == "frontend":
+        return "frontend-web"
+
+    if has_backend and has_frontend:
+        return "fullstack-web"
+    if has_backend:
+        return "backend-api"
+    if has_frontend:
+        return "frontend-web"
+    return "unknown"
+
+
 def format_status_text(project_dir: Path) -> str:
     project_dir = project_dir.expanduser().resolve()
     archmind_dir = project_dir / ".archmind"
@@ -1303,7 +1344,7 @@ def format_status_text(project_dir: Path) -> str:
 
     iterations = int(state_payload.get("iterations") or 0)
     fix_attempts = int(state_payload.get("fix_attempts") or 0)
-    project_type = str(state_payload.get("project_type") or "unknown").strip() or "unknown"
+    project_type = _resolve_project_type(state_payload, project_dir)
     template = str(state_payload.get("effective_template") or "unknown").strip() or "unknown"
     architecture_shape = str(state_payload.get("architecture_app_shape") or "").strip()
     architecture_summary = str(state_payload.get("architecture_reason_summary") or "").strip()
@@ -1370,7 +1411,7 @@ def format_projects_list(projects_dir: Optional[Path] = None, limit: int = 10) -
             or str(result_payload.get("status") or "").strip().upper()
             or "UNKNOWN"
         )
-        project_type = str(state_payload.get("project_type") or "unknown").strip() or "unknown"
+        project_type = _resolve_project_type(state_payload, project_dir)
         template = str(state_payload.get("effective_template") or "unknown").strip() or "unknown"
         marker = " [current]" if current is not None and project_dir.resolve() == current.resolve() else ""
         lines.append(f"{idx}. {project_dir.name}{marker}")
@@ -2725,7 +2766,7 @@ async def command_current(update: Any, context: Any) -> None:
         or str(result_payload.get("status") or "").strip().upper()
         or "UNKNOWN"
     )
-    project_type = str(state_payload.get("project_type") or "unknown").strip() or "unknown"
+    project_type = _resolve_project_type(state_payload, project_path)
     template = str(state_payload.get("effective_template") or "unknown").strip() or "unknown"
     runtime_backend = "STOPPED"
     runtime_frontend = "NOT RUNNING"
