@@ -165,6 +165,7 @@ def test_local_deploy_process_uses_archmind_log_files(monkeypatch, tmp_path: Pat
     (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
     (tmp_path / "frontend" / "package.json").write_text('{"name":"web"}', encoding="utf-8")
     captured: list[str] = []
+    captured_cmds: list[list[str]] = []
 
     class DummyProc:
         def __init__(self, pid: int) -> None:
@@ -174,6 +175,7 @@ def test_local_deploy_process_uses_archmind_log_files(monkeypatch, tmp_path: Pat
         out = kwargs.get("stdout")
         name = str(getattr(out, "name", ""))
         captured.append(name)
+        captured_cmds.append([str(x) for x in cmd])
         if "uvicorn" in " ".join(str(x) for x in cmd):
             return DummyProc(14001)
         return DummyProc(14002)
@@ -188,6 +190,12 @@ def test_local_deploy_process_uses_archmind_log_files(monkeypatch, tmp_path: Pat
     assert frontend["status"] == "SUCCESS"
     assert any(path.endswith(".archmind/backend.log") for path in captured)
     assert any(path.endswith(".archmind/frontend.log") for path in captured)
+    backend_cmd = next((cmd for cmd in captured_cmds if cmd and cmd[0] == "uvicorn"), [])
+    frontend_cmd = next((cmd for cmd in captured_cmds if cmd[:3] == ["npm", "run", "dev"]), [])
+    assert "--host" in backend_cmd
+    assert "0.0.0.0" in backend_cmd
+    assert "--hostname" in frontend_cmd
+    assert "0.0.0.0" in frontend_cmd
 
 
 def test_local_fullstack_deploy_returns_both_urls(monkeypatch, tmp_path: Path) -> None:

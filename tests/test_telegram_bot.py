@@ -1501,6 +1501,34 @@ def test_current_shows_frontend_url_when_frontend_running(monkeypatch, tmp_path:
     assert "/next" in out
 
 
+def test_current_shows_external_urls_when_runtime_running(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "current_external_proj"
+    archmind = project / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "state.json").write_text(
+        json.dumps({"last_status": "DONE", "project_type": "fullstack-web", "effective_template": "fullstack-ddd"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "RUNNING", "pid": 22001, "url": "http://127.0.0.1:8050"},
+            "frontend": {"status": "RUNNING", "pid": 22002, "url": "http://127.0.0.1:3000"},
+        },
+    )
+    monkeypatch.setattr("archmind.telegram_bot._detect_external_ip", lambda: "100.64.0.10")
+    set_current_project(project)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_current(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "Backend URL: http://127.0.0.1:8050" in out
+    assert "Frontend URL: http://127.0.0.1:3000" in out
+    assert "External URL: http://100.64.0.10:8050" in out
+    assert "External URL: http://100.64.0.10:3000" in out
+
+
 def test_projects_marks_current_project(monkeypatch, tmp_path: Path) -> None:
     root = tmp_path / "projects"
     root.mkdir(parents=True, exist_ok=True)
@@ -4158,6 +4186,31 @@ def test_running_lists_projects_with_current_marker(monkeypatch, tmp_path: Path)
     assert "Frontend: RUNNING (pid 12346)" in out
     assert "2. proj_other" in out
     assert "Frontend: NOT RUNNING" in out
+
+
+def test_running_shows_external_urls_when_ip_detected(monkeypatch, tmp_path: Path) -> None:
+    current = tmp_path / "proj_current_external"
+    current.mkdir(parents=True, exist_ok=True)
+    set_current_project(current)
+    monkeypatch.setattr(
+        "archmind.deploy.list_running_local_projects",
+        lambda _root: [
+            {
+                "project_dir": current,
+                "project_name": "proj_current_external",
+                "backend": {"status": "RUNNING", "pid": 12345, "url": "http://127.0.0.1:8011"},
+                "frontend": {"status": "RUNNING", "pid": 12346, "url": "http://127.0.0.1:3011"},
+            }
+        ],
+    )
+    monkeypatch.setattr("archmind.telegram_bot._detect_external_ip", lambda: "100.64.0.10")
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_running(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "External URL: http://100.64.0.10:8011" in out
+    assert "External URL: http://100.64.0.10:3011" in out
 
 
 def test_watch_retry_accumulates_existing_fix_attempts(monkeypatch, tmp_path: Path) -> None:

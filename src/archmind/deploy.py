@@ -412,7 +412,7 @@ def deploy_backend_local(project_dir: Path) -> dict[str, Any]:
     if not (root / "app").is_dir():
         return _service_result("FAIL", None, "backend app directory not found")
     port = find_free_port()
-    cmd = ["uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(port)]
+    cmd = ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", str(port)]
     try:
         proc = _run_local_process_with_log(cmd, cwd=root, log_path=(root / ".archmind" / "backend.log"))
     except Exception as exc:
@@ -431,7 +431,7 @@ def deploy_frontend_local(project_dir: Path) -> dict[str, Any]:
     if frontend_dir is None:
         return _service_result("FAIL", None, "frontend deploy directory not found")
     port = find_free_port()
-    cmd = ["npm", "run", "dev", "--", "--hostname", "127.0.0.1", "--port", str(port)]
+    cmd = ["npm", "run", "dev", "--", "--hostname", "0.0.0.0", "--port", str(port)]
     try:
         proc = _run_local_process_with_log(cmd, cwd=frontend_dir, log_path=(root / ".archmind" / "frontend.log"))
     except Exception as exc:

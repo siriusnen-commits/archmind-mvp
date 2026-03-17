@@ -1294,6 +1294,34 @@ def _latest_run_summary_payload(project_dir: Path) -> dict[str, Any]:
     return payload or {}
 
 
+def _detect_external_ip() -> Optional[str]:
+    try:
+        result = subprocess.run(
+            ["tailscale", "ip", "-4"],
+            capture_output=True,
+            text=True,
+            timeout=1,
+            shell=False,
+            check=False,
+        )
+        ip = str(result.stdout or "").strip().splitlines()[0]
+        if ip:
+            return ip
+    except Exception:
+        pass
+    return None
+
+
+def _external_url_for(local_url: str, external_ip: Optional[str]) -> str:
+    if not external_ip:
+        return ""
+    text = str(local_url or "").strip()
+    match = re.match(r"^https?://[^:/]+:(\d+)", text)
+    if not match:
+        return ""
+    return f"http://{external_ip}:{match.group(1)}"
+
+
 def _status_component_summary(project_dir: Path, result_payload: dict[str, Any]) -> tuple[str, str]:
     summary_payload = _latest_run_summary_payload(project_dir)
     backend = str((summary_payload.get("backend") or {}).get("status") or "").strip()
@@ -2820,15 +2848,22 @@ async def command_current(update: Any, context: Any) -> None:
         if state_payload.get("frontend_pid") is not None:
             runtime_frontend = "RUNNING"
 
+    external_ip = _detect_external_ip()
     runtime_lines = [
         "Runtime",
         f"Backend: {runtime_backend}",
     ]
     if backend_url:
         runtime_lines.append(f"Backend URL: {backend_url}")
+        external_backend_url = _external_url_for(backend_url, external_ip)
+        if runtime_backend == "RUNNING" and external_backend_url:
+            runtime_lines.append(f"External URL: {external_backend_url}")
     runtime_lines.append(f"Frontend: {runtime_frontend}")
     if runtime_frontend == "RUNNING" and frontend_url:
         runtime_lines.append(f"Frontend URL: {frontend_url}")
+        external_frontend_url = _external_url_for(frontend_url, external_ip)
+        if external_frontend_url:
+            runtime_lines.append(f"External URL: {external_frontend_url}")
 
     message = (
         "Current project\n\n"
@@ -3758,6 +3793,7 @@ async def command_running(update: Any, context: Any) -> None:
         return
 
     current = get_current_project()
+    external_ip = _detect_external_ip()
     lines = ["Running local services", ""]
     for idx, item in enumerate(rows, start=1):
         project_dir = item.get("project_dir")
@@ -3775,12 +3811,18 @@ async def command_running(update: Any, context: Any) -> None:
         backend_url = str(backend.get("url") or "").strip()
         if backend_url:
             lines.append(f"   URL: {backend_url}")
+            external_backend_url = _external_url_for(backend_url, external_ip)
+            if backend_status.upper() == "RUNNING" and external_backend_url:
+                lines.append(f"   External URL: {external_backend_url}")
         frontend_status = str(frontend.get("status") or "NOT RUNNING")
         frontend_pid = frontend.get("pid")
         lines.append(f"   Frontend: {frontend_status}" + (f" (pid {frontend_pid})" if frontend_pid else ""))
         frontend_url = str(frontend.get("url") or "").strip()
         if frontend_url:
             lines.append(f"   URL: {frontend_url}")
+            external_frontend_url = _external_url_for(frontend_url, external_ip)
+            if frontend_status.upper() == "RUNNING" and external_frontend_url:
+                lines.append(f"   External URL: {external_frontend_url}")
         if idx != len(rows):
             lines.append("")
     await update.message.reply_text(_truncate_message("\n".join(lines), limit=3500))
