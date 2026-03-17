@@ -40,6 +40,7 @@ from archmind.telegram_bot import (
     command_apply_suggestion,
     command_apply_plan,
     command_next,
+    command_suggestion_callback,
     command_plan,
     command_retry,
     command_preview,
@@ -543,15 +544,27 @@ def test_build_finished_message_prefers_frontend_smoke_success_in_summary() -> N
 @dataclass
 class DummyMessage:
     sent: list[str] = field(default_factory=list)
+    sent_kwargs: list[dict[str, object]] = field(default_factory=list)
 
-    async def reply_text(self, text: str) -> None:
+    async def reply_text(self, text: str, **kwargs) -> None:
         self.sent.append(text)
+        self.sent_kwargs.append(dict(kwargs))
 
 
 @dataclass
 class DummyUpdate:
     message: DummyMessage
     effective_chat: object
+
+
+@dataclass
+class DummyCallbackQuery:
+    data: str
+    message: DummyMessage
+    answered: bool = False
+
+    async def answer(self) -> None:
+        self.answered = True
 
 
 @dataclass
@@ -3124,6 +3137,47 @@ def test_next_command_recommends_api_and_pages_for_entity(tmp_path: Path, monkey
     assert any("/add_api " in cmd for cmd in out.splitlines())
     assert any("/add_field " in cmd for cmd in out.splitlines())
     assert any(candidate in out for candidate in expected_candidates)
+    assert msg.sent_kwargs
+    reply_markup = msg.sent_kwargs[-1].get("reply_markup")
+    assert reply_markup is not None
+    buttons = [btn for row in getattr(reply_markup, "inline_keyboard", []) for btn in row]
+    assert any(str(getattr(btn, "callback_data", "")) == "/add_api GET /tasks/{id}" for btn in buttons)
+
+
+def test_next_callback_executes_full_add_api_command(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "domains": ["tasks"],
+                "template": "fastapi",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+                "reason_summary": "demo",
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    query = DummyCallbackQuery(data="/add_api GET /tasks/{id}", message=msg)
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    update.callback_query = query  # type: ignore[attr-defined]
+    asyncio.run(command_suggestion_callback(update, DummyContext()))
+
+    assert query.answered is True
+    out = msg.sent[-1]
+    assert "API added" in out
+    assert "Endpoint:\nGET /tasks/{id}" in out
+    payload = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
+    assert "GET /tasks/{id}" in (payload.get("api_endpoints") or [])
 
 
 def test_next_command_limits_suggestions_to_five(tmp_path: Path, monkeypatch) -> None:

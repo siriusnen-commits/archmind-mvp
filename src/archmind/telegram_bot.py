@@ -3505,6 +3505,26 @@ async def command_next(update: Any, context: Any) -> None:
         return
 
     lines = ["Next development suggestions", ""]
+    callback_rows: list[list[Any]] = []
+    InlineKeyboardButton = None
+    InlineKeyboardMarkup = None
+    try:
+        from telegram import InlineKeyboardButton as _InlineKeyboardButton, InlineKeyboardMarkup as _InlineKeyboardMarkup
+
+        InlineKeyboardButton = _InlineKeyboardButton
+        InlineKeyboardMarkup = _InlineKeyboardMarkup
+    except Exception:
+        class _InlineKeyboardButton:  # pragma: no cover - fallback only when telegram package is unavailable
+            def __init__(self, text: str, callback_data: str) -> None:
+                self.text = text
+                self.callback_data = callback_data
+
+        class _InlineKeyboardMarkup:  # pragma: no cover - fallback only when telegram package is unavailable
+            def __init__(self, inline_keyboard: list[list[Any]]) -> None:
+                self.inline_keyboard = inline_keyboard
+
+        InlineKeyboardButton = _InlineKeyboardButton
+        InlineKeyboardMarkup = _InlineKeyboardMarkup
     for i, item in enumerate(suggestions, start=1):
         command = str(item.get("command") or "").strip()
         reason = str(item.get("reason") or "").strip()
@@ -3512,8 +3532,52 @@ async def command_next(update: Any, context: Any) -> None:
         if reason:
             lines.append(f"   reason: {reason}")
         lines.append("")
+        if InlineKeyboardButton is not None and len(command.encode("utf-8")) <= 64:
+            callback_rows.append([InlineKeyboardButton(text=command, callback_data=command)])
     lines += ["Next:", "- run suggested commands", "- /inspect"]
-    await update.message.reply_text(_truncate_message("\n".join(lines)))
+    if InlineKeyboardMarkup is not None and callback_rows:
+        await update.message.reply_text(_truncate_message("\n".join(lines)), reply_markup=InlineKeyboardMarkup(callback_rows))
+    else:
+        await update.message.reply_text(_truncate_message("\n".join(lines)))
+
+
+async def command_suggestion_callback(update: Any, context: Any) -> None:
+    query = getattr(update, "callback_query", None)
+    if query is None:
+        return
+    data = str(getattr(query, "data", "") or "").strip()
+    if not data.startswith("/"):
+        return
+    answer = getattr(query, "answer", None)
+    if callable(answer):
+        await answer()
+
+    message = getattr(query, "message", None)
+    if message is None:
+        return
+
+    parts = data.split()
+    cmd = parts[0].strip().lower()
+    args = parts[1:]
+
+    callback_update = type("CallbackUpdate", (), {"message": message, "effective_chat": getattr(update, "effective_chat", None)})()
+    callback_context = type(
+        "CallbackContext",
+        (),
+        {"args": args, "application": getattr(context, "application", None)},
+    )()
+
+    handlers: dict[str, Any] = {
+        "/add_entity": command_add_entity,
+        "/add_field": command_add_field,
+        "/add_api": command_add_api,
+        "/add_page": command_add_page,
+    }
+    handler = handlers.get(cmd)
+    if handler is None:
+        await message.reply_text(f"Unsupported suggestion command: {data}")
+        return
+    await handler(callback_update, callback_context)
 
 
 async def command_use(update: Any, context: Any) -> None:
@@ -4024,7 +4088,7 @@ def run_bot() -> None:
         raise SystemExit("TELEGRAM_BOT_TOKEN is required")
 
     try:
-        from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
+        from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler, MessageHandler, filters
     except Exception as exc:
         raise SystemExit(f"python-telegram-bot is required: {exc}") from exc
 
@@ -4044,6 +4108,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("apply_suggestion", command_apply_suggestion))
     app.add_handler(CommandHandler("apply_plan", command_apply_plan))
     app.add_handler(CommandHandler("next", command_next))
+    app.add_handler(CallbackQueryHandler(command_suggestion_callback, pattern=r"^/add_(?:entity|field|api|page)\b"))
     app.add_handler(CommandHandler("continue", command_continue))
     app.add_handler(CommandHandler("fix", command_fix))
     app.add_handler(CommandHandler("retry", command_retry))
