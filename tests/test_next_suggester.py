@@ -58,3 +58,15 @@ def test_next_suggester_recommends_missing_crud_and_timestamp_for_partial_note_a
     assert "/add_api PUT /notes/{id}" in cmds
     assert "/add_api DELETE /notes/{id}" in cmds
     assert "/add_field Note created_at:datetime" in cmds
+
+
+def test_next_suggester_does_not_recommend_put_when_patch_update_exists() -> None:
+    spec = {
+        "shape": "backend",
+        "modules": [],
+        "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": ["PATCH /tasks/{id}"],
+        "frontend_pages": [],
+    }
+    cmds = _commands(spec)
+    assert "/add_api PUT /tasks/{id}" not in cmds

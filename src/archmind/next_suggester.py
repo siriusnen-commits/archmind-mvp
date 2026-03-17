@@ -99,13 +99,20 @@ def suggest_next_commands(spec: dict[str, Any], limit: int = 5) -> list[dict[str
 
         expected_apis = [
             ("GET", f"/{plural}/{{id}}", "read API missing"),
-            ("PUT", f"/{plural}/{{id}}", "update API missing"),
             ("DELETE", f"/{plural}/{{id}}", "delete API missing"),
         ]
         for method, path, reason in expected_apis:
             endpoint = f"{method} {path}"
             if endpoint not in api_endpoints:
                 add(f"/add_api {method} {path}", f"{name} entity exists but {reason}")
+
+        update_paths = {
+            f"PUT /{plural}/{{id}}",
+            f"PATCH /{plural}/{{id}}",
+        }
+        has_update = any(ep in api_endpoints for ep in update_paths)
+        if not has_update:
+            add(f"/add_api PUT /{plural}/{{id}}", f"{name} entity exists but update API missing")
 
         fields = entity.get("fields") if isinstance(entity.get("fields"), list) else []
         field_names = {str(item.get("name") or "").strip().lower() for item in fields if isinstance(item, dict)}
