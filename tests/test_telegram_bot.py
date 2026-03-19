@@ -2338,14 +2338,51 @@ def test_improve_command_reports_webapp_mismatch_and_env_missing(tmp_path: Path,
     msg = DummyMessage()
     asyncio.run(command_improve(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     out = msg.sent[-1]
-    assert "Improve analysis" in out
-    assert "1. 문제" in out
-    assert "개선안" in out
-    assert "실행 명령" in out
-    assert "webapp 의도로 보이지만 현재 프로젝트가 backend 중심으로 구성되어 있습니다." in out
-    assert "runtime env 구조가 누락되어 있습니다" in out
+    assert "Project:" in out
+    assert "Improve suggestions" in out
+    assert "1. " in out
+    assert "reason:" in out
+    assert "command:" in out
+    assert "Align intent with fullstack template" in out
+    assert "Repair runtime env injection" in out
     assert "/idea_local 개인용 블로그형식의 다이어리 webapp" in out
     assert "/deploy local" in out
+    assert "Next:" in out
+    assert "- /inspect" in out
+    assert "- /next" in out
+
+
+def test_improve_command_includes_runtime_failure_class_suggestion(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "runtime_fail_proj"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi==0.115.0\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "template": "fastapi",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps({"runtime_failure_class": "runtime-entrypoint-error"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_improve(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Resolve runtime failure classification" in out
+    assert "runtime-entrypoint-error" in out
+    assert "/logs backend" in out
 
 
 def test_add_module_updates_spec_and_reuses_apply_hook(tmp_path: Path, monkeypatch) -> None:

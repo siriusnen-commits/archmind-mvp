@@ -3365,13 +3365,6 @@ def _build_improvement_report(project_path: Path) -> str:
     spec, _ = _read_or_init_project_spec(root)
     reasoning = _load_json(archmind_dir / "architecture_reasoning.json") or {}
     state_payload = load_state(root) or {}
-
-    has_backend = (root / "app").is_dir() or (root / "requirements.txt").exists()
-    frontend_dir = _frontend_dir_for_project(root)
-    has_frontend = frontend_dir is not None
-    backend_env_exists = (root / "backend" / ".env").exists() or (root / ".env").exists()
-    frontend_env_exists = bool(frontend_dir and (frontend_dir / ".env.local").exists())
-
     shape = str(spec.get("shape") or reasoning.get("app_shape") or state_payload.get("architecture_app_shape") or "unknown").strip().lower()
     template = str(
         state_payload.get("effective_template")
@@ -3379,87 +3372,188 @@ def _build_improvement_report(project_path: Path) -> str:
         or reasoning.get("recommended_template")
         or "unknown"
     ).strip().lower()
+    fullstack_expected = shape == "fullstack" or template == "fullstack-ddd"
+
+    backend_entry_root = root / "app" / "main.py"
+    backend_entry_nested = root / "backend" / "app" / "main.py"
+    backend_entry_ok = backend_entry_nested.exists() if fullstack_expected else (backend_entry_root.exists() or backend_entry_nested.exists())
+    has_backend = backend_entry_ok or (root / "app").is_dir() or (root / "backend" / "app").is_dir()
+    frontend_dir = _frontend_dir_for_project(root)
+    has_frontend = frontend_dir is not None
+    frontend_root_ok = (root / "frontend").is_dir()
+    backend_env_exists = (root / "backend" / ".env").exists() or (root / ".env").exists()
+    frontend_env_exists = bool(frontend_dir and (frontend_dir / ".env.local").exists())
+    api_base_url = _read_frontend_api_base_url(root)
+    requirements_ok = (root / "backend" / "requirements.txt").exists() if fullstack_expected else (
+        (root / "requirements.txt").exists() or (root / "backend" / "requirements.txt").exists()
+    )
+    runtime_failure_class = str(state_payload.get("runtime_failure_class") or state_payload.get("last_failure_class") or "").strip()
+    project_display_name = root.name
+    github_repo_url = str(state_payload.get("github_repo_url") or "").strip()
     idea_hint = _extract_project_idea_hint(reasoning, state_payload, spec)
     fullstack_intent = _fullstack_intent_from_text(idea_hint)
+    current_selected = get_current_project()
+    last_selected = load_last_project_path()
 
-    findings: list[dict[str, str]] = []
-    if fullstack_intent and (not has_frontend or shape == "backend" or template in ("fastapi", "fastapi-ddd")):
-        findings.append(
+    suggestions: list[dict[str, str]] = []
+    if fullstack_expected and (not backend_entry_nested.exists() or not frontend_root_ok):
+        suggestions.append(
             {
-                "problem": "webapp 의도로 보이지만 현재 프로젝트가 backend 중심으로 구성되어 있습니다.",
-                "improvement": "프로젝트를 fullstack 구조로 정렬하고 기본 템플릿을 fullstack-ddd로 맞추세요.",
+                "title": "Fix fullstack structure contract",
+                "reason": "shape/template는 fullstack이지만 backend/app/main.py 또는 frontend 구조가 누락되었습니다.",
+                "command": "/idea_local <same idea>",
+            }
+        )
+    if fullstack_intent and (shape == "backend" or template in ("fastapi", "fastapi-ddd")):
+        suggestions.append(
+            {
+                "title": "Align intent with fullstack template",
+                "reason": "아이디어는 webapp 성격인데 현재 shape/template가 backend 중심입니다.",
                 "command": (
-                    f"/design {idea_hint}\n"
-                    f"/idea_local {idea_hint}"
+                    f"/design {idea_hint}\n/idea_local {idea_hint}"
                     if idea_hint
-                    else "/design <원래 아이디어>\n/idea_local <원래 아이디어>"
+                    else "/design <idea>\n/idea_local <idea>"
                 ),
             }
         )
-    if not has_frontend:
-        findings.append(
+    if not has_backend:
+        suggestions.append(
             {
-                "problem": "frontend 구조가 없습니다.",
-                "improvement": "UI 페이지를 포함한 fullstack 프로젝트로 전환하거나 새로 생성하세요.",
-                "command": (
-                    f"/plan {idea_hint}\n"
-                    f"/idea_local {idea_hint}"
-                    if idea_hint
-                    else "/plan <아이디어>\n/idea_local <아이디어>"
-                ),
+                "title": "Restore backend entrypoint",
+                "reason": "backend entrypoint를 찾지 못해 runtime에서 실행 실패 가능성이 높습니다.",
+                "command": "/inspect\n/deploy local",
             }
         )
-    if not backend_env_exists or (has_frontend and not frontend_env_exists):
+    if not requirements_ok:
+        suggestions.append(
+            {
+                "title": "Add backend requirements file",
+                "reason": "requirements.txt가 없어 python dependency 설치/실행이 불안정합니다.",
+                "command": "/inspect",
+            }
+        )
+    if not has_frontend and (fullstack_expected or fullstack_intent):
+        suggestions.append(
+            {
+                "title": "Add missing frontend structure",
+                "reason": "web/fullstack 프로젝트인데 frontend 경로가 없습니다.",
+                "command": "/plan <same idea>\n/idea_local <same idea>",
+            }
+        )
+    if not backend_env_exists or (has_frontend and (not frontend_env_exists or not api_base_url)):
         missing_parts: list[str] = []
         if not backend_env_exists:
             missing_parts.append("backend/.env")
         if has_frontend and not frontend_env_exists:
             missing_parts.append("frontend/.env.local")
-        findings.append(
+        if has_frontend and frontend_env_exists and not api_base_url:
+            missing_parts.append("NEXT_PUBLIC_API_BASE_URL")
+        suggestions.append(
             {
-                "problem": f"runtime env 구조가 누락되어 있습니다: {', '.join(missing_parts)}",
-                "improvement": "local runtime을 한 번 기동해 포트/URL/CORS env를 자동 생성하세요.",
+                "title": "Repair runtime env injection",
+                "reason": f"runtime 연결 설정 누락: {', '.join(missing_parts)}",
                 "command": "/deploy local\n/inspect",
             }
         )
-
-    if not findings:
-        findings.append(
+    if runtime_failure_class:
+        suggestions.append(
             {
-                "problem": "즉시 수정이 필요한 구조 불일치는 찾지 못했습니다.",
-                "improvement": "기능 확장이나 안정화는 다음 개발 제안을 따라 진행하세요.",
-                "command": "/next\n/inspect",
+                "title": "Resolve runtime failure classification",
+                "reason": f"최근 failure class가 `{runtime_failure_class}`로 남아 있습니다.",
+                "command": "/logs backend\n/inspect",
+            }
+        )
+
+    if github_repo_url:
+        slug = ""
+        m = re.search(r"github\.com[:/]+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?$", github_repo_url)
+        if m:
+            slug = m.group(1).split("/", 1)[1]
+        if slug and ("_-_-" in slug or not re.search(r"[a-z]", slug)):
+            suggestions.append(
+                {
+                    "title": "Normalize repository slug",
+                    "reason": f"repo slug `{slug}`가 가독성이 낮아 관리가 어렵습니다.",
+                    "command": "/inspect",
+                }
+            )
+    if re.search(r"[^\x00-\x7F]", project_display_name) and not github_repo_url:
+        suggestions.append(
+            {
+                "title": "Separate display name and repo slug",
+                "reason": "프로젝트명이 비ASCII라 repo slug 정책 점검이 필요합니다.",
+                "command": "/inspect",
+            }
+        )
+
+    if current_selected is not None and last_selected is not None and current_selected.resolve() != last_selected.resolve():
+        suggestions.append(
+            {
+                "title": "Confirm target project selection",
+                "reason": f"current와 last project가 다릅니다: current={current_selected.name}, last={last_selected.name}",
+                "command": "/current\n/projects\n/use <n>",
+            }
+        )
+
+    # B-category: feature/model expansion suggestions
+    next_commands = suggest_next_commands(
+        {
+            "shape": shape or "unknown",
+            "modules": spec.get("modules") if isinstance(spec.get("modules"), list) else [],
+            "entities": _normalize_entities(spec.get("entities")),
+            "api_endpoints": spec.get("api_endpoints") if isinstance(spec.get("api_endpoints"), list) else [],
+            "frontend_pages": spec.get("frontend_pages") if isinstance(spec.get("frontend_pages"), list) else [],
+        },
+        limit=3,
+    )
+    if next_commands:
+        top = next_commands[0]
+        cmd = str(top.get("command") or "").strip()
+        reason = str(top.get("reason") or "").strip() or "기능 확장 관점의 다음 단계입니다."
+        suggestions.append(
+            {
+                "title": "Expand features incrementally",
+                "reason": reason,
+                "command": cmd or "/next",
+            }
+        )
+    else:
+        suggestions.append(
+            {
+                "title": "Expand domain model",
+                "reason": "기능 확장을 위해 엔티티/필드/페이지를 점진적으로 추가하세요.",
+                "command": "/add_entity <name>\n/add_field <Entity> <field:type>\n/add_page <path>",
+            }
+        )
+
+    if not suggestions:
+        suggestions.append(
+            {
+                "title": "No immediate correction needed",
+                "reason": "치명적 구조 불일치는 감지되지 않았습니다.",
+                "command": "/next",
             }
         )
 
     lines = [
-        "Improve analysis",
-        "",
         "Project:",
         root.name,
         "",
-        "Current:",
-        f"- shape: {shape or 'unknown'}",
-        f"- template: {template or 'unknown'}",
-        f"- backend: {'yes' if has_backend else 'no'}",
-        f"- frontend: {'yes' if has_frontend else 'no'}",
-        f"- backend env: {'yes' if backend_env_exists else 'no'}",
-        f"- frontend env: {'yes' if frontend_env_exists else 'no'}",
+        "Improve suggestions",
     ]
-    if idea_hint:
-        lines += ["", "Idea hint:", idea_hint[:220]]
-
-    for idx, item in enumerate(findings, start=1):
+    for idx, item in enumerate(suggestions, start=1):
         lines += [
             "",
-            f"{idx}. 문제",
-            f"- {item['problem']}",
-            "개선안",
-            f"- {item['improvement']}",
-            "실행 명령",
+            f"{idx}. {item['title']}",
+            f"   reason: {item['reason']}",
+            f"   command: {item['command']}",
         ]
-        lines.extend(f"- {part}" for part in str(item["command"]).splitlines())
-
+    lines += [
+        "",
+        "Next:",
+        "- /inspect",
+        "- /next",
+    ]
     return _truncate_message("\n".join(lines), limit=3900)
 
 
