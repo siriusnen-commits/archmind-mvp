@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -91,6 +92,7 @@ CODE
 
 INSPECTION
 /inspect               show project summary
+/improve               analyze project mismatches and suggest corrections
 
 CLEANUP
 /delete_project
@@ -129,6 +131,7 @@ _RUNNING_JOB: Optional[_RunningJob] = None
 _RUNNING_JOB_SEQ = 0
 _CURRENT_PROJECT: Optional[Path] = None
 _PENDING_DELETE: Optional[_PendingDelete] = None
+_CALLBACK_PAYLOADS: dict[str, str] = {}
 
 
 def _is_job_active(job: _RunningJob) -> bool:
@@ -463,6 +466,87 @@ def _truncate_message(text: str, limit: int = 3900) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 3] + "..."
+
+
+def _inline_keyboard_classes() -> tuple[Any, Any]:
+    try:
+        from telegram import InlineKeyboardButton as _InlineKeyboardButton, InlineKeyboardMarkup as _InlineKeyboardMarkup
+
+        return _InlineKeyboardButton, _InlineKeyboardMarkup
+    except Exception:
+        class _InlineKeyboardButton:  # pragma: no cover - fallback only when telegram package is unavailable
+            def __init__(self, text: str, callback_data: str) -> None:
+                self.text = text
+                self.callback_data = callback_data
+
+        class _InlineKeyboardMarkup:  # pragma: no cover - fallback only when telegram package is unavailable
+            def __init__(self, inline_keyboard: list[list[Any]]) -> None:
+                self.inline_keyboard = inline_keyboard
+
+        return _InlineKeyboardButton, _InlineKeyboardMarkup
+
+
+def _remember_callback_payload(payload: str) -> str:
+    raw = str(payload or "")
+    digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:20]
+    _CALLBACK_PAYLOADS[digest] = raw
+    if len(_CALLBACK_PAYLOADS) > 512:
+        oldest = next(iter(_CALLBACK_PAYLOADS))
+        _CALLBACK_PAYLOADS.pop(oldest, None)
+    return digest
+
+
+def _encode_callback_data(action: str, payload: str) -> str:
+    action_key = str(action or "").strip().lower()
+    payload_text = str(payload or "")
+    direct = f"{action_key}|{payload_text}"
+    if len(direct.encode("utf-8")) <= 64:
+        return direct
+    token = _remember_callback_payload(payload_text)
+    return f"{action_key}|{token}"
+
+
+def _decode_callback_data(data: str) -> tuple[str, str]:
+    raw = str(data or "").strip()
+    if "|" not in raw:
+        if raw.startswith("/"):
+            return "suggest", raw
+        return "", ""
+    action, payload = raw.split("|", 1)
+    resolved = _CALLBACK_PAYLOADS.get(payload, payload)
+    return str(action).strip().lower(), str(resolved)
+
+
+def _parse_command_string(command_text: str) -> tuple[str, list[str]]:
+    parts = [x for x in str(command_text or "").strip().split() if x]
+    if not parts:
+        return "", []
+    return parts[0].lower(), parts[1:]
+
+
+def _resolve_project_by_id(project_id: str) -> Optional[Path]:
+    key = str(project_id or "").strip()
+    if not key:
+        return None
+    projects_dir = resolve_projects_dir()
+    if not projects_dir.exists() or not projects_dir.is_dir():
+        return None
+    for child in projects_dir.iterdir():
+        if child.is_dir() and child.name == key:
+            return child.resolve()
+    return None
+
+
+def _build_callback_update_context(update: Any, context: Any, args: list[str]) -> tuple[Any, Any, Any, Any]:
+    query = getattr(update, "callback_query", None)
+    message = getattr(query, "message", None)
+    callback_update = type("CallbackUpdate", (), {"message": message, "effective_chat": getattr(update, "effective_chat", None)})()
+    callback_context = type(
+        "CallbackContext",
+        (),
+        {"args": args, "application": getattr(context, "application", None)},
+    )()
+    return query, message, callback_update, callback_context
 
 
 def _no_active_project_guidance() -> str:
@@ -2242,6 +2326,14 @@ async def _handle_idea_like(
     if auto_deploy:
         start_msg += f"auto_deploy={auto_deploy_target}\n"
     start_msg += f"log={log_path}"
+    if cmd_name == "idea_local":
+        InlineKeyboardButton, InlineKeyboardMarkup = _inline_keyboard_classes()
+        project_id = project_dir.name
+        next_label = f"NEXT (for {project_id})"
+        callback_data = _encode_callback_data("next", project_id)
+        reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton(text=next_label, callback_data=callback_data)]])
+        await update.message.reply_text(start_msg, reply_markup=reply_markup)
+        return
     await update.message.reply_text(start_msg)
 
 
@@ -2548,7 +2640,16 @@ async def command_design(update: Any, context: Any) -> None:
         "2. generate project",
         f"   /idea_local {idea}",
     ]
-    await update.message.reply_text(_truncate_message("\n".join(lines)))
+    InlineKeyboardButton, InlineKeyboardMarkup = _inline_keyboard_classes()
+    reply_markup = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(text="PLAN", callback_data=_encode_callback_data("plan", idea)),
+                InlineKeyboardButton(text="GENERATE", callback_data=_encode_callback_data("generate", idea)),
+            ]
+        ]
+    )
+    await update.message.reply_text(_truncate_message("\n".join(lines)), reply_markup=reply_markup)
 
 
 def _format_plan_message(plan: dict[str, Any]) -> str:
@@ -2677,7 +2778,11 @@ async def command_plan(update: Any, context: Any) -> None:
         target_project = _resolve_target_project()
         if target_project is not None:
             _save_plan_execution(target_project, plan)
-        await update.message.reply_text(_truncate_message(_format_plan_message(plan)))
+        InlineKeyboardButton, InlineKeyboardMarkup = _inline_keyboard_classes()
+        reply_markup = InlineKeyboardMarkup(
+            [[InlineKeyboardButton(text="GENERATE", callback_data=_encode_callback_data("generate", idea))]]
+        )
+        await update.message.reply_text(_truncate_message(_format_plan_message(plan)), reply_markup=reply_markup)
         return
 
     project_path = _resolve_target_project()
@@ -3013,6 +3118,15 @@ async def command_inspect(update: Any, context: Any) -> None:
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 
 
+async def command_improve(update: Any, context: Any) -> None:
+    del context
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text(_no_active_project_guidance())
+        return
+    await update.message.reply_text(_build_improvement_report(project_path))
+
+
 def _build_selected_project_summary(project_path: Path) -> str:
     archmind_dir = project_path / ".archmind"
     spec, _ = _read_or_init_project_spec(project_path)
@@ -3090,6 +3204,142 @@ def _build_selected_project_summary(project_path: Path) -> str:
     lines += ["", "Try next:", "- /inspect", "- /next"]
 
     return "\n".join(lines)
+
+
+def _frontend_dir_for_project(project_path: Path) -> Optional[Path]:
+    root = project_path.expanduser().resolve()
+    frontend_subdir = root / "frontend"
+    if frontend_subdir.is_dir():
+        return frontend_subdir
+    if (root / "package.json").exists() and ((root / "app").is_dir() or (root / "pages").is_dir()):
+        return root
+    return None
+
+
+def _fullstack_intent_from_text(text: str) -> bool:
+    raw = str(text or "").strip().lower()
+    if not raw:
+        return False
+    keywords = ("webapp", "웹앱", "블로그", "다이어리", "게시판", "대시보드", "관리화면")
+    return any(token in raw for token in keywords)
+
+
+def _extract_project_idea_hint(reasoning: dict[str, Any], state_payload: dict[str, Any], spec: dict[str, Any]) -> str:
+    candidates = [
+        str(reasoning.get("idea_original") or ""),
+        str(reasoning.get("idea_normalized") or ""),
+        str(spec.get("reason_summary") or ""),
+        str(state_payload.get("architecture_reason_summary") or ""),
+    ]
+    for value in candidates:
+        text = str(value).strip()
+        if text:
+            return text
+    return ""
+
+
+def _build_improvement_report(project_path: Path) -> str:
+    root = project_path.expanduser().resolve()
+    archmind_dir = root / ".archmind"
+    spec, _ = _read_or_init_project_spec(root)
+    reasoning = _load_json(archmind_dir / "architecture_reasoning.json") or {}
+    state_payload = load_state(root) or {}
+
+    has_backend = (root / "app").is_dir() or (root / "requirements.txt").exists()
+    frontend_dir = _frontend_dir_for_project(root)
+    has_frontend = frontend_dir is not None
+    backend_env_exists = (root / "backend" / ".env").exists() or (root / ".env").exists()
+    frontend_env_exists = bool(frontend_dir and (frontend_dir / ".env.local").exists())
+
+    shape = str(spec.get("shape") or reasoning.get("app_shape") or state_payload.get("architecture_app_shape") or "unknown").strip().lower()
+    template = str(
+        state_payload.get("effective_template")
+        or spec.get("template")
+        or reasoning.get("recommended_template")
+        or "unknown"
+    ).strip().lower()
+    idea_hint = _extract_project_idea_hint(reasoning, state_payload, spec)
+    fullstack_intent = _fullstack_intent_from_text(idea_hint)
+
+    findings: list[dict[str, str]] = []
+    if fullstack_intent and (not has_frontend or shape == "backend" or template in ("fastapi", "fastapi-ddd")):
+        findings.append(
+            {
+                "problem": "webapp 의도로 보이지만 현재 프로젝트가 backend 중심으로 구성되어 있습니다.",
+                "improvement": "프로젝트를 fullstack 구조로 정렬하고 기본 템플릿을 fullstack-ddd로 맞추세요.",
+                "command": (
+                    f"/design {idea_hint}\n"
+                    f"/idea_local {idea_hint}"
+                    if idea_hint
+                    else "/design <원래 아이디어>\n/idea_local <원래 아이디어>"
+                ),
+            }
+        )
+    if not has_frontend:
+        findings.append(
+            {
+                "problem": "frontend 구조가 없습니다.",
+                "improvement": "UI 페이지를 포함한 fullstack 프로젝트로 전환하거나 새로 생성하세요.",
+                "command": (
+                    f"/plan {idea_hint}\n"
+                    f"/idea_local {idea_hint}"
+                    if idea_hint
+                    else "/plan <아이디어>\n/idea_local <아이디어>"
+                ),
+            }
+        )
+    if not backend_env_exists or (has_frontend and not frontend_env_exists):
+        missing_parts: list[str] = []
+        if not backend_env_exists:
+            missing_parts.append("backend/.env")
+        if has_frontend and not frontend_env_exists:
+            missing_parts.append("frontend/.env.local")
+        findings.append(
+            {
+                "problem": f"runtime env 구조가 누락되어 있습니다: {', '.join(missing_parts)}",
+                "improvement": "local runtime을 한 번 기동해 포트/URL/CORS env를 자동 생성하세요.",
+                "command": "/deploy local\n/inspect",
+            }
+        )
+
+    if not findings:
+        findings.append(
+            {
+                "problem": "즉시 수정이 필요한 구조 불일치는 찾지 못했습니다.",
+                "improvement": "기능 확장이나 안정화는 다음 개발 제안을 따라 진행하세요.",
+                "command": "/next\n/inspect",
+            }
+        )
+
+    lines = [
+        "Improve analysis",
+        "",
+        "Project:",
+        root.name,
+        "",
+        "Current:",
+        f"- shape: {shape or 'unknown'}",
+        f"- template: {template or 'unknown'}",
+        f"- backend: {'yes' if has_backend else 'no'}",
+        f"- frontend: {'yes' if has_frontend else 'no'}",
+        f"- backend env: {'yes' if backend_env_exists else 'no'}",
+        f"- frontend env: {'yes' if frontend_env_exists else 'no'}",
+    ]
+    if idea_hint:
+        lines += ["", "Idea hint:", idea_hint[:220]]
+
+    for idx, item in enumerate(findings, start=1):
+        lines += [
+            "",
+            f"{idx}. 문제",
+            f"- {item['problem']}",
+            "개선안",
+            f"- {item['improvement']}",
+            "실행 명령",
+        ]
+        lines.extend(f"- {part}" for part in str(item["command"]).splitlines())
+
+    return _truncate_message("\n".join(lines), limit=3900)
 
 
 async def command_add_module(update: Any, context: Any) -> None:
@@ -3584,31 +3834,20 @@ async def command_next(update: Any, context: Any) -> None:
     suggestions = suggest_next_commands(spec, limit=5)
     if not suggestions:
         await update.message.reply_text(
-            "Next development suggestions\n\nNo immediate suggestions.\n\nNext:\n- /inspect\n- continue evolving the project"
+            "Next development suggestions\n"
+            f"Target Project: {project_path.name}\n\n"
+            "No immediate suggestions.\n\n"
+            "Next:\n- /inspect\n- continue evolving the project"
         )
         return
 
-    lines = ["Next development suggestions", ""]
+    lines = [
+        "Next development suggestions",
+        f"Target Project: {project_path.name}",
+        "",
+    ]
     callback_rows: list[list[Any]] = []
-    InlineKeyboardButton = None
-    InlineKeyboardMarkup = None
-    try:
-        from telegram import InlineKeyboardButton as _InlineKeyboardButton, InlineKeyboardMarkup as _InlineKeyboardMarkup
-
-        InlineKeyboardButton = _InlineKeyboardButton
-        InlineKeyboardMarkup = _InlineKeyboardMarkup
-    except Exception:
-        class _InlineKeyboardButton:  # pragma: no cover - fallback only when telegram package is unavailable
-            def __init__(self, text: str, callback_data: str) -> None:
-                self.text = text
-                self.callback_data = callback_data
-
-        class _InlineKeyboardMarkup:  # pragma: no cover - fallback only when telegram package is unavailable
-            def __init__(self, inline_keyboard: list[list[Any]]) -> None:
-                self.inline_keyboard = inline_keyboard
-
-        InlineKeyboardButton = _InlineKeyboardButton
-        InlineKeyboardMarkup = _InlineKeyboardMarkup
+    InlineKeyboardButton, InlineKeyboardMarkup = _inline_keyboard_classes()
     for i, item in enumerate(suggestions, start=1):
         command = str(item.get("command") or "").strip()
         reason = str(item.get("reason") or "").strip()
@@ -3616,52 +3855,76 @@ async def command_next(update: Any, context: Any) -> None:
         if reason:
             lines.append(f"   reason: {reason}")
         lines.append("")
-        if InlineKeyboardButton is not None and len(command.encode("utf-8")) <= 64:
-            callback_rows.append([InlineKeyboardButton(text=command, callback_data=command)])
+        callback_rows.append([InlineKeyboardButton(text=command, callback_data=_encode_callback_data("suggest", command))])
     lines += ["Next:", "- run suggested commands", "- /inspect"]
-    if InlineKeyboardMarkup is not None and callback_rows:
+    if callback_rows:
         await update.message.reply_text(_truncate_message("\n".join(lines)), reply_markup=InlineKeyboardMarkup(callback_rows))
     else:
         await update.message.reply_text(_truncate_message("\n".join(lines)))
 
 
 async def command_suggestion_callback(update: Any, context: Any) -> None:
-    query = getattr(update, "callback_query", None)
-    if query is None:
+    query, message, callback_update, callback_context = _build_callback_update_context(update, context, [])
+    if query is None or message is None:
         return
-    data = str(getattr(query, "data", "") or "").strip()
-    if not data.startswith("/"):
-        return
+
     answer = getattr(query, "answer", None)
     if callable(answer):
         await answer()
 
-    message = getattr(query, "message", None)
-    if message is None:
+    action, payload = _decode_callback_data(str(getattr(query, "data", "") or ""))
+    if not action:
         return
 
-    parts = data.split()
-    cmd = parts[0].strip().lower()
-    args = parts[1:]
-
-    callback_update = type("CallbackUpdate", (), {"message": message, "effective_chat": getattr(update, "effective_chat", None)})()
-    callback_context = type(
-        "CallbackContext",
-        (),
-        {"args": args, "application": getattr(context, "application", None)},
-    )()
-
-    handlers: dict[str, Any] = {
-        "/add_entity": command_add_entity,
-        "/add_field": command_add_field,
-        "/add_api": command_add_api,
-        "/add_page": command_add_page,
-    }
-    handler = handlers.get(cmd)
-    if handler is None:
-        await message.reply_text(f"Unsupported suggestion command: {data}")
+    if action == "plan":
+        callback_context.args = [x for x in str(payload).split() if x]
+        await command_plan(callback_update, callback_context)
         return
-    await handler(callback_update, callback_context)
+    if action == "generate":
+        callback_context.args = [x for x in str(payload).split() if x]
+        await command_idea_local(callback_update, callback_context)
+        return
+    if action == "next":
+        project_id = str(payload or "").strip()
+        project_path = _resolve_project_by_id(project_id)
+        if project_path is None:
+            await message.reply_text(f"Project not found: {project_id}")
+            return
+        set_current_project(project_path)
+        save_last_project_path(project_path)
+        callback_context.args = []
+        await command_next(callback_update, callback_context)
+        return
+    if action == "suggest":
+        cmd, args = _parse_command_string(payload)
+        callback_context.args = args
+        handlers: dict[str, Any] = {
+            "/add_entity": command_add_entity,
+            "/add_field": command_add_field,
+            "/add_api": command_add_api,
+            "/add_page": command_add_page,
+        }
+        handler = handlers.get(cmd)
+        if handler is None:
+            await message.reply_text(f"Unsupported suggestion command: {payload}")
+            return
+        await handler(callback_update, callback_context)
+        return
+    await message.reply_text(f"Unsupported callback action: {action}")
+
+
+async def command_unknown(update: Any, context: Any) -> None:
+    del context
+    await update.message.reply_text(
+        "알 수 없는 명령어입니다.\n"
+        "다음 명령어를 확인해주세요:\n\n"
+        "/help\n"
+        "/design {아이디어}\n"
+        "/plan {아이디어}\n"
+        "/idea_local {아이디어}\n"
+        "/inspect\n"
+        "/next"
+    )
 
 
 async def command_use(update: Any, context: Any) -> None:
@@ -4199,13 +4462,14 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("apply_suggestion", command_apply_suggestion))
     app.add_handler(CommandHandler("apply_plan", command_apply_plan))
     app.add_handler(CommandHandler("next", command_next))
-    app.add_handler(CallbackQueryHandler(command_suggestion_callback, pattern=r"^/add_(?:entity|field|api|page)\b"))
+    app.add_handler(CallbackQueryHandler(command_suggestion_callback))
     app.add_handler(CommandHandler("continue", command_continue))
     app.add_handler(CommandHandler("fix", command_fix))
     app.add_handler(CommandHandler("retry", command_retry))
     app.add_handler(CommandHandler("use", command_use))
     app.add_handler(CommandHandler("current", command_current))
     app.add_handler(CommandHandler("inspect", command_inspect))
+    app.add_handler(CommandHandler("improve", command_improve))
     app.add_handler(CommandHandler("logs", command_logs))
     app.add_handler(CommandHandler("running", command_running))
     app.add_handler(CommandHandler("tree", command_tree))
@@ -4218,6 +4482,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("stop", command_stop))
     app.add_handler(CommandHandler("restart", command_restart))
     app.add_handler(CommandHandler("delete_project", command_delete_project))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, command_text))
     app.add_handler(CommandHandler("help", command_help))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, command_text))
+    app.add_handler(MessageHandler(filters.COMMAND, command_unknown))
     app.run_polling()

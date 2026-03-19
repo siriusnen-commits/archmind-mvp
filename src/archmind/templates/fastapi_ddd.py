@@ -29,8 +29,10 @@ def enforce_fastapi_ddd(_: Dict[str, str], project_name: str) -> Dict[str, str]:
 
     files[".env.example"] = (
         f"APP_NAME={project_name}\n"
+        "APP_PORT=8000\n"
+        "BACKEND_BASE_URL=http://127.0.0.1:8000\n"
         "DB_URL=sqlite:///./data/app.db\n"
-        "ALLOW_ORIGINS=*\n"
+        "CORS_ALLOW_ORIGINS=http://localhost:3000,http://127.0.0.1:3000\n"
     )
 
     # packages
@@ -44,17 +46,19 @@ def enforce_fastapi_ddd(_: Dict[str, str], project_name: str) -> Dict[str, str]:
     files["app/services/__init__.py"] = ""
     files["tests/__init__.py"] = ""
 
-    files["app/core/config.py"] = f"""from __future__ import annotations
+    files["app/core/settings.py"] = f"""from __future__ import annotations
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=(".env", "backend/.env"), extra="ignore")
 
     app_name: str = "{project_name}"
+    app_port: int = 8000
+    backend_base_url: str = "http://127.0.0.1:8000"
     db_url: str = "sqlite:///./data/app.db"
-    allow_origins: str = "*"
+    cors_allow_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
 
 settings = Settings()
@@ -65,7 +69,7 @@ settings = Settings()
 from pathlib import Path
 from sqlmodel import SQLModel, Session, create_engine
 
-from app.core.config import settings
+from app.core.settings import settings
 
 
 engine = create_engine(settings.db_url, echo=False)
@@ -358,7 +362,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
-from app.core.config import settings
+from app.core.settings import settings
 from app.db.session import init_db
 
 
@@ -369,16 +373,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
-origins = [x.strip() for x in settings.allow_origins.split(",") if x.strip()]
+origins = [x.strip() for x in settings.cors_allow_origins.split(",") if x.strip()]
 if not origins:
-    origins = ["*"]
-if origins == ["*"]:
-    allow_origins = ["*"]
-else:
-    allow_origins = origins
+    origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allow_origins,
+    allow_origins=origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -391,7 +391,7 @@ import uvicorn
 
 if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
-    port = int(os.getenv("PORT", "8000"))
+    port = int(os.getenv("APP_PORT", os.getenv("PORT", "8000")))
     uvicorn.run("app.main:app", host=host, port=port, reload=True)
 """
 
@@ -461,7 +461,7 @@ python -m pip install -r requirements.txt
 
 ## Backend run
 ```bash
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port ${{PORT:-8000}}
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port ${{APP_PORT:-${{PORT:-8000}}}}
 ```
 
 ## Tests
@@ -471,7 +471,9 @@ python -m pytest -q
 
 ## Environment
 - `APP_NAME` (default: {project_name})
+- `APP_PORT` (default: 8000)
+- `BACKEND_BASE_URL` (default: http://127.0.0.1:8000)
 - `DB_URL` (default: sqlite:///./data/app.db)
-- `ALLOW_ORIGINS` (default: *)
+- `CORS_ALLOW_ORIGINS` (comma-separated frontend origins)
 """
     return files

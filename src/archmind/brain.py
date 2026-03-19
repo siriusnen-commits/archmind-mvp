@@ -204,6 +204,18 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
             r"프론트엔드만",
         ],
     )
+    fullstack_priority = _has_any(
+        text,
+        [
+            r"\bwebapp\b",
+            r"웹앱",
+            r"블로그",
+            r"다이어리",
+            r"게시판",
+            r"대시보드",
+            r"관리화면",
+        ],
+    )
 
     # RULE 1 + RULE 3
     if (auth_needed or db_needed) and not frontend_only_explicit:
@@ -215,17 +227,23 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
     if dashboard_needed and backend_needed:
         frontend_needed = True
 
-    # RULE 2
-    if auth_needed and db_needed:
+    # Priority rule: listed webapp keywords must be treated as fullstack.
+    if fullstack_priority:
+        backend_needed = True
+        frontend_needed = True
         app_shape = "fullstack"
-    elif backend_needed and frontend_needed:
-        app_shape = "fullstack"
-    elif backend_needed and not frontend_needed:
-        app_shape = "backend"
-    elif frontend_needed and not backend_needed:
-        app_shape = "frontend"
     else:
-        app_shape = "unknown"
+        # RULE 2
+        if auth_needed and db_needed:
+            app_shape = "fullstack"
+        elif backend_needed and frontend_needed:
+            app_shape = "fullstack"
+        elif backend_needed and not frontend_needed:
+            app_shape = "backend"
+        elif frontend_needed and not backend_needed:
+            app_shape = "frontend"
+        else:
+            app_shape = "unknown"
 
     # RULE 5
     if app_shape == "unknown":
@@ -284,7 +302,9 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
                 backend_needed = True
                 app_shape = "backend"
 
-    if app_shape == "fullstack":
+    if fullstack_priority:
+        recommended_template = "fullstack-ddd"
+    elif app_shape == "fullstack":
         recommended_template = "fullstack-ddd"
     elif app_shape == "backend":
         recommended_template = "fastapi"
@@ -295,11 +315,11 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
 
     is_data_tool = any(domain in domains for domain in ("inventory", "reports", "analytics", "data"))
     data_tool_intent = is_data_tool and (_has_any(text, [r"\btool\b", r"\bviewer\b", r"관리", r"조회"]) or dashboard_needed)
-    if internal_tool and dashboard_needed:
+    if not fullstack_priority and internal_tool and dashboard_needed:
         recommended_template = "internal-tool"
-    elif worker_needed and backend_needed and not frontend_needed:
+    elif not fullstack_priority and worker_needed and backend_needed and not frontend_needed:
         recommended_template = "worker-api"
-    elif data_tool_intent:
+    elif not fullstack_priority and data_tool_intent:
         recommended_template = "data-tool"
 
     if app_shape == "fullstack":

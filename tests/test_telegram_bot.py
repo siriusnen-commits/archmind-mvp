@@ -32,6 +32,7 @@ from archmind.telegram_bot import (
     command_stop,
     command_help,
     command_inspect,
+    command_improve,
     command_add_module,
     command_add_entity,
     command_add_field,
@@ -46,6 +47,7 @@ from archmind.telegram_bot import (
     command_preview,
     command_suggest,
     command_design,
+    command_unknown,
     command_state,
     extract_idea,
     load_last_project_path,
@@ -2240,6 +2242,71 @@ def test_inspect_command_truncates_entity_api_and_page_lists(tmp_path: Path, mon
     assert "History count: 3" in out
 
 
+def test_improve_command_without_project_shows_guidance(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: None)
+    msg = DummyMessage()
+    asyncio.run(command_improve(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "No active project." in out
+    assert "/design <idea>" in out
+    assert "/idea_local <idea>" in out
+
+
+def test_improve_command_reports_webapp_mismatch_and_env_missing(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "blog_backend_only"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi==0.115.0\n", encoding="utf-8")
+    (archmind / "architecture_reasoning.json").write_text(
+        json.dumps(
+            {
+                "idea_original": "개인용 블로그형식의 다이어리 webapp",
+                "app_shape": "backend",
+                "recommended_template": "fastapi",
+                "reason_summary": "backend app for notes",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "template": "fastapi",
+                "modules": ["db"],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "effective_template": "fastapi",
+                "architecture_app_shape": "backend",
+                "architecture_reason_summary": "backend app",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    asyncio.run(command_improve(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Improve analysis" in out
+    assert "1. 문제" in out
+    assert "개선안" in out
+    assert "실행 명령" in out
+    assert "webapp 의도로 보이지만 현재 프로젝트가 backend 중심으로 구성되어 있습니다." in out
+    assert "runtime env 구조가 누락되어 있습니다" in out
+    assert "/idea_local 개인용 블로그형식의 다이어리 webapp" in out
+    assert "/deploy local" in out
+
+
 def test_add_module_updates_spec_and_reuses_apply_hook(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "task_tracker"
     archmind = project_dir / ".archmind"
@@ -3218,6 +3285,7 @@ def test_next_command_recommends_user_entity_for_auth_module(tmp_path: Path, mon
     asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     out = msg.sent[-1]
     assert "Next development suggestions" in out
+    assert "Target Project: task_tracker" in out
     assert "/add_entity User" in out
 
 
@@ -3260,7 +3328,7 @@ def test_next_command_recommends_api_and_pages_for_entity(tmp_path: Path, monkey
     reply_markup = msg.sent_kwargs[-1].get("reply_markup")
     assert reply_markup is not None
     buttons = [btn for row in getattr(reply_markup, "inline_keyboard", []) for btn in row]
-    assert any(str(getattr(btn, "callback_data", "")) == "/add_api GET /tasks/{id}" for btn in buttons)
+    assert any(str(getattr(btn, "callback_data", "")).startswith("suggest|") for btn in buttons)
 
 
 def test_next_callback_executes_full_add_api_command(tmp_path: Path, monkeypatch) -> None:
@@ -3297,6 +3365,39 @@ def test_next_callback_executes_full_add_api_command(tmp_path: Path, monkeypatch
     assert "Endpoint:\nGET /tasks/{id}" in out
     payload = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
     assert "GET /tasks/{id}" in (payload.get("api_endpoints") or [])
+
+
+def test_next_callback_with_project_id_runs_next_for_target_project(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "target_proj"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "domains": ["tasks"],
+                "template": "fastapi",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+                "reason_summary": "demo",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot.DEFAULT_PROJECTS_DIR", tmp_path)
+    msg = DummyMessage()
+    query = DummyCallbackQuery(data="next|target_proj", message=msg)
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    update.callback_query = query  # type: ignore[attr-defined]
+
+    asyncio.run(command_suggestion_callback(update, DummyContext()))
+
+    assert query.answered is True
+    out = msg.sent[-1]
+    assert "Next development suggestions" in out
+    assert "Target Project: target_proj" in out
 
 
 def test_next_command_limits_suggestions_to_five(tmp_path: Path, monkeypatch) -> None:
@@ -3381,6 +3482,22 @@ def test_plan_command_from_idea_includes_phases() -> None:
     assert "Phase 2 - Core fields" in out
     assert "Phase 3 - APIs" in out
     assert "Phase 4 - Frontend" in out
+    reply_markup = msg.sent_kwargs[-1].get("reply_markup")
+    assert reply_markup is not None
+    buttons = [btn for row in getattr(reply_markup, "inline_keyboard", []) for btn in row]
+    assert any(str(getattr(btn, "callback_data", "")).startswith("generate|") for btn in buttons)
+
+
+def test_design_command_includes_plan_and_generate_buttons() -> None:
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_design(update, DummyContext(args=["defect", "tracker"])))
+    reply_markup = msg.sent_kwargs[-1].get("reply_markup")
+    assert reply_markup is not None
+    buttons = [btn for row in getattr(reply_markup, "inline_keyboard", []) for btn in row]
+    callback_values = [str(getattr(btn, "callback_data", "")) for btn in buttons]
+    assert any(val.startswith("plan|") for val in callback_values)
+    assert any(val.startswith("generate|") for val in callback_values)
 
 
 def test_plan_command_from_current_project_works_and_limits_steps(tmp_path: Path, monkeypatch) -> None:
@@ -3637,6 +3754,25 @@ def test_idea_local_starts_pipeline_with_auto_deploy_local(monkeypatch, tmp_path
     assert cmd[cmd.index("--deploy-target") + 1] == "local"
     assert "command=/idea_local" in msg.sent[-1]
     assert "auto_deploy=local" in msg.sent[-1]
+    reply_markup = msg.sent_kwargs[-1].get("reply_markup")
+    assert reply_markup is not None
+    buttons = [btn for row in getattr(reply_markup, "inline_keyboard", []) for btn in row]
+    assert any(str(getattr(btn, "text", "")).startswith("NEXT (for 20260315_auto_local)") for btn in buttons)
+    assert any(str(getattr(btn, "callback_data", "")) == "next|20260315_auto_local" for btn in buttons)
+
+
+def test_unknown_command_returns_guidance_message() -> None:
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_unknown(update, DummyContext(args=["oops"])))
+    out = msg.sent[-1]
+    assert "알 수 없는 명령어입니다." in out
+    assert "/help" in out
+    assert "/design {아이디어}" in out
+    assert "/plan {아이디어}" in out
+    assert "/idea_local {아이디어}" in out
+    assert "/inspect" in out
+    assert "/next" in out
 
 
 def test_deploy_without_selected_project_shows_message(monkeypatch) -> None:

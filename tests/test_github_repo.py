@@ -44,6 +44,29 @@ def test_create_github_repo_handles_gh_failure_gracefully(monkeypatch, tmp_path:
     assert url is None
 
 
+def test_create_github_repo_uses_project_id_and_english_slug_for_korean_name(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "20260318_171959_일기 웹앱!!!"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "README.md").write_text("# demo\n", encoding="utf-8")
+    captured_create_cmd: list[str] = []
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal captured_create_cmd
+        if cmd[:3] == ["gh", "repo", "create"]:
+            captured_create_cmd = list(cmd)
+            return _DummyCompleted(
+                returncode=0,
+                stdout="https://github.com/siriusnen-commits/20260318_171959_project\n",
+                stderr="",
+            )
+        return _DummyCompleted(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("archmind.github_repo.subprocess.run", fake_run)
+    url = create_github_repo(project_dir)
+    assert captured_create_cmd[:4] == ["gh", "repo", "create", "20260318_171959_project"]
+    assert url == "https://github.com/siriusnen-commits/20260318_171959_project"
+
+
 def test_pipeline_stores_github_repo_url_in_state(monkeypatch, tmp_path: Path) -> None:
     def fake_generate_project(idea: str, opt) -> Path:  # type: ignore[no-untyped-def]
         project_name = (opt.name or "archmind_project").strip() or "archmind_project"

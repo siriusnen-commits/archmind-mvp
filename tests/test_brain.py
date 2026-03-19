@@ -83,3 +83,9 @@ def test_reason_architecture_simple_todo_app_defaults_to_fullstack() -> None:
     assert out["app_shape"] == "fullstack"
     assert out["recommended_template"] == "fullstack-ddd"
     assert out["frontend_needed"] is True
+
+
+def test_reason_architecture_webapp_keywords_force_fullstack_shape() -> None:
+    out = reason_architecture_from_idea("개인용 블로그형식의 다이어리 webapp")
+    assert out["app_shape"] == "fullstack"
+    assert out["recommended_template"] == "fullstack-ddd"

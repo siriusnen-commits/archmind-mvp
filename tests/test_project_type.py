@@ -44,6 +44,11 @@ def test_detect_project_type_unknown() -> None:
     assert detect_project_type("something helpful for teams") == "unknown"
 
 
+def test_detect_project_type_webapp_keywords_force_fullstack() -> None:
+    idea = "개인용 블로그형식의 다이어리 webapp"
+    assert detect_project_type(idea) == "fullstack-web"
+
+
 def test_state_shows_project_type_from_result(tmp_path: Path) -> None:
     archmind = tmp_path / ".archmind"
     archmind.mkdir(parents=True, exist_ok=True)

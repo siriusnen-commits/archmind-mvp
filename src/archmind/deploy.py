@@ -276,6 +276,91 @@ def find_free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _detect_lan_ip() -> str:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("8.8.8.8", 80))
+        return str(sock.getsockname()[0] or "").strip()
+    except Exception:
+        return ""
+    finally:
+        sock.close()
+
+
+def _backend_env_file(root: Path) -> Path:
+    return root / "backend" / ".env"
+
+
+def _build_runtime_urls(backend_port: int | None, frontend_port: int | None) -> tuple[str, list[str]]:
+    backend_base_url = f"http://127.0.0.1:{int(backend_port)}" if backend_port else ""
+    origins: list[str] = []
+    if frontend_port:
+        p = int(frontend_port)
+        origins.append(f"http://localhost:{p}")
+        origins.append(f"http://127.0.0.1:{p}")
+        external_frontend_url = os.getenv("ARCHMIND_EXTERNAL_FRONTEND_URL", "").strip()
+        if external_frontend_url:
+            origins.append(external_frontend_url)
+        else:
+            lan_ip = _detect_lan_ip()
+            if lan_ip:
+                origins.append(f"http://{lan_ip}:{p}")
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in origins:
+        v = str(item).strip()
+        if not v or v in seen:
+            continue
+        seen.add(v)
+        deduped.append(v)
+    return backend_base_url, deduped
+
+
+def _write_runtime_env_files(
+    root: Path,
+    *,
+    backend_port: int | None = None,
+    frontend_port: int | None = None,
+    backend_base_url: str | None = None,
+) -> dict[str, str]:
+    backend_env_path = _backend_env_file(root)
+    legacy_backend_env_path = root / ".env"
+    frontend_dir = get_frontend_deploy_dir(root)
+    frontend_env_path = (frontend_dir / ".env.local") if frontend_dir is not None else None
+
+    resolved_backend_url, cors_origins = _build_runtime_urls(backend_port, frontend_port)
+    if backend_base_url is not None and str(backend_base_url).strip():
+        resolved_backend_url = str(backend_base_url).strip()
+
+    backend_lines = []
+    if backend_port:
+        backend_lines.append(f"APP_PORT={int(backend_port)}")
+    if resolved_backend_url:
+        backend_lines.append(f"BACKEND_BASE_URL={resolved_backend_url}")
+    backend_lines.append(f"CORS_ALLOW_ORIGINS={','.join(cors_origins)}")
+    backend_env_path.parent.mkdir(parents=True, exist_ok=True)
+    backend_payload = "\n".join(backend_lines) + "\n"
+    backend_env_path.write_text(backend_payload, encoding="utf-8")
+    # Keep root .env for templates/projects that still read env_file=".env".
+    legacy_backend_env_path.write_text(backend_payload, encoding="utf-8")
+
+    if frontend_env_path is not None:
+        frontend_lines = []
+        if resolved_backend_url:
+            frontend_lines.append(f"NEXT_PUBLIC_API_BASE_URL={resolved_backend_url}")
+        if frontend_port:
+            frontend_lines.append(f"NEXT_PUBLIC_FRONTEND_PORT={int(frontend_port)}")
+        frontend_env_path.parent.mkdir(parents=True, exist_ok=True)
+        frontend_env_path.write_text("\n".join(frontend_lines) + "\n", encoding="utf-8")
+
+    return {
+        "backend_env": str(backend_env_path),
+        "frontend_env": str(frontend_env_path) if frontend_env_path is not None else "",
+        "backend_base_url": resolved_backend_url,
+        "cors_allow_origins": ",".join(cors_origins),
+    }
+
+
 def _placeholder_backend_url(project_dir: Path) -> str:
     slug = generate_deploy_slug(project_dir.name or "archmind-app")
     return f"https://api-{slug}.up.railway.app"
@@ -407,46 +492,59 @@ def _frontend_smoke_with_retry(base_url: str, attempts: int = 5, interval_s: flo
     return latest
 
 
-def deploy_backend_local(project_dir: Path) -> dict[str, Any]:
+def deploy_backend_local(project_dir: Path, *, port: int | None = None, frontend_port: int | None = None) -> dict[str, Any]:
     root = project_dir.expanduser().resolve()
     if not (root / "app").is_dir():
         return _service_result("FAIL", None, "backend app directory not found")
-    port = find_free_port()
-    cmd = ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", str(port)]
+    picked_port = int(port) if port else find_free_port()
+    _write_runtime_env_files(root, backend_port=picked_port, frontend_port=frontend_port)
+    cmd = ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", str(picked_port)]
     try:
         proc = _run_local_process_with_log(cmd, cwd=root, log_path=(root / ".archmind" / "backend.log"))
     except Exception as exc:
         return _service_result("FAIL", None, f"local backend start failed: {exc}")
     return {
         "status": "SUCCESS",
-        "url": f"http://127.0.0.1:{port}",
+        "url": f"http://127.0.0.1:{picked_port}",
         "detail": "local backend started",
         "pid": int(proc.pid),
     }
 
 
-def deploy_frontend_local(project_dir: Path) -> dict[str, Any]:
+def deploy_frontend_local(
+    project_dir: Path,
+    *,
+    port: int | None = None,
+    backend_base_url: str | None = None,
+) -> dict[str, Any]:
     root = project_dir.expanduser().resolve()
     frontend_dir = get_frontend_deploy_dir(root)
     if frontend_dir is None:
         return _service_result("FAIL", None, "frontend deploy directory not found")
-    port = find_free_port()
-    cmd = ["npm", "run", "dev", "--", "--hostname", "0.0.0.0", "--port", str(port)]
+    picked_port = int(port) if port else find_free_port()
+    _write_runtime_env_files(root, frontend_port=picked_port, backend_base_url=backend_base_url)
+    cmd = ["npm", "run", "dev", "--", "--hostname", "0.0.0.0", "--port", str(picked_port)]
     try:
         proc = _run_local_process_with_log(cmd, cwd=frontend_dir, log_path=(root / ".archmind" / "frontend.log"))
     except Exception as exc:
         return _service_result("FAIL", None, f"local frontend start failed: {exc}")
     return {
         "status": "SUCCESS",
-        "url": f"http://127.0.0.1:{port}",
+        "url": f"http://127.0.0.1:{picked_port}",
         "detail": "local frontend started",
         "pid": int(proc.pid),
     }
 
 
 def deploy_fullstack_local(project_dir: Path) -> dict[str, Any]:
-    backend = deploy_backend_local(project_dir)
-    frontend = deploy_frontend_local(project_dir)
+    backend_port = find_free_port()
+    frontend_port = find_free_port()
+    while frontend_port == backend_port:
+        frontend_port = find_free_port()
+    _write_runtime_env_files(project_dir.expanduser().resolve(), backend_port=backend_port, frontend_port=frontend_port)
+    backend = deploy_backend_local(project_dir, port=backend_port, frontend_port=frontend_port)
+    backend_url = str(backend.get("url") or "")
+    frontend = deploy_frontend_local(project_dir, port=frontend_port, backend_base_url=backend_url)
     backend_ok = str(backend.get("status") or "").upper() == "SUCCESS"
     frontend_ok = str(frontend.get("status") or "").upper() == "SUCCESS"
     backend_smoke = (
@@ -491,7 +589,9 @@ def deploy_to_local(project_dir: Path, kind: str = "backend") -> dict[str, Any]:
     if kind == "fullstack":
         return deploy_fullstack_local(root)
     if kind == "frontend":
-        frontend = deploy_frontend_local(root)
+        state = load_state(root) or {}
+        backend_url = str(state.get("backend_deploy_url") or state.get("deploy_url") or "").strip()
+        frontend = deploy_frontend_local(root, backend_base_url=backend_url or None)
         ok = str(frontend.get("status") or "").upper() == "SUCCESS"
         frontend_smoke = (
             _frontend_smoke_with_retry(str(frontend.get("url") or ""))
@@ -518,7 +618,13 @@ def deploy_to_local(project_dir: Path, kind: str = "backend") -> dict[str, Any]:
             "frontend_smoke_detail": str(frontend_smoke.get("detail") or ""),
         }
 
-    backend = deploy_backend_local(root)
+    state = load_state(root) or {}
+    frontend_url = str(state.get("frontend_deploy_url") or "").strip()
+    frontend_port = None
+    match = re.match(r"^https?://[^:/]+:(\d+)", frontend_url)
+    if match:
+        frontend_port = int(match.group(1))
+    backend = deploy_backend_local(root, frontend_port=frontend_port)
     ok = str(backend.get("status") or "").upper() == "SUCCESS"
     backend_smoke = (
         _backend_smoke_with_retry(str(backend.get("url") or ""))

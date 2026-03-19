@@ -78,4 +78,4 @@ def test_fastapi_readme_run_command_is_runtime_neutral(tmp_path: Path, monkeypat
     project_dir = generate_project("simple fastapi notes api", opt)
 
     readme = (project_dir / "README.md").read_text(encoding="utf-8")
-    assert "python -m uvicorn app.main:app --reload --host 0.0.0.0 --port ${PORT:-8000}" in readme
+    assert "python -m uvicorn app.main:app --reload --host 0.0.0.0 --port ${APP_PORT:-${PORT:-8000}}" in readme

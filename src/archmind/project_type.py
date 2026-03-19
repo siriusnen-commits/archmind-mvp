@@ -33,6 +33,15 @@ def detect_project_type(idea: str) -> str:
     if not text:
         return "unknown"
 
+    fullstack_priority_patterns = [
+        r"\bwebapp\b",
+        r"웹앱",
+        r"블로그",
+        r"다이어리",
+        r"게시판",
+        r"대시보드",
+        r"관리화면",
+    ]
     backend_patterns = [
         r"\bfastapi\b",
         r"\bapi\b",
@@ -104,10 +113,13 @@ def detect_project_type(idea: str) -> str:
     cli_hits = _contains_any(text, cli_patterns)
     automation_hits = _contains_any(text, automation_patterns)
     fullstack_hits = _contains_any(text, fullstack_patterns)
+    fullstack_priority_hits = _contains_any(text, fullstack_priority_patterns)
     internal_hits = _contains_any(text, internal_tool_patterns)
     worker_hits = _contains_any(text, worker_api_patterns)
     data_hits = _contains_any(text, data_tool_patterns)
 
+    if fullstack_priority_hits > 0:
+        return "fullstack-web"
     if internal_hits > 0 and frontend_hits > 0:
         return "internal-tool"
     if worker_hits > 0 and backend_hits > 0 and frontend_hits == 0:

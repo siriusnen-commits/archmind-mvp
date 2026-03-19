@@ -68,10 +68,36 @@ def enforce_fastapi_runtime(files: Dict[str, str], project_name: str) -> Dict[st
     # 2) pytest-ready baseline scaffold
     if "app/__init__.py" not in files:
         files["app/__init__.py"] = ""
+    if "app/core/__init__.py" not in files:
+        files["app/core/__init__.py"] = ""
+    if "app/core/settings.py" not in files or not files["app/core/settings.py"].strip():
+        files["app/core/settings.py"] = (
+            "from __future__ import annotations\n\n"
+            "from pydantic_settings import BaseSettings, SettingsConfigDict\n\n\n"
+            "class Settings(BaseSettings):\n"
+            "    model_config = SettingsConfigDict(env_file=(\".env\", \"backend/.env\"), extra=\"ignore\")\n\n"
+            f"    app_name: str = \"{project_name}\"\n"
+            "    app_port: int = 8000\n"
+            "    backend_base_url: str = \"http://127.0.0.1:8000\"\n"
+            "    cors_allow_origins: str = \"http://localhost:3000,http://127.0.0.1:3000\"\n\n\n"
+            "settings = Settings()\n"
+        )
     if "app/main.py" not in files or not files["app/main.py"].strip():
         files["app/main.py"] = (
-            "from fastapi import FastAPI\n\n"
-            "app = FastAPI()\n\n"
+            "from fastapi import FastAPI\n"
+            "from fastapi.middleware.cors import CORSMiddleware\n\n"
+            "from app.core.settings import settings\n\n"
+            "app = FastAPI(title=settings.app_name)\n"
+            "origins = [x.strip() for x in settings.cors_allow_origins.split(\",\") if x.strip()]\n"
+            "if not origins:\n"
+            "    origins = [\"http://localhost:3000\", \"http://127.0.0.1:3000\"]\n"
+            "app.add_middleware(\n"
+            "    CORSMiddleware,\n"
+            "    allow_origins=origins,\n"
+            "    allow_credentials=False,\n"
+            "    allow_methods=[\"*\"],\n"
+            "    allow_headers=[\"*\"],\n"
+            ")\n\n"
             "@app.get('/health')\n"
             "def health() -> dict[str, str]:\n"
             "    return {'status': 'ok'}\n\n"
@@ -104,7 +130,7 @@ def enforce_fastapi_runtime(files: Dict[str, str], project_name: str) -> Dict[st
             "if __name__ == '__main__':\n"
             "    import uvicorn\n\n"
             "    host = os.getenv('HOST', '0.0.0.0')\n"
-            "    port = int(os.getenv('PORT', '8000'))\n"
+            "    port = int(os.getenv('APP_PORT', os.getenv('PORT', '8000')))\n"
             "    uvicorn.run('app.main:app', host=host, port=port, reload=True)\n"
         )
 
@@ -120,12 +146,19 @@ def enforce_fastapi_runtime(files: Dict[str, str], project_name: str) -> Dict[st
             "```\n\n"
             "## Run\n"
             "```bash\n"
-            "python -m uvicorn app.main:app --reload --host 0.0.0.0 --port ${PORT:-8000}\n"
+            "python -m uvicorn app.main:app --reload --host 0.0.0.0 --port ${APP_PORT:-${PORT:-8000}}\n"
             "```\n\n"
             "## Test\n"
             "```bash\n"
             "python -m pytest -q\n"
             "```\n"
+        )
+    if ".env.example" not in files or not files[".env.example"].strip():
+        files[".env.example"] = (
+            f"APP_NAME={project_name}\n"
+            "APP_PORT=8000\n"
+            "BACKEND_BASE_URL=http://127.0.0.1:8000\n"
+            "CORS_ALLOW_ORIGINS=http://localhost:3000,http://127.0.0.1:3000\n"
         )
 
     return files

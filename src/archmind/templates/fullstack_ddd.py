@@ -34,9 +34,10 @@ def enforce_fullstack_ddd(_: Dict[str, str], project_name: str) -> Dict[str, str
 
     files[".env.example"] = (
         f"APP_NAME={project_name}\n"
+        "APP_PORT=8000\n"
+        "BACKEND_BASE_URL=http://127.0.0.1:8000\n"
         "DB_URL=sqlite:///./data/app.db\n"
-        "# ALLOW_ORIGINS='*' is for dev only; set specific origins in production.\n"
-        "ALLOW_ORIGINS=*\n"
+        "CORS_ALLOW_ORIGINS=http://localhost:3000,http://127.0.0.1:3000\n"
     )
 
     # packages
@@ -53,18 +54,19 @@ def enforce_fullstack_ddd(_: Dict[str, str], project_name: str) -> Dict[str, str
     ]:
         files[p] = ""
 
-    files["app/core/config.py"] = f"""from __future__ import annotations
+    files["app/core/settings.py"] = f"""from __future__ import annotations
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=(".env", "backend/.env"), extra="ignore")
 
     app_name: str = "{project_name}"
+    app_port: int = 8000
+    backend_base_url: str = "http://127.0.0.1:8000"
     db_url: str = "sqlite:///./data/app.db"
-    # NOTE: "*" is for dev convenience; set specific origins in production.
-    allow_origins: str = "*"
+    cors_allow_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
 
 settings = Settings()
@@ -75,7 +77,7 @@ settings = Settings()
 from pathlib import Path
 from sqlmodel import SQLModel, Session, create_engine
 
-from app.core.config import settings
+from app.core.settings import settings
 
 
 engine = create_engine(settings.db_url, echo=False)
@@ -369,7 +371,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
-from app.core.config import settings
+from app.core.settings import settings
 from app.db.session import init_db
 
 
@@ -380,17 +382,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
-origins = [x.strip() for x in settings.allow_origins.split(",") if x.strip()]
+origins = [x.strip() for x in settings.cors_allow_origins.split(",") if x.strip()]
 if not origins:
-    origins = ["*"]
-if origins == ["*"]:
-    # DEV ONLY: allow all origins for convenience. In production, set ALLOW_ORIGINS.
-    allow_origins = ["*"]
-else:
-    allow_origins = origins
+    origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allow_origins,
+    allow_origins=origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -403,7 +400,7 @@ import uvicorn
 
 if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
-    port = int(os.getenv("PORT", "8000"))
+    port = int(os.getenv("APP_PORT", os.getenv("PORT", "8000")))
     uvicorn.run("app.main:app", host=host, port=port, reload=True)
 """
 
@@ -492,7 +489,10 @@ def test_defects_query_and_sorting():
     # -------------------------
     # Frontend (Next.js App Router)
     # -------------------------
-    files["frontend/.env.example"] = "NEXT_PUBLIC_BACKEND_URL=http://127.0.0.1:8000\n"
+    files["frontend/.env.example"] = (
+        "NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000\n"
+        "NEXT_PUBLIC_FRONTEND_PORT=3000\n"
+    )
 
     files["frontend/package.json"] = f"""{{
   "name": "{project_name}-frontend",
@@ -647,12 +647,13 @@ type DefectListResponse = {
   page_size: number;
 };
 
-const ENV_BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL;
+const ENV_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL;
 
-function getBackendUrl() {
-  if (typeof window === "undefined") return ENV_BACKEND ?? "http://127.0.0.1:8000";
-  if (ENV_BACKEND && ENV_BACKEND.trim()) return ENV_BACKEND;
+function getApiBaseUrl() {
+  if (typeof window === "undefined") return ENV_API_BASE ?? "http://127.0.0.1:8000";
+  if (ENV_API_BASE && ENV_API_BASE.trim()) return ENV_API_BASE;
   const host = window.location.hostname;
+  // Fallback only when runtime .env.local is missing.
   return `http://${host}:8000`;
 }
 
@@ -673,7 +674,7 @@ export default function DefectsPage() {
   const [pageSize, setPageSize] = useState(10);
   const [total, setTotal] = useState(0);
 
-  const backendUrl = useMemo(() => getBackendUrl(), []);
+  const apiBaseUrl = useMemo(() => getApiBaseUrl(), []);
 
   function humanizeError(err: unknown) {
     if (err instanceof TypeError) {
@@ -701,12 +702,12 @@ export default function DefectsPage() {
         if (params.page) qs.set("page", String(params.page));
         if (params.page_size) qs.set("page_size", String(params.page_size));
 
-        const r = await fetch(`${backendUrl}/defects?${qs.toString()}`, { cache: "no-store" });
+        const r = await fetch(`${apiBaseUrl}/defects?${qs.toString()}`, { cache: "no-store" });
         if (!r.ok) throw new Error(`GET /defects failed: ${r.status}`);
         return (await r.json()) as DefectListResponse;
       },
       async create(payload: { defect_type: string; note: string }) {
-        const r = await fetch(`${backendUrl}/defects`, {
+        const r = await fetch(`${apiBaseUrl}/defects`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
@@ -715,7 +716,7 @@ export default function DefectsPage() {
         return (await r.json()) as Defect;
       },
       async update(id: number, payload: { defect_type?: string; note?: string }) {
-        const r = await fetch(`${backendUrl}/defects/${id}`, {
+        const r = await fetch(`${apiBaseUrl}/defects/${id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
@@ -724,12 +725,12 @@ export default function DefectsPage() {
         return (await r.json()) as Defect;
       },
       async remove(id: number) {
-        const r = await fetch(`${backendUrl}/defects/${id}`, { method: "DELETE" });
+        const r = await fetch(`${apiBaseUrl}/defects/${id}`, { method: "DELETE" });
         if (!r.ok) throw new Error(`DELETE /defects/${id} failed: ${r.status}`);
         return (await r.json()) as { status: string };
       },
     }),
-    [backendUrl]
+    [apiBaseUrl]
   );
 
   async function refresh(nextPage = page) {
@@ -1024,13 +1025,13 @@ export default function DefectsPage() {
     # Root helper scripts (선택)
     files["scripts/dev_backend.sh"] = """#!/usr/bin/env bash
 set -euo pipefail
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port ${PORT:-8000}
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port ${APP_PORT:-${PORT:-8000}}
 """
     files["scripts/dev_frontend.sh"] = """#!/usr/bin/env bash
 set -euo pipefail
 cd frontend
 npm install
-cp -n .env.example .env || true
+cp -n .env.example .env.local || true
 npm run dev
 """
 
@@ -1045,14 +1046,14 @@ python -m pip install -r requirements.txt
 
 ## Backend run
 ```bash
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port ${{PORT:-8000}}
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port ${{APP_PORT:-${{PORT:-8000}}}}
 ```
 
 ## Frontend setup
 ```bash
 cd frontend
 npm install
-cp -n .env.example .env
+cp -n .env.example .env.local
 ```
 
 ## Frontend run
@@ -1067,9 +1068,12 @@ python -m pytest -q
 
 ## Environment
 - `APP_NAME` (default: {project_name})
+- `APP_PORT` (default: 8000)
+- `BACKEND_BASE_URL` (default: http://127.0.0.1:8000)
 - `DB_URL` (default: sqlite:///./data/app.db)
-- `ALLOW_ORIGINS` (default: *) (dev only; set specific origins in production)
-- `NEXT_PUBLIC_BACKEND_URL` (optional; defaults to http://{{host}}:8000)
+- `CORS_ALLOW_ORIGINS` (comma-separated frontend origins)
+- `NEXT_PUBLIC_API_BASE_URL` (frontend -> backend base URL)
+- `NEXT_PUBLIC_FRONTEND_PORT` (frontend runtime port)
 """
 
     return files

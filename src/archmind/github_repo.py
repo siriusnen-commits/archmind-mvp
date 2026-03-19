@@ -28,6 +28,34 @@ def _extract_repo_url(*texts: str) -> Optional[str]:
     return None
 
 
+def _split_display_name(project_dir: Path) -> tuple[str, str]:
+    display_name = project_dir.name
+    matched = re.match(r"^(\d{8}_\d{6})(?:[_-]+(.*))?$", display_name)
+    if not matched:
+        return "", display_name
+    project_id = str(matched.group(1) or "").strip()
+    tail = str(matched.group(2) or "").strip()
+    return project_id, tail
+
+
+def _sanitize_english_slug(value: str, max_len: int = 24) -> str:
+    text = str(value or "").strip().lower()
+    text = text.replace("_", " ").replace("-", " ")
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    text = re.sub(r"\s+", "-", text).strip("-")
+    if not text:
+        return "project"
+    return text[:max_len].strip("-") or "project"
+
+
+def _build_repo_slug(project_dir: Path) -> str:
+    project_id, raw_tail = _split_display_name(project_dir)
+    short_english_slug = _sanitize_english_slug(raw_tail or project_dir.name)
+    if project_id:
+        return f"{project_id}_{short_english_slug}"
+    return short_english_slug
+
+
 def create_github_repo(project_dir: Path) -> Optional[str]:
     project_dir = project_dir.expanduser().resolve()
     if not project_dir.exists() or not project_dir.is_dir():
@@ -52,13 +80,13 @@ def create_github_repo(project_dir: Path) -> Optional[str]:
         if "nothing to commit" not in combined and "working tree clean" not in combined:
             return None
 
-    repo_name = project_dir.name
+    repo_slug = _build_repo_slug(project_dir)
     create_result = _run(
         [
             "gh",
             "repo",
             "create",
-            repo_name,
+            repo_slug,
             "--private",
             "--source",
             str(project_dir),
@@ -73,7 +101,7 @@ def create_github_repo(project_dir: Path) -> Optional[str]:
     if repo_url:
         return repo_url
 
-    view_result = _run(["gh", "repo", "view", repo_name, "--json", "url", "-q", ".url"], cwd=project_dir)
+    view_result = _run(["gh", "repo", "view", repo_slug, "--json", "url", "-q", ".url"], cwd=project_dir)
     if view_result.returncode != 0:
         return None
     value = (view_result.stdout or "").strip()

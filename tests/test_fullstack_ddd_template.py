@@ -118,3 +118,16 @@ def test_fullstack_frontend_start_script_is_runtime_neutral(tmp_path: Path) -> N
     project_dir = _generate_fullstack(tmp_path, name="fullstack_runtime_neutral")
     package_text = (project_dir / "frontend" / "package.json").read_text(encoding="utf-8")
     assert '"start": "sh -c \'next start -p ${PORT:-3000}\'"' in package_text
+
+
+def test_fullstack_runtime_env_template_uses_api_base_url_and_settings(tmp_path: Path) -> None:
+    project_dir = _generate_fullstack(tmp_path, name="fullstack_runtime_env")
+    settings_text = (project_dir / "app" / "core" / "settings.py").read_text(encoding="utf-8")
+    frontend_env_example = (project_dir / "frontend" / ".env.example").read_text(encoding="utf-8")
+    frontend_page = (project_dir / "frontend" / "app" / "ui" / "DefectsPage.tsx").read_text(encoding="utf-8")
+
+    assert "cors_allow_origins" in settings_text
+    assert "NEXT_PUBLIC_API_BASE_URL=" in frontend_env_example
+    assert "NEXT_PUBLIC_FRONTEND_PORT=" in frontend_env_example
+    assert "NEXT_PUBLIC_API_BASE_URL" in frontend_page
+    assert "NEXT_PUBLIC_BACKEND_URL" not in frontend_page

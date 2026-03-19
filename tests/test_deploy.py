@@ -12,6 +12,7 @@ from archmind.deploy import (
     deploy_frontend_to_railway_real,
     deploy_fullstack_local,
     deploy_project,
+    deploy_to_local,
     detect_deploy_kind,
     generate_deploy_slug,
     get_frontend_deploy_dir,
@@ -199,13 +200,26 @@ def test_local_deploy_process_uses_archmind_log_files(monkeypatch, tmp_path: Pat
 
 
 def test_local_fullstack_deploy_returns_both_urls(monkeypatch, tmp_path: Path) -> None:
+    ports = iter([8011, 3011])
+    monkeypatch.setattr("archmind.deploy.find_free_port", lambda: next(ports))
+    monkeypatch.setattr("archmind.deploy._detect_lan_ip", lambda: "")
     monkeypatch.setattr(
         "archmind.deploy.deploy_backend_local",
-        lambda _p: {"status": "SUCCESS", "url": "http://127.0.0.1:8011", "detail": "local backend started", "pid": 1001},
+        lambda _p, port=None, frontend_port=None: {
+            "status": "SUCCESS",
+            "url": "http://127.0.0.1:8011",
+            "detail": "local backend started",
+            "pid": 1001,
+        },
     )
     monkeypatch.setattr(
         "archmind.deploy.deploy_frontend_local",
-        lambda _p: {"status": "SUCCESS", "url": "http://127.0.0.1:3011", "detail": "local frontend started", "pid": 1002},
+        lambda _p, port=None, backend_base_url=None: {
+            "status": "SUCCESS",
+            "url": "http://127.0.0.1:3011",
+            "detail": "local frontend started",
+            "pid": 1002,
+        },
     )
     monkeypatch.setattr(
         "archmind.deploy._backend_smoke_with_retry",
@@ -221,6 +235,72 @@ def test_local_fullstack_deploy_returns_both_urls(monkeypatch, tmp_path: Path) -
     assert result["frontend"]["url"] == "http://127.0.0.1:3011"
     assert result["backend_smoke_status"] == "SUCCESS"
     assert result["frontend_smoke_status"] == "SUCCESS"
+
+
+def test_local_fullstack_deploy_writes_runtime_env_files(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "app").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "frontend" / "package.json").write_text('{"name":"web"}', encoding="utf-8")
+
+    ports = iter([8011, 3011])
+    monkeypatch.setattr("archmind.deploy.find_free_port", lambda: next(ports))
+    monkeypatch.setattr("archmind.deploy._detect_lan_ip", lambda: "")
+    monkeypatch.setattr(
+        "archmind.deploy.deploy_backend_local",
+        lambda _p, port=None, frontend_port=None: {
+            "status": "SUCCESS",
+            "url": f"http://127.0.0.1:{int(port or 8011)}",
+            "detail": "local backend started",
+            "pid": 5011,
+        },
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.deploy_frontend_local",
+        lambda _p, port=None, backend_base_url=None: {
+            "status": "SUCCESS",
+            "url": f"http://127.0.0.1:{int(port or 3011)}",
+            "detail": "local frontend started",
+            "pid": 5012,
+        },
+    )
+    monkeypatch.setattr(
+        "archmind.deploy._backend_smoke_with_retry",
+        lambda _url: {"healthcheck_url": "http://127.0.0.1:8011/health", "healthcheck_status": "SUCCESS", "healthcheck_detail": "ok"},
+    )
+    monkeypatch.setattr(
+        "archmind.deploy._frontend_smoke_with_retry",
+        lambda _url: {"url": "http://127.0.0.1:3011", "status": "SUCCESS", "detail": "ok"},
+    )
+
+    result = deploy_fullstack_local(tmp_path)
+    assert result["status"] == "SUCCESS"
+    backend_env = (tmp_path / "backend" / ".env").read_text(encoding="utf-8")
+    root_env = (tmp_path / ".env").read_text(encoding="utf-8")
+    frontend_env = (tmp_path / "frontend" / ".env.local").read_text(encoding="utf-8")
+    assert "APP_PORT=8011" in backend_env
+    assert "BACKEND_BASE_URL=http://127.0.0.1:8011" in backend_env
+    assert "CORS_ALLOW_ORIGINS=http://localhost:3011,http://127.0.0.1:3011" in backend_env
+    assert backend_env == root_env
+    assert "NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8011" in frontend_env
+    assert "NEXT_PUBLIC_FRONTEND_PORT=3011" in frontend_env
+
+
+def test_local_backend_deploy_uses_runtime_frontend_port_for_cors(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "app").mkdir(parents=True, exist_ok=True)
+    write_state(tmp_path, {"frontend_deploy_url": "http://127.0.0.1:4555"})
+
+    class DummyProc:
+        pid = 17001
+
+    monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 8111)
+    monkeypatch.setattr("archmind.deploy._detect_lan_ip", lambda: "")
+    monkeypatch.setattr("archmind.deploy._run_local_process_with_log", lambda *a, **k: DummyProc())
+
+    result = deploy_to_local(tmp_path, kind="backend")
+    assert result["status"] == "SUCCESS"
+    backend_env = (tmp_path / "backend" / ".env").read_text(encoding="utf-8")
+    assert "APP_PORT=8111" in backend_env
+    assert "CORS_ALLOW_ORIGINS=http://localhost:4555,http://127.0.0.1:4555" in backend_env
 
 
 def test_generate_deploy_slug_from_timestamped_name() -> None:
