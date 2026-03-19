@@ -176,16 +176,65 @@ def test_local_backend_deploy_detects_backend_subdir_entrypoint(monkeypatch, tmp
 
 
 def test_local_backend_deploy_reports_generation_error_when_backend_structure_missing(monkeypatch, tmp_path: Path) -> None:
-    (tmp_path / "main.py").write_text(
-        'import uvicorn\nuvicorn.run("app.main:app", host="0.0.0.0", port=8000)\n',
-        encoding="utf-8",
-    )
-    monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 8033)
+    (tmp_path / "README.md").write_text("# empty\n", encoding="utf-8")
+    monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 8031)
     result = deploy_backend_local(tmp_path)
     assert result["status"] == "FAIL"
     assert result["failure_class"] == "generation-error"
     detail = str(result.get("detail") or "")
+    assert "Detected backend target: (none)" in detail
+    assert "Run command: (none)" in detail
+
+
+def test_local_backend_deploy_falls_back_to_launcher_python_mode(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "main.py").write_text(
+        'import uvicorn\nuvicorn.run("app.main:app", host="0.0.0.0", port=8000)\n',
+        encoding="utf-8",
+    )
+    captured: dict[str, list[str]] = {}
+
+    class DummyProc:
+        pid = 12031
+
+        def poll(self) -> int | None:
+            return None
+
+    def fake_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
+        captured["cmd"] = [str(x) for x in cmd]
+        return DummyProc()
+
+    monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 8033)
+    monkeypatch.setattr("archmind.deploy.time.sleep", lambda _s: None)
+    monkeypatch.setattr("archmind.deploy._run_local_process_with_log", fake_run)
+    result = deploy_backend_local(tmp_path)
+    assert result["status"] == "SUCCESS"
+    assert result["backend_run_mode"] == "launcher-python"
+    assert captured.get("cmd") == ["python", "main.py"]
+    assert result["run_command"] == "python main.py"
+
+
+def test_local_backend_deploy_launcher_failure_classifies_runtime_entrypoint_error(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "main.py").write_text(
+        'import uvicorn\nuvicorn.run("app.main:app", host="0.0.0.0", port=8000)\n',
+        encoding="utf-8",
+    )
+
+    class DummyProc:
+        pid = 12032
+
+        def poll(self) -> int | None:
+            return 1
+
+    monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 8034)
+    monkeypatch.setattr("archmind.deploy.time.sleep", lambda _s: None)
+    monkeypatch.setattr("archmind.deploy._run_local_process_with_log", lambda *a, **k: DummyProc())
+    monkeypatch.setattr("archmind.deploy.read_last_lines", lambda *_a, **_k: "ModuleNotFoundError: No module named 'app'")
+    result = deploy_backend_local(tmp_path)
+    assert result["status"] == "FAIL"
+    assert result["failure_class"] == "runtime-entrypoint-error"
+    detail = str(result.get("detail") or "")
     assert "Detected backend target: app.main:app" in detail
+    assert "Backend run mode: launcher-python" in detail
     assert "Run command: python main.py" in detail
 
 

@@ -719,7 +719,9 @@ def test_read_recent_logs_fallback_when_missing(tmp_path: Path) -> None:
     msg_back = read_recent_backend_logs(project_dir)
     msg_front = read_recent_frontend_logs(project_dir)
     assert "No recent logs found." in msg_last
-    assert "No backend logs found." in msg_back
+    assert "No backend logs found. Showing runtime diagnostics instead." in msg_back
+    assert "Detected backend target:" in msg_back
+    assert "Run command:" in msg_back
     assert "No frontend logs found." in msg_front
     assert "Focus:" in msg_last
 
@@ -792,7 +794,10 @@ def test_logs_local_no_logs_available(tmp_path: Path) -> None:
     msg = DummyMessage()
     update = DummyUpdate(message=msg, effective_chat=DummyChat())
     asyncio.run(command_logs(update, DummyContext(args=["local"])))
-    assert msg.sent[-1] == "No logs available."
+    out = msg.sent[-1]
+    assert "No log files found. Showing backend runtime diagnostics instead." in out
+    assert "Detected backend target:" in out
+    assert "Run command:" in out
 
 
 def test_extract_key_error_lines_backend_priority() -> None:

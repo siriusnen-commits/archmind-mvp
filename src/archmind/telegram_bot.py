@@ -1778,6 +1778,30 @@ def _failure_class_from_state(project_dir: Path) -> str:
     return str(state.get("last_failure_class") or "").strip()
 
 
+def _backend_runtime_diagnostics_lines(project_dir: Path) -> list[str]:
+    state = _load_json(project_dir / ".archmind" / "state.json") or {}
+    backend_entry = str(state.get("backend_entry") or "").strip()
+    backend_run_mode = str(state.get("backend_run_mode") or "").strip()
+    backend_run_cwd = str(state.get("backend_run_cwd") or "").strip()
+    backend_run_command = str(state.get("backend_run_command") or "").strip()
+    runtime_failure_class = str(state.get("runtime_failure_class") or state.get("last_failure_class") or "").strip()
+    backend_detail = str(state.get("backend_deploy_detail") or state.get("last_deploy_detail") or "").strip()
+    backend_log_path = project_dir / ".archmind" / "backend.log"
+
+    lines = [
+        "Backend runtime diagnostics:",
+        f"- Detected backend target: {backend_entry or '(unknown)'}",
+        f"- Backend run mode: {backend_run_mode or '(unknown)'}",
+        f"- Run cwd: {backend_run_cwd or str(project_dir)}",
+        f"- Run command: {backend_run_command or '(unknown)'}",
+        f"- Failure class: {runtime_failure_class or '(unknown)'}",
+        f"- Log path: {backend_log_path}",
+    ]
+    if backend_detail:
+        lines += ["", "Last backend detail:", backend_detail]
+    return lines
+
+
 def _failure_summary_from_class(mode: str, failure_class: str, key_lines: list[str]) -> str:
     klass = (failure_class or "").lower()
     if mode == "backend":
@@ -1785,6 +1809,12 @@ def _failure_summary_from_class(mode: str, failure_class: str, key_lines: list[s
             return "backend pytest failed"
         if klass == "backend-dependency":
             return "backend dependency install failed"
+        if klass == "generation-error":
+            return "backend generation structure error"
+        if klass == "runtime-entrypoint-error":
+            return "backend runtime entrypoint mismatch"
+        if klass == "dependency-error":
+            return "backend dependency import error"
         if klass.startswith("environment"):
             return "backend environment issue detected"
         return "backend failure detected"
@@ -1841,7 +1871,14 @@ def read_recent_backend_logs(project_dir: Path) -> str:
         excerpt = excerpt or sanitize_log_excerpt("\n".join(clues), max_lines=40)
     key_lines = extract_key_error_lines(excerpt)
     if not key_lines:
-        return build_logs_message(project_dir.name, "backend", "No backend logs found.", [], ["inspect recent failure details"])
+        diagnostics = _backend_runtime_diagnostics_lines(project_dir)
+        return build_logs_message(
+            project_dir.name,
+            "backend",
+            "No backend logs found. Showing runtime diagnostics instead.",
+            diagnostics,
+            ["inspect backend entrypoint and run command"],
+        )
     failure_class = _failure_class_from_state(project_dir) or classify_failure(excerpt, "backend-pytest:FAIL")
     failure = _failure_summary_from_class("backend", failure_class, key_lines)
     focus = build_log_focus("backend", failure_class, key_lines)
@@ -3075,6 +3112,8 @@ async def command_inspect(update: Any, context: Any) -> None:
     frontend_pid = state.get("frontend_pid")
     backend_entry = str(state.get("backend_entry") or "").strip()
     backend_run_mode = str(state.get("backend_run_mode") or "").strip()
+    runtime_failure_class = str(state.get("runtime_failure_class") or "").strip()
+    last_failure_class = str(state.get("last_failure_class") or "").strip()
 
     runtime_backend = ""
     runtime_frontend = ""
@@ -3113,6 +3152,9 @@ async def command_inspect(update: Any, context: Any) -> None:
             lines.append(f"Target: {deploy_target}")
         if deploy_status:
             lines.append(f"Status: {deploy_status}")
+    failure_class = runtime_failure_class or last_failure_class
+    if failure_class:
+        lines += ["", f"Failure Class: {failure_class}"]
 
     if evolution:
         lines += ["", "Evolution:", f"Version: {evolution_version}"]
@@ -3176,6 +3218,8 @@ def _build_selected_project_summary(project_path: Path) -> str:
     frontend_url = str(state.get("frontend_deploy_url") or "").strip()
     backend_entry = str(state.get("backend_entry") or "").strip()
     backend_run_mode = str(state.get("backend_run_mode") or "").strip()
+    runtime_failure_class = str(state.get("runtime_failure_class") or "").strip()
+    last_failure_class = str(state.get("last_failure_class") or "").strip()
     try:
         from archmind.deploy import get_local_runtime_status
 
@@ -3220,6 +3264,9 @@ def _build_selected_project_summary(project_path: Path) -> str:
             lines.append(f"Target: {deploy_target}")
         if deploy_status:
             lines.append(f"Status: {deploy_status}")
+    failure_class = runtime_failure_class or last_failure_class
+    if failure_class:
+        lines.append(f"Failure Class: {failure_class}")
 
     lines += ["", "Try next:", "- /inspect", "- /next"]
 
@@ -4044,14 +4091,26 @@ async def command_logs(update: Any, context: Any) -> None:
         backend_text = read_last_lines(project_path / ".archmind" / "backend.log", lines=20) if show_backend else None
         frontend_text = read_last_lines(project_path / ".archmind" / "frontend.log", lines=20) if show_frontend else None
         if (show_backend and not backend_text) and (show_frontend and not frontend_text):
-            await update.message.reply_text("No logs available.")
+            lines = [
+                "Local logs",
+                "",
+                "Project:",
+                project_path.name,
+                "",
+                "No log files found. Showing backend runtime diagnostics instead.",
+                "",
+                *_backend_runtime_diagnostics_lines(project_path),
+            ]
+            await update.message.reply_text(_truncate_message("\n".join(lines), limit=3500))
             return
 
         lines = ["Local logs", "", "Project:", project_path.name]
         if show_backend:
-            lines.extend(["", "Backend logs (last 20 lines):", "", backend_text or "No logs available."])
+            lines.extend(["", "Backend logs (last 20 lines):", "", backend_text or "(no backend log lines captured)"])
+            if not backend_text:
+                lines += ["", *_backend_runtime_diagnostics_lines(project_path)]
         if show_frontend:
-            lines.extend(["", "Frontend logs (last 20 lines):", "", frontend_text or "No logs available."])
+            lines.extend(["", "Frontend logs (last 20 lines):", "", frontend_text or "(no frontend log lines captured)"])
         await update.message.reply_text(_truncate_message("\n".join(lines), limit=3500))
         return
 

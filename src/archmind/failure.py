@@ -297,6 +297,8 @@ def classify_failure(excerpt: str, failure_signature: str = "") -> str:
             'no module named "app"',
             'attribute "app" not found in module "main"',
             "attribute 'app' not found in module 'main'",
+            "backend entrypoint not found",
+            "invalid backend cwd/target mismatch",
         )
     ) and "backend-pytest" not in sig and "pytest" not in text:
         return "runtime-entrypoint-error"

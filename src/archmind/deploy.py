@@ -517,19 +517,28 @@ def detect_backend_runtime_entry(project_dir: Path, *, port: int) -> dict[str, A
             "launcher_mode_detected": launcher_mode,
         }
 
-    reason = (
-        "backend structure validation failed: expected project_root/app/main.py "
-        "or project_root/backend/app/main.py"
-    )
+    if launcher_mode:
+        return {
+            "ok": True,
+            "failure_class": "",
+            "failure_reason": "",
+            "backend_entry": "app.main:app",
+            "backend_run_mode": "launcher-python",
+            "run_cwd": root,
+            "run_command": ["python", "main.py"],
+            "launcher_mode_detected": True,
+        }
+
+    reason = "backend entrypoint not found"
     return {
         "ok": False,
         "failure_class": "generation-error",
         "failure_reason": reason,
-        "backend_entry": "app.main:app" if launcher_mode else "",
-        "backend_run_mode": "launcher-python" if launcher_mode else "",
+        "backend_entry": "",
+        "backend_run_mode": "",
         "run_cwd": root,
-        "run_command": ["python", "main.py"] if launcher_mode else [],
-        "launcher_mode_detected": launcher_mode,
+        "run_command": [],
+        "launcher_mode_detected": False,
     }
 
 
@@ -582,17 +591,24 @@ def _compose_backend_runtime_failure_detail(
     detected_target: str,
     run_cwd: Path,
     run_command: list[str],
+    backend_run_mode: str = "",
+    log_path: Path | None = None,
     stderr_tail: str = "",
 ) -> str:
     lines = [
         f"{failure_class}: {reason}",
         f"Detected backend target: {detected_target or '(none)'}",
+        f"Backend run mode: {backend_run_mode or '(none)'}",
         f"Run cwd: {run_cwd}",
         f"Run command: {' '.join(run_command) if run_command else '(none)'}",
     ]
+    if log_path is not None:
+        lines.append(f"Log path: {log_path}")
     tail = str(stderr_tail or "").strip()
     if tail:
         lines += ["stderr (last 20 lines):", tail]
+    else:
+        lines += ["stderr (last 20 lines):", "(no stderr captured)"]
     return "\n".join(lines)
 
 
@@ -640,6 +656,7 @@ def deploy_backend_local(project_dir: Path, *, port: int | None = None, frontend
                 detected_target=backend_entry,
                 run_cwd=Path(run_cwd) if isinstance(run_cwd, Path) else root,
                 run_command=run_command,
+                backend_run_mode=backend_run_mode,
             ),
             "failure_class": failure_class,
             "backend_entry": backend_entry,
@@ -665,6 +682,8 @@ def deploy_backend_local(project_dir: Path, *, port: int | None = None, frontend
                 detected_target=backend_entry,
                 run_cwd=resolved_cwd,
                 run_command=run_command,
+                backend_run_mode=backend_run_mode,
+                log_path=log_path,
             ),
             "failure_class": failure_class,
             "backend_entry": backend_entry,
@@ -687,6 +706,8 @@ def deploy_backend_local(project_dir: Path, *, port: int | None = None, frontend
                 detected_target=backend_entry,
                 run_cwd=resolved_cwd,
                 run_command=run_command,
+                backend_run_mode=backend_run_mode,
+                log_path=log_path,
                 stderr_tail=stderr_tail,
             ),
             "failure_class": failure_class,

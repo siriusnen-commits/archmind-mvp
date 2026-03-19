@@ -33,6 +33,11 @@ def test_classify_runtime_entrypoint_error() -> None:
     assert classify_failure(excerpt, "") == "runtime-entrypoint-error"
 
 
+def test_classify_runtime_entrypoint_not_found_text() -> None:
+    excerpt = "backend entrypoint not found"
+    assert classify_failure(excerpt, "") == "runtime-entrypoint-error"
+
+
 def test_classify_generation_error() -> None:
     excerpt = "generation-error: backend structure validation failed"
     assert classify_failure(excerpt, "") == "generation-error"
