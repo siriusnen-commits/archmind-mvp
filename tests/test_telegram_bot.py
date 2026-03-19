@@ -2247,6 +2247,42 @@ def test_inspect_command_truncates_entity_api_and_page_lists(tmp_path: Path, mon
     assert "History count: 3" in out
 
 
+def test_inspect_command_shows_api_base_url_from_frontend_env(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect_api_base"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "frontend").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / ".env.local").write_text(
+        "NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8011\n",
+        encoding="utf-8",
+    )
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "domains": ["tasks"],
+                "template": "fullstack-ddd",
+                "modules": ["db"],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_inspect(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "API Base URL:" in out
+    assert "http://127.0.0.1:8011" in out
+
+
 def test_improve_command_without_project_shows_guidance(monkeypatch) -> None:
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: None)
     msg = DummyMessage()

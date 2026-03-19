@@ -1778,6 +1778,26 @@ def _failure_class_from_state(project_dir: Path) -> str:
     return str(state.get("last_failure_class") or "").strip()
 
 
+def _read_frontend_api_base_url(project_dir: Path) -> str:
+    root = project_dir.expanduser().resolve()
+    candidates = [root / "frontend" / ".env.local", root / ".env.local"]
+    for path in candidates:
+        if not path.exists() or not path.is_file():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            continue
+        for line in text.splitlines():
+            line = str(line).strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            if key.strip() == "NEXT_PUBLIC_API_BASE_URL":
+                return value.strip()
+    return ""
+
+
 def _backend_runtime_diagnostics_lines(project_dir: Path) -> list[str]:
     state = _load_json(project_dir / ".archmind" / "state.json") or {}
     backend_entry = str(state.get("backend_entry") or "").strip()
@@ -3131,6 +3151,7 @@ async def command_inspect(update: Any, context: Any) -> None:
     backend_run_mode = str(state.get("backend_run_mode") or "").strip()
     runtime_failure_class = str(state.get("runtime_failure_class") or "").strip()
     last_failure_class = str(state.get("last_failure_class") or "").strip()
+    api_base_url = _read_frontend_api_base_url(project_path)
 
     runtime_backend = ""
     runtime_frontend = ""
@@ -3154,6 +3175,8 @@ async def command_inspect(update: Any, context: Any) -> None:
         lines += ["", "Backend URL:", backend_url]
     if frontend_url:
         lines += ["", "Frontend URL:", frontend_url]
+    if api_base_url:
+        lines += ["", "API Base URL:", api_base_url]
     if backend_entry or backend_run_mode:
         lines += ["", "Backend Runtime:"]
         if backend_entry:
@@ -3241,6 +3264,7 @@ def _build_selected_project_summary(project_path: Path) -> str:
     backend_run_mode = str(state.get("backend_run_mode") or "").strip()
     runtime_failure_class = str(state.get("runtime_failure_class") or "").strip()
     last_failure_class = str(state.get("last_failure_class") or "").strip()
+    api_base_url = _read_frontend_api_base_url(project_path)
     try:
         from archmind.deploy import get_local_runtime_status
 
@@ -3270,6 +3294,8 @@ def _build_selected_project_summary(project_path: Path) -> str:
         lines += ["", "Backend URL:", backend_url]
     if frontend_url:
         lines += ["", "Frontend URL:", frontend_url]
+    if api_base_url:
+        lines += ["", "API Base URL:", api_base_url]
     lines += [
         "",
         "Project Structure:",

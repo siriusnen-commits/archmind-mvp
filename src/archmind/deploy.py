@@ -328,6 +328,8 @@ def _write_runtime_env_files(
     frontend_port: int | None = None,
     backend_base_url: str | None = None,
 ) -> dict[str, str]:
+    # Runtime is the single source of truth for backend/frontend connectivity.
+    # Inject ports + URLs before process startup so templates can stay env-driven.
     backend_env_path = _backend_env_file(root)
     legacy_backend_env_path = root / ".env"
     frontend_dir = get_frontend_deploy_dir(root)
