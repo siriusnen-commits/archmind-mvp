@@ -1076,4 +1076,63 @@ python -m pytest -q
 - `NEXT_PUBLIC_FRONTEND_PORT` (frontend runtime port)
 """
 
-    return files
+    backend_prefixed: Dict[str, str] = {}
+    for path, content in files.items():
+        if path.startswith(("frontend/", "scripts/")) or path == "README.md":
+            backend_prefixed[path] = content
+            continue
+        backend_prefixed[f"backend/{path}"] = content
+
+    # Fullstack contract: no root launcher; runtime starts backend/app/main.py via cwd=backend.
+    backend_prefixed.pop("backend/main.py", None)
+
+    backend_prefixed["scripts/dev_backend.sh"] = """#!/usr/bin/env bash
+set -euo pipefail
+cd backend
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port ${APP_PORT:-${PORT:-8000}}
+"""
+    backend_prefixed["README.md"] = f"""# {project_name}
+
+## Backend setup
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+## Backend run
+```bash
+cd backend
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port ${{APP_PORT:-${{PORT:-8000}}}}
+```
+
+## Frontend setup
+```bash
+cd frontend
+npm install
+cp -n .env.example .env.local
+```
+
+## Frontend run
+```bash
+npm run dev
+```
+
+## Tests
+```bash
+cd backend
+python -m pytest -q
+```
+
+## Environment
+- `APP_NAME` (default: {project_name})
+- `APP_PORT` (default: 8000)
+- `BACKEND_BASE_URL` (default: http://127.0.0.1:8000)
+- `DB_URL` (default: sqlite:///./data/app.db)
+- `CORS_ALLOW_ORIGINS` (comma-separated frontend origins)
+- `NEXT_PUBLIC_API_BASE_URL` (frontend -> backend base URL)
+- `NEXT_PUBLIC_FRONTEND_PORT` (frontend runtime port)
+"""
+
+    return backend_prefixed

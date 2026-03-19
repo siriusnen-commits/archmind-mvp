@@ -13,8 +13,20 @@ def _fake_generate_project(idea: str, opt) -> Path:  # type: ignore[no-untyped-d
     project_name = (opt.name or "archmind_project").strip() or "archmind_project"
     project_dir = Path(opt.out) / project_name
     project_dir.mkdir(parents=True, exist_ok=True)
-    project_dir.joinpath("pytest.ini").write_text("[pytest]\naddopts = -q\n", encoding="utf-8")
-    project_dir.joinpath("test_ok.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    template = str(getattr(opt, "template", "") or "").strip().lower()
+    if template == "fullstack-ddd":
+        (project_dir / "backend" / "app").mkdir(parents=True, exist_ok=True)
+        (project_dir / "backend" / "app" / "main.py").write_text(
+            "from fastapi import FastAPI\napp = FastAPI()\n",
+            encoding="utf-8",
+        )
+        (project_dir / "backend" / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+        (project_dir / "backend" / "pytest.ini").write_text("[pytest]\naddopts = -q\n", encoding="utf-8")
+        (project_dir / "backend" / "test_ok.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+        (project_dir / "frontend").mkdir(parents=True, exist_ok=True)
+    else:
+        project_dir.joinpath("pytest.ini").write_text("[pytest]\naddopts = -q\n", encoding="utf-8")
+        project_dir.joinpath("test_ok.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
     project_dir.joinpath("README.md").write_text("# demo\n", encoding="utf-8")
     return project_dir
 

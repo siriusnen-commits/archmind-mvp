@@ -20,7 +20,8 @@ def _import_app(project_dir: Path, db_url: str):
     db_path = db_url.replace("sqlite:///", "", 1)
     if db_path:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    sys.path.insert(0, str(project_dir))
+    backend_dir = project_dir / "backend"
+    sys.path.insert(0, str(backend_dir))
     try:
         for mod in list(sys.modules):
             if mod == "app" or mod.startswith("app."):
@@ -31,8 +32,8 @@ def _import_app(project_dir: Path, db_url: str):
         init_db()
         return module.app
     finally:
-        if str(project_dir) in sys.path:
-            sys.path.remove(str(project_dir))
+        if str(backend_dir) in sys.path:
+            sys.path.remove(str(backend_dir))
         if prev is None:
             os.environ.pop("DB_URL", None)
         else:
@@ -45,7 +46,7 @@ def test_fullstack_ddd_template_pytest_passes(tmp_path: Path) -> None:
     project_dir = _generate_fullstack(tmp_path)
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "-q"],
-        cwd=project_dir,
+        cwd=project_dir / "backend",
         capture_output=True,
         text=True,
         timeout=120,
@@ -55,7 +56,7 @@ def test_fullstack_ddd_template_pytest_passes(tmp_path: Path) -> None:
 
 def test_defects_query_sort_pagination(tmp_path: Path) -> None:
     project_dir = _generate_fullstack(tmp_path)
-    db_path = project_dir / "data" / "test.db"
+    db_path = project_dir / "backend" / "data" / "test.db"
     db_url = f"sqlite:///{db_path}"
     app = _import_app(project_dir, db_url)
 
@@ -118,11 +119,13 @@ def test_fullstack_frontend_start_script_is_runtime_neutral(tmp_path: Path) -> N
     project_dir = _generate_fullstack(tmp_path, name="fullstack_runtime_neutral")
     package_text = (project_dir / "frontend" / "package.json").read_text(encoding="utf-8")
     assert '"start": "sh -c \'next start -p ${PORT:-3000}\'"' in package_text
+    assert not (project_dir / "main.py").exists()
+    assert (project_dir / "backend" / "app" / "main.py").exists()
 
 
 def test_fullstack_runtime_env_template_uses_api_base_url_and_settings(tmp_path: Path) -> None:
     project_dir = _generate_fullstack(tmp_path, name="fullstack_runtime_env")
-    settings_text = (project_dir / "app" / "core" / "settings.py").read_text(encoding="utf-8")
+    settings_text = (project_dir / "backend" / "app" / "core" / "settings.py").read_text(encoding="utf-8")
     frontend_env_example = (project_dir / "frontend" / ".env.example").read_text(encoding="utf-8")
     frontend_page = (project_dir / "frontend" / "app" / "ui" / "DefectsPage.tsx").read_text(encoding="utf-8")
 

@@ -28,14 +28,24 @@ def _fake_generate_project(idea: str, opt) -> Path:  # type: ignore[no-untyped-d
     project_dir.joinpath("pytest.ini").write_text("[pytest]\naddopts = -q\n", encoding="utf-8")
     project_dir.joinpath("test_ok.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
 
-    if template in ("fastapi", "fastapi-ddd", "fullstack-ddd", "worker-api", "internal-tool", "data-tool"):
-        (project_dir / "app").mkdir(parents=True, exist_ok=True)
-        (project_dir / "app" / "__init__.py").write_text("", encoding="utf-8")
-        (project_dir / "app" / "main.py").write_text(
+    if template in ("fastapi", "fastapi-ddd", "worker-api", "internal-tool", "data-tool"):
+        backend_root = project_dir
+        (backend_root / "app").mkdir(parents=True, exist_ok=True)
+        (backend_root / "app" / "__init__.py").write_text("", encoding="utf-8")
+        (backend_root / "app" / "main.py").write_text(
             "from fastapi import FastAPI\napp = FastAPI()\n@app.get('/health')\ndef health(): return {'status':'ok'}\n",
             encoding="utf-8",
         )
-        (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+        (backend_root / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    if template == "fullstack-ddd":
+        backend_root = project_dir / "backend"
+        (backend_root / "app").mkdir(parents=True, exist_ok=True)
+        (backend_root / "app" / "__init__.py").write_text("", encoding="utf-8")
+        (backend_root / "app" / "main.py").write_text(
+            "from fastapi import FastAPI\napp = FastAPI()\n@app.get('/health')\ndef health(): return {'status':'ok'}\n",
+            encoding="utf-8",
+        )
+        (backend_root / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
 
     if template in ("nextjs", "fullstack-ddd", "internal-tool", "data-tool"):
         frontend_dir = project_dir / "frontend" if template == "fullstack-ddd" else project_dir
@@ -52,7 +62,12 @@ def _fake_generate_project(idea: str, opt) -> Path:  # type: ignore[no-untyped-d
 
 
 def _detect_project_shape(project_dir: Path) -> str:
-    has_backend = (project_dir / "app").is_dir() or (project_dir / "requirements.txt").exists()
+    has_backend = (
+        (project_dir / "app").is_dir()
+        or (project_dir / "requirements.txt").exists()
+        or (project_dir / "backend" / "app").is_dir()
+        or (project_dir / "backend" / "requirements.txt").exists()
+    )
     has_frontend = (
         (project_dir / "frontend" / "package.json").exists()
         or (project_dir / "package.json").exists()

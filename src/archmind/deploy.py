@@ -137,6 +137,7 @@ def detect_deploy_kind(project_dir: Path) -> str:
             (root / "requirements.txt").exists(),
             (root / "backend" / "requirements.txt").exists(),
             (root / "pytest.ini").exists(),
+            (root / "backend" / "pytest.ini").exists(),
         )
     )
     has_frontend = any(

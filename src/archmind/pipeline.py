@@ -537,6 +537,16 @@ def _write_project_spec(
         return None
 
 
+def _validate_generation_contract(project_dir: Path, *, app_shape: str, effective_template: str) -> dict[str, Any]:
+    from archmind.generator import validate_generated_project_structure
+
+    return validate_generated_project_structure(
+        project_dir,
+        app_shape=app_shape,
+        template_name=effective_template,
+    )
+
+
 def run_pipeline_command(opts: PipelineOptions) -> int:
     if opts.dry_run:
         steps = []
@@ -627,6 +637,62 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
     if not project_dir.exists() or not project_dir.is_dir():
         print(f"[ERROR] Path is not a directory: {project_dir}", file=sys.stderr)
         return 2
+
+    app_shape = str(architecture_reasoning.get("app_shape") or "").strip().lower()
+    should_validate_generation_contract = bool(
+        opts.idea and (app_shape == "fullstack" or effective_template == "fullstack-ddd")
+    )
+    structure_check = {"ok": True}
+    if should_validate_generation_contract:
+        structure_check = _validate_generation_contract(
+            project_dir,
+            app_shape=app_shape,
+            effective_template=effective_template,
+        )
+    if should_validate_generation_contract and not bool(structure_check.get("ok")):
+        reason = str(structure_check.get("reason") or "invalid project structure")
+        print(f"[ERROR] generation-error: {reason}", file=sys.stderr)
+        try:
+            payload = ensure_state(project_dir)
+            payload["last_status"] = "FAIL"
+            payload["last_failure_class"] = "generation-error"
+            payload["runtime_failure_class"] = "generation-error"
+            payload["backend_entry"] = str(structure_check.get("entrypoint") or "app.main:app")
+            payload["backend_run_mode"] = "asgi-direct"
+            payload["backend_run_cwd"] = str((project_dir / "backend") if app_shape == "fullstack" or effective_template == "fullstack-ddd" else project_dir)
+            payload["backend_run_command"] = "uvicorn app.main:app --host 0.0.0.0 --port <assigned_port>"
+            payload["recent_failures"] = [reason]
+            write_state(project_dir, payload)
+        except Exception:
+            pass
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        failure_payload = {
+            "status": "FAIL",
+            "project_type": normalize_project_type(_project_type_from_app_shape(app_shape)),
+            "selected_template": selected_template,
+            "effective_template": effective_template,
+            "template_fallback_reason": template_fallback_reason or None,
+            "project_dir": str(project_dir),
+            "timestamp": timestamp,
+            "command": _build_command(opts),
+            "steps": {
+                "generate": {
+                    "skipped": False,
+                    "ok": False,
+                    "detail": reason,
+                    "failure_class": "generation-error",
+                },
+                "run_before_fix": {"ok": False, "status": "FAIL", "reason": "skipped due to generation-error"},
+                "fix": {"attempted": False, "applied": bool(opts.apply), "iterations": 0, "model": opts.model, "scope": _effective_fix_scope(opts), "prompt": None},
+                "run_after_fix": {"ok": False, "log": None, "summary": None, "detail": None},
+            },
+            "artifacts": {},
+            "failure_summary": [reason],
+            "architecture_reasoning": architecture_reasoning or None,
+        }
+        result_json, _ = write_result(project_dir, failure_payload)
+        print(f"[FAIL] generation-error. result: {result_json}", file=sys.stderr)
+        return 1
 
     reasoning_path: Optional[Path] = None
     project_spec_path: Optional[Path] = None

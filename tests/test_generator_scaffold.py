@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from archmind.generator import GenerateOptions, generate_project
+from archmind.generator import GenerateOptions, generate_project, validate_generated_project_structure
 
 
 def test_backend_fastapi_normalizes_absolute_paths_and_avoids_duplicate_writes(tmp_path: Path, monkeypatch) -> None:
@@ -40,5 +40,17 @@ def test_nextjs_and_fullstack_templates_still_generate(tmp_path: Path) -> None:
 
     fullstack_opt = GenerateOptions(out=tmp_path, force=False, name="fullstack_demo", template="fullstack-ddd")
     fullstack_dir = generate_project("fullstack app with fastapi backend and nextjs frontend", fullstack_opt)
-    assert (fullstack_dir / "requirements.txt").exists()
+    assert (fullstack_dir / "backend" / "requirements.txt").exists()
+    assert (fullstack_dir / "backend" / "app" / "main.py").exists()
+    assert not (fullstack_dir / "main.py").exists()
     assert (fullstack_dir / "frontend" / "package.json").exists()
+
+
+def test_validate_generated_project_structure_for_fullstack_contract(tmp_path: Path) -> None:
+    project = tmp_path / "contract"
+    (project / "backend" / "app").mkdir(parents=True, exist_ok=True)
+    (project / "backend" / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project / "backend" / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project / "frontend").mkdir(parents=True, exist_ok=True)
+    check = validate_generated_project_structure(project, template_name="fullstack-ddd")
+    assert check["ok"] is True

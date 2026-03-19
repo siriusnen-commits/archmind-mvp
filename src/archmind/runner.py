@@ -203,6 +203,13 @@ def _select_python_executable(project_dir: Path) -> str:
     return sys.executable
 
 
+def _select_backend_project_dir(project_dir: Path) -> Path:
+    backend_root = project_dir / "backend"
+    if (backend_root / "app" / "main.py").exists() or (backend_root / "pytest.ini").exists() or (backend_root / "tests").exists():
+        return backend_root
+    return project_dir
+
+
 def _normalize_profile_name(profile: Optional[str]) -> Optional[str]:
     if not profile:
         return None
@@ -377,9 +384,10 @@ def write_failure_prompt(
 
 
 def run_backend_pytest(config: RunConfig) -> BackendResult:
-    pytest_ini = config.project_dir / "pytest.ini"
-    tests_dir = config.project_dir / "tests"
-    python_exec = _select_python_executable(config.project_dir)
+    backend_root = _select_backend_project_dir(config.project_dir)
+    pytest_ini = backend_root / "pytest.ini"
+    tests_dir = backend_root / "tests"
+    python_exec = _select_python_executable(backend_root)
 
     if pytest_ini.exists():
         cmd = [python_exec, "-m", "pytest", "-c", "./pytest.ini", "-q"]
@@ -397,7 +405,7 @@ def run_backend_pytest(config: RunConfig) -> BackendResult:
             reason="No pytest.ini or tests/ directory.",
         )
 
-    result = run_cmd_capture(cmd, config.project_dir, config.timeout_s)
+    result = run_cmd_capture(cmd, backend_root, config.timeout_s)
     combined = (result.stdout + "\n" + result.stderr).strip()
     tail_lines = _extract_tail_lines(combined)
     summary_lines = _extract_key_lines(tail_lines)
@@ -406,7 +414,7 @@ def run_backend_pytest(config: RunConfig) -> BackendResult:
     return BackendResult(
         status=status,
         cmd=_format_cmd(cmd),
-        cwd=str(config.project_dir),
+        cwd=str(backend_root),
         exit_code=result.exit_code,
         duration_s=result.duration_s,
         output=combined,
@@ -592,9 +600,10 @@ def _collect_failure_summary(steps: Sequence[ProfileStepResult], max_lines: int 
 
 
 def run_python_pytest_profile(config: RunConfig) -> list[ProfileStepResult]:
-    pytest_ini = config.project_dir / "pytest.ini"
-    tests_dir = config.project_dir / "tests"
-    python_exec = _select_python_executable(config.project_dir)
+    backend_root = _select_backend_project_dir(config.project_dir)
+    pytest_ini = backend_root / "pytest.ini"
+    tests_dir = backend_root / "tests"
+    python_exec = _select_python_executable(backend_root)
 
     if pytest_ini.exists():
         cmd = [python_exec, "-m", "pytest", "-c", "./pytest.ini", "-q"]
@@ -603,7 +612,7 @@ def run_python_pytest_profile(config: RunConfig) -> list[ProfileStepResult]:
     else:
         return [_profile_step_skip("pytest", None, "No pytest.ini or tests/ directory.")]
 
-    result = run_cmd_capture(cmd, config.project_dir, config.timeout_s)
+    result = run_cmd_capture(cmd, backend_root, config.timeout_s)
     return [_profile_step_from_command("pytest", _format_cmd(cmd), result)]
 
 

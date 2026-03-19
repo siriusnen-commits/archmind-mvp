@@ -3051,7 +3051,16 @@ async def command_inspect(update: Any, context: Any) -> None:
     evolution_added = _ordered_modules([str(x) for x in (evolution.get("added_modules") or [])]) if evolution else []
     evolution_history_count = len(evolution.get("history") or []) if isinstance(evolution.get("history"), list) else 0
 
-    has_backend = (project_path / "app").is_dir() or (project_path / "requirements.txt").exists()
+    root_backend_main = project_path / "app" / "main.py"
+    nested_backend_main = project_path / "backend" / "app" / "main.py"
+    has_backend = (
+        root_backend_main.exists()
+        or nested_backend_main.exists()
+        or (project_path / "app").is_dir()
+        or (project_path / "backend" / "app").is_dir()
+        or (project_path / "requirements.txt").exists()
+        or (project_path / "backend" / "requirements.txt").exists()
+    )
     has_frontend = (
         (project_path / "frontend").is_dir()
         or (project_path / "package.json").exists()
@@ -3103,6 +3112,14 @@ async def command_inspect(update: Any, context: Any) -> None:
         lines += ["", "Structure:", structure]
     if core_files:
         lines += ["", "Files:"] + core_files[:6]
+    entrypoint_label = "app.main:app" if (root_backend_main.exists() or nested_backend_main.exists()) else "(missing)"
+    lines += [
+        "",
+        "Project Structure:",
+        f"- backend: {'OK' if has_backend else 'MISSING'}",
+        f"- frontend: {'OK' if has_frontend else 'MISSING'}",
+        f"- entrypoint: {entrypoint_label}",
+    ]
 
     backend_url = str(state.get("backend_deploy_url") or state.get("backend_url") or "").strip()
     frontend_url = str(state.get("frontend_deploy_url") or state.get("frontend_url") or "").strip()
@@ -3212,6 +3229,10 @@ def _build_selected_project_summary(project_path: Path) -> str:
     if evolution_added:
         lines += ["", "Evolution:", f"Version: {evolution_version}", f"Added modules: {', '.join(evolution_added)}"]
 
+    root_backend_main = project_path / "app" / "main.py"
+    nested_backend_main = project_path / "backend" / "app" / "main.py"
+    has_backend = bool(root_backend_main.exists() or nested_backend_main.exists())
+    has_frontend = (project_path / "frontend").is_dir()
     runtime_backend = ""
     runtime_frontend = ""
     backend_url = str(state.get("backend_deploy_url") or "").strip()
@@ -3249,6 +3270,13 @@ def _build_selected_project_summary(project_path: Path) -> str:
         lines += ["", "Backend URL:", backend_url]
     if frontend_url:
         lines += ["", "Frontend URL:", frontend_url]
+    lines += [
+        "",
+        "Project Structure:",
+        f"- backend: {'OK' if has_backend else 'MISSING'}",
+        f"- frontend: {'OK' if has_frontend else 'MISSING'}",
+        f"- entrypoint: {'app.main:app' if has_backend else '(missing)'}",
+    ]
     if backend_entry or backend_run_mode:
         lines += ["", "Backend Runtime:"]
         if backend_entry:

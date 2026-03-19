@@ -295,15 +295,16 @@ def apply_template(spec: Dict[str, Any], opt: GenerateOptions) -> Dict[str, Any]
 
         files = enforce_fullstack_ddd({}, project_name)
         spec["directories"] = [
-            "app",
-            "app/api",
-            "app/api/routers",
-            "app/core",
-            "app/db",
-            "app/domain",
-            "app/repositories",
-            "app/services",
-            "tests",
+            "backend",
+            "backend/app",
+            "backend/app/api",
+            "backend/app/api/routers",
+            "backend/app/core",
+            "backend/app/db",
+            "backend/app/domain",
+            "backend/app/repositories",
+            "backend/app/services",
+            "backend/tests",
             "frontend",
             "frontend/app",
             "frontend/app/ui",
@@ -464,7 +465,7 @@ def apply_modules_to_project(project_dir: Path, template_name: str, modules: lis
     )
 
     tmpl = str(template_name or "").strip().lower()
-    backend_root = project_dir / "app"
+    backend_root = _resolve_backend_app_root(project_dir) or (project_dir / "app")
     frontend_root = project_dir / "app"
     if tmpl in {"fullstack-ddd", "internal-tool", "data-tool"}:
         frontend_root = project_dir / "frontend" / "app"
@@ -510,7 +511,7 @@ def apply_modules_to_project(project_dir: Path, template_name: str, modules: lis
         db_file.parent.mkdir(parents=True, exist_ok=True)
         db_file.write_text('DATABASE_URL = "env:DATABASE_URL"\n', encoding="utf-8")
 
-        env_example = project_dir / ".env.example"
+        env_example = (project_dir / "backend" / ".env.example") if (project_dir / "backend" / ".env.example").exists() else (project_dir / ".env.example")
         if env_example.exists():
             env_text = env_example.read_text(encoding="utf-8")
             if "DATABASE_URL=" not in env_text:
@@ -594,8 +595,35 @@ def apply_modules_to_project(project_dir: Path, template_name: str, modules: lis
 
 
 def _has_backend_structure(project_dir: Path) -> bool:
-    app_dir = project_dir / "app"
-    return app_dir.is_dir() and ((app_dir / "main.py").exists() or (project_dir / "requirements.txt").exists())
+    root_app_dir = project_dir / "app"
+    backend_app_dir = project_dir / "backend" / "app"
+    return bool(
+        (
+            root_app_dir.is_dir() and (root_app_dir / "main.py").exists()
+        )
+        or (
+            backend_app_dir.is_dir() and (backend_app_dir / "main.py").exists()
+        )
+    )
+
+
+def _resolve_backend_project_root(project_dir: Path) -> Optional[Path]:
+    backend_root = project_dir / "backend"
+    if (backend_root / "app" / "main.py").exists():
+        return backend_root
+    if (project_dir / "app" / "main.py").exists():
+        return project_dir
+    return None
+
+
+def _resolve_backend_app_root(project_dir: Path) -> Optional[Path]:
+    backend_root = _resolve_backend_project_root(project_dir)
+    if backend_root is None:
+        return None
+    app_root = backend_root / "app"
+    if app_root.is_dir():
+        return app_root
+    return None
 
 
 def _resolve_frontend_app_root(project_dir: Path) -> Optional[Path]:
@@ -688,15 +716,18 @@ def apply_entity_scaffold(project_dir: Path, entity_name: str) -> list[str]:
     """
     if not _has_backend_structure(project_dir):
         return []
+    backend_app_root = _resolve_backend_app_root(project_dir)
+    if backend_app_root is None:
+        return []
 
     class_name, slug, plural = _entity_identity(entity_name)
     if not class_name:
         return []
 
     generated: list[str] = []
-    models_file = project_dir / "app" / "models" / f"{slug}.py"
-    schemas_file = project_dir / "app" / "schemas" / f"{slug}.py"
-    routers_file = project_dir / "app" / "routers" / f"{slug}.py"
+    models_file = backend_app_root / "models" / f"{slug}.py"
+    schemas_file = backend_app_root / "schemas" / f"{slug}.py"
+    routers_file = backend_app_root / "routers" / f"{slug}.py"
 
     _write_if_missing(
         models_file,
@@ -716,7 +747,7 @@ def apply_entity_scaffold(project_dir: Path, entity_name: str) -> list[str]:
     )
     _write_if_changed(routers_file, _render_entity_router_content(slug, plural), generated, project_dir)
 
-    _ensure_main_router_registration(project_dir / "app" / "main.py", slug, generated, project_dir)
+    _ensure_main_router_registration(backend_app_root / "main.py", slug, generated, project_dir)
     return generated
 
 
@@ -727,13 +758,16 @@ def apply_api_scaffold(project_dir: Path, method: str, path: str) -> list[str]:
     """
     if not _has_backend_structure(project_dir):
         return []
+    backend_app_root = _resolve_backend_app_root(project_dir)
+    if backend_app_root is None:
+        return []
 
     method_up = str(method or "").strip().upper()
     route_path = str(path or "").strip()
     if not method_up or not route_path:
         return []
 
-    router_file = project_dir / "app" / "routers" / "custom.py"
+    router_file = backend_app_root / "routers" / "custom.py"
     decorator = f'@router.{method_up.lower()}("{route_path}")'
     safe = route_path.strip("/").replace("/", "_").replace("{", "").replace("}", "").replace("-", "_")
     safe = re.sub(r"[^a-zA-Z0-9_]", "", safe) or "root"
@@ -750,7 +784,7 @@ def apply_api_scaffold(project_dir: Path, method: str, path: str) -> list[str]:
         content = router_file.read_text(encoding="utf-8")
         if decorator in content:
             generated: list[str] = []
-            _ensure_named_router_registration(project_dir / "app" / "main.py", "custom", "custom_router", generated, project_dir)
+            _ensure_named_router_registration(backend_app_root / "main.py", "custom", "custom_router", generated, project_dir)
             return generated
         if content and not content.endswith("\n"):
             content += "\n"
@@ -766,7 +800,7 @@ def apply_api_scaffold(project_dir: Path, method: str, path: str) -> list[str]:
 
     generated = []
     _write_if_changed(router_file, content, generated, project_dir)
-    _ensure_named_router_registration(project_dir / "app" / "main.py", "custom", "custom_router", generated, project_dir)
+    _ensure_named_router_registration(backend_app_root / "main.py", "custom", "custom_router", generated, project_dir)
     return generated
 
 
@@ -915,6 +949,9 @@ def apply_entity_fields_to_scaffold(project_dir: Path, entity_name: str, fields:
     """
     if not _has_backend_structure(project_dir):
         return []
+    backend_app_root = _resolve_backend_app_root(project_dir)
+    if backend_app_root is None:
+        return []
     class_name, slug, _ = _entity_identity(entity_name)
     if not class_name:
         return []
@@ -934,9 +971,88 @@ def apply_entity_fields_to_scaffold(project_dir: Path, entity_name: str, fields:
     )
 
     changed: list[str] = []
-    _write_if_changed(project_dir / "app" / "models" / f"{slug}.py", model_content, changed, project_dir)
-    _write_if_changed(project_dir / "app" / "schemas" / f"{slug}.py", schema_content, changed, project_dir)
+    _write_if_changed(backend_app_root / "models" / f"{slug}.py", model_content, changed, project_dir)
+    _write_if_changed(backend_app_root / "schemas" / f"{slug}.py", schema_content, changed, project_dir)
     return changed
+
+
+def validate_generated_project_structure(
+    project_dir: Path,
+    *,
+    app_shape: str = "",
+    template_name: str = "",
+) -> dict[str, Any]:
+    root = project_dir.expanduser().resolve()
+    shape = str(app_shape or "").strip().lower()
+    template = str(template_name or "").strip().lower()
+    is_fullstack = shape == "fullstack" or template == "fullstack-ddd"
+    requires_backend_contract = is_fullstack or shape == "backend" or template in {
+        "fastapi",
+        "fastapi-ddd",
+        "worker-api",
+        "internal-tool",
+        "data-tool",
+    }
+
+    if not requires_backend_contract:
+        return {
+            "ok": True,
+            "failure_class": "",
+            "reason": "",
+            "entrypoint": "",
+            "backend": "N/A",
+            "frontend": "OK" if (root / "frontend").is_dir() or (root / "app").is_dir() else "N/A",
+            "requirements": "N/A",
+        }
+
+    backend_main = (root / "backend" / "app" / "main.py") if is_fullstack else (root / "app" / "main.py")
+    backend_requirements = (root / "backend" / "requirements.txt") if is_fullstack else (root / "requirements.txt")
+    frontend_dir = root / "frontend"
+
+    backend_ok = backend_main.exists()
+    requirements_ok = backend_requirements.exists()
+    frontend_ok = (frontend_dir.exists() and frontend_dir.is_dir()) if is_fullstack else True
+    root_launcher_ok = not ((root / "main.py").exists()) if is_fullstack else True
+
+    entrypoint_contains_app = False
+    if backend_ok:
+        try:
+            text = backend_main.read_text(encoding="utf-8", errors="replace")
+            entrypoint_contains_app = bool(re.search(r"\bapp\s*=\s*FastAPI\(", text))
+        except Exception:
+            entrypoint_contains_app = False
+
+    reasons: list[str] = []
+    if not backend_ok:
+        reasons.append(f"missing backend entrypoint: {backend_main.relative_to(root)}")
+    if not requirements_ok:
+        reasons.append(f"missing requirements: {backend_requirements.relative_to(root)}")
+    if not frontend_ok:
+        reasons.append("missing frontend directory: frontend")
+    if not root_launcher_ok:
+        reasons.append("root main.py is not allowed for fullstack template")
+    if backend_ok and not entrypoint_contains_app:
+        reasons.append(f"invalid FastAPI app declaration in: {backend_main.relative_to(root)}")
+
+    if reasons:
+        return {
+            "ok": False,
+            "failure_class": "generation-error",
+            "reason": "invalid project structure: " + "; ".join(reasons),
+            "entrypoint": "app.main:app",
+            "backend": "OK" if backend_ok else "MISSING",
+            "frontend": "OK" if frontend_ok else "MISSING",
+            "requirements": "OK" if requirements_ok else "MISSING",
+        }
+    return {
+        "ok": True,
+        "failure_class": "",
+        "reason": "",
+        "entrypoint": "app.main:app",
+        "backend": "OK",
+        "frontend": "OK" if is_fullstack else "N/A",
+        "requirements": "OK",
+    }
 
 
 # -----------------------------
@@ -975,4 +1091,7 @@ def generate_project(idea: str, opt: GenerateOptions):
     spec = apply_template(spec, opt)
     project_dir = write_project(spec, opt)
     apply_modules_to_project(project_dir, opt.template, list(getattr(opt, "modules", []) or []))
+    structure_check = validate_generated_project_structure(project_dir, template_name=opt.template)
+    if not bool(structure_check.get("ok")):
+        raise RuntimeError(f"generation-error: {structure_check.get('reason') or 'invalid project structure'}")
     return project_dir
