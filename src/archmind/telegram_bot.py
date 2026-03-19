@@ -1275,6 +1275,10 @@ def build_log_focus(log_type: str, failure_class: Optional[str], key_lines: list
         return ["inspect frontend package.json and install step", "verify npm install output"]
     if klass == "environment-node-missing":
         return ["install node/npm runtime on target host"]
+    if klass in ("generation-error", "runtime-entrypoint-error"):
+        return ["inspect backend entrypoint and run command", "verify app/main.py structure"]
+    if klass == "dependency-error":
+        return ["inspect backend dependency installation", "verify requirements and virtualenv"]
     if klass == "environment-python":
         return ["inspect python environment and virtualenv"]
     if klass in ("filesystem-overwrite", "filesystem-path-validation"):
@@ -3069,6 +3073,8 @@ async def command_inspect(update: Any, context: Any) -> None:
     frontend_status = str(state.get("frontend_smoke_status") or state.get("frontend_status") or "").strip().upper()
     backend_pid = state.get("backend_pid")
     frontend_pid = state.get("frontend_pid")
+    backend_entry = str(state.get("backend_entry") or "").strip()
+    backend_run_mode = str(state.get("backend_run_mode") or "").strip()
 
     runtime_backend = ""
     runtime_frontend = ""
@@ -3092,6 +3098,12 @@ async def command_inspect(update: Any, context: Any) -> None:
         lines += ["", "Backend URL:", backend_url]
     if frontend_url:
         lines += ["", "Frontend URL:", frontend_url]
+    if backend_entry or backend_run_mode:
+        lines += ["", "Backend Runtime:"]
+        if backend_entry:
+            lines.append(f"Backend Entry: {backend_entry}")
+        if backend_run_mode:
+            lines.append(f"Backend Run Mode: {backend_run_mode}")
 
     deploy_target = str(state.get("deploy_target") or state.get("auto_deploy_target") or "").strip()
     deploy_status = str(state.get("last_deploy_status") or state.get("auto_deploy_status") or "").strip().upper()
@@ -3162,6 +3174,8 @@ def _build_selected_project_summary(project_path: Path) -> str:
     runtime_frontend = ""
     backend_url = str(state.get("backend_deploy_url") or "").strip()
     frontend_url = str(state.get("frontend_deploy_url") or "").strip()
+    backend_entry = str(state.get("backend_entry") or "").strip()
+    backend_run_mode = str(state.get("backend_run_mode") or "").strip()
     try:
         from archmind.deploy import get_local_runtime_status
 
@@ -3191,6 +3205,12 @@ def _build_selected_project_summary(project_path: Path) -> str:
         lines += ["", "Backend URL:", backend_url]
     if frontend_url:
         lines += ["", "Frontend URL:", frontend_url]
+    if backend_entry or backend_run_mode:
+        lines += ["", "Backend Runtime:"]
+        if backend_entry:
+            lines.append(f"Backend Entry: {backend_entry}")
+        if backend_run_mode:
+            lines.append(f"Backend Run Mode: {backend_run_mode}")
 
     deploy_target = str(state.get("deploy_target") or state.get("auto_deploy_target") or "").strip()
     deploy_status = str(state.get("last_deploy_status") or state.get("auto_deploy_status") or "").strip().upper()

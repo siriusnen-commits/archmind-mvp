@@ -131,7 +131,11 @@ def detect_deploy_kind(project_dir: Path) -> str:
     has_backend = any(
         (
             (root / "app").is_dir(),
+            (root / "app" / "main.py").exists(),
+            (root / "backend" / "app").is_dir(),
+            (root / "backend" / "app" / "main.py").exists(),
             (root / "requirements.txt").exists(),
+            (root / "backend" / "requirements.txt").exists(),
             (root / "pytest.ini").exists(),
         )
     )
@@ -468,6 +472,130 @@ def _run_local_process_with_log(cmd: list[str], *, cwd: Path, log_path: Path) ->
     return proc
 
 
+def _contains_launcher_target(main_file: Path, target: str = "app.main:app") -> bool:
+    if not main_file.exists() or not main_file.is_file():
+        return False
+    try:
+        text = main_file.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return False
+    pattern = re.compile(rf"uvicorn\.run\(\s*['\"]{re.escape(target)}['\"]")
+    return bool(pattern.search(text))
+
+
+def detect_backend_runtime_entry(project_dir: Path, *, port: int) -> dict[str, Any]:
+    root = project_dir.expanduser().resolve()
+    app_main_root = root / "app" / "main.py"
+    app_main_backend = root / "backend" / "app" / "main.py"
+    launcher_main = root / "main.py"
+    launcher_mode = _contains_launcher_target(launcher_main, "app.main:app")
+
+    if app_main_root.exists():
+        target = "app.main:app"
+        run_cwd = root
+        return {
+            "ok": True,
+            "failure_class": "",
+            "failure_reason": "",
+            "backend_entry": target,
+            "backend_run_mode": "asgi-direct",
+            "run_cwd": run_cwd,
+            "run_command": ["uvicorn", target, "--host", "0.0.0.0", "--port", str(int(port))],
+            "launcher_mode_detected": launcher_mode,
+        }
+    if app_main_backend.exists():
+        target = "app.main:app"
+        run_cwd = root / "backend"
+        return {
+            "ok": True,
+            "failure_class": "",
+            "failure_reason": "",
+            "backend_entry": target,
+            "backend_run_mode": "asgi-direct",
+            "run_cwd": run_cwd,
+            "run_command": ["uvicorn", target, "--host", "0.0.0.0", "--port", str(int(port))],
+            "launcher_mode_detected": launcher_mode,
+        }
+
+    reason = (
+        "backend structure validation failed: expected project_root/app/main.py "
+        "or project_root/backend/app/main.py"
+    )
+    return {
+        "ok": False,
+        "failure_class": "generation-error",
+        "failure_reason": reason,
+        "backend_entry": "app.main:app" if launcher_mode else "",
+        "backend_run_mode": "launcher-python" if launcher_mode else "",
+        "run_cwd": root,
+        "run_command": ["python", "main.py"] if launcher_mode else [],
+        "launcher_mode_detected": launcher_mode,
+    }
+
+
+def _classify_backend_runtime_failure(detail: str) -> str:
+    text = str(detail or "").lower()
+    if not text:
+        return "runtime-entrypoint-error"
+    if any(
+        token in text
+        for token in (
+            "no module named 'app'",
+            'no module named "app"',
+            'attribute "app" not found in module "main"',
+            "attribute 'app' not found in module 'main'",
+        )
+    ):
+        return "runtime-entrypoint-error"
+    if any(
+        token in text
+        for token in (
+            "python: command not found",
+            "python3: command not found",
+            "no module named pip",
+            "virtualenv",
+            "venv",
+        )
+    ):
+        return "environment-python"
+    if any(
+        token in text
+        for token in (
+            "no module named fastapi",
+            "no module named uvicorn",
+            "no module named pydantic",
+            "no module named sqlmodel",
+            "module not found: fastapi",
+            "module not found: uvicorn",
+            "modulenotfounderror",
+            "importerror",
+        )
+    ):
+        return "dependency-error"
+    return "runtime-entrypoint-error"
+
+
+def _compose_backend_runtime_failure_detail(
+    failure_class: str,
+    reason: str,
+    *,
+    detected_target: str,
+    run_cwd: Path,
+    run_command: list[str],
+    stderr_tail: str = "",
+) -> str:
+    lines = [
+        f"{failure_class}: {reason}",
+        f"Detected backend target: {detected_target or '(none)'}",
+        f"Run cwd: {run_cwd}",
+        f"Run command: {' '.join(run_command) if run_command else '(none)'}",
+    ]
+    tail = str(stderr_tail or "").strip()
+    if tail:
+        lines += ["stderr (last 20 lines):", tail]
+    return "\n".join(lines)
+
+
 def _backend_smoke_with_retry(base_url: str, attempts: int = 5, interval_s: float = 0.4) -> dict[str, Any]:
     latest = verify_deploy_health(base_url)
     if str(latest.get("healthcheck_status") or "").upper() == "SUCCESS":
@@ -494,20 +622,89 @@ def _frontend_smoke_with_retry(base_url: str, attempts: int = 5, interval_s: flo
 
 def deploy_backend_local(project_dir: Path, *, port: int | None = None, frontend_port: int | None = None) -> dict[str, Any]:
     root = project_dir.expanduser().resolve()
-    if not (root / "app").is_dir():
-        return _service_result("FAIL", None, "backend app directory not found")
     picked_port = int(port) if port else find_free_port()
+    entry = detect_backend_runtime_entry(root, port=picked_port)
+    run_cwd = entry.get("run_cwd")
+    run_command = [str(x) for x in (entry.get("run_command") or [])]
+    backend_entry = str(entry.get("backend_entry") or "")
+    backend_run_mode = str(entry.get("backend_run_mode") or "")
+    if not bool(entry.get("ok")):
+        reason = str(entry.get("failure_reason") or "backend runtime entry detection failed")
+        failure_class = str(entry.get("failure_class") or "generation-error")
+        return {
+            "status": "FAIL",
+            "url": None,
+            "detail": _compose_backend_runtime_failure_detail(
+                failure_class,
+                reason,
+                detected_target=backend_entry,
+                run_cwd=Path(run_cwd) if isinstance(run_cwd, Path) else root,
+                run_command=run_command,
+            ),
+            "failure_class": failure_class,
+            "backend_entry": backend_entry,
+            "backend_run_mode": backend_run_mode,
+            "run_cwd": str(run_cwd or root),
+            "run_command": " ".join(run_command),
+        }
+
+    resolved_cwd = Path(run_cwd) if isinstance(run_cwd, Path) else root
     _write_runtime_env_files(root, backend_port=picked_port, frontend_port=frontend_port)
-    cmd = ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", str(picked_port)]
+    log_path = root / ".archmind" / "backend.log"
     try:
-        proc = _run_local_process_with_log(cmd, cwd=root, log_path=(root / ".archmind" / "backend.log"))
+        proc = _run_local_process_with_log(run_command, cwd=resolved_cwd, log_path=log_path)
     except Exception as exc:
-        return _service_result("FAIL", None, f"local backend start failed: {exc}")
+        reason = f"local backend start failed: {exc}"
+        failure_class = _classify_backend_runtime_failure(reason)
+        return {
+            "status": "FAIL",
+            "url": None,
+            "detail": _compose_backend_runtime_failure_detail(
+                failure_class,
+                reason,
+                detected_target=backend_entry,
+                run_cwd=resolved_cwd,
+                run_command=run_command,
+            ),
+            "failure_class": failure_class,
+            "backend_entry": backend_entry,
+            "backend_run_mode": backend_run_mode,
+            "run_cwd": str(resolved_cwd),
+            "run_command": " ".join(run_command),
+        }
+    time.sleep(0.35)
+    exit_code = proc.poll()
+    if exit_code is not None:
+        stderr_tail = str(read_last_lines(log_path, lines=20) or "").strip()
+        reason = f"backend process exited immediately (code={int(exit_code)})"
+        failure_class = _classify_backend_runtime_failure(stderr_tail or reason)
+        return {
+            "status": "FAIL",
+            "url": None,
+            "detail": _compose_backend_runtime_failure_detail(
+                failure_class,
+                reason,
+                detected_target=backend_entry,
+                run_cwd=resolved_cwd,
+                run_command=run_command,
+                stderr_tail=stderr_tail,
+            ),
+            "failure_class": failure_class,
+            "backend_entry": backend_entry,
+            "backend_run_mode": backend_run_mode,
+            "run_cwd": str(resolved_cwd),
+            "run_command": " ".join(run_command),
+        }
     return {
         "status": "SUCCESS",
         "url": f"http://127.0.0.1:{picked_port}",
         "detail": "local backend started",
         "pid": int(proc.pid),
+        "failure_class": "",
+        "backend_entry": backend_entry,
+        "backend_run_mode": backend_run_mode,
+        "run_cwd": str(resolved_cwd),
+        "run_command": " ".join(run_command),
     }
 
 
@@ -567,6 +764,11 @@ def deploy_fullstack_local(project_dir: Path) -> dict[str, Any]:
         "detail": "local fullstack deploy completed",
         "backend": _service_result(str(backend.get("status") or "FAIL"), backend.get("url"), str(backend.get("detail") or "")),
         "frontend": _service_result(str(frontend.get("status") or "FAIL"), frontend.get("url"), str(frontend.get("detail") or "")),
+        "failure_class": str(backend.get("failure_class") or ""),
+        "backend_entry": str(backend.get("backend_entry") or ""),
+        "backend_run_mode": str(backend.get("backend_run_mode") or ""),
+        "run_cwd": str(backend.get("run_cwd") or ""),
+        "run_command": str(backend.get("run_command") or ""),
         "backend_pid": backend.get("pid"),
         "frontend_pid": frontend.get("pid"),
         "healthcheck_url": str(backend_smoke.get("healthcheck_url") or ""),
@@ -639,6 +841,11 @@ def deploy_to_local(project_dir: Path, kind: str = "backend") -> dict[str, Any]:
         "status": "SUCCESS" if ok else "FAIL",
         "url": backend.get("url"),
         "detail": str(backend.get("detail") or ""),
+        "failure_class": str(backend.get("failure_class") or ""),
+        "backend_entry": str(backend.get("backend_entry") or ""),
+        "backend_run_mode": str(backend.get("backend_run_mode") or ""),
+        "run_cwd": str(backend.get("run_cwd") or ""),
+        "run_command": str(backend.get("run_command") or ""),
         "backend_pid": backend.get("pid"),
         "healthcheck_url": str(backend_smoke.get("healthcheck_url") or ""),
         "healthcheck_status": str(backend_smoke.get("healthcheck_status") or "SKIPPED"),

@@ -28,6 +28,21 @@ def test_classify_module_not_found() -> None:
     assert classify_failure(excerpt, "backend-pytest:FAIL") == "backend-pytest:module-not-found"
 
 
+def test_classify_runtime_entrypoint_error() -> None:
+    excerpt = "ModuleNotFoundError: No module named 'app'"
+    assert classify_failure(excerpt, "") == "runtime-entrypoint-error"
+
+
+def test_classify_generation_error() -> None:
+    excerpt = "generation-error: backend structure validation failed"
+    assert classify_failure(excerpt, "") == "generation-error"
+
+
+def test_classify_dependency_error() -> None:
+    excerpt = "No module named fastapi"
+    assert classify_failure(excerpt, "") == "dependency-error"
+
+
 def test_classify_import_error() -> None:
     excerpt = "ImportError: cannot import name 'Query' from 'fastapi'"
     assert classify_failure(excerpt, "backend-pytest:FAIL") == "backend-pytest:import"

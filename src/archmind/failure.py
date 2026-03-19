@@ -283,6 +283,24 @@ def classify_failure(excerpt: str, failure_signature: str = "") -> str:
     ):
         return "filesystem-path-validation"
 
+    if "generation-error" in text:
+        return "generation-error"
+    if "runtime-entrypoint-error" in text:
+        return "runtime-entrypoint-error"
+    if "dependency-error" in text:
+        return "dependency-error"
+
+    if any(
+        token in text
+        for token in (
+            "no module named 'app'",
+            'no module named "app"',
+            'attribute "app" not found in module "main"',
+            "attribute 'app' not found in module 'main'",
+        )
+    ) and "backend-pytest" not in sig and "pytest" not in text:
+        return "runtime-entrypoint-error"
+
     if any(
         token in text
         for token in (
@@ -318,6 +336,19 @@ def classify_failure(excerpt: str, failure_signature: str = "") -> str:
         )
     ):
         return "environment-python"
+
+    if any(
+        token in text
+        for token in (
+            "no module named fastapi",
+            "no module named uvicorn",
+            "no module named pydantic",
+            "no module named sqlmodel",
+            "module not found: fastapi",
+            "module not found: uvicorn",
+        )
+    ):
+        return "dependency-error"
 
     if any(token in text for token in ("pip install", "no matching distribution found", "could not find a version")):
         return "backend-dependency"
@@ -401,6 +432,9 @@ def fix_strategy_for_class(failure_class: str) -> str:
         "env-dependency",
         "frontend-install",
         "backend-dependency",
+        "dependency-error",
+        "generation-error",
+        "runtime-entrypoint-error",
         "environment-node-missing",
         "environment-python",
         "frontend-missing-package",
@@ -481,7 +515,15 @@ def strategy_instructions(failure_class: str) -> list[str]:
             "dependency/env 문제를 먼저 해결하라.",
             "코드 수정보다 설치/설정 문제를 우선 의심하라.",
         ]
-    if klass in ("frontend-install", "backend-dependency", "environment-node-missing", "environment-python"):
+    if klass in (
+        "frontend-install",
+        "backend-dependency",
+        "dependency-error",
+        "generation-error",
+        "runtime-entrypoint-error",
+        "environment-node-missing",
+        "environment-python",
+    ):
         return [
             "환경/설치 문제를 먼저 해결하라.",
             "실패 원인 로그를 기준으로 패키지/런타임 설정을 점검하라.",
@@ -624,7 +666,15 @@ def select_repair_targets(
         targets = ["frontend/package.json", "package.json", "frontend/next.config.js"]
         return [t for t in list(dict.fromkeys(targets)) if is_safe_repair_target(t, Path(project_dir))][:3]
 
-    if klass in ("backend-dependency", "env-dependency", "environment-node-missing", "environment-python"):
+    if klass in (
+        "backend-dependency",
+        "dependency-error",
+        "generation-error",
+        "runtime-entrypoint-error",
+        "env-dependency",
+        "environment-node-missing",
+        "environment-python",
+    ):
         targets = ["frontend/package.json", "requirements.txt", ".env.example"]
         return [t for t in list(dict.fromkeys(targets)) if is_safe_repair_target(t, Path(project_dir))][:3]
 

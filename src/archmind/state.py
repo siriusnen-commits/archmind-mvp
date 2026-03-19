@@ -348,6 +348,11 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "frontend_smoke_detail": "",
         "backend_pid": None,
         "frontend_pid": None,
+        "backend_entry": "",
+        "backend_run_mode": "",
+        "backend_run_cwd": "",
+        "backend_run_command": "",
+        "runtime_failure_class": "",
         "healthcheck_url": "",
         "healthcheck_status": "",
         "healthcheck_detail": "",
@@ -456,6 +461,11 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     payload["frontend_smoke_detail"] = str(payload.get("frontend_smoke_detail") or "").strip()[:220]
     payload["backend_pid"] = _safe_pid(payload.get("backend_pid"))
     payload["frontend_pid"] = _safe_pid(payload.get("frontend_pid"))
+    payload["backend_entry"] = str(payload.get("backend_entry") or "").strip()[:120]
+    payload["backend_run_mode"] = str(payload.get("backend_run_mode") or "").strip()[:40]
+    payload["backend_run_cwd"] = str(payload.get("backend_run_cwd") or "").strip()[:300]
+    payload["backend_run_command"] = str(payload.get("backend_run_command") or "").strip()[:300]
+    payload["runtime_failure_class"] = str(payload.get("runtime_failure_class") or "").strip()[:80]
     payload["healthcheck_url"] = str(payload.get("healthcheck_url") or "").strip()[:300]
     payload["healthcheck_status"] = _safe_healthcheck_status(str(payload.get("healthcheck_status") or ""))
     payload["healthcheck_detail"] = str(payload.get("healthcheck_detail") or "").strip()[:220]
@@ -933,6 +943,11 @@ def update_after_deploy(
     payload["frontend_smoke_detail"] = frontend_smoke_detail[:220]
     payload["backend_pid"] = _safe_pid(result.get("backend_pid"))
     payload["frontend_pid"] = _safe_pid(result.get("frontend_pid"))
+    payload["backend_entry"] = str(result.get("backend_entry") or payload.get("backend_entry") or "").strip()[:120]
+    payload["backend_run_mode"] = str(result.get("backend_run_mode") or payload.get("backend_run_mode") or "").strip()[:40]
+    payload["backend_run_cwd"] = str(result.get("run_cwd") or payload.get("backend_run_cwd") or "").strip()[:300]
+    payload["backend_run_command"] = str(result.get("run_command") or payload.get("backend_run_command") or "").strip()[:300]
+    payload["runtime_failure_class"] = str(result.get("failure_class") or payload.get("runtime_failure_class") or "").strip()[:80]
     backend = result.get("backend")
     if isinstance(backend, dict):
         payload["backend_deploy_url"] = str(backend.get("url") or "").strip()[:300]

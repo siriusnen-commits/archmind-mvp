@@ -28,6 +28,11 @@ from archmind.deploy import (
 from archmind.state import load_state, update_after_deploy, write_state
 
 
+def _write_app_main(root: Path) -> None:
+    (root / "app").mkdir(parents=True, exist_ok=True)
+    (root / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+
+
 def test_deploy_project_returns_fail_when_railway_cli_missing(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("archmind.deploy.shutil.which", lambda _name: None)
     result = deploy_project(tmp_path, target="railway", allow_real_deploy=False)
@@ -103,7 +108,7 @@ def test_update_after_deploy_persists_deploy_fields(tmp_path: Path) -> None:
 
 
 def test_detect_deploy_kind_backend(tmp_path: Path) -> None:
-    (tmp_path / "app").mkdir(parents=True, exist_ok=True)
+    _write_app_main(tmp_path)
     (tmp_path / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
     assert detect_deploy_kind(tmp_path) == "backend"
 
@@ -114,7 +119,7 @@ def test_detect_deploy_kind_frontend(tmp_path: Path) -> None:
 
 
 def test_detect_deploy_kind_fullstack(tmp_path: Path) -> None:
-    (tmp_path / "app").mkdir(parents=True, exist_ok=True)
+    _write_app_main(tmp_path)
     (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
     (tmp_path / "frontend" / "package.json").write_text('{"name":"web"}', encoding="utf-8")
     assert detect_deploy_kind(tmp_path) == "fullstack"
@@ -133,10 +138,13 @@ def test_get_frontend_deploy_dir_uses_root_package_json(tmp_path: Path) -> None:
 
 
 def test_local_backend_deploy_returns_localhost_url(monkeypatch, tmp_path: Path) -> None:
-    (tmp_path / "app").mkdir(parents=True, exist_ok=True)
+    _write_app_main(tmp_path)
 
     class DummyProc:
         pid = 12001
+
+        def poll(self) -> int | None:
+            return None
 
     monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 8011)
     monkeypatch.setattr("archmind.deploy._run_local_process_with_log", lambda *a, **k: DummyProc())
@@ -144,6 +152,60 @@ def test_local_backend_deploy_returns_localhost_url(monkeypatch, tmp_path: Path)
     assert result["status"] == "SUCCESS"
     assert result["url"] == "http://127.0.0.1:8011"
     assert result["pid"] == 12001
+
+
+def test_local_backend_deploy_detects_backend_subdir_entrypoint(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "backend" / "app").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "backend" / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+
+    class DummyProc:
+        pid = 12002
+
+        def poll(self) -> int | None:
+            return None
+
+    monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 8022)
+    monkeypatch.setattr("archmind.deploy.time.sleep", lambda _s: None)
+    monkeypatch.setattr("archmind.deploy._run_local_process_with_log", lambda *a, **k: DummyProc())
+    result = deploy_backend_local(tmp_path)
+    assert result["status"] == "SUCCESS"
+    assert result["backend_entry"] == "app.main:app"
+    assert result["backend_run_mode"] == "asgi-direct"
+    assert str(result.get("run_cwd") or "").endswith("/backend")
+    assert "uvicorn app.main:app" in str(result.get("run_command") or "")
+
+
+def test_local_backend_deploy_reports_generation_error_when_backend_structure_missing(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "main.py").write_text(
+        'import uvicorn\nuvicorn.run("app.main:app", host="0.0.0.0", port=8000)\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 8033)
+    result = deploy_backend_local(tmp_path)
+    assert result["status"] == "FAIL"
+    assert result["failure_class"] == "generation-error"
+    detail = str(result.get("detail") or "")
+    assert "Detected backend target: app.main:app" in detail
+    assert "Run command: python main.py" in detail
+
+
+def test_local_backend_deploy_classifies_entrypoint_error_from_stderr_tail(monkeypatch, tmp_path: Path) -> None:
+    _write_app_main(tmp_path)
+
+    class DummyProc:
+        pid = 12003
+
+        def poll(self) -> int | None:
+            return 1
+
+    monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 8044)
+    monkeypatch.setattr("archmind.deploy.time.sleep", lambda _s: None)
+    monkeypatch.setattr("archmind.deploy._run_local_process_with_log", lambda *a, **k: DummyProc())
+    monkeypatch.setattr("archmind.deploy.read_last_lines", lambda *_a, **_k: "ModuleNotFoundError: No module named 'app'")
+    result = deploy_backend_local(tmp_path)
+    assert result["status"] == "FAIL"
+    assert result["failure_class"] == "runtime-entrypoint-error"
+    assert "Detected backend target: app.main:app" in str(result.get("detail") or "")
 
 
 def test_local_frontend_deploy_returns_localhost_url(monkeypatch, tmp_path: Path) -> None:
@@ -162,7 +224,7 @@ def test_local_frontend_deploy_returns_localhost_url(monkeypatch, tmp_path: Path
 
 
 def test_local_deploy_process_uses_archmind_log_files(monkeypatch, tmp_path: Path) -> None:
-    (tmp_path / "app").mkdir(parents=True, exist_ok=True)
+    _write_app_main(tmp_path)
     (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
     (tmp_path / "frontend" / "package.json").write_text('{"name":"web"}', encoding="utf-8")
     captured: list[str] = []
@@ -171,6 +233,9 @@ def test_local_deploy_process_uses_archmind_log_files(monkeypatch, tmp_path: Pat
     class DummyProc:
         def __init__(self, pid: int) -> None:
             self.pid = pid
+
+        def poll(self) -> int | None:
+            return None
 
     def fake_popen(cmd, **kwargs):  # type: ignore[no-untyped-def]
         out = kwargs.get("stdout")
@@ -238,7 +303,7 @@ def test_local_fullstack_deploy_returns_both_urls(monkeypatch, tmp_path: Path) -
 
 
 def test_local_fullstack_deploy_writes_runtime_env_files(monkeypatch, tmp_path: Path) -> None:
-    (tmp_path / "app").mkdir(parents=True, exist_ok=True)
+    _write_app_main(tmp_path)
     (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
     (tmp_path / "frontend" / "package.json").write_text('{"name":"web"}', encoding="utf-8")
 
@@ -286,11 +351,14 @@ def test_local_fullstack_deploy_writes_runtime_env_files(monkeypatch, tmp_path: 
 
 
 def test_local_backend_deploy_uses_runtime_frontend_port_for_cors(monkeypatch, tmp_path: Path) -> None:
-    (tmp_path / "app").mkdir(parents=True, exist_ok=True)
+    _write_app_main(tmp_path)
     write_state(tmp_path, {"frontend_deploy_url": "http://127.0.0.1:4555"})
 
     class DummyProc:
         pid = 17001
+
+        def poll(self) -> int | None:
+            return None
 
     monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 8111)
     monkeypatch.setattr("archmind.deploy._detect_lan_ip", lambda: "")
@@ -312,6 +380,14 @@ def test_generate_deploy_slug_fallback_and_constraints() -> None:
     slug = generate_deploy_slug("20260314___%%%")
     assert slug.startswith("a")
     assert len(slug) <= 40
+
+
+def test_detect_deploy_kind_supports_backend_subdir(tmp_path: Path) -> None:
+    (tmp_path / "backend" / "app").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "backend" / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "frontend" / "package.json").write_text('{"name":"web"}', encoding="utf-8")
+    assert detect_deploy_kind(tmp_path) == "fullstack"
 
 
 def test_deploy_project_real_path_calls_railway_commands(monkeypatch, tmp_path: Path) -> None:
@@ -363,7 +439,7 @@ def test_deploy_project_real_path_calls_railway_commands(monkeypatch, tmp_path: 
 
 
 def test_fullstack_mock_deploy_returns_backend_frontend_entries(monkeypatch, tmp_path: Path) -> None:
-    (tmp_path / "app").mkdir(parents=True, exist_ok=True)
+    _write_app_main(tmp_path)
     (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
     (tmp_path / "frontend" / "package.json").write_text('{"name":"web"}', encoding="utf-8")
 
@@ -496,7 +572,7 @@ def test_frontend_real_deploy_returns_success_when_commands_succeed(monkeypatch,
 
 
 def test_fullstack_real_deploy_stores_frontend_real_url(monkeypatch, tmp_path: Path) -> None:
-    (tmp_path / "app").mkdir(parents=True, exist_ok=True)
+    _write_app_main(tmp_path)
     (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
     (tmp_path / "frontend" / "package.json").write_text('{"name":"web"}', encoding="utf-8")
 
