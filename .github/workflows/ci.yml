@@ -28,8 +28,9 @@ jobs:
           python --version
           which python
           ls -la
-          if [ -d src ]; then ls -la src; else echo "src directory missing"; fi
-          if [ -d tests ]; then ls -la tests; else echo "tests directory missing"; fi
+          ls -la src || echo "src not found"
+          ls -la tests || echo "tests not found"
           git status --short || true
           python -m pip list | grep -i pytest || true
+          echo "starting pytest"
           python -m pytest -vv -rA --maxfail=1
