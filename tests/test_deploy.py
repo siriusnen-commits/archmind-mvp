@@ -443,6 +443,45 @@ def test_run_backend_local_with_health_stops_when_preflight_failed(monkeypatch, 
     assert preflight.get("status") == "FAILED"
 
 
+def test_run_backend_local_with_health_continues_when_db_init_command_unavailable(monkeypatch, tmp_path: Path) -> None:
+    _write_app_main(tmp_path)
+
+    class DummyProc:
+        pid = 22004
+
+        def poll(self) -> int | None:
+            return None
+
+    monkeypatch.setattr(
+        "archmind.deploy.run_preflight_checks",
+        lambda *_a, **_k: {
+            "ok": True,
+            "fixed": True,
+            "status": "FIXED",
+            "fixes_applied": ["db init skipped (no explicit init command)"],
+            "issues_found": [],
+            "selected_port": 8125,
+        },
+    )
+    monkeypatch.setattr("archmind.deploy.time.sleep", lambda _s: None)
+    monkeypatch.setattr("archmind.deploy._run_local_process_with_log", lambda *a, **k: DummyProc())
+    monkeypatch.setattr(
+        "archmind.deploy._backend_smoke_with_retry",
+        lambda _url: {
+            "healthcheck_url": "http://127.0.0.1:8125/health",
+            "healthcheck_status": "SUCCESS",
+            "healthcheck_detail": "health endpoint returned status ok",
+        },
+    )
+
+    result = run_backend_local_with_health(tmp_path)
+    assert result["ok"] is True
+    assert result["status"] == "SUCCESS"
+    preflight = result.get("preflight") if isinstance(result.get("preflight"), dict) else {}
+    assert preflight.get("status") == "FIXED"
+    assert any("db init skipped" in str(item) for item in (preflight.get("fixes_applied") or []))
+
+
 def test_run_preflight_checks_fixes_import_and_port(monkeypatch, tmp_path: Path) -> None:
     _write_app_main(tmp_path)
     monkeypatch.setattr(

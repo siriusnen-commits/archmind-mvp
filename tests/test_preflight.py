@@ -107,6 +107,66 @@ def test_preflight_db_init_when_missing(monkeypatch, tmp_path: Path) -> None:
     assert any("database initialized" in item for item in result["fixes_applied"])
 
 
+def test_preflight_db_init_command_unavailable_is_non_blocking(monkeypatch, tmp_path: Path) -> None:
+    _write_app_main(tmp_path)
+    monkeypatch.setattr(
+        "archmind.deploy.detect_backend_runtime_entry",
+        lambda *_a, **_k: {"ok": True, "run_cwd": tmp_path, "failure_reason": ""},
+    )
+
+    class Completed:
+        returncode = 0
+        stderr = ""
+        stdout = ""
+
+    monkeypatch.setattr("archmind.deploy.subprocess.run", lambda *_a, **_k: Completed())
+    monkeypatch.setattr("archmind.deploy._apply_default_env", lambda *_a, **_k: (True, "runtime env defaults applied"))
+    monkeypatch.setattr("archmind.deploy._is_port_available", lambda _p: True)
+    monkeypatch.setattr(
+        "archmind.deploy.apply_auto_fix",
+        lambda _p, analysis, **_k: (
+            {"applied": False, "fix_type": "db_not_initialized", "detail": "db init command not available", "new_port": None}
+            if str(analysis.get("type") or "") == "db_not_initialized"
+            else {"applied": False, "fix_type": "unknown", "detail": "", "new_port": None}
+        ),
+    )
+
+    result = run_preflight_checks(tmp_path)
+    assert result["ok"] is True
+    assert any("db init skipped" in item for item in result["fixes_applied"])
+    assert not any("db init command not available" in str(item) for item in result["issues_found"])
+
+
+def test_preflight_db_init_execution_failure_is_blocking(monkeypatch, tmp_path: Path) -> None:
+    _write_app_main(tmp_path)
+    monkeypatch.setattr(
+        "archmind.deploy.detect_backend_runtime_entry",
+        lambda *_a, **_k: {"ok": True, "run_cwd": tmp_path, "failure_reason": ""},
+    )
+
+    class Completed:
+        returncode = 0
+        stderr = ""
+        stdout = ""
+
+    monkeypatch.setattr("archmind.deploy.subprocess.run", lambda *_a, **_k: Completed())
+    monkeypatch.setattr("archmind.deploy._apply_default_env", lambda *_a, **_k: (True, "runtime env defaults applied"))
+    monkeypatch.setattr("archmind.deploy._is_port_available", lambda _p: True)
+    monkeypatch.setattr(
+        "archmind.deploy.apply_auto_fix",
+        lambda _p, analysis, **_k: (
+            {"applied": False, "fix_type": "db_not_initialized", "detail": "db init execution failed: permission denied", "new_port": None}
+            if str(analysis.get("type") or "") == "db_not_initialized"
+            else {"applied": False, "fix_type": "unknown", "detail": "", "new_port": None}
+        ),
+    )
+
+    result = run_preflight_checks(tmp_path)
+    assert result["ok"] is False
+    assert result["status"] == "FAILED"
+    assert any("db init execution failed" in str(item) for item in result["issues_found"])
+
+
 def test_preflight_creates_env_when_missing(monkeypatch, tmp_path: Path) -> None:
     _write_app_main(tmp_path)
     (tmp_path / "runtime.db").write_text("", encoding="utf-8")

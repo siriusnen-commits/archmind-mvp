@@ -5173,6 +5173,42 @@ def test_restart_local_when_not_running(monkeypatch, tmp_path: Path) -> None:
     assert "Next:\n- /running\n- /logs" in out
 
 
+def test_restart_local_shows_preflight_db_init_skip_without_failure(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "restart_preflight_skip_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+    monkeypatch.setattr(
+        "archmind.deploy.restart_local_services",
+        lambda _p: {
+            "ok": True,
+            "target": "local",
+            "backend": {"status": "RESTARTED", "url": "http://127.0.0.1:8012", "detail": "local backend started"},
+            "frontend": {"status": "NOT RUNNING", "url": "", "detail": ""},
+            "deploy": {
+                "preflight": {
+                    "status": "FIXED",
+                    "fixes_applied": ["db init skipped (no explicit init command)"],
+                    "issues_found": [],
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "RUNNING", "url": "http://127.0.0.1:8012"},
+            "frontend": {"status": "NOT RUNNING", "url": ""},
+        },
+    )
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_restart(update, DummyContext(args=["local"])))
+    out = msg.sent[-1]
+    assert "Backend:\nRUNNING" in out
+    assert "Preflight:\nFIXED" in out
+    assert "- db init skipped (no explicit init command)" in out
+
+
 def test_delete_project_local_executes_and_reports(monkeypatch, tmp_path: Path) -> None:
     project = tmp_path / "delete_local_proj"
     project.mkdir(parents=True, exist_ok=True)

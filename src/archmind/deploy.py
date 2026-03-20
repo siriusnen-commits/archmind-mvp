@@ -1049,7 +1049,12 @@ def run_preflight_checks(project_dir: Path, *, requested_port: int | None = None
             used_fix_types.add(str(fix.get("fix_type") or ""))
             fixes_applied.append(str(fix.get("detail") or "database initialized"))
         else:
-            issues_found.append(str(fix.get("detail") or "database initialization failed"))
+            db_detail = str(fix.get("detail") or "").strip()
+            lowered = db_detail.lower()
+            if "db init command not available" in lowered:
+                fixes_applied.append("db init skipped (no explicit init command)")
+            else:
+                issues_found.append(db_detail or "database initialization failed")
 
     if not _is_port_available(selected_port):
         fix = apply_auto_fix(
