@@ -526,6 +526,72 @@ def _parse_command_string(command_text: str) -> tuple[str, list[str]]:
     return parts[0].lower(), parts[1:]
 
 
+def _normalize_recommended_command(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    lowered = raw.lower()
+    if lowered.startswith("command:"):
+        raw = raw.split(":", 1)[1].strip()
+        lowered = raw.lower()
+    if lowered.startswith("run "):
+        raw = raw[4:].strip()
+    if not raw.startswith("/"):
+        return ""
+    cmd, args = _parse_command_string(raw)
+    if not cmd:
+        return ""
+    if args:
+        return " ".join([cmd] + args)
+    return cmd
+
+
+def _normalize_recommended_action_text(text: str) -> str:
+    normalized = _normalize_recommended_command(text)
+    if normalized:
+        return normalized
+    return str(text or "").strip()
+
+
+def _extract_recommended_commands_from_text(text: str) -> list[str]:
+    commands: list[str] = []
+    for raw in str(text or "").splitlines():
+        line = str(raw).strip()
+        if not line:
+            continue
+        if line.startswith("- "):
+            line = line[2:].strip()
+        cmd = _normalize_recommended_command(line)
+        if cmd and cmd not in commands:
+            commands.append(cmd)
+    return commands
+
+
+def _build_action_keyboard(commands: list[str], *, max_buttons: int = 6) -> Any:
+    unique: list[str] = []
+    for item in commands:
+        cmd = _normalize_recommended_command(item)
+        if not cmd or cmd in unique:
+            continue
+        unique.append(cmd)
+        if len(unique) >= max_buttons:
+            break
+    if not unique:
+        return None
+    InlineKeyboardButton, InlineKeyboardMarkup = _inline_keyboard_classes()
+    rows: list[list[Any]] = []
+    for idx in range(0, len(unique), 2):
+        row_cmds = unique[idx : idx + 2]
+        row: list[Any] = []
+        for cmd in row_cmds:
+            label = cmd
+            if len(label) > 28:
+                label = label[:25] + "..."
+            row.append(InlineKeyboardButton(text=label, callback_data=_encode_callback_data("cmd", cmd)))
+        rows.append(row)
+    return InlineKeyboardMarkup(rows)
+
+
 def _resolve_project_by_id(project_id: str) -> Optional[Path]:
     key = str(project_id or "").strip()
     if not key:
@@ -1647,6 +1713,8 @@ def format_status_text(project_dir: Path) -> str:
         next_action = state_next_action
     else:
         next_action = "none"
+    if next_action != "none":
+        next_action = _normalize_recommended_action_text(next_action)
 
     lines = [
         "ArchMind status",
@@ -2343,6 +2411,7 @@ def build_finished_message(
         next_actions = _recommend_next_actions(candidate_project, status, summary_lines, state, evaluation, result)[:3]
     else:
         next_actions = next_action_suggestions("DONE" if str(status or "").upper() == "DONE" else "STOP")[:3]
+    next_actions = [_normalize_recommended_action_text(item) for item in next_actions if str(item).strip()]
     repository_info = _repository_summary_from_state(state)
     github_repo_url = str(repository_info.get("url") or result.get("github_repo_url") or "").strip()
     repository_status = str(repository_info.get("status") or "").strip().upper()
@@ -2492,7 +2561,8 @@ async def watch_pipeline_and_notify(
         message = f"ArchMind finished with notification error: {exc}"
 
     try:
-        await application.bot.send_message(chat_id=chat_id, text=message)
+        suggested = _extract_recommended_commands_from_text(message)
+        await _send_message_with_action_buttons(application.bot, chat_id=chat_id, text=message, commands=suggested)
     except Exception:
         # Notification errors should never crash the bot loop.
         pass
@@ -2543,9 +2613,21 @@ async def watch_retry_and_notify(
     except Exception as exc:
         message = f"ArchMind finished with notification error: {exc}"
     try:
-        await application.bot.send_message(chat_id=chat_id, text=message)
+        suggested = _extract_recommended_commands_from_text(message)
+        await _send_message_with_action_buttons(application.bot, chat_id=chat_id, text=message, commands=suggested)
     except Exception:
         pass
+
+
+async def _send_message_with_action_buttons(bot: Any, *, chat_id: int, text: str, commands: list[str]) -> None:
+    reply_markup = _build_action_keyboard(commands)
+    if reply_markup is not None:
+        try:
+            await bot.send_message(chat_id=chat_id, text=text, reply_markup=reply_markup)
+            return
+        except TypeError:
+            pass
+    await bot.send_message(chat_id=chat_id, text=text)
 
 
 def _missing_project_message() -> str:
@@ -3570,7 +3652,16 @@ async def command_improve(update: Any, context: Any) -> None:
     if project_path is None:
         await update.message.reply_text(_no_active_project_guidance())
         return
-    await update.message.reply_text(_build_improvement_report(project_path))
+    report = _build_improvement_report(project_path)
+    commands = _extract_recommended_commands_from_text(report)
+    for fallback in ("/inspect", "/next"):
+        if fallback not in commands:
+            commands.append(fallback)
+    reply_markup = _build_action_keyboard(commands)
+    if reply_markup is not None:
+        await update.message.reply_text(report, reply_markup=reply_markup)
+    else:
+        await update.message.reply_text(report)
 
 
 def _build_selected_project_summary(project_path: Path) -> str:
@@ -4630,6 +4721,28 @@ async def command_suggestion_callback(update: Any, context: Any) -> None:
         handler = handlers.get(cmd)
         if handler is None:
             await message.reply_text(f"Unsupported suggestion command: {payload}")
+            return
+        await handler(callback_update, callback_context)
+        return
+    if action == "cmd":
+        cmd, args = _parse_command_string(payload)
+        callback_context.args = args
+        handlers: dict[str, Any] = {
+            "/inspect": command_inspect,
+            "/next": command_next,
+            "/fix": command_fix,
+            "/retry": command_retry,
+            "/logs": command_logs,
+            "/deploy": command_deploy,
+            "/run": command_run,
+            "/continue": command_continue,
+            "/projects": command_projects,
+            "/current": command_current,
+            "/use": command_use,
+        }
+        handler = handlers.get(cmd)
+        if handler is None:
+            await message.reply_text(f"Unsupported command action: {payload}")
             return
         await handler(callback_update, callback_context)
         return
