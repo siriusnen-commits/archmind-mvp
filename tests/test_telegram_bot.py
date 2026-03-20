@@ -4289,6 +4289,96 @@ def test_run_backend_failure_message(monkeypatch, tmp_path: Path) -> None:
     assert "Next:\n- /logs backend\n- /inspect" in out
 
 
+def test_run_backend_success_message_after_auto_fix(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "run_backend_autofix_ok_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.run_backend_local_with_health",
+        lambda _p: {
+            "ok": True,
+            "target": "local",
+            "mode": "real",
+            "kind": "backend",
+            "status": "SUCCESS",
+            "url": "http://127.0.0.1:8130",
+            "detail": "local backend started",
+            "backend_entry": "app.main:app",
+            "backend_run_mode": "asgi-direct",
+            "run_cwd": str(project / "backend"),
+            "run_command": "uvicorn app.main:app --host 0.0.0.0 --port 8130",
+            "backend_smoke_url": "http://127.0.0.1:8130/health",
+            "backend_smoke_status": "SUCCESS",
+            "backend_smoke_detail": "health endpoint returned status ok",
+            "auto_fix": {
+                "attempts": 1,
+                "last_fix": "missing_dependency",
+                "last_detail": "missing_dependency -> sqlmodel installed",
+                "status": "SUCCESS",
+            },
+        },
+    )
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_run(update, DummyContext(args=["backend"])))
+    out = msg.sent[-1]
+    assert "Backend:\nRUNNING (after auto-fix)" in out
+    assert "Fix applied:\nmissing_dependency -> sqlmodel installed" in out
+
+
+def test_run_backend_failure_message_includes_auto_fix_attempts(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "run_backend_autofix_fail_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.run_backend_local_with_health",
+        lambda _p: {
+            "ok": False,
+            "target": "local",
+            "mode": "real",
+            "kind": "backend",
+            "status": "FAIL",
+            "url": "",
+            "detail": "runtime-execution-error: health request failed",
+            "failure_class": "runtime-execution-error",
+            "backend_entry": "app.main:app",
+            "run_cwd": str(project / "backend"),
+            "run_command": "uvicorn app.main:app --host 0.0.0.0 --port 8131",
+            "auto_fix": {
+                "attempts": 2,
+                "last_fix": "env_missing",
+                "last_detail": "runtime env defaults applied",
+                "status": "FAILED",
+            },
+        },
+    )
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_run(update, DummyContext(args=["backend"])))
+    out = msg.sent[-1]
+    assert "Auto-fix attempts:\n2" in out
+    assert "Last auto-fix:\nenv_missing" in out
+    assert "Last error:\nruntime env defaults applied" in out
+
+
 def test_run_backend_skips_when_already_running(monkeypatch, tmp_path: Path) -> None:
     project = tmp_path / "run_backend_already_proj"
     project.mkdir(parents=True, exist_ok=True)

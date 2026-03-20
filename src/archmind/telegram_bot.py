@@ -4643,8 +4643,14 @@ async def command_run(update: Any, context: Any) -> None:
     backend_url = str(result.get("url") or "").strip()
     backend_smoke_status = str(result.get("backend_smoke_status") or result.get("healthcheck_status") or "").strip().upper()
     backend_smoke_url = str(result.get("backend_smoke_url") or result.get("healthcheck_url") or "").strip()
+    auto_fix = result.get("auto_fix") if isinstance(result.get("auto_fix"), dict) else {}
+    auto_fix_attempts = int(auto_fix.get("attempts") or 0) if str(auto_fix.get("attempts") or "").isdigit() else 0
+    auto_fix_last_fix = str(auto_fix.get("last_fix") or "").strip()
+    auto_fix_last_detail = str(auto_fix.get("last_detail") or "").strip()
+    auto_fix_status = str(auto_fix.get("status") or "").strip().upper()
     backend_status = "RUNNING" if str(result.get("status") or "").upper() == "SUCCESS" else "FAIL"
     if backend_status == "RUNNING":
+        backend_header = "RUNNING (after auto-fix)" if auto_fix_attempts > 0 and auto_fix_status == "SUCCESS" else "RUNNING"
         lines = [
             "Run finished",
             "",
@@ -4652,7 +4658,7 @@ async def command_run(update: Any, context: Any) -> None:
             project_path.name,
             "",
             "Backend:",
-            backend_status,
+            backend_header,
         ]
         if backend_url:
             lines += ["", "Backend URL:", backend_url]
@@ -4660,6 +4666,8 @@ async def command_run(update: Any, context: Any) -> None:
             lines += ["", "Backend smoke:", backend_smoke_status]
             if backend_smoke_url:
                 lines.append(backend_smoke_url)
+        if auto_fix_attempts > 0:
+            lines += ["", "Fix applied:", auto_fix_last_detail or auto_fix_last_fix or "auto-fix applied"]
         lines += [
             "",
             "Detected backend target:",
@@ -4701,6 +4709,18 @@ async def command_run(update: Any, context: Any) -> None:
         "",
         "Run command:",
         run_command or "(none)",
+    ]
+    if auto_fix_attempts > 0:
+        lines += [
+            "",
+            "Auto-fix attempts:",
+            str(auto_fix_attempts),
+        ]
+        if auto_fix_last_fix:
+            lines += ["", "Last auto-fix:", auto_fix_last_fix]
+        if auto_fix_last_detail:
+            lines += ["", "Last error:", auto_fix_last_detail]
+    lines += [
         "",
         "Next:",
         "- /logs backend",

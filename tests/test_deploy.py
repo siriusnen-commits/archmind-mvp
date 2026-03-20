@@ -753,6 +753,12 @@ def test_update_runtime_state_updates_runtime_only(tmp_path: Path) -> None:
             "run_command": "uvicorn app.main:app --host 0.0.0.0 --port 9001",
             "url": "http://127.0.0.1:9001",
             "failure_class": "",
+            "auto_fix": {
+                "attempts": 1,
+                "last_fix": "missing_dependency",
+                "last_detail": "missing_dependency -> sqlmodel installed",
+                "status": "SUCCESS",
+            },
         },
         action="telegram /run backend",
     )
@@ -766,6 +772,9 @@ def test_update_runtime_state_updates_runtime_only(tmp_path: Path) -> None:
     assert runtime.get("mode") == "local"
     assert runtime.get("backend_status") == "RUNNING"
     assert int(runtime.get("backend_port") or 0) == 9001
+    auto_fix = runtime.get("auto_fix") if isinstance(runtime.get("auto_fix"), dict) else {}
+    assert auto_fix.get("attempts") == 1
+    assert auto_fix.get("last_fix") == "missing_dependency"
 
 
 def test_local_fullstack_state_stores_smoke_fields(tmp_path: Path) -> None:
