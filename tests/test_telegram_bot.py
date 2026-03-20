@@ -75,6 +75,7 @@ from archmind.telegram_bot import (
     format_recent_diff,
     format_status_text,
     list_recent_projects,
+    watch_pipeline_and_notify,
     watch_retry_and_notify,
 )
 
@@ -4708,3 +4709,165 @@ def test_build_completion_message_corrects_stale_fix_attempts_from_history(tmp_p
     )
     msg = build_completion_message(project_dir, tmp_path / "unused.log")
     assert "Fix attempts: 3" in msg
+
+
+def test_watch_pipeline_and_notify_appends_auto_run_result(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "idea_local_watch_proj"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    temp_log = tmp_path / "idea_local_watch.log"
+
+    class DummyProc:
+        def wait(self) -> int:
+            return 0
+
+    class DummyBot:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def send_message(self, chat_id: int, text: str) -> None:  # noqa: ARG002
+            self.sent.append(text)
+
+    class DummyApp:
+        def __init__(self) -> None:
+            self.bot = DummyBot()
+
+    app = DummyApp()
+    monkeypatch.setattr("archmind.telegram_bot._wait_for_latest_artifacts", lambda *_a, **_k: None)
+    monkeypatch.setattr("archmind.telegram_bot.build_completion_message", lambda *_a, **_k: "Project created")
+    monkeypatch.setattr("archmind.telegram_bot._auto_run_backend_after_idea_local", lambda _p: "Backend:\nRUNNING")
+
+    asyncio.run(
+        watch_pipeline_and_notify(
+            proc=DummyProc(),
+            project_dir=project_dir,
+            temp_log=temp_log,
+            chat_id=1,
+            application=app,
+            auto_run_backend=True,
+        )
+    )
+    assert app.bot.sent
+    assert "Project created" in app.bot.sent[-1]
+    assert "Backend:\nRUNNING" in app.bot.sent[-1]
+
+
+def test_idea_local_sets_auto_run_backend_flag_for_watcher(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "idea_local_autorun_flag"
+    log_path = tmp_path / "idea_local_autorun_flag.telegram.log"
+    captured: dict[str, object] = {}
+
+    class DummyProc:
+        pid = 10101
+
+    async def fake_watch(**kwargs):  # type: ignore[no-untyped-def]
+        captured["watch_kwargs"] = kwargs
+
+    monkeypatch.setattr("archmind.telegram_bot.resolve_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("archmind.telegram_bot.planned_project_dir", lambda *_a, **_k: project_dir)
+    monkeypatch.setattr("archmind.telegram_bot.start_pipeline_process", lambda *_a, **_k: (DummyProc(), log_path))
+    monkeypatch.setattr("archmind.telegram_bot.watch_pipeline_and_notify", fake_watch)
+
+    class DummyBot:
+        async def send_message(self, chat_id: int, text: str) -> None:  # noqa: ARG002
+            return None
+
+    class DummyApp:
+        bot = DummyBot()
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    ctx = DummyContext(args=["fastapi", "app"], application=DummyApp())
+    asyncio.run(command_idea_local(update, ctx))
+    assert isinstance(captured.get("watch_kwargs"), dict)
+    assert bool(captured["watch_kwargs"].get("auto_run_backend")) is True
+
+
+def test_auto_run_backend_after_idea_local_detect_ok_runs_backend(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "idea_local_autorun_ok"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot.load_state", lambda _p: {"effective_template": "fastapi"})
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app"},
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.run_backend_local_with_health",
+        lambda _p: {
+            "ok": True,
+            "status": "SUCCESS",
+            "url": "http://127.0.0.1:8131",
+            "backend_smoke_status": "SUCCESS",
+            "backend_smoke_url": "http://127.0.0.1:8131/health",
+        },
+    )
+    monkeypatch.setattr("archmind.telegram_bot.update_after_deploy", lambda *a, **k: {})
+    out = telegram_bot._auto_run_backend_after_idea_local(project_dir)
+    assert "Backend:\nRUNNING" in out
+    assert "Backend smoke:\nSUCCESS" in out
+    assert "http://127.0.0.1:8131" in out
+
+
+def test_auto_run_backend_after_idea_local_detect_fail_skips(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "idea_local_autorun_skip"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot.load_state", lambda _p: {"effective_template": "fastapi"})
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": False, "failure_reason": "missing backend entrypoint"},
+    )
+    called = {"run": 0}
+    monkeypatch.setattr(
+        "archmind.deploy.run_backend_local_with_health",
+        lambda _p: called.__setitem__("run", called["run"] + 1) or {"status": "SUCCESS"},
+    )
+    out = telegram_bot._auto_run_backend_after_idea_local(project_dir)
+    assert called["run"] == 0
+    assert "Backend:\nSKIPPED" in out
+    assert "missing backend entrypoint" in out
+
+
+def test_auto_run_backend_after_idea_local_fail_response(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "idea_local_autorun_fail"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot.load_state", lambda _p: {"effective_template": "fastapi"})
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app"},
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.run_backend_local_with_health",
+        lambda _p: {
+            "ok": False,
+            "status": "FAIL",
+            "url": "",
+            "failure_class": "runtime-execution-error",
+            "backend_smoke_status": "FAIL",
+            "backend_smoke_url": "http://127.0.0.1:8132/health",
+        },
+    )
+    monkeypatch.setattr("archmind.telegram_bot.update_after_deploy", lambda *a, **k: {})
+    out = telegram_bot._auto_run_backend_after_idea_local(project_dir)
+    assert "Backend:\nFAIL" in out
+    assert "Failure class:\nruntime-execution-error" in out
+    assert "Next:\n- /logs backend\n- /fix" in out

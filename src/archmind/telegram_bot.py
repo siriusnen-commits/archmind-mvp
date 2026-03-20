@@ -2266,11 +2266,16 @@ async def watch_pipeline_and_notify(
     chat_id: int,
     application: Any,
     started_at: Optional[float] = None,
+    auto_run_backend: bool = False,
 ) -> None:
     try:
         exit_code = await asyncio.to_thread(proc.wait)
         await asyncio.to_thread(_wait_for_latest_artifacts, project_dir, started_at or time.time())
         message = build_completion_message(project_dir, temp_log, max_len=1200, exit_code=exit_code)
+        if auto_run_backend and exit_code == 0:
+            auto_run_message = await asyncio.to_thread(_auto_run_backend_after_idea_local, project_dir)
+            if auto_run_message:
+                message = _truncate_message(f"{message}\n\n{auto_run_message}", limit=3500)
     except Exception as exc:
         message = f"ArchMind finished with notification error: {exc}"
 
@@ -2340,6 +2345,80 @@ def _temp_log_for_project(project_dir: Path) -> Path:
     return root / f"{project_dir.name}.telegram.log"
 
 
+def _should_auto_run_backend_for_template(state_payload: dict[str, Any]) -> bool:
+    template = str(state_payload.get("effective_template") or state_payload.get("selected_template") or "").strip().lower()
+    return template in {"fullstack-ddd", "fastapi", "fastapi-ddd"}
+
+
+def _auto_run_backend_after_idea_local(project_dir: Path) -> str:
+    project_path = project_dir.expanduser().resolve()
+    state_payload = load_state(project_path) or {}
+    if not _should_auto_run_backend_for_template(state_payload):
+        return ""
+
+    from archmind.deploy import get_local_runtime_status, run_backend_local_with_health
+
+    runtime = get_local_runtime_status(project_path)
+    runtime_backend = runtime.get("backend") if isinstance(runtime.get("backend"), dict) else {}
+    if str(runtime_backend.get("status") or "").upper() == "RUNNING":
+        backend_url = str(runtime_backend.get("url") or "").strip()
+        lines = [
+            "Backend auto-run",
+            "",
+            "Backend:",
+            "Backend already running",
+        ]
+        if backend_url:
+            lines += ["", "Backend URL:", backend_url]
+        lines += ["", "Next:", "- /logs backend", "- /running"]
+        return "\n".join(lines)
+
+    detect = detect_backend_runtime_entry(project_path, port=8000)
+    if not bool(detect.get("ok")):
+        failure_reason = str(detect.get("failure_reason") or "backend runtime entry detection failed").strip()
+        lines = [
+            "Backend auto-run",
+            "",
+            "Backend:",
+            "SKIPPED",
+            "",
+            "Reason:",
+            failure_reason,
+            "",
+            "Next:",
+            "- /inspect",
+            "- /next",
+        ]
+        return "\n".join(lines)
+
+    result = run_backend_local_with_health(project_path)
+    update_after_deploy(project_path, result, action="telegram /idea_local auto-run backend")
+    backend_status = "RUNNING" if str(result.get("status") or "").upper() == "SUCCESS" else "FAIL"
+    lines = ["Backend auto-run", "", "Backend:", backend_status]
+    backend_url = str(result.get("url") or "").strip()
+    if backend_url:
+        lines += ["", "Backend URL:", backend_url]
+    backend_smoke_status = str(result.get("backend_smoke_status") or result.get("healthcheck_status") or "").strip().upper()
+    backend_smoke_url = str(result.get("backend_smoke_url") or result.get("healthcheck_url") or "").strip()
+    if backend_smoke_status:
+        lines += ["", "Backend smoke:", backend_smoke_status]
+        if backend_smoke_url:
+            lines.append(backend_smoke_url)
+    if backend_status == "FAIL":
+        lines += [
+            "",
+            "Failure class:",
+            str(result.get("failure_class") or "runtime-execution-error").strip(),
+            "",
+            "Next:",
+            "- /logs backend",
+            "- /fix",
+        ]
+    else:
+        lines += ["", "Next:", "- /logs backend", "- /running"]
+    return "\n".join(lines)
+
+
 async def _handle_idea_like(
     update: Any,
     context: Any,
@@ -2390,6 +2469,7 @@ async def _handle_idea_like(
                 chat_id=int(chat_id),
                 application=application,
                 started_at=started_at,
+                auto_run_backend=(cmd_name == "idea_local"),
             )
         )
         _attach_running_task(job, task)
