@@ -947,7 +947,13 @@ def update_after_deploy(
     payload["backend_run_mode"] = str(result.get("backend_run_mode") or payload.get("backend_run_mode") or "").strip()[:40]
     payload["backend_run_cwd"] = str(result.get("run_cwd") or payload.get("backend_run_cwd") or "").strip()[:300]
     payload["backend_run_command"] = str(result.get("run_command") or payload.get("backend_run_command") or "").strip()[:300]
-    payload["runtime_failure_class"] = str(result.get("failure_class") or payload.get("runtime_failure_class") or "").strip()[:80]
+    has_runtime_failure_class = "failure_class" in result
+    if has_runtime_failure_class:
+        payload["runtime_failure_class"] = str(result.get("failure_class") or "").strip()[:80]
+    elif kind in {"backend", "fullstack"} and status == "SUCCESS":
+        payload["runtime_failure_class"] = ""
+    else:
+        payload["runtime_failure_class"] = str(payload.get("runtime_failure_class") or "").strip()[:80]
     backend = result.get("backend")
     if isinstance(backend, dict):
         payload["backend_deploy_url"] = str(backend.get("url") or "").strip()[:300]

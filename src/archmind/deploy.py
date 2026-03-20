@@ -713,6 +713,7 @@ def deploy_fullstack_local(project_dir: Path) -> dict[str, Any]:
         if frontend_ok
         else {"url": "", "status": "SKIPPED", "detail": "frontend deploy failed"}
     )
+    runtime_failure_class = str(backend.get("failure_class") or "").strip() if not backend_ok else ""
     return {
         "ok": backend_ok or frontend_ok,
         "target": "local",
@@ -723,7 +724,7 @@ def deploy_fullstack_local(project_dir: Path) -> dict[str, Any]:
         "detail": "local fullstack deploy completed",
         "backend": _service_result(str(backend.get("status") or "FAIL"), backend.get("url"), str(backend.get("detail") or "")),
         "frontend": _service_result(str(frontend.get("status") or "FAIL"), frontend.get("url"), str(frontend.get("detail") or "")),
-        "failure_class": str(backend.get("failure_class") or ""),
+        "failure_class": runtime_failure_class,
         "backend_entry": str(backend.get("backend_entry") or ""),
         "backend_run_mode": str(backend.get("backend_run_mode") or ""),
         "run_cwd": str(backend.get("run_cwd") or ""),
@@ -787,6 +788,7 @@ def deploy_to_local(project_dir: Path, kind: str = "backend") -> dict[str, Any]:
         frontend_port = int(match.group(1))
     backend = deploy_backend_local(root, frontend_port=frontend_port)
     ok = str(backend.get("status") or "").upper() == "SUCCESS"
+    runtime_failure_class = str(backend.get("failure_class") or "").strip() if not ok else ""
     backend_smoke = (
         _backend_smoke_with_retry(str(backend.get("url") or ""))
         if ok
@@ -800,7 +802,7 @@ def deploy_to_local(project_dir: Path, kind: str = "backend") -> dict[str, Any]:
         "status": "SUCCESS" if ok else "FAIL",
         "url": backend.get("url"),
         "detail": str(backend.get("detail") or ""),
-        "failure_class": str(backend.get("failure_class") or ""),
+        "failure_class": runtime_failure_class,
         "backend_entry": str(backend.get("backend_entry") or ""),
         "backend_run_mode": str(backend.get("backend_run_mode") or ""),
         "run_cwd": str(backend.get("run_cwd") or ""),

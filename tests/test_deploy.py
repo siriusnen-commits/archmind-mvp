@@ -155,6 +155,7 @@ def test_local_backend_deploy_returns_localhost_url(monkeypatch, tmp_path: Path)
     assert result["status"] == "SUCCESS"
     assert result["url"] == "http://127.0.0.1:8011"
     assert result["pid"] == 12001
+    assert str(result.get("failure_class") or "") == ""
 
 
 def test_local_backend_deploy_detects_backend_subdir_entrypoint(monkeypatch, tmp_path: Path) -> None:
@@ -588,6 +589,45 @@ def test_fullstack_state_stores_backend_frontend_fields(tmp_path: Path) -> None:
     assert state.get("frontend_deploy_url") == "https://web-example.up.railway.app"
     assert state.get("backend_smoke_status") == "SKIPPED"
     assert state.get("frontend_smoke_status") == "SKIPPED"
+
+
+def test_update_after_deploy_clears_runtime_failure_class_when_backend_succeeds(tmp_path: Path) -> None:
+    write_state(tmp_path, {"runtime_failure_class": "environment-python"})
+    result = {
+        "ok": True,
+        "target": "local",
+        "mode": "real",
+        "kind": "backend",
+        "status": "SUCCESS",
+        "url": "http://127.0.0.1:8011",
+        "detail": "local backend started",
+        "failure_class": "",
+        "backend_entry": "app.main:app",
+        "backend_run_mode": "asgi-direct",
+        "run_cwd": str(tmp_path),
+        "run_command": "uvicorn app.main:app --host 0.0.0.0 --port 8011",
+    }
+    update_after_deploy(tmp_path, result, action="archmind deploy --path x --target local")
+    state = load_state(tmp_path)
+    assert state is not None
+    assert str(state.get("runtime_failure_class") or "") == ""
+
+
+def test_update_after_deploy_marks_generation_error_when_detection_fails(tmp_path: Path) -> None:
+    result = {
+        "ok": False,
+        "target": "local",
+        "mode": "real",
+        "kind": "backend",
+        "status": "FAIL",
+        "url": "",
+        "detail": "generation-error: backend runtime entry detection failed",
+        "failure_class": "generation-error",
+    }
+    update_after_deploy(tmp_path, result, action="archmind deploy --path x --target local")
+    state = load_state(tmp_path)
+    assert state is not None
+    assert str(state.get("runtime_failure_class") or "") == "generation-error"
 
 
 def test_local_fullstack_state_stores_smoke_fields(tmp_path: Path) -> None:
