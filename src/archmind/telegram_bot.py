@@ -1865,6 +1865,83 @@ def _status_component_summary(project_dir: Path, result_payload: dict[str, Any])
     return (_normalize_component_status(backend), _normalize_component_status(frontend))
 
 
+def _normalize_runtime_state_label(value: str) -> str:
+    state = str(value or "").strip().upper()
+    if state in {"RUNNING"}:
+        return "RUNNING"
+    if state in {"FAIL", "FAILED", "ERROR", "WARNING"}:
+        return "FAIL"
+    if state in {"STOPPED", "NOT RUNNING", "IDLE", "SKIPPED", "SUCCESS", ""}:
+        return "STOPPED"
+    return "STOPPED"
+
+
+def _project_runtime_status(
+    project_dir: Path,
+    state_payload: dict[str, Any],
+    result_payload: dict[str, Any],
+    runtime_payload: Optional[dict[str, Any]] = None,
+) -> str:
+    runtime_block = state_payload.get("runtime") if isinstance(state_payload.get("runtime"), dict) else {}
+    services = runtime_block.get("services") if isinstance(runtime_block.get("services"), dict) else {}
+    backend_service = services.get("backend") if isinstance(services.get("backend"), dict) else {}
+    frontend_service = services.get("frontend") if isinstance(services.get("frontend"), dict) else {}
+    backend_live = runtime_payload.get("backend") if isinstance(runtime_payload, dict) and isinstance(runtime_payload.get("backend"), dict) else {}
+    frontend_live = runtime_payload.get("frontend") if isinstance(runtime_payload, dict) and isinstance(runtime_payload.get("frontend"), dict) else {}
+
+    backend_states = [
+        str(backend_live.get("status") or ""),
+        str(backend_service.get("status") or ""),
+        str(runtime_block.get("backend_status") or ""),
+    ]
+    frontend_states = [
+        str(frontend_live.get("status") or ""),
+        str(frontend_service.get("status") or ""),
+        str(runtime_block.get("frontend_status") or ""),
+    ]
+
+    normalized_backend = [_normalize_runtime_state_label(x) for x in backend_states if str(x).strip()]
+    normalized_frontend = [_normalize_runtime_state_label(x) for x in frontend_states if str(x).strip()]
+    runtime_signal_present = bool(normalized_backend or normalized_frontend)
+    if "RUNNING" in normalized_backend or "RUNNING" in normalized_frontend:
+        return "RUNNING"
+
+    runtime_failure_class = str(runtime_block.get("failure_class") or "").strip()
+    if runtime_failure_class:
+        return "FAIL"
+
+    preflight = runtime_block.get("preflight") if isinstance(runtime_block.get("preflight"), dict) else {}
+    if str(preflight.get("status") or "").strip().upper() == "FAILED":
+        return "FAIL"
+
+    if "FAIL" in normalized_backend or "FAIL" in normalized_frontend:
+        return "FAIL"
+
+    steps = result_payload.get("steps") if isinstance(result_payload.get("steps"), dict) else {}
+    for key in ("run_before_fix", "run_after_fix"):
+        step = steps.get(key) if isinstance(steps, dict) else {}
+        if not isinstance(step, dict):
+            continue
+        detail = step.get("detail") if isinstance(step.get("detail"), dict) else {}
+        backend_status = str((detail.get("backend_status") if isinstance(detail, dict) else "") or step.get("status") or "").strip().upper()
+        frontend_status = str((detail.get("frontend_status") if isinstance(detail, dict) else "") or "").strip().upper()
+        if backend_status in {"FAIL", "FAILED", "ERROR"} or frontend_status in {"FAIL", "FAILED", "ERROR"}:
+            return "FAIL"
+
+    if bool(state_payload.get("backend_pid")) or bool(state_payload.get("frontend_pid")):
+        return "RUNNING"
+
+    if runtime_signal_present or _runtime_detect_required(project_dir, state_payload, result_payload):
+        return "STOPPED"
+
+    last_status = str(state_payload.get("last_status") or result_payload.get("status") or "").strip().upper()
+    if last_status in {"FAIL", "FAILED", "ERROR"}:
+        return "FAIL"
+    if last_status in {"RUNNING"}:
+        return "RUNNING"
+    return "STOPPED"
+
+
 def _resolve_project_type(state_payload: dict[str, Any], project_path: Optional[Path] = None) -> str:
     explicit = normalize_project_type(str(state_payload.get("project_type") or "").strip())
     if explicit != "unknown":
@@ -1987,18 +2064,11 @@ def format_projects_list(projects_dir: Optional[Path] = None, limit: int = 10) -
     for idx, project_dir in enumerate(picked, start=1):
         state_payload = _load_json(project_dir / ".archmind" / "state.json") or {}
         result_payload = _load_json(project_dir / ".archmind" / "result.json") or {}
-        status = (
-            str(state_payload.get("last_status") or "").strip().upper()
-            or str(result_payload.get("status") or "").strip().upper()
-            or "UNKNOWN"
-        )
+        status = "STOPPED"
         project_type = _resolve_project_type(state_payload, project_dir)
         template = str(state_payload.get("effective_template") or "unknown").strip() or "unknown"
         marker = " [current]" if current is not None and project_dir.resolve() == current.resolve() else ""
         lines.append(f"{idx}. {project_dir.name}{marker}")
-        lines.append(f"   Status: {status}")
-        lines.append(f"   Type: {project_type}")
-        lines.append(f"   Template: {template}")
 
         runtime_backend_running = False
         runtime_frontend_running = False
@@ -2019,6 +2089,12 @@ def format_projects_list(projects_dir: Optional[Path] = None, limit: int = 10) -
         except Exception:
             runtime_backend_running = bool(state_payload.get("backend_pid"))
             runtime_frontend_running = bool(state_payload.get("frontend_pid"))
+            runtime_payload = {}
+
+        status = _project_runtime_status(project_dir, state_payload, result_payload, runtime_payload)
+        lines.append(f"   Status: {status}")
+        lines.append(f"   Type: {project_type}")
+        lines.append(f"   Template: {template}")
 
         if runtime_backend_running and runtime_frontend_running:
             runtime_line = "RUNNING"
@@ -3621,11 +3697,7 @@ async def command_current(update: Any, context: Any) -> None:
 
     state_payload = _load_json(project_path / ".archmind" / "state.json") or {}
     result_payload = _load_json(project_path / ".archmind" / "result.json") or {}
-    status = (
-        str(state_payload.get("last_status") or "").strip().upper()
-        or str(result_payload.get("status") or "").strip().upper()
-        or "UNKNOWN"
-    )
+    status = "STOPPED"
     project_type = _resolve_project_type(state_payload, project_path)
     template = str(state_payload.get("effective_template") or "unknown").strip() or "unknown"
     runtime_backend = "STOPPED"
@@ -3647,10 +3719,13 @@ async def command_current(update: Any, context: Any) -> None:
             )
             frontend_url = str(frontend.get("url") or frontend_url).strip()
     except Exception:
+        runtime_payload = {}
         if state_payload.get("backend_pid") is not None:
             runtime_backend = "RUNNING"
         if state_payload.get("frontend_pid") is not None:
             runtime_frontend = "RUNNING"
+
+    status = _project_runtime_status(project_path, state_payload, result_payload, runtime_payload)
 
     external_ip = _detect_external_ip()
     runtime_lines = [
