@@ -81,7 +81,8 @@ LOCAL RUNTIME
 /running               show running services
 /logs                  show logs
 /restart               restart services
-/stop                  stop services
+/stop                  stop current project services
+/stop all              stop all local services
 
 DEPLOY
 /deploy local
