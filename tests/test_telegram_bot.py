@@ -270,12 +270,48 @@ def test_build_completion_message_includes_github_repo_url_when_present(tmp_path
         encoding="utf-8",
     )
     (archmind / "state.json").write_text(
-        json.dumps({"last_status": "DONE", "iterations": 1, "fix_attempts": 0, "github_repo_url": "https://github.com/siriusnen-commits/repo_msg"}),
+        json.dumps(
+            {
+                "last_status": "DONE",
+                "iterations": 1,
+                "fix_attempts": 0,
+                "github_repo_url": "https://github.com/siriusnen-commits/repo_msg",
+                "repository": {"status": "CREATED", "url": "https://github.com/siriusnen-commits/repo_msg", "attempted": True},
+            }
+        ),
         encoding="utf-8",
     )
     msg = build_completion_message(project_dir, tmp_path / "unused.log")
-    assert "GitHub repo:" in msg
+    assert "GitHub Repo:" in msg
+    assert "CREATED" in msg
     assert "https://github.com/siriusnen-commits/repo_msg" in msg
+
+
+def test_build_completion_message_shows_repository_failed_independently_of_runtime(tmp_path: Path) -> None:
+    project_dir = tmp_path / "repo_failed_runtime_not_done"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "last_status": "NOT_DONE",
+                "last_failure_class": "runtime-execution-error",
+                "repository": {
+                    "status": "FAILED",
+                    "url": "",
+                    "name": "repo_failed_runtime_not_done",
+                    "reason": "gh auth missing",
+                    "attempted": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    msg = build_completion_message(project_dir, tmp_path / "unused.log")
+    assert "Status: NOT_DONE" in msg
+    assert "GitHub Repo:" in msg
+    assert "FAILED" in msg
+    assert "Reason: gh auth missing" in msg
 
 
 def test_build_completion_message_includes_auto_deploy_success_summary(tmp_path: Path) -> None:
@@ -2368,6 +2404,50 @@ def test_inspect_command_shows_api_base_url_from_frontend_env(tmp_path: Path, mo
     assert "http://127.0.0.1:8011" in out
 
 
+def test_inspect_command_shows_repository_status_section(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect_repository_status"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "template": "fastapi",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "repository": {
+                    "status": "FAILED",
+                    "url": "",
+                    "name": "inspect_repository_status",
+                    "reason": "gh auth missing",
+                    "attempted": True,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_inspect(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "Repository:" in out
+    assert "Status: FAILED" in out
+    assert "Reason: gh auth missing" in out
+
+
 def test_inspect_command_hides_stale_runtime_failure_when_detection_ok(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "inspect_stale_runtime_class"
     archmind = project_dir / ".archmind"
@@ -2409,6 +2489,55 @@ def test_inspect_command_hides_stale_runtime_failure_when_detection_ok(tmp_path:
     out = msg.sent[-1]
     assert "Failure Class: (none)" in out
     assert "environment-python" not in out
+
+
+def test_inspect_command_keeps_runtime_and_repository_status_separate(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect_runtime_repo_separate"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "template": "fastapi",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "runtime": {"backend_status": "FAIL", "failure_class": "runtime-execution-error"},
+                "repository": {
+                    "status": "CREATED",
+                    "url": "https://github.com/siriusnen-commits/inspect_runtime_repo_separate",
+                    "name": "inspect_runtime_repo_separate",
+                    "reason": "",
+                    "attempted": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": False, "failure_class": "runtime-execution-error", "failure_reason": "runtime failed"},
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Failure Class: runtime-execution-error" in out
+    assert "Repository:" in out
+    assert "Status: CREATED" in out
+    assert "https://github.com/siriusnen-commits/inspect_runtime_repo_separate" in out
 
 
 def test_improve_command_without_project_shows_guidance(monkeypatch) -> None:

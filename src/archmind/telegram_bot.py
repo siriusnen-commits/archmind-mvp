@@ -2186,7 +2186,10 @@ def build_finished_message(
     if auto_deploy_enabled:
         summary_lines.append(f"Auto deploy: {auto_deploy_target} {auto_deploy_status}")
     next_actions = _recommend_next_actions(status, summary_lines, state, evaluation, result)[:3]
-    github_repo_url = str(state.get("github_repo_url") or result.get("github_repo_url") or "").strip()
+    repository_info = _repository_summary_from_state(state)
+    github_repo_url = str(repository_info.get("url") or result.get("github_repo_url") or "").strip()
+    repository_status = str(repository_info.get("status") or "").strip().upper()
+    repository_reason = str(repository_info.get("reason") or "").strip()
 
     lines = [
         "ArchMind finished",
@@ -2212,12 +2215,16 @@ def build_finished_message(
     ]
     summary_limit = 6 if auto_deploy_enabled else 5
     lines.extend(f"- {line}" for line in summary_lines[:summary_limit])
-    if github_repo_url:
+    if repository_status or github_repo_url or repository_reason:
         lines += [
             "",
-            "GitHub repo:",
-            github_repo_url,
+            "GitHub Repo:",
+            repository_status or ("CREATED" if github_repo_url else "SKIPPED"),
         ]
+        if github_repo_url:
+            lines.append(github_repo_url)
+        if repository_reason:
+            lines.append(f"Reason: {repository_reason}")
     if auto_deploy_enabled:
         backend_url = str(state.get("backend_deploy_url") or "").strip()
         frontend_url = str(state.get("frontend_deploy_url") or "").strip()
@@ -3367,6 +3374,17 @@ async def command_inspect(update: Any, context: Any) -> None:
             lines.append(f"Target: {deploy_target}")
         if deploy_status:
             lines.append(f"Status: {deploy_status}")
+    repository_info = _repository_summary_from_state(state)
+    repository_status = str(repository_info.get("status") or "").strip()
+    repository_url = str(repository_info.get("url") or "").strip()
+    repository_reason = str(repository_info.get("reason") or "").strip()
+    if repository_status or repository_url or repository_reason:
+        lines += ["", "Repository:"]
+        lines.append(f"Status: {repository_status or 'SKIPPED'}")
+        if repository_url:
+            lines.append(f"URL: {repository_url}")
+        if repository_reason:
+            lines.append(f"Reason: {repository_reason}")
     if runtime_failure_class:
         lines += ["", f"Failure Class: {runtime_failure_class}"]
     elif runtime_detect_ok or backend_entry or backend_run_mode or has_backend:
@@ -3517,6 +3535,17 @@ def _build_selected_project_summary(project_path: Path) -> str:
             lines.append(f"Target: {deploy_target}")
         if deploy_status:
             lines.append(f"Status: {deploy_status}")
+    repository_info = _repository_summary_from_state(state)
+    repository_status = str(repository_info.get("status") or "").strip()
+    repository_url = str(repository_info.get("url") or "").strip()
+    repository_reason = str(repository_info.get("reason") or "").strip()
+    if repository_status or repository_url or repository_reason:
+        lines += ["", "Repository:"]
+        lines.append(f"Status: {repository_status or 'SKIPPED'}")
+        if repository_url:
+            lines.append(f"URL: {repository_url}")
+        if repository_reason:
+            lines.append(f"Reason: {repository_reason}")
     if runtime_failure_class:
         lines.append(f"Failure Class: {runtime_failure_class}")
     elif runtime_detect_ok or backend_entry or backend_run_mode or has_backend:
@@ -3557,6 +3586,24 @@ def _extract_project_idea_hint(reasoning: dict[str, Any], state_payload: dict[st
         if text:
             return text
     return ""
+
+
+def _repository_summary_from_state(state_payload: dict[str, Any]) -> dict[str, str]:
+    repository_block = state_payload.get("repository") if isinstance(state_payload.get("repository"), dict) else {}
+    status = str((repository_block.get("status") if isinstance(repository_block, dict) else "") or "").strip().upper()
+    url = str(
+        (repository_block.get("url") if isinstance(repository_block, dict) else "")
+        or state_payload.get("github_repo_url")
+        or ""
+    ).strip()
+    reason = str((repository_block.get("reason") if isinstance(repository_block, dict) else "") or "").strip()
+    if not status:
+        status = "CREATED" if url else "SKIPPED"
+    return {
+        "status": status,
+        "url": url,
+        "reason": reason,
+    }
 
 
 def _state_block_value(block: dict[str, Any], key: str, fallback: Any) -> Any:

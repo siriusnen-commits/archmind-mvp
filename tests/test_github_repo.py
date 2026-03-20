@@ -78,8 +78,14 @@ def test_pipeline_stores_github_repo_url_in_state(monkeypatch, tmp_path: Path) -
 
     monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: fake_generate_project)
     monkeypatch.setattr(
-        "archmind.pipeline.create_github_repo",
-        lambda _project_dir: "https://github.com/siriusnen-commits/idea_repo",
+        "archmind.pipeline.create_github_repo_with_status",
+        lambda _project_dir, enabled=True: {  # noqa: ARG001
+            "status": "CREATED",
+            "url": "https://github.com/siriusnen-commits/idea_repo",
+            "name": "idea_repo",
+            "reason": "",
+            "attempted": True,
+        },
     )
 
     exit_code = main(
@@ -104,3 +110,4 @@ def test_pipeline_stores_github_repo_url_in_state(monkeypatch, tmp_path: Path) -
     result_payload = json.loads((tmp_path / "idea_repo" / ".archmind" / "result.json").read_text(encoding="utf-8"))
     assert state_payload.get("github_repo_url") == "https://github.com/siriusnen-commits/idea_repo"
     assert result_payload.get("github_repo_url") == "https://github.com/siriusnen-commits/idea_repo"
+    assert (state_payload.get("repository") or {}).get("status") == "CREATED"

@@ -607,3 +607,147 @@ def test_pipeline_auto_deploy_fail_does_not_fail_pipeline(monkeypatch, tmp_path:
     result_payload = json.loads((tmp_path / ".archmind" / "result.json").read_text(encoding="utf-8"))
     assert result_payload.get("status") == "SUCCESS"
     assert result_payload.get("auto_deploy_status") == "FAIL"
+
+
+def test_pipeline_repo_attempted_even_when_runtime_not_done(monkeypatch, tmp_path: Path) -> None:
+    calls = {"n": 0}
+
+    def fake_generate_fail_run(_idea: str, opt) -> Path:  # type: ignore[no-untyped-def]
+        project_name = (opt.name or "archmind_project").strip() or "archmind_project"
+        project_dir = Path(opt.out) / project_name
+        project_dir.mkdir(parents=True, exist_ok=True)
+        project_dir.joinpath("pytest.ini").write_text("[pytest]\naddopts = -q\n", encoding="utf-8")
+        project_dir.joinpath("test_fail.py").write_text("def test_fail():\n    assert False\n", encoding="utf-8")
+        return project_dir
+
+    def fake_repo_create(_project_dir, enabled=True):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        return {
+            "status": "CREATED",
+            "url": "https://github.com/siriusnen-commits/repo_attempted",
+            "name": "repo_attempted",
+            "reason": "",
+            "attempted": True,
+        }
+
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: fake_generate_fail_run)
+    monkeypatch.setattr("archmind.pipeline.create_github_repo_with_status", fake_repo_create)
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "failing notes api",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "repo_attempted",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code != 0
+    assert calls["n"] == 1
+
+
+def test_pipeline_repo_created_status_is_persisted(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project)
+    monkeypatch.setattr(
+        "archmind.pipeline.create_github_repo_with_status",
+        lambda _project_dir, enabled=True: {  # noqa: ARG001
+            "status": "CREATED",
+            "url": "https://github.com/siriusnen-commits/repo_created",
+            "name": "repo_created",
+            "reason": "",
+            "attempted": True,
+        },
+    )
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "simple fastapi notes api",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "repo_created",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+    state_payload = json.loads((tmp_path / "repo_created" / ".archmind" / "state.json").read_text(encoding="utf-8"))
+    assert (state_payload.get("repository") or {}).get("status") == "CREATED"
+    assert (state_payload.get("repository") or {}).get("url") == "https://github.com/siriusnen-commits/repo_created"
+
+
+def test_pipeline_repo_failed_reason_is_persisted(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project)
+    monkeypatch.setattr(
+        "archmind.pipeline.create_github_repo_with_status",
+        lambda _project_dir, enabled=True: {  # noqa: ARG001
+            "status": "FAILED",
+            "url": "",
+            "name": "repo_failed",
+            "reason": "gh auth missing",
+            "attempted": True,
+        },
+    )
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "simple fastapi notes api",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "repo_failed",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+    result_payload = json.loads((tmp_path / "repo_failed" / ".archmind" / "result.json").read_text(encoding="utf-8"))
+    assert (result_payload.get("repository") or {}).get("status") == "FAILED"
+    assert "gh auth missing" in str((result_payload.get("repository") or {}).get("reason") or "")
+
+
+def test_pipeline_generation_failure_marks_repository_skipped(monkeypatch, tmp_path: Path) -> None:
+    def fake_invalid_fullstack(_idea: str, opt) -> Path:  # type: ignore[no-untyped-def]
+        project_name = (opt.name or "archmind_project").strip() or "archmind_project"
+        project_dir = Path(opt.out) / project_name
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "frontend").mkdir(parents=True, exist_ok=True)
+        return project_dir
+
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: fake_invalid_fullstack)
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "blog webapp",
+            "--template",
+            "fullstack-ddd",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "repo_skipped_generation_fail",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 1
+    result_payload = json.loads((tmp_path / "repo_skipped_generation_fail" / ".archmind" / "result.json").read_text(encoding="utf-8"))
+    repository = result_payload.get("repository") or {}
+    assert repository.get("status") == "SKIPPED"
