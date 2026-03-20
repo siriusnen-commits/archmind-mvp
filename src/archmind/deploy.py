@@ -1793,7 +1793,14 @@ def _stop_pid(pid: int | None) -> tuple[str, str]:
         return "NOT RUNNING", ""
     try:
         os.kill(pid, signal.SIGTERM)
-        return "STOPPED", ""
+        time.sleep(0.6)
+        if not is_pid_running(pid):
+            return "STOPPED", ""
+        os.kill(pid, signal.SIGKILL)
+        time.sleep(0.2)
+        if not is_pid_running(pid):
+            return "STOPPED", ""
+        return "WARNING", "process still running after SIGKILL"
     except ProcessLookupError:
         return "NOT RUNNING", ""
     except Exception as exc:
@@ -1803,19 +1810,19 @@ def _stop_pid(pid: int | None) -> tuple[str, str]:
 def stop_local_services(project_dir: Path) -> dict[str, Any]:
     root = project_dir.expanduser().resolve()
     payload = load_state(root) or ensure_state(root)
-    backend_pid = _to_pid(payload.get("backend_pid"))
-    frontend_pid = _to_pid(payload.get("frontend_pid"))
+    runtime_block = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
+    backend_pid = _to_pid(payload.get("backend_pid") or runtime_block.get("backend_pid"))
+    frontend_pid = _to_pid(payload.get("frontend_pid") or runtime_block.get("frontend_pid"))
 
     backend_status, backend_detail = _stop_pid(backend_pid)
     frontend_status, frontend_detail = _stop_pid(frontend_pid)
 
     payload["backend_pid"] = None
     payload["frontend_pid"] = None
-    runtime_block = payload.get("runtime")
-    if not isinstance(runtime_block, dict):
-        runtime_block = {}
     runtime_block["backend_pid"] = None
-    runtime_block["backend_status"] = "NOT RUNNING"
+    runtime_block["frontend_pid"] = None
+    runtime_block["backend_status"] = "STOPPED" if backend_status == "STOPPED" else "NOT RUNNING"
+    runtime_block["frontend_status"] = "STOPPED" if frontend_status == "STOPPED" else "NOT RUNNING"
     runtime_block["failure_class"] = ""
     runtime_block["healthcheck_status"] = ""
     runtime_block["healthcheck_detail"] = ""
@@ -1834,6 +1841,58 @@ def stop_local_services(project_dir: Path) -> dict[str, Any]:
             "status": frontend_status,
             "pid": frontend_pid,
             "detail": frontend_detail,
+        },
+    }
+
+
+def stop_all_local_services(projects_root: Path) -> dict[str, Any]:
+    rows = list_running_local_projects(projects_root)
+    stopped: list[dict[str, Any]] = []
+    already_stopped: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+
+    for row in rows:
+        project_dir = row.get("project_dir")
+        if not isinstance(project_dir, Path):
+            continue
+        project_name = str(row.get("project_name") or project_dir.name)
+        result = stop_local_services(project_dir)
+        backend = result.get("backend") if isinstance(result.get("backend"), dict) else {}
+        frontend = result.get("frontend") if isinstance(result.get("frontend"), dict) else {}
+        backend_status = str(backend.get("status") or "NOT RUNNING").strip().upper()
+        frontend_status = str(frontend.get("status") or "NOT RUNNING").strip().upper()
+        backend_pid = backend.get("pid")
+        frontend_pid = frontend.get("pid")
+        backend_detail = str(backend.get("detail") or "").strip()
+        frontend_detail = str(frontend.get("detail") or "").strip()
+        item = {
+            "project_name": project_name,
+            "project_dir": project_dir,
+            "backend_status": backend_status,
+            "frontend_status": frontend_status,
+            "backend_pid": backend_pid,
+            "frontend_pid": frontend_pid,
+            "backend_detail": backend_detail,
+            "frontend_detail": frontend_detail,
+        }
+        if backend_status == "WARNING" or frontend_status == "WARNING":
+            failed.append(item)
+        elif backend_status == "STOPPED" or frontend_status == "STOPPED":
+            stopped.append(item)
+        else:
+            already_stopped.append(item)
+
+    return {
+        "ok": len(failed) == 0,
+        "target": "local",
+        "stopped": stopped,
+        "already_stopped": already_stopped,
+        "failed": failed,
+        "counts": {
+            "stopped": len(stopped),
+            "already_stopped": len(already_stopped),
+            "failed": len(failed),
+            "projects": len(rows),
         },
     }
 
