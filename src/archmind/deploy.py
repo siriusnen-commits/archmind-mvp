@@ -1807,15 +1807,59 @@ def _stop_pid(pid: int | None) -> tuple[str, str]:
         return "WARNING", str(exc)
 
 
+def _is_local_service_responsive(url: str) -> bool:
+    text = str(url or "").strip()
+    if not text:
+        return False
+    try:
+        parsed = parse.urlparse(text)
+    except Exception:
+        return False
+    if parsed.scheme not in {"http", "https"}:
+        return False
+    if parsed.hostname not in {"127.0.0.1", "localhost"}:
+        return False
+    targets = [text]
+    if parsed.path in {"", "/"}:
+        targets.append(text.rstrip("/") + "/health")
+    for target in targets:
+        try:
+            with request.urlopen(target, timeout=0.5) as response:  # noqa: S310
+                code = int(getattr(response, "status", 0) or 0)
+                if 200 <= code < 500:
+                    return True
+        except Exception:
+            continue
+    return False
+
+
 def stop_local_services(project_dir: Path) -> dict[str, Any]:
     root = project_dir.expanduser().resolve()
     payload = load_state(root) or ensure_state(root)
     runtime_block = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
+    deploy_block = payload.get("deploy") if isinstance(payload.get("deploy"), dict) else {}
     backend_pid = _to_pid(payload.get("backend_pid") or runtime_block.get("backend_pid"))
     frontend_pid = _to_pid(payload.get("frontend_pid") or runtime_block.get("frontend_pid"))
+    backend_url = str(
+        runtime_block.get("backend_url")
+        or payload.get("backend_deploy_url")
+        or deploy_block.get("backend_url")
+        or payload.get("deploy_url")
+        or ""
+    ).strip()
+    frontend_url = str(
+        deploy_block.get("frontend_url")
+        or payload.get("frontend_deploy_url")
+        or runtime_block.get("frontend_url")
+        or ""
+    ).strip()
 
     backend_status, backend_detail = _stop_pid(backend_pid)
     frontend_status, frontend_detail = _stop_pid(frontend_pid)
+    if backend_status == "WARNING" and backend_detail == "process still running after SIGKILL" and not _is_local_service_responsive(backend_url):
+        backend_status, backend_detail = "STOPPED", "process lingering but backend service is down"
+    if frontend_status == "WARNING" and frontend_detail == "process still running after SIGKILL" and not _is_local_service_responsive(frontend_url):
+        frontend_status, frontend_detail = "STOPPED", "process lingering but frontend service is down"
 
     payload["backend_pid"] = None
     payload["frontend_pid"] = None

@@ -1130,6 +1130,44 @@ def test_stop_local_services_handles_missing_pids(tmp_path: Path) -> None:
     assert runtime.get("frontend_status") == "NOT RUNNING"
 
 
+def test_stop_local_services_treats_lingering_pid_as_stopped_when_service_down(monkeypatch, tmp_path: Path) -> None:
+    write_state(
+        tmp_path,
+        {
+            "backend_pid": 1234,
+            "backend_deploy_url": "http://127.0.0.1:8123",
+            "runtime": {"backend_pid": 1234, "backend_url": "http://127.0.0.1:8123"},
+        },
+    )
+
+    monkeypatch.setattr("archmind.deploy.os.kill", lambda *_a, **_k: None)
+    monkeypatch.setattr("archmind.deploy.is_pid_running", lambda _pid: True)
+    monkeypatch.setattr("archmind.deploy._is_local_service_responsive", lambda _url: False)
+
+    result = stop_local_services(tmp_path)
+    assert result["backend"]["status"] == "STOPPED"
+    assert "service is down" in str(result["backend"].get("detail") or "")
+
+
+def test_stop_local_services_keeps_warning_when_service_still_responsive(monkeypatch, tmp_path: Path) -> None:
+    write_state(
+        tmp_path,
+        {
+            "backend_pid": 1234,
+            "backend_deploy_url": "http://127.0.0.1:8123",
+            "runtime": {"backend_pid": 1234, "backend_url": "http://127.0.0.1:8123"},
+        },
+    )
+
+    monkeypatch.setattr("archmind.deploy.os.kill", lambda *_a, **_k: None)
+    monkeypatch.setattr("archmind.deploy.is_pid_running", lambda _pid: True)
+    monkeypatch.setattr("archmind.deploy._is_local_service_responsive", lambda _url: True)
+
+    result = stop_local_services(tmp_path)
+    assert result["backend"]["status"] == "WARNING"
+    assert "still running" in str(result["backend"].get("detail") or "")
+
+
 def test_stop_all_local_services_stops_every_running_project(monkeypatch, tmp_path: Path) -> None:
     proj_a = tmp_path / "project_a"
     proj_b = tmp_path / "project_b"

@@ -2235,6 +2235,60 @@ def test_help_callback_renders_runtime_section(monkeypatch) -> None:
     assert "/stop all" in out
 
 
+def test_help_create_section_uses_navigation_buttons_only() -> None:
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_help(update, DummyContext(args=["create"])))
+    reply_markup = msg.sent_kwargs[-1].get("reply_markup")
+    assert reply_markup is not None
+    buttons = [btn for row in getattr(reply_markup, "inline_keyboard", []) for btn in row]
+    callback_values = [str(getattr(btn, "callback_data", "")) for btn in buttons]
+    assert any(value == "help|project" for value in callback_values)
+    assert any(value == "help|runtime" for value in callback_values)
+    assert not any("sample idea" in value for value in callback_values)
+
+
+def test_command_callback_dispatches_running_and_restart(monkeypatch) -> None:
+    captured: dict[str, list[str]] = {"running": [], "restart": []}
+
+    async def fake_running(update_arg, context_arg):  # type: ignore[no-untyped-def]
+        captured["running"] = list(getattr(context_arg, "args", []))
+        await update_arg.message.reply_text("running called")
+
+    async def fake_restart(update_arg, context_arg):  # type: ignore[no-untyped-def]
+        captured["restart"] = list(getattr(context_arg, "args", []))
+        await update_arg.message.reply_text("restart called")
+
+    monkeypatch.setattr("archmind.telegram_bot.command_running", fake_running)
+    monkeypatch.setattr("archmind.telegram_bot.command_restart", fake_restart)
+
+    msg_running = DummyMessage()
+    q_running = DummyCallbackQuery(data="cmd|/running", message=msg_running)
+    u_running = DummyUpdate(message=msg_running, effective_chat=DummyChat())
+    u_running.callback_query = q_running  # type: ignore[attr-defined]
+    asyncio.run(command_suggestion_callback(u_running, DummyContext()))
+    assert q_running.answered is True
+    assert captured["running"] == []
+    assert "Unsupported command action" not in (msg_running.sent[-1] if msg_running.sent else "")
+
+    msg_restart = DummyMessage()
+    q_restart = DummyCallbackQuery(data="cmd|/restart", message=msg_restart)
+    u_restart = DummyUpdate(message=msg_restart, effective_chat=DummyChat())
+    u_restart.callback_query = q_restart  # type: ignore[attr-defined]
+    asyncio.run(command_suggestion_callback(u_restart, DummyContext()))
+    assert q_restart.answered is True
+    assert captured["restart"] == []
+    assert "Unsupported command action" not in (msg_restart.sent[-1] if msg_restart.sent else "")
+
+    msg_running_colon = DummyMessage()
+    q_running_colon = DummyCallbackQuery(data="cmd:/running", message=msg_running_colon)
+    u_running_colon = DummyUpdate(message=msg_running_colon, effective_chat=DummyChat())
+    u_running_colon.callback_query = q_running_colon  # type: ignore[attr-defined]
+    asyncio.run(command_suggestion_callback(u_running_colon, DummyContext()))
+    assert q_running_colon.answered is True
+    assert "Unsupported command action" not in (msg_running_colon.sent[-1] if msg_running_colon.sent else "")
+
+
 def test_help_all_keeps_full_command_list() -> None:
     msg = DummyMessage()
     update = DummyUpdate(message=msg, effective_chat=DummyChat())
@@ -3170,6 +3224,57 @@ def test_improve_command_suppresses_env_repair_for_detected_flat_backend(tmp_pat
     monkeypatch.setattr(
         "archmind.telegram_bot.detect_backend_runtime_entry",
         lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_improve(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Repair runtime env injection" not in out
+
+
+def test_improve_command_suppresses_cors_only_env_hint_when_runtime_healthy(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "improve_cors_only_missing"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (project_dir / ".env").write_text(
+        "APP_PORT=8000\nBACKEND_BASE_URL=http://127.0.0.1:8000\n",
+        encoding="utf-8",
+    )
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "template": "fastapi",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "runtime": {"backend_status": "RUNNING", "failure_class": "", "healthcheck_status": "SUCCESS"},
+                "backend_smoke_status": "SUCCESS",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "RUNNING", "pid": 22001, "url": "http://127.0.0.1:8000"},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
     )
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
     msg = DummyMessage()

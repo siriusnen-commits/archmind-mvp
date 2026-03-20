@@ -570,8 +570,8 @@ def _help_sections_keyboard(section: str = "") -> Any:
         return InlineKeyboardMarkup(
             [
                 [
-                    InlineKeyboardButton(text="Idea local", callback_data=_encode_callback_data("cmd", "/idea_local sample idea")),
-                    InlineKeyboardButton(text="Design", callback_data=_encode_callback_data("cmd", "/design sample idea")),
+                    InlineKeyboardButton(text="Project help", callback_data=_encode_callback_data("help", "project")),
+                    InlineKeyboardButton(text="Runtime help", callback_data=_encode_callback_data("help", "runtime")),
                 ],
                 [InlineKeyboardButton(text="Back", callback_data=_encode_callback_data("help", "quick"))],
             ]
@@ -697,11 +697,12 @@ def _encode_callback_data(action: str, payload: str) -> str:
 
 def _decode_callback_data(data: str) -> tuple[str, str]:
     raw = str(data or "").strip()
-    if "|" not in raw:
+    separator = "|" if "|" in raw else (":" if ":" in raw else "")
+    if not separator:
         if raw.startswith("/"):
             return "suggest", raw
         return "", ""
-    action, payload = raw.split("|", 1)
+    action, payload = raw.split(separator, 1)
     resolved = _CALLBACK_PAYLOADS.get(payload, payload)
     return str(action).strip().lower(), str(resolved)
 
@@ -4203,6 +4204,41 @@ def _build_improvement_report(project_path: Path) -> str:
     runtime_backend_status = str(runtime_ctx.get("backend_status") or "").strip().upper()
     runtime_failure_class = str(runtime_ctx.get("failure_class") or "").strip()
     runtime_detect_ok = bool(runtime_ctx.get("detect_ok"))
+    live_backend_status = ""
+    live_backend_url = ""
+    try:
+        from archmind.deploy import get_local_runtime_status
+
+        live_runtime = get_local_runtime_status(root)
+        live_backend = live_runtime.get("backend") if isinstance(live_runtime.get("backend"), dict) else {}
+        live_backend_status = str(live_backend.get("status") or "").strip().upper()
+        live_backend_url = str(live_backend.get("url") or "").strip()
+    except Exception:
+        live_backend_status = ""
+        live_backend_url = ""
+    runtime_block = state_payload.get("runtime") if isinstance(state_payload.get("runtime"), dict) else {}
+    latest_health_status = str(
+        (runtime_block.get("healthcheck_status") if isinstance(runtime_block, dict) else "")
+        or state_payload.get("healthcheck_status")
+        or state_payload.get("backend_smoke_status")
+        or ""
+    ).strip().upper()
+    runtime_usable = (
+        runtime_detect_ok
+        and (live_backend_status == "RUNNING" or runtime_backend_status == "RUNNING")
+        and (latest_health_status == "SUCCESS" or bool(live_backend_url) or bool(_read_frontend_api_base_url(root)))
+        and not runtime_failure_class
+    )
+    if runtime_usable and env_missing_parts:
+        critical_env_parts = {
+            "backend/.env",
+            ".env",
+            "frontend/.env.local",
+            "APP_PORT",
+            "BACKEND_BASE_URL",
+            "NEXT_PUBLIC_API_BASE_URL",
+        }
+        env_missing_parts = [item for item in env_missing_parts if str(item).strip() in critical_env_parts]
     deploy_target = str(deploy_ctx.get("target") or "").strip()
     deploy_status = str(deploy_ctx.get("status") or "").strip().upper()
     deploy_failure_class = str(deploy_ctx.get("failure_class") or "").strip()
@@ -4969,6 +5005,8 @@ async def command_suggestion_callback(update: Any, context: Any) -> None:
             "/inspect": command_inspect,
             "/next": command_next,
             "/improve": command_improve,
+            "/running": command_running,
+            "/restart": command_restart,
             "/fix": command_fix,
             "/retry": command_retry,
             "/logs": command_logs,
