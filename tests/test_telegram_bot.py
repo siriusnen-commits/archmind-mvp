@@ -258,8 +258,8 @@ def test_build_completion_message_reads_result_state_json(tmp_path: Path) -> Non
     assert "Backend tests are still failing" in message
     assert "Further work remains" in message
     assert "Next:" in message
-    assert "- run /fix" in message
-    assert "- run /logs backend" in message
+    assert "- /fix" in message
+    assert "- /logs backend" in message
 
 
 def test_build_completion_message_includes_github_repo_url_when_present(tmp_path: Path) -> None:
@@ -436,7 +436,7 @@ def test_build_completion_message_not_done_after_fix_recommends_continue(tmp_pat
     msg = build_completion_message(project_dir, tmp_path / "unused.log")
     assert "Status: NOT_DONE" in msg
     assert "Next:" in msg
-    assert "- run /continue" in msg
+    assert "- /continue" in msg
 
 
 def test_build_completion_message_suppresses_stale_failure_when_detect_ok(tmp_path: Path, monkeypatch) -> None:
@@ -1392,7 +1392,7 @@ def test_status_command_returns_summary(monkeypatch, tmp_path: Path) -> None:
     assert "Template: nextjs" in out
     assert "Backend:\nSKIP" in out
     assert "Frontend:\nWARNING" in out
-    assert "Next:\nrun /fix" in out
+    assert "Next:\n/fix" in out
 
 
 def test_status_command_works_when_running(monkeypatch, tmp_path: Path) -> None:
@@ -1429,7 +1429,7 @@ def test_status_command_works_when_running(monkeypatch, tmp_path: Path) -> None:
     assert "Progress: Running checks" in out
     assert "Backend:\nFAIL" in out
     assert "Frontend:\nABSENT" in out
-    assert "Next:\nrun /continue" in out
+    assert "Next:\n/continue" in out
 
 
 def test_format_status_text_defaults_when_idle_without_artifacts(tmp_path: Path) -> None:
@@ -2990,6 +2990,56 @@ def test_improve_command_formats_command_hints_as_single_line(tmp_path: Path, mo
         assert re.search(r"command:\s*/\S", line)
         if idx + 1 < len(lines):
             assert not lines[idx + 1].startswith("/")
+
+
+def test_improve_command_includes_action_keyboard_with_cmd_callbacks(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "improve_buttons"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi==0.115.0\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "template": "fastapi",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_improve(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    assert msg.sent_kwargs
+    reply_markup = msg.sent_kwargs[-1].get("reply_markup")
+    assert reply_markup is not None
+    buttons = [btn for row in getattr(reply_markup, "inline_keyboard", []) for btn in row]
+    callback_values = [str(getattr(btn, "callback_data", "")) for btn in buttons]
+    assert any(value.startswith("cmd|/") for value in callback_values)
+    assert any("cmd|/inspect" in value for value in callback_values)
+
+
+def test_command_callback_dispatches_complete_command_payload(monkeypatch) -> None:
+    msg = DummyMessage()
+    query = DummyCallbackQuery(data="cmd|/logs backend", message=msg)
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    update.callback_query = query  # type: ignore[attr-defined]
+    captured: dict[str, Any] = {}
+
+    async def fake_logs(update_arg, context_arg):  # type: ignore[no-untyped-def]
+        captured["called"] = True
+        captured["args"] = list(getattr(context_arg, "args", []))
+        await update_arg.message.reply_text("logs called")
+
+    monkeypatch.setattr("archmind.telegram_bot.command_logs", fake_logs)
+    asyncio.run(command_suggestion_callback(update, DummyContext()))
+    assert query.answered is True
+    assert captured.get("called") is True
+    assert captured.get("args") == ["backend"]
 
 
 def test_add_module_updates_spec_and_reuses_apply_hook(tmp_path: Path, monkeypatch) -> None:
