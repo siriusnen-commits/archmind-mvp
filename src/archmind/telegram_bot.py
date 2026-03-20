@@ -4648,6 +4648,11 @@ async def command_run(update: Any, context: Any) -> None:
     auto_fix_last_fix = str(auto_fix.get("last_fix") or "").strip()
     auto_fix_last_detail = str(auto_fix.get("last_detail") or "").strip()
     auto_fix_status = str(auto_fix.get("status") or "").strip().upper()
+    preflight = result.get("preflight") if isinstance(result.get("preflight"), dict) else {}
+    preflight_status = str(preflight.get("status") or "").strip().upper()
+    preflight_fixes = preflight.get("fixes_applied")
+    if not isinstance(preflight_fixes, list):
+        preflight_fixes = preflight.get("fixes") if isinstance(preflight.get("fixes"), list) else []
     backend_status = "RUNNING" if str(result.get("status") or "").upper() == "SUCCESS" else "FAIL"
     if backend_status == "RUNNING":
         backend_header = "RUNNING (after auto-fix)" if auto_fix_attempts > 0 and auto_fix_status == "SUCCESS" else "RUNNING"
@@ -4660,6 +4665,13 @@ async def command_run(update: Any, context: Any) -> None:
             "Backend:",
             backend_header,
         ]
+        if preflight_status:
+            lines += ["", "Preflight:", preflight_status]
+            if preflight_status == "FIXED":
+                for item in preflight_fixes[:5]:
+                    value = str(item).strip()
+                    if value:
+                        lines.append(f"- {value}")
         if backend_url:
             lines += ["", "Backend URL:", backend_url]
         if backend_smoke_status:
@@ -4694,6 +4706,15 @@ async def command_run(update: Any, context: Any) -> None:
         "",
         "Backend:",
         "FAIL",
+    ]
+    if preflight_status:
+        lines += ["", "Preflight:", preflight_status]
+        if preflight_status == "FIXED":
+            for item in preflight_fixes[:5]:
+                value = str(item).strip()
+                if value:
+                    lines.append(f"- {value}")
+    lines += [
         "",
         "Failure class:",
         failure_class,

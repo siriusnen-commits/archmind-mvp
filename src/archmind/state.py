@@ -36,6 +36,7 @@ AGENT_STATES = (
 
 HEALTHCHECK_STATUSES = ("SUCCESS", "FAIL", "SKIPPED")
 SERVICE_DEPLOY_STATUSES = ("SUCCESS", "FAIL", "SKIPPED")
+PREFLIGHT_STATUSES = ("OK", "FIXED", "FAILED")
 
 
 def derive_task_label_from_failure_signature(signature: str) -> str:
@@ -92,6 +93,11 @@ def _safe_healthcheck_status(value: str) -> str:
 def _safe_service_deploy_status(value: str) -> str:
     status = (value or "").upper()
     return status if status in SERVICE_DEPLOY_STATUSES else ""
+
+
+def _safe_preflight_status(value: str) -> str:
+    status = (value or "").upper()
+    return status if status in PREFLIGHT_STATUSES else ""
 
 
 def _safe_agent_state(value: str) -> str:
@@ -195,6 +201,11 @@ def _default_runtime_state() -> dict[str, Any]:
             "last_fix": "",
             "last_detail": "",
             "status": "",
+        },
+        "preflight": {
+            "status": "",
+            "fixes": [],
+            "issues": [],
         },
     }
 
@@ -365,6 +376,20 @@ def _normalize_loaded_state(project_dir: Path, payload: dict[str, Any]) -> dict[
         "last_fix": str(auto_fix_block.get("last_fix") or "").strip()[:80],
         "last_detail": str(auto_fix_block.get("last_detail") or "").strip()[:220],
         "status": _safe_optional_status(str(auto_fix_block.get("status") or "")),
+    }
+    preflight_block = runtime_defaults.get("preflight")
+    if not isinstance(preflight_block, dict):
+        preflight_block = {}
+    preflight_fixes = preflight_block.get("fixes")
+    if not isinstance(preflight_fixes, list):
+        preflight_fixes = []
+    preflight_issues = preflight_block.get("issues")
+    if not isinstance(preflight_issues, list):
+        preflight_issues = []
+    runtime_defaults["preflight"] = {
+        "status": _safe_preflight_status(str(preflight_block.get("status") or "")),
+        "fixes": [str(item).strip()[:160] for item in preflight_fixes if str(item).strip()][:8],
+        "issues": [str(item).strip()[:160] for item in preflight_issues if str(item).strip()][:8],
     }
     normalized["runtime"] = runtime_defaults
     normalized["iterations"] = _safe_int(normalized.get("iterations"), 0)
@@ -657,6 +682,20 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
         "last_fix": str(auto_fix_block.get("last_fix") or "").strip()[:80],
         "last_detail": str(auto_fix_block.get("last_detail") or "").strip()[:220],
         "status": _safe_optional_status(str(auto_fix_block.get("status") or "")),
+    }
+    preflight_block = runtime.get("preflight")
+    if not isinstance(preflight_block, dict):
+        preflight_block = {}
+    preflight_fixes = preflight_block.get("fixes")
+    if not isinstance(preflight_fixes, list):
+        preflight_fixes = []
+    preflight_issues = preflight_block.get("issues")
+    if not isinstance(preflight_issues, list):
+        preflight_issues = []
+    runtime["preflight"] = {
+        "status": _safe_preflight_status(str(preflight_block.get("status") or "")),
+        "fixes": [str(item).strip()[:160] for item in preflight_fixes if str(item).strip()][:8],
+        "issues": [str(item).strip()[:160] for item in preflight_issues if str(item).strip()][:8],
     }
     payload["runtime"] = runtime
 
@@ -1278,6 +1317,20 @@ def update_runtime_state(
         "last_fix": str(auto_fix_block.get("last_fix") or "").strip()[:80],
         "last_detail": _sanitize_line(str(auto_fix_block.get("last_detail") or ""), project_dir)[:220],
         "status": _safe_optional_status(str(auto_fix_block.get("status") or "")),
+    }
+    preflight_block = result.get("preflight")
+    if not isinstance(preflight_block, dict):
+        preflight_block = runtime.get("preflight") if isinstance(runtime.get("preflight"), dict) else {}
+    raw_fixes = preflight_block.get("fixes_applied")
+    if not isinstance(raw_fixes, list):
+        raw_fixes = preflight_block.get("fixes") if isinstance(preflight_block.get("fixes"), list) else []
+    raw_issues = preflight_block.get("issues_found")
+    if not isinstance(raw_issues, list):
+        raw_issues = preflight_block.get("issues") if isinstance(preflight_block.get("issues"), list) else []
+    runtime["preflight"] = {
+        "status": _safe_preflight_status(str(preflight_block.get("status") or "")),
+        "fixes": [_sanitize_line(str(item), project_dir)[:160] for item in raw_fixes if str(item).strip()][:8],
+        "issues": [_sanitize_line(str(item), project_dir)[:160] for item in raw_issues if str(item).strip()][:8],
     }
     payload["runtime"] = runtime
     payload["last_action"] = _sanitize_line(action, project_dir)

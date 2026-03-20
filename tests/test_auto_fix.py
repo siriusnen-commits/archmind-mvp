@@ -14,6 +14,10 @@ def test_analyze_backend_failure_missing_dependency() -> None:
 
 def test_auto_fix_missing_dependency_then_success(monkeypatch, tmp_path: Path) -> None:
     calls = {"deploy": 0, "pip": 0}
+    monkeypatch.setattr(
+        "archmind.deploy.run_preflight_checks",
+        lambda *_a, **_k: {"ok": True, "fixed": False, "status": "OK", "fixes_applied": [], "issues_found": [], "selected_port": 8121},
+    )
 
     def fake_deploy(_p: Path, port=None):  # type: ignore[no-untyped-def]
         calls["deploy"] += 1
@@ -73,6 +77,10 @@ def test_auto_fix_missing_dependency_then_success(monkeypatch, tmp_path: Path) -
 
 def test_auto_fix_db_init_then_success(monkeypatch, tmp_path: Path) -> None:
     calls = {"deploy": 0}
+    monkeypatch.setattr(
+        "archmind.deploy.run_preflight_checks",
+        lambda *_a, **_k: {"ok": True, "fixed": False, "status": "OK", "fixes_applied": [], "issues_found": [], "selected_port": 8122},
+    )
 
     def fake_deploy(_p: Path, port=None):  # type: ignore[no-untyped-def]
         calls["deploy"] += 1
@@ -120,6 +128,10 @@ def test_auto_fix_db_init_then_success(monkeypatch, tmp_path: Path) -> None:
 
 def test_auto_fix_port_in_use_switches_port(monkeypatch, tmp_path: Path) -> None:
     seen_ports: list[int | None] = []
+    monkeypatch.setattr(
+        "archmind.deploy.run_preflight_checks",
+        lambda *_a, **_k: {"ok": True, "fixed": False, "status": "OK", "fixes_applied": [], "issues_found": [], "selected_port": 8123},
+    )
 
     def fake_deploy(_p: Path, port=None):  # type: ignore[no-untyped-def]
         seen_ports.append(port)
@@ -167,6 +179,10 @@ def test_auto_fix_port_in_use_switches_port(monkeypatch, tmp_path: Path) -> None
 
 def test_auto_fix_unknown_skips_and_keeps_fail(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
+        "archmind.deploy.run_preflight_checks",
+        lambda *_a, **_k: {"ok": True, "fixed": False, "status": "OK", "fixes_applied": [], "issues_found": [], "selected_port": 8124},
+    )
+    monkeypatch.setattr(
         "archmind.deploy.deploy_backend_local",
         lambda *_a, **_k: {
             "status": "FAIL",
@@ -191,6 +207,10 @@ def test_auto_fix_unknown_skips_and_keeps_fail(monkeypatch, tmp_path: Path) -> N
 
 
 def test_auto_fix_retry_limited_to_two_attempts(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "archmind.deploy.run_preflight_checks",
+        lambda *_a, **_k: {"ok": True, "fixed": False, "status": "OK", "fixes_applied": [], "issues_found": [], "selected_port": 8125},
+    )
     deploy_calls = {"n": 0}
 
     def fake_deploy(*_a, **_k):  # type: ignore[no-untyped-def]

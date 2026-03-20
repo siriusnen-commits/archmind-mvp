@@ -4379,6 +4379,52 @@ def test_run_backend_failure_message_includes_auto_fix_attempts(monkeypatch, tmp
     assert "Last error:\nruntime env defaults applied" in out
 
 
+def test_run_backend_message_includes_preflight_status(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "run_backend_preflight_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.run_backend_local_with_health",
+        lambda _p: {
+            "ok": True,
+            "target": "local",
+            "mode": "real",
+            "kind": "backend",
+            "status": "SUCCESS",
+            "url": "http://127.0.0.1:8135",
+            "detail": "local backend started",
+            "backend_entry": "app.main:app",
+            "backend_run_mode": "asgi-direct",
+            "run_cwd": str(project / "backend"),
+            "run_command": "uvicorn app.main:app --host 0.0.0.0 --port 8135",
+            "backend_smoke_url": "http://127.0.0.1:8135/health",
+            "backend_smoke_status": "SUCCESS",
+            "backend_smoke_detail": "health endpoint returned status ok",
+            "preflight": {
+                "status": "FIXED",
+                "fixes_applied": ["installed requirements", "created .env defaults"],
+                "issues_found": [],
+            },
+        },
+    )
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_run(update, DummyContext(args=["backend"])))
+    out = msg.sent[-1]
+    assert "Preflight:\nFIXED" in out
+    assert "- installed requirements" in out
+    assert "- created .env defaults" in out
+
+
 def test_run_backend_skips_when_already_running(monkeypatch, tmp_path: Path) -> None:
     project = tmp_path / "run_backend_already_proj"
     project.mkdir(parents=True, exist_ok=True)
