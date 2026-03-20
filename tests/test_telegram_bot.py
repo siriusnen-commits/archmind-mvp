@@ -2205,6 +2205,8 @@ def test_help_mentions_command_groups() -> None:
     assert "/logs" in out
     assert "/restart" in out
     assert "/stop" in out
+    assert "/stop all" in out
+    assert "stop all local services" in out
     assert "/deploy local" in out
     assert "/tree" in out
     assert "/open <file>" in out
