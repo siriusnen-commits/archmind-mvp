@@ -2433,8 +2433,17 @@ def test_improve_command_includes_runtime_failure_class_suggestion(tmp_path: Pat
         encoding="utf-8",
     )
     (archmind / "state.json").write_text(
-        json.dumps({"runtime_failure_class": "runtime-entrypoint-error"}),
+        json.dumps(
+            {
+                "runtime": {"backend_status": "FAIL", "failure_class": "runtime-entrypoint-error"},
+                "runtime_failure_class": "runtime-entrypoint-error",
+            }
+        ),
         encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": False, "failure_class": "runtime-entrypoint-error", "failure_reason": "entrypoint invalid"},
     )
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
     msg = DummyMessage()
@@ -2443,6 +2452,132 @@ def test_improve_command_includes_runtime_failure_class_suggestion(tmp_path: Pat
     assert "Resolve runtime failure classification" in out
     assert "runtime-entrypoint-error" in out
     assert "/logs backend" in out
+
+
+def test_improve_command_suppresses_stale_legacy_runtime_failure_when_detect_ok(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "runtime_stale_legacy"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi==0.115.0\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "template": "fastapi",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "runtime": {"backend_status": "RUNNING", "failure_class": ""},
+                "runtime_failure_class": "environment-python",
+                "last_failure_class": "environment-python",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_improve(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Resolve runtime failure classification" not in out
+    assert "environment-python" not in out
+
+
+def test_improve_command_does_not_mix_deploy_success_with_runtime_health(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "deploy_success_runtime_ok"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi==0.115.0\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "template": "fastapi",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "deploy": {"target": "railway", "status": "SUCCESS", "failure_class": ""},
+                "runtime": {"mode": "local", "backend_status": "RUNNING", "failure_class": ""},
+                "runtime_failure_class": "environment-python",
+                "last_failure_class": "environment-python",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_improve(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Resolve runtime failure classification" not in out
+    assert "Investigate deploy failure classification" not in out
+
+
+def test_improve_command_keeps_structure_or_domain_expansion_suggestions_when_runtime_consistent(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "runtime_ok_expand"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi==0.115.0\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "template": "fastapi",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "runtime": {"backend_status": "RUNNING", "failure_class": ""},
+                "runtime_failure_class": "environment-python",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_improve(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Resolve runtime failure classification" not in out
+    assert ("Expand features incrementally" in out) or ("Expand domain model" in out)
 
 
 def test_add_module_updates_spec_and_reuses_apply_hook(tmp_path: Path, monkeypatch) -> None:
