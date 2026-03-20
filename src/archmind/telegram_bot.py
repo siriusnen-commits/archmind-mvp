@@ -1003,7 +1003,7 @@ def _progress_text(project_dir: Path, fallback: str = "") -> str:
 
 def _current_task_label(project_dir: Path, status: str) -> Optional[str]:
     archmind_dir = project_dir / ".archmind"
-    state = _load_json(archmind_dir / "state.json") or {}
+    state = load_state(project_path) or {}
     signature = str(state.get("last_failure_signature") or "").strip()
     derived_label = str(state.get("derived_task_label") or "").strip() or derive_task_label_from_failure_signature(signature)
     if derived_label and str(status).upper() == "STUCK":
@@ -1784,20 +1784,55 @@ def _read_frontend_api_base_url(project_dir: Path) -> str:
     root = project_dir.expanduser().resolve()
     candidates = [root / "frontend" / ".env.local", root / ".env.local"]
     for path in candidates:
-        if not path.exists() or not path.is_file():
-            continue
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except Exception:
-            continue
-        for line in text.splitlines():
-            line = str(line).strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            if key.strip() == "NEXT_PUBLIC_API_BASE_URL":
-                return value.strip()
+        env_map = _read_env_key_values(path)
+        if env_map.get("NEXT_PUBLIC_API_BASE_URL"):
+            return str(env_map.get("NEXT_PUBLIC_API_BASE_URL") or "").strip()
     return ""
+
+
+def _read_env_key_values(path: Path) -> dict[str, str]:
+    if not path.exists() or not path.is_file():
+        return {}
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return {}
+    out: dict[str, str] = {}
+    for raw in lines:
+        line = str(raw).strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key_clean = key.strip()
+        if not key_clean:
+            continue
+        out[key_clean] = value.strip()
+    return out
+
+
+def _runtime_env_missing_parts(project_path: Path, *, fullstack_expected: bool, has_frontend: bool) -> list[str]:
+    root = project_path.expanduser().resolve()
+    missing: list[str] = []
+    if fullstack_expected:
+        backend_env_path = root / "backend" / ".env"
+    elif (root / "backend").is_dir():
+        backend_env_path = root / "backend" / ".env"
+    else:
+        backend_env_path = root / ".env"
+    backend_env = _read_env_key_values(backend_env_path)
+    if not backend_env_path.exists():
+        missing.append(backend_env_path.relative_to(root).as_posix())
+    for key in ("APP_PORT", "BACKEND_BASE_URL", "CORS_ALLOW_ORIGINS"):
+        if not str(backend_env.get(key) or "").strip():
+            missing.append(key)
+    if has_frontend:
+        frontend_env_path = root / "frontend" / ".env.local"
+        frontend_env = _read_env_key_values(frontend_env_path)
+        if not frontend_env_path.exists():
+            missing.append("frontend/.env.local")
+        if not str(frontend_env.get("NEXT_PUBLIC_API_BASE_URL") or "").strip():
+            missing.append("NEXT_PUBLIC_API_BASE_URL")
+    return missing
 
 
 def _backend_runtime_diagnostics_lines(project_dir: Path) -> list[str]:
@@ -2115,11 +2150,12 @@ def build_finished_message(
     status: str,
     fallback_summary_lines: Optional[list[str]] = None,
     max_len: int = 1200,
+    failure_class_override: Optional[str] = None,
 ) -> str:
     iterations = state.get("iterations")
     fix_attempts = state.get("fix_attempts")
     signature = str(state.get("last_failure_signature") or "").strip()
-    failure_class = str(state.get("last_failure_class") or "").strip()
+    failure_class = str(failure_class_override if failure_class_override is not None else (state.get("last_failure_class") or "")).strip()
     current_task = str(state.get("derived_task_label") or "").strip() or derive_task_label_from_failure_signature(signature)
     if not current_task:
         current_task = str(state.get("current_task_label") or "").strip()
@@ -2235,6 +2271,8 @@ def build_completion_message(
     state = load_state(project_dir) or {}
     result = _load_json(archmind_dir / "result.json") or {}
     status = _status_from_sources(project_dir)
+    runtime_ctx = _improve_runtime_context(project_dir, state)
+    display_failure_class = str(runtime_ctx.get("failure_class") or "").strip()
     fallback_summary = _result_summary_lines(project_dir, temp_log)
     message = build_finished_message(
         evaluation=evaluation,
@@ -2244,6 +2282,7 @@ def build_completion_message(
         status=status,
         fallback_summary_lines=fallback_summary,
         max_len=max_len,
+        failure_class_override=display_failure_class,
     )
     if exit_code is not None and str(status).upper() == "UNKNOWN":
         message = _truncate_message(f"{message}\n(exit code: {exit_code})", limit=max_len)
@@ -2364,7 +2403,9 @@ def _auto_run_backend_after_idea_local(project_dir: Path) -> str:
     if not _should_auto_run_backend_for_template(state_payload):
         return ""
 
-    from archmind.deploy import get_local_runtime_status, run_backend_local_with_health
+    from archmind.deploy import ensure_runtime_env_defaults, get_local_runtime_status, run_backend_local_with_health
+
+    ensure_runtime_env_defaults(project_path)
 
     runtime = get_local_runtime_status(project_path)
     runtime_backend = runtime.get("backend") if isinstance(runtime.get("backend"), dict) else {}
@@ -3161,7 +3202,7 @@ async def command_inspect(update: Any, context: Any) -> None:
     archmind_dir = project_path / ".archmind"
     spec, _ = _read_or_init_project_spec(project_path)
     reasoning = _load_json(archmind_dir / "architecture_reasoning.json") or {}
-    state = _load_json(archmind_dir / "state.json") or {}
+    state = load_state(project_path) or {}
 
     shape = str(spec.get("shape") or reasoning.get("app_shape") or "unknown").strip() or "unknown"
     template = str(spec.get("template") or reasoning.get("recommended_template") or "unknown").strip() or "unknown"
@@ -3248,6 +3289,8 @@ async def command_inspect(update: Any, context: Any) -> None:
 
     deploy_block = state.get("deploy") if isinstance(state.get("deploy"), dict) else {}
     runtime_block = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
+    runtime_ctx = _improve_runtime_context(project_path, state)
+    runtime_detect_ok = bool(runtime_ctx.get("detect_ok"))
     backend_url = str(
         (runtime_block.get("backend_url") if isinstance(runtime_block, dict) else "")
         or state.get("backend_deploy_url")
@@ -3258,7 +3301,7 @@ async def command_inspect(update: Any, context: Any) -> None:
         or state.get("frontend_deploy_url")
         or ""
     ).strip()
-    backend_status = str(
+    backend_status = str(runtime_ctx.get("backend_status") or "").strip().upper() or str(
         (runtime_block.get("backend_status") if isinstance(runtime_block, dict) else "")
         or state.get("backend_smoke_status")
         or ""
@@ -3270,10 +3313,9 @@ async def command_inspect(update: Any, context: Any) -> None:
     ).strip().upper()
     backend_pid = (runtime_block.get("backend_pid") if isinstance(runtime_block, dict) else None) or state.get("backend_pid")
     frontend_pid = (runtime_block.get("frontend_pid") if isinstance(runtime_block, dict) else None) or state.get("frontend_pid")
-    backend_entry = str((runtime_block.get("backend_entry") if isinstance(runtime_block, dict) else "") or "").strip()
-    backend_run_mode = str((runtime_block.get("backend_run_mode") if isinstance(runtime_block, dict) else "") or "").strip()
-    runtime_failure_class = str((runtime_block.get("failure_class") if isinstance(runtime_block, dict) else "") or "").strip()
-    last_failure_class = str(state.get("last_failure_class") or "").strip()
+    backend_entry = str(runtime_ctx.get("backend_entry") or "").strip()
+    backend_run_mode = str(runtime_ctx.get("backend_run_mode") or "").strip()
+    runtime_failure_class = str(runtime_ctx.get("failure_class") or "").strip()
     api_base_url = _read_frontend_api_base_url(project_path)
 
     runtime_backend = ""
@@ -3325,9 +3367,10 @@ async def command_inspect(update: Any, context: Any) -> None:
             lines.append(f"Target: {deploy_target}")
         if deploy_status:
             lines.append(f"Status: {deploy_status}")
-    failure_class = runtime_failure_class or last_failure_class
-    if failure_class:
-        lines += ["", f"Failure Class: {failure_class}"]
+    if runtime_failure_class:
+        lines += ["", f"Failure Class: {runtime_failure_class}"]
+    elif runtime_detect_ok or backend_entry or backend_run_mode or has_backend:
+        lines += ["", "Failure Class: (none)"]
 
     if evolution:
         lines += ["", "Evolution:", f"Version: {evolution_version}"]
@@ -3391,6 +3434,8 @@ def _build_selected_project_summary(project_path: Path) -> str:
     has_frontend = (project_path / "frontend").is_dir()
     deploy_block = state.get("deploy") if isinstance(state.get("deploy"), dict) else {}
     runtime_block = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
+    runtime_ctx = _improve_runtime_context(project_path, state)
+    runtime_detect_ok = bool(runtime_ctx.get("detect_ok"))
     runtime_backend = ""
     runtime_frontend = ""
     backend_url = str(
@@ -3403,10 +3448,9 @@ def _build_selected_project_summary(project_path: Path) -> str:
         or state.get("frontend_deploy_url")
         or ""
     ).strip()
-    backend_entry = str((runtime_block.get("backend_entry") if isinstance(runtime_block, dict) else "") or "").strip()
-    backend_run_mode = str((runtime_block.get("backend_run_mode") if isinstance(runtime_block, dict) else "") or "").strip()
-    runtime_failure_class = str((runtime_block.get("failure_class") if isinstance(runtime_block, dict) else "") or "").strip()
-    last_failure_class = str(state.get("last_failure_class") or "").strip()
+    backend_entry = str(runtime_ctx.get("backend_entry") or "").strip()
+    backend_run_mode = str(runtime_ctx.get("backend_run_mode") or "").strip()
+    runtime_failure_class = str(runtime_ctx.get("failure_class") or "").strip()
     api_base_url = _read_frontend_api_base_url(project_path)
     try:
         from archmind.deploy import get_local_runtime_status
@@ -3473,9 +3517,10 @@ def _build_selected_project_summary(project_path: Path) -> str:
             lines.append(f"Target: {deploy_target}")
         if deploy_status:
             lines.append(f"Status: {deploy_status}")
-    failure_class = runtime_failure_class or last_failure_class
-    if failure_class:
-        lines.append(f"Failure Class: {failure_class}")
+    if runtime_failure_class:
+        lines.append(f"Failure Class: {runtime_failure_class}")
+    elif runtime_detect_ok or backend_entry or backend_run_mode or has_backend:
+        lines.append("Failure Class: (none)")
 
     lines += ["", "Try next:", "- /inspect", "- /next"]
 
@@ -3611,12 +3656,10 @@ def _build_improvement_report(project_path: Path) -> str:
     frontend_dir = _frontend_dir_for_project(root)
     has_frontend = frontend_dir is not None
     frontend_root_ok = (root / "frontend").is_dir()
-    backend_env_exists = (root / "backend" / ".env").exists() or (root / ".env").exists()
-    frontend_env_exists = bool(frontend_dir and (frontend_dir / ".env.local").exists())
-    api_base_url = _read_frontend_api_base_url(root)
     requirements_ok = (root / "backend" / "requirements.txt").exists() if fullstack_expected else (
         (root / "requirements.txt").exists() or (root / "backend" / "requirements.txt").exists()
     )
+    env_missing_parts = _runtime_env_missing_parts(root, fullstack_expected=fullstack_expected, has_frontend=has_frontend)
     runtime_ctx = _improve_runtime_context(root, state_payload)
     deploy_ctx = _improve_deploy_context(state_payload)
     runtime_backend_status = str(runtime_ctx.get("backend_status") or "").strip().upper()
@@ -3679,14 +3722,8 @@ def _build_improvement_report(project_path: Path) -> str:
                 "command": "/plan <same idea>\n/idea_local <same idea>",
             }
         )
-    if not backend_env_exists or (has_frontend and (not frontend_env_exists or not api_base_url)):
-        missing_parts: list[str] = []
-        if not backend_env_exists:
-            missing_parts.append("backend/.env")
-        if has_frontend and not frontend_env_exists:
-            missing_parts.append("frontend/.env.local")
-        if has_frontend and frontend_env_exists and not api_base_url:
-            missing_parts.append("NEXT_PUBLIC_API_BASE_URL")
+    if env_missing_parts:
+        missing_parts = list(dict.fromkeys(env_missing_parts))
         runtime_suggestions.append(
             {
                 "title": "Repair runtime env injection",

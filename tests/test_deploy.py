@@ -14,6 +14,7 @@ from archmind.deploy import (
     deploy_fullstack_local,
     deploy_project,
     deploy_to_local,
+    ensure_runtime_env_defaults,
     run_backend_local_with_health,
     run_preflight_checks,
     detect_deploy_kind,
@@ -656,6 +657,42 @@ def test_local_backend_deploy_uses_runtime_frontend_port_for_cors(monkeypatch, t
     backend_env = (tmp_path / "backend" / ".env").read_text(encoding="utf-8")
     assert "APP_PORT=8111" in backend_env
     assert "CORS_ALLOW_ORIGINS=http://localhost:4555,http://127.0.0.1:4555" in backend_env
+
+
+def test_ensure_runtime_env_defaults_adds_missing_keys(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "backend").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.deploy._detect_lan_ip", lambda: "")
+    result = ensure_runtime_env_defaults(tmp_path, backend_port=8123, frontend_port=3123)
+    assert result["ok"] is True
+    backend_env = (tmp_path / "backend" / ".env").read_text(encoding="utf-8")
+    frontend_env = (tmp_path / "frontend" / ".env.local").read_text(encoding="utf-8")
+    assert "APP_PORT=8123" in backend_env
+    assert "BACKEND_BASE_URL=http://127.0.0.1:8123" in backend_env
+    assert "CORS_ALLOW_ORIGINS=http://localhost:3123,http://127.0.0.1:3123" in backend_env
+    assert "NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8123" in frontend_env
+
+
+def test_ensure_runtime_env_defaults_keeps_existing_values(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "backend").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "backend" / ".env").write_text(
+        "APP_PORT=9999\nBACKEND_BASE_URL=http://example.local:9999\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "frontend" / ".env.local").write_text(
+        "NEXT_PUBLIC_API_BASE_URL=http://example.local:9999\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.deploy._detect_lan_ip", lambda: "")
+    result = ensure_runtime_env_defaults(tmp_path, backend_port=8123, frontend_port=3123)
+    assert result["ok"] is True
+    backend_env = (tmp_path / "backend" / ".env").read_text(encoding="utf-8")
+    frontend_env = (tmp_path / "frontend" / ".env.local").read_text(encoding="utf-8")
+    assert "APP_PORT=9999" in backend_env
+    assert "BACKEND_BASE_URL=http://example.local:9999" in backend_env
+    assert "CORS_ALLOW_ORIGINS=http://localhost:3123,http://127.0.0.1:3123" in backend_env
+    assert "NEXT_PUBLIC_API_BASE_URL=http://example.local:9999" in frontend_env
 
 
 def test_generate_deploy_slug_from_timestamped_name() -> None:

@@ -396,6 +396,31 @@ def test_build_completion_message_not_done_after_fix_recommends_continue(tmp_pat
     assert "- run /continue" in msg
 
 
+def test_build_completion_message_suppresses_stale_failure_when_detect_ok(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "completion_detect_ok"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "last_status": "NOT_DONE",
+                "runtime_failure_class": "environment-python",
+                "last_failure_class": "environment-python",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+    msg = build_completion_message(project_dir, tmp_path / "unused.log")
+    assert "Failure class: environment-python" not in msg
+
+
 def test_build_completion_message_includes_stuck_reason_and_next(tmp_path: Path) -> None:
     project_dir = tmp_path / "p5"
     archmind = project_dir / ".archmind"
@@ -2343,6 +2368,49 @@ def test_inspect_command_shows_api_base_url_from_frontend_env(tmp_path: Path, mo
     assert "http://127.0.0.1:8011" in out
 
 
+def test_inspect_command_hides_stale_runtime_failure_when_detection_ok(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect_stale_runtime_class"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "template": "fastapi",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "runtime": {"backend_status": "RUNNING", "failure_class": ""},
+                "runtime_failure_class": "environment-python",
+                "last_failure_class": "environment-python",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_inspect(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "Failure Class: (none)" in out
+    assert "environment-python" not in out
+
+
 def test_improve_command_without_project_shows_guidance(monkeypatch) -> None:
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: None)
     msg = DummyMessage()
@@ -2578,6 +2646,50 @@ def test_improve_command_keeps_structure_or_domain_expansion_suggestions_when_ru
     out = msg.sent[-1]
     assert "Resolve runtime failure classification" not in out
     assert ("Expand features incrementally" in out) or ("Expand domain model" in out)
+
+
+def test_improve_command_suppresses_env_repair_when_runtime_env_keys_present(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "improve_env_ok"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "backend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "backend" / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "backend" / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (project_dir / "frontend").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / ".env.local").write_text(
+        "NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8011\n",
+        encoding="utf-8",
+    )
+    (project_dir / "backend" / ".env").write_text(
+        "APP_PORT=8011\nBACKEND_BASE_URL=http://127.0.0.1:8011\nCORS_ALLOW_ORIGINS=http://localhost:3011,http://127.0.0.1:3011\n",
+        encoding="utf-8",
+    )
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps({"runtime": {"backend_status": "RUNNING", "failure_class": ""}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_improve(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Repair runtime env injection" not in out
 
 
 def test_add_module_updates_spec_and_reuses_apply_hook(tmp_path: Path, monkeypatch) -> None:
@@ -5169,3 +5281,42 @@ def test_auto_run_backend_after_idea_local_fail_response(monkeypatch, tmp_path: 
     assert "Backend:\nFAIL" in out
     assert "Failure class:\nruntime-execution-error" in out
     assert "Next:\n- /logs backend\n- /fix" in out
+
+
+def test_auto_run_backend_after_idea_local_injects_runtime_env_defaults(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "idea_local_env_injection"
+    (project_dir / "backend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "backend" / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "backend" / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (project_dir / "frontend").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot.load_state", lambda _p: {"effective_template": "fullstack-ddd"})
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+    monkeypatch.setattr("archmind.deploy._detect_lan_ip", lambda: "")
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app"},
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.run_backend_local_with_health",
+        lambda _p: {
+            "ok": True,
+            "status": "SUCCESS",
+            "url": "http://127.0.0.1:8131",
+            "backend_smoke_status": "SUCCESS",
+            "backend_smoke_url": "http://127.0.0.1:8131/health",
+        },
+    )
+    monkeypatch.setattr("archmind.telegram_bot.update_runtime_state", lambda *a, **k: {})
+    telegram_bot._auto_run_backend_after_idea_local(project_dir)
+    backend_env = (project_dir / "backend" / ".env").read_text(encoding="utf-8")
+    frontend_env = (project_dir / "frontend" / ".env.local").read_text(encoding="utf-8")
+    assert "APP_PORT=8000" in backend_env
+    assert "BACKEND_BASE_URL=http://127.0.0.1:8000" in backend_env
+    assert "CORS_ALLOW_ORIGINS=http://localhost:3000,http://127.0.0.1:3000" in backend_env
+    assert "NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000" in frontend_env
