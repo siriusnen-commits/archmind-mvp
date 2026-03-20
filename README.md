@@ -63,6 +63,11 @@ ArchMind now supports a much more complete execution loop:
 - `/improve`
 - `/next`
 
+## Offline Install
+
+For offline environments, ArchMind supports installation using a bundled dependency archive such as `wheelhouse.zip`.
+You can verify offline installation with `scripts/offline_install_verify.sh`.
+
 ## What v0.7.0 Means
 
 ArchMind can now:
