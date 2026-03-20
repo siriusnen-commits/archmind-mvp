@@ -491,7 +491,8 @@ def _help_section_text(section: str) -> str:
             "- /restart               restart current project services\n"
             "- /stop                  stop current project services\n"
             "- /stop all              stop all local services\n"
-            "- /logs                  show runtime logs"
+            "- /logs backend          show backend runtime logs\n"
+            "- /logs frontend         show frontend runtime logs"
         )
     if key == "project":
         return (
@@ -567,8 +568,9 @@ def _help_sections_keyboard(section: str = "") -> Any:
                 ],
                 [
                     InlineKeyboardButton(text="Stop all", callback_data=_encode_callback_data("cmd", "/stop all")),
-                    InlineKeyboardButton(text="Logs", callback_data=_encode_callback_data("cmd", "/logs")),
+                    InlineKeyboardButton(text="Logs backend", callback_data=_encode_callback_data("cmd", "/logs backend")),
                 ],
+                [InlineKeyboardButton(text="Logs frontend", callback_data=_encode_callback_data("cmd", "/logs frontend"))],
                 [InlineKeyboardButton(text="Back", callback_data=_encode_callback_data("help", "quick"))],
             ]
         )
@@ -759,6 +761,39 @@ def _extract_recommended_commands_from_text(text: str) -> list[str]:
         if cmd and cmd not in commands:
             commands.append(cmd)
     return commands
+
+
+def _command_handler_map() -> dict[str, Any]:
+    return {
+        "/help": command_help,
+        "/inspect": command_inspect,
+        "/next": command_next,
+        "/improve": command_improve,
+        "/running": command_running,
+        "/restart": command_restart,
+        "/fix": command_fix,
+        "/retry": command_retry,
+        "/logs": command_logs,
+        "/deploy": command_deploy,
+        "/run": command_run,
+        "/stop": command_stop,
+        "/tree": command_tree,
+        "/diff": command_diff,
+        "/continue": command_continue,
+        "/projects": command_projects,
+        "/current": command_current,
+        "/use": command_use,
+    }
+
+
+async def _dispatch_command_text(update: Any, context: Any, command_text: str) -> bool:
+    cmd, args = _parse_command_string(command_text)
+    handler = _command_handler_map().get(cmd)
+    if handler is None:
+        return False
+    context.args = args
+    await handler(update, context)
+    return True
 
 
 def _build_action_keyboard(commands: list[str], *, max_buttons: int = 6) -> Any:
@@ -4977,33 +5012,10 @@ async def command_suggestion_callback(update: Any, context: Any) -> None:
         await command_help(callback_update, callback_context)
         return
     if action == "cmd":
-        cmd, args = _parse_command_string(payload)
-        callback_context.args = args
-        handlers: dict[str, Any] = {
-            "/help": command_help,
-            "/inspect": command_inspect,
-            "/next": command_next,
-            "/improve": command_improve,
-            "/running": command_running,
-            "/restart": command_restart,
-            "/fix": command_fix,
-            "/retry": command_retry,
-            "/logs": command_logs,
-            "/deploy": command_deploy,
-            "/run": command_run,
-            "/stop": command_stop,
-            "/tree": command_tree,
-            "/diff": command_diff,
-            "/continue": command_continue,
-            "/projects": command_projects,
-            "/current": command_current,
-            "/use": command_use,
-        }
-        handler = handlers.get(cmd)
-        if handler is None:
+        dispatched = await _dispatch_command_text(callback_update, callback_context, str(payload or ""))
+        if not dispatched:
             await message.reply_text(f"Unsupported command action: {payload}")
             return
-        await handler(callback_update, callback_context)
         return
     await message.reply_text(f"Unsupported callback action: {action}")
 
