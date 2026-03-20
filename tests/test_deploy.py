@@ -1148,6 +1148,8 @@ def test_stop_local_services_treats_lingering_pid_as_stopped_when_service_down(m
     result = stop_local_services(tmp_path)
     assert result["backend"]["status"] == "STOPPED"
     assert "still running" not in str(result["backend"].get("detail") or "")
+    warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+    assert any("service is down" in str(item) for item in warnings)
 
 
 def test_stop_local_services_keeps_warning_when_service_still_responsive(monkeypatch, tmp_path: Path) -> None:
