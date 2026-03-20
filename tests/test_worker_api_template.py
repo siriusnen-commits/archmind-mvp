@@ -20,6 +20,7 @@ def test_generate_worker_api_template_scaffold(tmp_path: Path) -> None:
     assert "worker_router" in api_router
 
     session_py = (project_dir / "app" / "db" / "session.py").read_text(encoding="utf-8")
+    assert "from app.core.settings import settings" in session_py
     assert "def _ensure_sqlite_parent_dir" in session_py
     assert 'if not value.startswith("sqlite:///")' in session_py
     assert "Path(db_path).expanduser().parent.mkdir(parents=True, exist_ok=True)" in session_py

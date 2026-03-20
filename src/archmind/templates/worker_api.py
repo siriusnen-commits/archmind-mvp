@@ -14,7 +14,7 @@ def enforce_worker_api(_: Dict[str, str], project_name: str) -> Dict[str, str]:
 from pathlib import Path
 from sqlmodel import SQLModel, Session, create_engine
 
-from app.core.config import settings
+from app.core.settings import settings
 
 
 def _ensure_sqlite_parent_dir(db_url: str) -> None:
