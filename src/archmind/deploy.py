@@ -1720,27 +1720,62 @@ def get_local_runtime_status(project_dir: Path) -> dict[str, Any]:
     root = project_dir.expanduser().resolve()
     state = load_state(root) or {}
     runtime = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
+    services = runtime.get("services") if isinstance(runtime.get("services"), dict) else {}
+    backend_service = services.get("backend") if isinstance(services.get("backend"), dict) else {}
+    frontend_service = services.get("frontend") if isinstance(services.get("frontend"), dict) else {}
     deploy = state.get("deploy") if isinstance(state.get("deploy"), dict) else {}
-    backend_pid = _to_pid(runtime.get("backend_pid") if isinstance(runtime, dict) else state.get("backend_pid"))
-    frontend_pid = _to_pid(state.get("frontend_pid"))
+    backend_pid = _to_pid(
+        (backend_service.get("pid") if isinstance(backend_service, dict) else None)
+        or (runtime.get("backend_pid") if isinstance(runtime, dict) else None)
+        or state.get("backend_pid")
+    )
+    frontend_pid = _to_pid(
+        (frontend_service.get("pid") if isinstance(frontend_service, dict) else None)
+        or (runtime.get("frontend_pid") if isinstance(runtime, dict) else None)
+        or state.get("frontend_pid")
+    )
     backend_running = is_pid_running(backend_pid)
     frontend_running = is_pid_running(frontend_pid)
     deploy_target = str((deploy.get("target") if isinstance(deploy, dict) else "") or state.get("deploy_target") or "").strip().lower()
     backend_url = str(
+        (backend_service.get("url") if isinstance(backend_service, dict) else "")
+        or
         (runtime.get("backend_url") if isinstance(runtime, dict) else "")
         or (deploy.get("backend_url") if isinstance(deploy, dict) else "")
         or state.get("backend_deploy_url")
         or state.get("deploy_url")
         or ""
     ).strip()
-    frontend_url = str((deploy.get("frontend_url") if isinstance(deploy, dict) else "") or state.get("frontend_deploy_url") or "").strip()
-    backend_state_status = str((runtime.get("backend_status") if isinstance(runtime, dict) else "") or state.get("backend_status") or "").strip().upper()
+    frontend_url = str(
+        (frontend_service.get("url") if isinstance(frontend_service, dict) else "")
+        or (runtime.get("frontend_url") if isinstance(runtime, dict) else "")
+        or (deploy.get("frontend_url") if isinstance(deploy, dict) else "")
+        or state.get("frontend_deploy_url")
+        or ""
+    ).strip()
+    backend_state_status = str(
+        (backend_service.get("status") if isinstance(backend_service, dict) else "")
+        or (runtime.get("backend_status") if isinstance(runtime, dict) else "")
+        or state.get("backend_status")
+        or ""
+    ).strip().upper()
+    frontend_state_status = str(
+        (frontend_service.get("status") if isinstance(frontend_service, dict) else "")
+        or (runtime.get("frontend_status") if isinstance(runtime, dict) else "")
+        or ""
+    ).strip().upper()
     if backend_running:
         backend_status = "RUNNING"
-    elif backend_state_status in {"FAIL", "WARNING"}:
+    elif backend_state_status in {"FAIL", "WARNING", "STOPPED"}:
         backend_status = backend_state_status
     else:
         backend_status = "NOT RUNNING"
+    if frontend_running:
+        frontend_status = "RUNNING"
+    elif frontend_state_status in {"FAIL", "WARNING", "STOPPED"}:
+        frontend_status = frontend_state_status
+    else:
+        frontend_status = "NOT RUNNING"
 
     return {
         "project_dir": root,
@@ -1752,9 +1787,25 @@ def get_local_runtime_status(project_dir: Path) -> dict[str, Any]:
             "url": backend_url,
         },
         "frontend": {
-            "status": "RUNNING" if frontend_running else "NOT RUNNING",
+            "status": frontend_status,
             "pid": frontend_pid,
             "url": frontend_url,
+        },
+        "services": {
+            "backend": {
+                "status": backend_status,
+                "pid": backend_pid,
+                "port": _to_pid((backend_service.get("port") if isinstance(backend_service, dict) else None) or runtime.get("backend_port")),
+                "url": backend_url,
+                "log_path": str((backend_service.get("log_path") if isinstance(backend_service, dict) else "") or runtime.get("backend_log_path") or "").strip(),
+            },
+            "frontend": {
+                "status": frontend_status,
+                "pid": frontend_pid,
+                "port": _to_pid((frontend_service.get("port") if isinstance(frontend_service, dict) else None) or runtime.get("frontend_port")),
+                "url": frontend_url,
+                "log_path": str((frontend_service.get("log_path") if isinstance(frontend_service, dict) else "") or runtime.get("frontend_log_path") or "").strip(),
+            },
         },
         "running": backend_running or frontend_running,
         "mtime": (root / ".archmind" / "state.json").stat().st_mtime if (root / ".archmind" / "state.json").exists() else 0.0,

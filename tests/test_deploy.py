@@ -32,6 +32,7 @@ from archmind.deploy import (
 )
 from archmind.state import load_state, update_after_deploy, update_runtime_state, write_state
 from archmind.generator import validate_generated_project_structure
+from archmind.frontend_runtime import detect_frontend_runtime_entry
 
 
 def _write_app_main(root: Path) -> None:
@@ -1425,6 +1426,67 @@ def test_get_local_runtime_status_uses_urls_and_pid_status(monkeypatch, tmp_path
     assert status["backend"]["url"] == "http://127.0.0.1:8044"
     assert status["frontend"]["status"] == "NOT RUNNING"
     assert status["frontend"]["url"] == "http://127.0.0.1:3044"
+
+
+def test_detect_frontend_runtime_entry_prefers_frontend_dir(tmp_path: Path) -> None:
+    frontend_dir = tmp_path / "frontend"
+    frontend_dir.mkdir(parents=True, exist_ok=True)
+    (frontend_dir / "package.json").write_text(
+        '{"name":"web","scripts":{"dev":"next dev"},"dependencies":{"next":"14.0.0"}}',
+        encoding="utf-8",
+    )
+    detected = detect_frontend_runtime_entry(tmp_path, port=3013)
+    assert detected["ok"] is True
+    assert Path(str(detected["run_cwd"])).resolve() == frontend_dir.resolve()
+    assert detected["frontend_port"] == 3013
+    assert detected["run_command"][:3] == ["npm", "run", "dev"]
+
+
+def test_update_runtime_state_persists_runtime_services_structure(tmp_path: Path) -> None:
+    update_runtime_state(
+        tmp_path,
+        {
+            "status": "SUCCESS",
+            "mode": "real",
+            "backend_status": "RUNNING",
+            "backend_pid": 44001,
+            "backend_port": 8044,
+            "backend_log_path": str(tmp_path / ".archmind" / "backend.log"),
+            "frontend_status": "RUNNING",
+            "frontend_pid": 44002,
+            "frontend_port": 3044,
+            "frontend_log_path": str(tmp_path / ".archmind" / "frontend.log"),
+            "services": {
+                "backend": {
+                    "status": "RUNNING",
+                    "pid": 44001,
+                    "port": 8044,
+                    "url": "http://127.0.0.1:8044",
+                    "log_path": str(tmp_path / ".archmind" / "backend.log"),
+                },
+                "frontend": {
+                    "status": "RUNNING",
+                    "pid": 44002,
+                    "port": 3044,
+                    "url": "http://127.0.0.1:3044",
+                    "log_path": str(tmp_path / ".archmind" / "frontend.log"),
+                },
+            },
+            "url": "http://127.0.0.1:8044",
+            "detail": "services started",
+        },
+        action="test /run all",
+    )
+    state = load_state(tmp_path) or {}
+    runtime = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
+    services = runtime.get("services") if isinstance(runtime.get("services"), dict) else {}
+    backend = services.get("backend") if isinstance(services.get("backend"), dict) else {}
+    frontend = services.get("frontend") if isinstance(services.get("frontend"), dict) else {}
+    assert str(backend.get("status") or "").upper() == "RUNNING"
+    assert int(backend.get("pid") or 0) == 44001
+    assert str(frontend.get("status") or "").upper() == "RUNNING"
+    assert int(frontend.get("pid") or 0) == 44002
+    assert int(state.get("frontend_pid") or 0) == 44002
 
 
 def test_read_last_lines_returns_none_when_missing(tmp_path: Path) -> None:

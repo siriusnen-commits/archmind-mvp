@@ -5125,9 +5125,104 @@ def test_run_backend_usage_validation(monkeypatch, tmp_path: Path) -> None:
     msg = DummyMessage()
     update = DummyUpdate(message=msg, effective_chat=DummyChat())
     asyncio.run(command_run(update, DummyContext(args=[])))
-    assert msg.sent[-1] == "Usage: /run backend"
+    assert msg.sent[-1] == "Usage: /run backend|all"
     asyncio.run(command_run(update, DummyContext(args=["frontend"])))
-    assert msg.sent[-1] == "Usage: /run backend"
+    assert msg.sent[-1] == "Usage: /run backend|all"
+
+
+def test_run_all_fullstack_runs_backend_and_frontend(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "run_all_fullstack_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+
+    monkeypatch.setattr(
+        "archmind.runtime_orchestrator.run_all_local_services",
+        lambda _p: {
+            "ok": True,
+            "target": "local",
+            "mode": "real",
+            "kind": "fullstack",
+            "status": "SUCCESS",
+            "services": {
+                "backend": {
+                    "status": "RUNNING",
+                    "pid": 20001,
+                    "port": 8126,
+                    "url": "http://127.0.0.1:8126",
+                    "log_path": str(project / ".archmind" / "backend.log"),
+                },
+                "frontend": {
+                    "status": "RUNNING",
+                    "pid": 20002,
+                    "port": 3011,
+                    "url": "http://127.0.0.1:3011",
+                    "log_path": str(project / ".archmind" / "frontend.log"),
+                },
+            },
+            "backend_status": "RUNNING",
+            "backend_pid": 20001,
+            "backend_port": 8126,
+            "backend_log_path": str(project / ".archmind" / "backend.log"),
+            "frontend_status": "RUNNING",
+            "frontend_pid": 20002,
+            "frontend_port": 3011,
+            "frontend_log_path": str(project / ".archmind" / "frontend.log"),
+            "url": "http://127.0.0.1:8126",
+            "detail": "services started",
+            "failure_class": "",
+        },
+    )
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_run(update, DummyContext(args=["all"])))
+    out = msg.sent[-1]
+    assert "Run all finished" in out
+    assert "Backend:\nRUNNING" in out
+    assert "Frontend:\nRUNNING" in out
+    assert "Backend URL:\nhttp://127.0.0.1:8126" in out
+    assert "Frontend URL:\nhttp://127.0.0.1:3011" in out
+
+    state = telegram_bot.load_state(project) or {}
+    runtime = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
+    services = runtime.get("services") if isinstance(runtime.get("services"), dict) else {}
+    frontend = services.get("frontend") if isinstance(services.get("frontend"), dict) else {}
+    assert str(frontend.get("status") or "").upper() == "RUNNING"
+    assert int(frontend.get("pid") or 0) == 20002
+
+
+def test_run_all_backend_only_skips_frontend(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "run_all_backend_only_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+    monkeypatch.setattr(
+        "archmind.runtime_orchestrator.run_all_local_services",
+        lambda _p: {
+            "ok": True,
+            "target": "local",
+            "mode": "real",
+            "kind": "backend",
+            "status": "SUCCESS",
+            "services": {
+                "backend": {"status": "RUNNING", "pid": 21001, "port": 8130, "url": "http://127.0.0.1:8130", "log_path": ""},
+                "frontend": {"status": "ABSENT", "pid": None, "port": None, "url": "", "log_path": ""},
+            },
+            "backend_status": "RUNNING",
+            "backend_pid": 21001,
+            "frontend_status": "ABSENT",
+            "frontend_pid": None,
+            "url": "http://127.0.0.1:8130",
+            "detail": "services started",
+            "failure_class": "",
+        },
+    )
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_run(update, DummyContext(args=["all"])))
+    out = msg.sent[-1]
+    assert "Run all finished" in out
+    assert "Backend:\nRUNNING" in out
+    assert "Frontend:\nABSENT" in out
 
 
 def test_run_backend_success_message_and_running_integration(monkeypatch, tmp_path: Path) -> None:
