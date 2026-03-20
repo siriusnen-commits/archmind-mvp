@@ -2241,11 +2241,15 @@ def test_help_runtime_section_text_and_buttons() -> None:
     assert "/stop" in out
     assert "/stop all" in out
     assert "stop all local services" in out
+    assert "/logs backend" in out
+    assert "/logs frontend" in out
     reply_markup = msg.sent_kwargs[-1].get("reply_markup")
     assert reply_markup is not None
     buttons = [btn for row in getattr(reply_markup, "inline_keyboard", []) for btn in row]
     callback_values = [str(getattr(btn, "callback_data", "")) for btn in buttons]
     assert any(value == "cmd|/stop all" for value in callback_values)
+    assert any(value == "cmd|/logs backend" for value in callback_values)
+    assert any(value == "cmd|/logs frontend" for value in callback_values)
     assert any(value == "help|quick" for value in callback_values)
 
 
@@ -2314,6 +2318,25 @@ def test_command_callback_dispatches_running_and_restart(monkeypatch) -> None:
     asyncio.run(command_suggestion_callback(u_running_colon, DummyContext()))
     assert q_running_colon.answered is True
     assert "Unsupported command action" not in (msg_running_colon.sent[-1] if msg_running_colon.sent else "")
+
+
+def test_command_callback_dispatches_stop_all(monkeypatch) -> None:
+    captured: dict[str, list[str]] = {"stop": []}
+
+    async def fake_stop(update_arg, context_arg):  # type: ignore[no-untyped-def]
+        captured["stop"] = list(getattr(context_arg, "args", []))
+        await update_arg.message.reply_text("stop called")
+
+    monkeypatch.setattr("archmind.telegram_bot.command_stop", fake_stop)
+
+    msg = DummyMessage()
+    query = DummyCallbackQuery(data="cmd|/stop all", message=msg)
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    update.callback_query = query  # type: ignore[attr-defined]
+    asyncio.run(command_suggestion_callback(update, DummyContext()))
+    assert query.answered is True
+    assert captured["stop"] == ["all"]
+    assert "Unsupported command action" not in (msg.sent[-1] if msg.sent else "")
 
 
 def test_help_all_keeps_full_command_list() -> None:
