@@ -5307,12 +5307,25 @@ async def command_restart(update: Any, context: Any) -> None:
 
     restart_backend = result.get("backend") if isinstance(result.get("backend"), dict) else {}
     restart_frontend = result.get("frontend") if isinstance(result.get("frontend"), dict) else {}
+    deploy_result = result.get("deploy") if isinstance(result.get("deploy"), dict) else {}
+    preflight = deploy_result.get("preflight") if isinstance(deploy_result.get("preflight"), dict) else {}
+    preflight_status = str(preflight.get("status") or "").strip().upper()
+    preflight_fixes = preflight.get("fixes_applied")
+    if not isinstance(preflight_fixes, list):
+        preflight_fixes = []
     backend_detail = str(restart_backend.get("detail") or "").strip()
     frontend_detail = str(restart_frontend.get("detail") or "").strip()
     if backend_detail and str(backend.get("status") or "").upper() != "RUNNING":
         lines.extend(["", "Backend detail:", backend_detail])
     if frontend_detail and str(frontend.get("status") or "").upper() != "RUNNING":
         lines.extend(["", "Frontend detail:", frontend_detail])
+    if preflight_status:
+        lines.extend(["", "Preflight:", preflight_status])
+        if preflight_status == "FIXED":
+            for item in preflight_fixes[:5]:
+                value = str(item).strip()
+                if value:
+                    lines.append(f"- {value}")
     lines += ["", "Next:", "- /running", "- /logs"]
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 
