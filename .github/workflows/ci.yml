@@ -69,10 +69,19 @@ jobs:
           cat "${GITHUB_WORKSPACE}/.ci-logs/pytest.log" || true
           echo "===== ENV ====="
           cat "${GITHUB_WORKSPACE}/.ci-logs/env.txt" || true
-      - name: Upload diagnostics
+      - name: Check diagnostics existence
         if: always()
+        id: ci_logs_check
+        shell: bash
+        run: |
+          if [ -d "${GITHUB_WORKSPACE}/.ci-logs" ] && find "${GITHUB_WORKSPACE}/.ci-logs" -type f | grep -q .; then
+            echo "has_logs=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_logs=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Upload diagnostics artifact
+        if: always() && steps.ci_logs_check.outputs.has_logs == 'true'
         uses: actions/upload-artifact@v6
         with:
           name: ci-test-logs
           path: ${{ github.workspace }}/.ci-logs
-          if-no-files-found: warn
