@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -491,6 +492,32 @@ def test_build_completion_message_marks_done_and_avoids_retry_when_detect_ok_wit
     assert "Status: DONE" in msg
     assert "run /retry" not in msg
     assert "run /fix" not in msg
+
+
+def test_build_completion_message_overrides_stale_not_done_final_status_when_detect_ok(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "summary_stale_final_status"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (archmind / "result.json").write_text(json.dumps({"status": "SUCCESS", "final_status": "NOT_DONE"}), encoding="utf-8")
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "final_status": "NOT_DONE",
+                "runtime": {"backend_status": "RUNNING", "failure_class": ""},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+    msg = build_completion_message(project_dir, tmp_path / "unused.log")
+    assert "Status: DONE" in msg
+    assert "run /retry" not in msg
 
 
 def test_build_completion_message_includes_stuck_reason_and_next(tmp_path: Path) -> None:
@@ -2882,6 +2909,87 @@ def test_improve_command_suppresses_env_repair_when_runtime_env_keys_present(tmp
     asyncio.run(command_improve(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     out = msg.sent[-1]
     assert "Repair runtime env injection" not in out
+
+
+def test_improve_command_suppresses_env_repair_for_detected_flat_backend(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "improve_flat_backend_env_ok"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (project_dir / ".env").write_text(
+        "APP_PORT=8000\nBACKEND_BASE_URL=http://127.0.0.1:8000\nCORS_ALLOW_ORIGINS=http://localhost:3000,http://127.0.0.1:3000\n",
+        encoding="utf-8",
+    )
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps({"runtime": {"backend_status": "RUNNING", "failure_class": ""}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_improve(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Repair runtime env injection" not in out
+
+
+def test_improve_command_formats_command_hints_as_single_line(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "improve_command_format"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi==0.115.0\n", encoding="utf-8")
+    (archmind / "architecture_reasoning.json").write_text(
+        json.dumps(
+            {
+                "idea_original": "개인용 블로그형식의 다이어리 webapp",
+                "app_shape": "backend",
+                "recommended_template": "fastapi",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "template": "fastapi",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_improve(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    lines = out.splitlines()
+    for idx, line in enumerate(lines):
+        if "command:" not in line:
+            continue
+        assert re.search(r"command:\s*/\S", line)
+        if idx + 1 < len(lines):
+            assert not lines[idx + 1].startswith("/")
 
 
 def test_add_module_updates_spec_and_reuses_apply_hook(tmp_path: Path, monkeypatch) -> None:
