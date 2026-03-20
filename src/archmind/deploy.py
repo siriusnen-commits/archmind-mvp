@@ -845,10 +845,177 @@ def _auto_fix_meta(history: list[dict[str, Any]], status: str) -> dict[str, Any]
     }
 
 
+def _is_port_available(port: int) -> bool:
+    if int(port) <= 0:
+        return False
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind(("127.0.0.1", int(port)))
+        except OSError:
+            return False
+    return True
+
+
+def run_preflight_checks(project_dir: Path, *, requested_port: int | None = None) -> dict[str, Any]:
+    root = project_dir.expanduser().resolve()
+    issues_found: list[str] = []
+    fixes_applied: list[str] = []
+    used_fix_types: set[str] = set()
+    selected_port = int(requested_port) if requested_port else 8000
+
+    entry = detect_backend_runtime_entry(root, port=selected_port)
+    if not bool(entry.get("ok")):
+        issues_found.append(str(entry.get("failure_reason") or "backend entrypoint detection failed"))
+        return {
+            "ok": False,
+            "fixed": False,
+            "status": "FAILED",
+            "fixes_applied": fixes_applied,
+            "issues_found": issues_found,
+            "selected_port": selected_port,
+        }
+
+    run_cwd = Path(entry.get("run_cwd") or root)
+    req_candidates = [
+        run_cwd / "requirements.txt",
+        root / "requirements.txt",
+        root / "backend" / "requirements.txt",
+    ]
+    req_path: Path | None = None
+    for candidate in req_candidates:
+        if candidate.exists() and candidate.is_file():
+            req_path = candidate
+            break
+    if req_path is not None:
+        completed = subprocess.run(  # noqa: S603
+            [sys.executable, "-m", "pip", "install", "-r", str(req_path)],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            shell=False,
+            check=False,
+        )
+        if completed.returncode == 0:
+            fixes_applied.append(f"installed requirements ({req_path.relative_to(root)})")
+        else:
+            detail = (completed.stderr or completed.stdout or "").strip() or "requirements install failed"
+            issues_found.append(detail)
+
+    env_ok, env_detail = _apply_default_env(root, selected_port)
+    if env_ok:
+        fixes_applied.append("created .env defaults")
+    else:
+        issues_found.append(env_detail)
+
+    probe = subprocess.run(  # noqa: S603
+        [sys.executable, "-c", "import app.main"],
+        cwd=run_cwd,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        shell=False,
+        check=False,
+    )
+    if probe.returncode != 0:
+        raw = (probe.stderr or probe.stdout or "").strip()
+        issues_found.append(raw or "backend import probe failed")
+        analysis = analyze_backend_failure(raw)
+        fix = apply_auto_fix(root, analysis, used_fix_types=used_fix_types, current_port=selected_port)
+        if bool(fix.get("applied")):
+            used_fix_types.add(str(fix.get("fix_type") or ""))
+            fixes_applied.append(str(fix.get("detail") or f"applied {fix.get('fix_type') or 'auto-fix'}"))
+            if fix.get("new_port") is not None:
+                selected_port = int(fix.get("new_port"))
+            probe_retry = subprocess.run(  # noqa: S603
+                [sys.executable, "-c", "import app.main"],
+                cwd=run_cwd,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                shell=False,
+                check=False,
+            )
+            if probe_retry.returncode == 0 and issues_found:
+                issues_found.pop()
+
+    has_sqlite_db = any(root.glob("*.db")) or any((root / "backend").glob("*.db"))
+    if not has_sqlite_db:
+        fix = apply_auto_fix(
+            root,
+            {"type": "db_not_initialized", "package": "", "detail": "database file missing"},
+            used_fix_types=used_fix_types,
+            current_port=selected_port,
+        )
+        if bool(fix.get("applied")):
+            used_fix_types.add(str(fix.get("fix_type") or ""))
+            fixes_applied.append(str(fix.get("detail") or "database initialized"))
+        else:
+            issues_found.append(str(fix.get("detail") or "database initialization failed"))
+
+    if not _is_port_available(selected_port):
+        fix = apply_auto_fix(
+            root,
+            {"type": "port_in_use", "package": "", "detail": "address already in use"},
+            used_fix_types=used_fix_types,
+            current_port=selected_port,
+        )
+        if bool(fix.get("applied")) and fix.get("new_port") is not None:
+            used_fix_types.add(str(fix.get("fix_type") or ""))
+            selected_port = int(fix.get("new_port"))
+            fixes_applied.append(str(fix.get("detail") or f"switched port to {selected_port}"))
+        else:
+            issues_found.append("port allocation failed")
+
+    ok = len(issues_found) == 0
+    fixed = len(fixes_applied) > 0
+    status = "OK" if ok and not fixed else ("FIXED" if ok and fixed else "FAILED")
+    return {
+        "ok": ok,
+        "fixed": fixed,
+        "status": status,
+        "fixes_applied": fixes_applied,
+        "issues_found": issues_found,
+        "selected_port": selected_port,
+    }
+
+
 def run_backend_local_with_health(project_dir: Path, *, port: int | None = None) -> dict[str, Any]:
     root = project_dir.expanduser().resolve()
     max_retries = 2
     current_port = int(port) if port else None
+    preflight = run_preflight_checks(root, requested_port=current_port)
+    selected = preflight.get("selected_port")
+    if selected is not None and str(selected).isdigit():
+        current_port = int(selected)
+    if not bool(preflight.get("ok")):
+        issue_lines = [str(item).strip() for item in (preflight.get("issues_found") or []) if str(item).strip()]
+        detail = "preflight failed before backend execution"
+        if issue_lines:
+            detail = f"{detail}\n" + "\n".join(issue_lines[:5])
+        return {
+            "ok": False,
+            "target": "local",
+            "mode": "real",
+            "kind": "backend",
+            "status": "FAIL",
+            "url": "",
+            "detail": detail,
+            "failure_class": "runtime-execution-error",
+            "backend_status": "FAIL",
+            "healthcheck_url": "",
+            "healthcheck_status": "SKIPPED",
+            "healthcheck_detail": "preflight failed",
+            "backend_smoke_url": "",
+            "backend_smoke_status": "SKIPPED",
+            "backend_smoke_detail": "preflight failed",
+            "frontend_smoke_url": "",
+            "frontend_smoke_status": "SKIPPED",
+            "frontend_smoke_detail": "frontend not deployed",
+            "auto_fix": _auto_fix_meta([], "SKIPPED"),
+            "preflight": preflight,
+        }
+
     used_fix_types: set[str] = set()
     auto_fix_history: list[dict[str, Any]] = []
 
@@ -890,6 +1057,7 @@ def run_backend_local_with_health(project_dir: Path, *, port: int | None = None)
                     "frontend_smoke_status": "SKIPPED",
                     "frontend_smoke_detail": "frontend not deployed",
                     "auto_fix": _auto_fix_meta(auto_fix_history, "FAILED"),
+                    "preflight": preflight,
                 }
 
             if attempt < max_retries:
@@ -936,6 +1104,7 @@ def run_backend_local_with_health(project_dir: Path, *, port: int | None = None)
                 "frontend_smoke_status": "SKIPPED",
                 "frontend_smoke_detail": "frontend not deployed",
                 "auto_fix": _auto_fix_meta(auto_fix_history, "FAILED"),
+                "preflight": preflight,
             }
 
         backend_smoke = _backend_smoke_with_retry(backend_url)
@@ -973,6 +1142,7 @@ def run_backend_local_with_health(project_dir: Path, *, port: int | None = None)
                 "frontend_smoke_status": "SKIPPED",
                 "frontend_smoke_detail": "frontend not deployed",
                 "auto_fix": auto_fix_meta,
+                "preflight": preflight,
             }
 
         failure_reason = "backend log contains ERROR marker" if has_error else str(backend_smoke.get("healthcheck_detail") or "backend health check failed").strip()
@@ -1033,6 +1203,7 @@ def run_backend_local_with_health(project_dir: Path, *, port: int | None = None)
             "frontend_smoke_status": "SKIPPED",
             "frontend_smoke_detail": "frontend not deployed",
             "auto_fix": _auto_fix_meta(auto_fix_history, "FAILED"),
+            "preflight": preflight,
         }
 
     return {
@@ -1046,6 +1217,7 @@ def run_backend_local_with_health(project_dir: Path, *, port: int | None = None)
         "failure_class": "runtime-execution-error",
         "backend_status": "FAIL",
         "auto_fix": _auto_fix_meta(auto_fix_history, "FAILED"),
+        "preflight": preflight,
     }
 
 

@@ -15,6 +15,7 @@ from archmind.deploy import (
     deploy_project,
     deploy_to_local,
     run_backend_local_with_health,
+    run_preflight_checks,
     detect_deploy_kind,
     generate_deploy_slug,
     get_frontend_deploy_dir,
@@ -314,6 +315,17 @@ def test_run_backend_local_with_health_success(monkeypatch, tmp_path: Path) -> N
             return None
 
     monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 8122)
+    monkeypatch.setattr(
+        "archmind.deploy.run_preflight_checks",
+        lambda *_a, **_k: {
+            "ok": True,
+            "fixed": False,
+            "status": "OK",
+            "fixes_applied": [],
+            "issues_found": [],
+            "selected_port": 8122,
+        },
+    )
     monkeypatch.setattr("archmind.deploy.time.sleep", lambda _s: None)
     monkeypatch.setattr("archmind.deploy._run_local_process_with_log", lambda *a, **k: DummyProc())
     monkeypatch.setattr(
@@ -332,6 +344,8 @@ def test_run_backend_local_with_health_success(monkeypatch, tmp_path: Path) -> N
     assert result["backend_smoke_status"] == "SUCCESS"
     assert result["backend_port"] == 8122
     assert str(result.get("backend_log_path") or "").endswith("/.archmind/backend.log")
+    preflight = result.get("preflight") if isinstance(result.get("preflight"), dict) else {}
+    assert preflight.get("status") == "OK"
 
 
 def test_run_backend_local_with_health_fail_on_health_timeout(monkeypatch, tmp_path: Path) -> None:
@@ -344,6 +358,17 @@ def test_run_backend_local_with_health_fail_on_health_timeout(monkeypatch, tmp_p
             return None
 
     monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 8123)
+    monkeypatch.setattr(
+        "archmind.deploy.run_preflight_checks",
+        lambda *_a, **_k: {
+            "ok": True,
+            "fixed": False,
+            "status": "OK",
+            "fixes_applied": [],
+            "issues_found": [],
+            "selected_port": 8123,
+        },
+    )
     monkeypatch.setattr("archmind.deploy.time.sleep", lambda _s: None)
     monkeypatch.setattr("archmind.deploy._run_local_process_with_log", lambda *a, **k: DummyProc())
     monkeypatch.setattr(
@@ -364,6 +389,17 @@ def test_run_backend_local_with_health_fail_on_health_timeout(monkeypatch, tmp_p
 
 def test_run_backend_local_with_health_detect_failure_not_environment_python(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
+        "archmind.deploy.run_preflight_checks",
+        lambda *_a, **_k: {
+            "ok": True,
+            "fixed": False,
+            "status": "OK",
+            "fixes_applied": [],
+            "issues_found": [],
+            "selected_port": 8124,
+        },
+    )
+    monkeypatch.setattr(
         "archmind.deploy.deploy_backend_local",
         lambda *_a, **_k: {
             "status": "FAIL",
@@ -383,6 +419,80 @@ def test_run_backend_local_with_health_detect_failure_not_environment_python(mon
     assert result["status"] == "FAIL"
     assert result["failure_class"] == "generation-error"
     assert result["failure_class"] != "environment-python"
+
+
+def test_run_backend_local_with_health_stops_when_preflight_failed(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "archmind.deploy.run_preflight_checks",
+        lambda *_a, **_k: {
+            "ok": False,
+            "fixed": False,
+            "status": "FAILED",
+            "fixes_applied": [],
+            "issues_found": ["requirements install failed"],
+            "selected_port": 8000,
+        },
+    )
+    result = run_backend_local_with_health(tmp_path)
+    assert result["ok"] is False
+    assert result["status"] == "FAIL"
+    assert result["failure_class"] == "runtime-execution-error"
+    assert "preflight failed" in str(result.get("detail") or "").lower()
+    preflight = result.get("preflight") if isinstance(result.get("preflight"), dict) else {}
+    assert preflight.get("status") == "FAILED"
+
+
+def test_run_preflight_checks_fixes_import_and_port(monkeypatch, tmp_path: Path) -> None:
+    _write_app_main(tmp_path)
+    monkeypatch.setattr(
+        "archmind.deploy.detect_backend_runtime_entry",
+        lambda *_a, **_k: {
+            "ok": True,
+            "run_cwd": tmp_path,
+            "backend_entry": "app.main:app",
+            "backend_run_mode": "asgi-direct",
+            "run_command": ["uvicorn", "app.main:app"],
+            "failure_reason": "",
+        },
+    )
+
+    class Completed:
+        def __init__(self, code: int, stderr: str = "", stdout: str = "") -> None:
+            self.returncode = code
+            self.stderr = stderr
+            self.stdout = stdout
+
+    calls = {"n": 0}
+
+    def fake_run(cmd, **_kwargs):  # type: ignore[no-untyped-def]
+        if cmd[:4] == ["/Users/inkyun/.pyenv/versions/3.11.7/bin/python", "-m", "pip", "install"] or cmd[1:4] == ["-m", "pip", "install"]:
+            return Completed(0)
+        if cmd[:2] == ["/Users/inkyun/.pyenv/versions/3.11.7/bin/python", "-c"] or cmd[:2] == ["python", "-c"] or (len(cmd) >= 2 and cmd[1] == "-c"):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return Completed(1, stderr="ModuleNotFoundError: No module named 'sqlmodel'")
+            return Completed(0)
+        return Completed(0)
+
+    monkeypatch.setattr("archmind.deploy.subprocess.run", fake_run)
+    monkeypatch.setattr("archmind.deploy._is_port_available", lambda _p: False)
+    monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 9101)
+    monkeypatch.setattr(
+        "archmind.deploy.apply_auto_fix",
+        lambda _p, analysis, **_k: (
+            {"applied": True, "fix_type": "missing_dependency", "detail": "missing_dependency -> sqlmodel installed", "new_port": None, "package": "sqlmodel"}
+            if str(analysis.get("type") or "") == "missing_dependency"
+            else {"applied": True, "fix_type": "port_in_use", "detail": "port_in_use -> switched port to 9101", "new_port": 9101, "package": ""}
+        ),
+    )
+    monkeypatch.setattr("archmind.deploy._apply_default_env", lambda *_a, **_k: (True, "runtime env defaults applied"))
+
+    result = run_preflight_checks(tmp_path, requested_port=8000)
+    assert result["ok"] is True
+    assert result["status"] == "FIXED"
+    assert result["selected_port"] == 9101
+    assert any("sqlmodel installed" in item for item in result["fixes_applied"])
+    assert any("switched port" in item for item in result["fixes_applied"])
 
 
 def test_local_frontend_deploy_returns_localhost_url(monkeypatch, tmp_path: Path) -> None:
