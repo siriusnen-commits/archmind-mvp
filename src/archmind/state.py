@@ -152,6 +152,12 @@ def _safe_pid(value: Any) -> Optional[int]:
     return pid if pid > 0 else None
 
 
+def _partition_value(block: dict[str, Any], key: str, fallback: Any) -> Any:
+    if key in block:
+        return block.get(key)
+    return fallback
+
+
 def _default_deploy_state() -> dict[str, Any]:
     return {
         "target": "",
@@ -323,10 +329,10 @@ def _normalize_loaded_state(project_dir: Path, payload: dict[str, Any]) -> dict[
 
     deploy_defaults = _default_deploy_state()
     deploy_defaults.update(deploy_block)
-    deploy_defaults["target"] = str(deploy_defaults.get("target") or normalized.get("deploy_target") or "").strip()[:40]
+    deploy_defaults["target"] = str(_partition_value(deploy_block, "target", normalized.get("deploy_target")) or "").strip()[:40]
     deploy_defaults["mode"] = str(deploy_defaults.get("mode") or normalized.get("deploy_mode") or "").strip()[:20]
     deploy_defaults["kind"] = str(deploy_defaults.get("kind") or normalized.get("deploy_kind") or "").strip()[:20]
-    deploy_defaults["status"] = _safe_optional_status(str(deploy_defaults.get("status") or normalized.get("last_deploy_status") or ""))
+    deploy_defaults["status"] = _safe_optional_status(str(_partition_value(deploy_block, "status", normalized.get("last_deploy_status")) or ""))
     deploy_defaults["url"] = str(deploy_defaults.get("url") or normalized.get("deploy_url") or "").strip()[:300]
     deploy_defaults["detail"] = str(deploy_defaults.get("detail") or normalized.get("last_deploy_detail") or "").strip()[:220]
     deploy_defaults["backend_url"] = str(deploy_defaults.get("backend_url") or normalized.get("backend_deploy_url") or "").strip()[:300]
@@ -344,13 +350,13 @@ def _normalize_loaded_state(project_dir: Path, payload: dict[str, Any]) -> dict[
     deploy_defaults["healthcheck_url"] = str(deploy_defaults.get("healthcheck_url") or normalized.get("healthcheck_url") or "").strip()[:300]
     deploy_defaults["healthcheck_status"] = _safe_healthcheck_status(str(deploy_defaults.get("healthcheck_status") or normalized.get("healthcheck_status") or ""))
     deploy_defaults["healthcheck_detail"] = str(deploy_defaults.get("healthcheck_detail") or normalized.get("healthcheck_detail") or "").strip()[:220]
-    deploy_defaults["failure_class"] = str(deploy_defaults.get("failure_class") or "").strip()[:80]
+    deploy_defaults["failure_class"] = str(_partition_value(deploy_block, "failure_class", "") or "").strip()[:80]
     normalized["deploy"] = deploy_defaults
 
     runtime_defaults = _default_runtime_state()
     runtime_defaults.update(runtime_block)
     runtime_defaults["mode"] = str(runtime_defaults.get("mode") or "local").strip()[:20]
-    runtime_defaults["backend_status"] = str(runtime_defaults.get("backend_status") or normalized.get("backend_status") or "").strip().upper()[:20]
+    runtime_defaults["backend_status"] = str(_partition_value(runtime_block, "backend_status", normalized.get("backend_status")) or "").strip().upper()[:20]
     runtime_defaults["backend_port"] = _safe_pid(runtime_defaults.get("backend_port") or normalized.get("backend_port"))
     runtime_defaults["backend_pid"] = _safe_pid(runtime_defaults.get("backend_pid") or normalized.get("backend_pid"))
     runtime_defaults["backend_log_path"] = str(runtime_defaults.get("backend_log_path") or normalized.get("backend_log_path") or "").strip()[:300]
@@ -360,7 +366,7 @@ def _normalize_loaded_state(project_dir: Path, payload: dict[str, Any]) -> dict[
     runtime_defaults["backend_run_command"] = str(runtime_defaults.get("backend_run_command") or normalized.get("backend_run_command") or "").strip()[:300]
     runtime_defaults["backend_url"] = str(runtime_defaults.get("backend_url") or normalized.get("backend_deploy_url") or normalized.get("deploy_url") or "").strip()[:300]
     runtime_defaults["failure_class"] = str(
-        runtime_defaults.get("failure_class") or normalized.get("runtime_failure_class") or ""
+        _partition_value(runtime_block, "failure_class", normalized.get("runtime_failure_class")) or ""
     ).strip()[:80]
     runtime_defaults["detail"] = str(runtime_defaults.get("detail") or "").strip()[:220]
     runtime_defaults["healthcheck_url"] = str(runtime_defaults.get("healthcheck_url") or normalized.get("healthcheck_url") or "").strip()[:300]
@@ -630,10 +636,10 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
         deploy_block = {}
     deploy = _default_deploy_state()
     deploy.update(deploy_block)
-    deploy["target"] = str(deploy.get("target") or payload.get("deploy_target") or "").strip()[:40]
+    deploy["target"] = str(_partition_value(deploy_block, "target", payload.get("deploy_target")) or "").strip()[:40]
     deploy["mode"] = str(deploy.get("mode") or payload.get("deploy_mode") or "").strip()[:20]
     deploy["kind"] = str(deploy.get("kind") or payload.get("deploy_kind") or "").strip()[:20]
-    deploy["status"] = _safe_optional_status(str(deploy.get("status") or payload.get("last_deploy_status") or ""))
+    deploy["status"] = _safe_optional_status(str(_partition_value(deploy_block, "status", payload.get("last_deploy_status")) or ""))
     deploy["url"] = str(deploy.get("url") or payload.get("deploy_url") or "").strip()[:300]
     deploy["detail"] = str(deploy.get("detail") or payload.get("last_deploy_detail") or "").strip()[:220]
     deploy["backend_url"] = str(deploy.get("backend_url") or payload.get("backend_deploy_url") or "").strip()[:300]
@@ -651,7 +657,7 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     deploy["healthcheck_url"] = str(deploy.get("healthcheck_url") or payload.get("healthcheck_url") or "").strip()[:300]
     deploy["healthcheck_status"] = _safe_healthcheck_status(str(deploy.get("healthcheck_status") or payload.get("healthcheck_status") or ""))
     deploy["healthcheck_detail"] = str(deploy.get("healthcheck_detail") or payload.get("healthcheck_detail") or "").strip()[:220]
-    deploy["failure_class"] = str(deploy.get("failure_class") or "").strip()[:80]
+    deploy["failure_class"] = str(_partition_value(deploy_block, "failure_class", "") or "").strip()[:80]
     payload["deploy"] = deploy
 
     runtime_block = payload.get("runtime")
@@ -660,7 +666,7 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     runtime = _default_runtime_state()
     runtime.update(runtime_block)
     runtime["mode"] = str(runtime.get("mode") or "local").strip()[:20]
-    runtime["backend_status"] = str(runtime.get("backend_status") or payload.get("backend_status") or "").strip().upper()[:20]
+    runtime["backend_status"] = str(_partition_value(runtime_block, "backend_status", payload.get("backend_status")) or "").strip().upper()[:20]
     runtime["backend_port"] = _safe_pid(runtime.get("backend_port") or payload.get("backend_port"))
     runtime["backend_pid"] = _safe_pid(runtime.get("backend_pid") or payload.get("backend_pid"))
     runtime["backend_log_path"] = str(runtime.get("backend_log_path") or payload.get("backend_log_path") or "").strip()[:300]
@@ -669,7 +675,7 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     runtime["backend_run_cwd"] = str(runtime.get("backend_run_cwd") or payload.get("backend_run_cwd") or "").strip()[:300]
     runtime["backend_run_command"] = str(runtime.get("backend_run_command") or payload.get("backend_run_command") or "").strip()[:300]
     runtime["backend_url"] = str(runtime.get("backend_url") or payload.get("backend_deploy_url") or payload.get("deploy_url") or "").strip()[:300]
-    runtime["failure_class"] = str(runtime.get("failure_class") or payload.get("runtime_failure_class") or "").strip()[:80]
+    runtime["failure_class"] = str(_partition_value(runtime_block, "failure_class", payload.get("runtime_failure_class")) or "").strip()[:80]
     runtime["detail"] = str(runtime.get("detail") or "").strip()[:220]
     runtime["healthcheck_url"] = str(runtime.get("healthcheck_url") or payload.get("healthcheck_url") or "").strip()[:300]
     runtime["healthcheck_status"] = _safe_healthcheck_status(str(runtime.get("healthcheck_status") or payload.get("healthcheck_status") or ""))

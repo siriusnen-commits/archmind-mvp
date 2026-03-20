@@ -3514,6 +3514,81 @@ def _extract_project_idea_hint(reasoning: dict[str, Any], state_payload: dict[st
     return ""
 
 
+def _state_block_value(block: dict[str, Any], key: str, fallback: Any) -> Any:
+    if key in block:
+        return block.get(key)
+    return fallback
+
+
+def _improve_runtime_context(project_path: Path, state_payload: dict[str, Any]) -> dict[str, Any]:
+    runtime_block = state_payload.get("runtime") if isinstance(state_payload.get("runtime"), dict) else {}
+    backend_status_raw = _state_block_value(runtime_block, "backend_status", state_payload.get("backend_status"))
+    backend_status = str(backend_status_raw or "").strip().upper()
+    if backend_status == "NOT RUNNING":
+        backend_status = "STOPPED"
+    runtime_failure_raw = _state_block_value(
+        runtime_block,
+        "failure_class",
+        state_payload.get("runtime_failure_class") or state_payload.get("last_failure_class"),
+    )
+    runtime_failure_class = str(runtime_failure_raw or "").strip()
+    backend_entry = str(_state_block_value(runtime_block, "backend_entry", state_payload.get("backend_entry")) or "").strip()
+    backend_run_mode = str(_state_block_value(runtime_block, "backend_run_mode", state_payload.get("backend_run_mode")) or "").strip()
+    backend_run_command = str(_state_block_value(runtime_block, "backend_run_command", state_payload.get("backend_run_command")) or "").strip()
+    auto_fix = runtime_block.get("auto_fix") if isinstance(runtime_block.get("auto_fix"), dict) else {}
+    preflight = runtime_block.get("preflight") if isinstance(runtime_block.get("preflight"), dict) else {}
+    try:
+        detected = detect_backend_runtime_entry(project_path, port=8000)
+    except Exception:
+        detected = {"ok": False}
+    detect_ok = bool(detected.get("ok"))
+    if detect_ok:
+        backend_entry = str(detected.get("backend_entry") or backend_entry or "").strip()
+        backend_run_mode = str(detected.get("backend_run_mode") or backend_run_mode or "").strip()
+        cmd_items = [str(item).strip() for item in (detected.get("run_command") or []) if str(item).strip()]
+        backend_run_command = " ".join(cmd_items) if cmd_items else backend_run_command
+        runtime_failure_class = ""
+    elif not runtime_failure_class:
+        runtime_failure_class = str(detected.get("failure_class") or "").strip()
+    return {
+        "backend_status": backend_status,
+        "failure_class": runtime_failure_class,
+        "backend_entry": backend_entry,
+        "backend_run_mode": backend_run_mode,
+        "backend_run_command": backend_run_command,
+        "auto_fix": auto_fix,
+        "preflight": preflight,
+        "detect_ok": detect_ok,
+        "detected": detected,
+    }
+
+
+def _improve_deploy_context(state_payload: dict[str, Any]) -> dict[str, str]:
+    deploy_block = state_payload.get("deploy") if isinstance(state_payload.get("deploy"), dict) else {}
+    target = str(
+        _state_block_value(
+            deploy_block,
+            "target",
+            state_payload.get("deploy_target") or state_payload.get("auto_deploy_target"),
+        )
+        or ""
+    ).strip()
+    status = str(
+        _state_block_value(
+            deploy_block,
+            "status",
+            state_payload.get("last_deploy_status") or state_payload.get("auto_deploy_status"),
+        )
+        or ""
+    ).strip().upper()
+    failure_class = str(_state_block_value(deploy_block, "failure_class", "") or "").strip()
+    return {
+        "target": target,
+        "status": status,
+        "failure_class": failure_class,
+    }
+
+
 def _build_improvement_report(project_path: Path) -> str:
     root = project_path.expanduser().resolve()
     archmind_dir = root / ".archmind"
@@ -3542,7 +3617,14 @@ def _build_improvement_report(project_path: Path) -> str:
     requirements_ok = (root / "backend" / "requirements.txt").exists() if fullstack_expected else (
         (root / "requirements.txt").exists() or (root / "backend" / "requirements.txt").exists()
     )
-    runtime_failure_class = str(state_payload.get("runtime_failure_class") or state_payload.get("last_failure_class") or "").strip()
+    runtime_ctx = _improve_runtime_context(root, state_payload)
+    deploy_ctx = _improve_deploy_context(state_payload)
+    runtime_backend_status = str(runtime_ctx.get("backend_status") or "").strip().upper()
+    runtime_failure_class = str(runtime_ctx.get("failure_class") or "").strip()
+    runtime_detect_ok = bool(runtime_ctx.get("detect_ok"))
+    deploy_target = str(deploy_ctx.get("target") or "").strip()
+    deploy_status = str(deploy_ctx.get("status") or "").strip().upper()
+    deploy_failure_class = str(deploy_ctx.get("failure_class") or "").strip()
     project_display_name = root.name
     github_repo_url = str(state_payload.get("github_repo_url") or "").strip()
     idea_hint = _extract_project_idea_hint(reasoning, state_payload, spec)
@@ -3550,9 +3632,11 @@ def _build_improvement_report(project_path: Path) -> str:
     current_selected = get_current_project()
     last_selected = load_last_project_path()
 
-    suggestions: list[dict[str, str]] = []
+    runtime_suggestions: list[dict[str, str]] = []
+    structure_suggestions: list[dict[str, str]] = []
+    evolution_suggestions: list[dict[str, str]] = []
     if fullstack_expected and (not backend_entry_nested.exists() or not frontend_root_ok):
-        suggestions.append(
+        structure_suggestions.append(
             {
                 "title": "Fix fullstack structure contract",
                 "reason": "shape/template는 fullstack이지만 backend/app/main.py 또는 frontend 구조가 누락되었습니다.",
@@ -3560,7 +3644,7 @@ def _build_improvement_report(project_path: Path) -> str:
             }
         )
     if fullstack_intent and (shape == "backend" or template in ("fastapi", "fastapi-ddd")):
-        suggestions.append(
+        structure_suggestions.append(
             {
                 "title": "Align intent with fullstack template",
                 "reason": "아이디어는 webapp 성격인데 현재 shape/template가 backend 중심입니다.",
@@ -3572,7 +3656,7 @@ def _build_improvement_report(project_path: Path) -> str:
             }
         )
     if not has_backend:
-        suggestions.append(
+        structure_suggestions.append(
             {
                 "title": "Restore backend entrypoint",
                 "reason": "backend entrypoint를 찾지 못해 runtime에서 실행 실패 가능성이 높습니다.",
@@ -3580,7 +3664,7 @@ def _build_improvement_report(project_path: Path) -> str:
             }
         )
     if not requirements_ok:
-        suggestions.append(
+        structure_suggestions.append(
             {
                 "title": "Add backend requirements file",
                 "reason": "requirements.txt가 없어 python dependency 설치/실행이 불안정합니다.",
@@ -3588,7 +3672,7 @@ def _build_improvement_report(project_path: Path) -> str:
             }
         )
     if not has_frontend and (fullstack_expected or fullstack_intent):
-        suggestions.append(
+        structure_suggestions.append(
             {
                 "title": "Add missing frontend structure",
                 "reason": "web/fullstack 프로젝트인데 frontend 경로가 없습니다.",
@@ -3603,19 +3687,31 @@ def _build_improvement_report(project_path: Path) -> str:
             missing_parts.append("frontend/.env.local")
         if has_frontend and frontend_env_exists and not api_base_url:
             missing_parts.append("NEXT_PUBLIC_API_BASE_URL")
-        suggestions.append(
+        runtime_suggestions.append(
             {
                 "title": "Repair runtime env injection",
                 "reason": f"runtime 연결 설정 누락: {', '.join(missing_parts)}",
                 "command": "/deploy local\n/inspect",
             }
         )
-    if runtime_failure_class:
-        suggestions.append(
+    runtime_failure_needs_fix = runtime_backend_status in {"FAIL", "STOPPED"} and bool(runtime_failure_class) and (not runtime_detect_ok)
+    if runtime_failure_needs_fix:
+        runtime_suggestions.append(
             {
                 "title": "Resolve runtime failure classification",
                 "reason": f"최근 failure class가 `{runtime_failure_class}`로 남아 있습니다.",
                 "command": "/logs backend\n/inspect",
+            }
+        )
+    if deploy_status == "FAIL" and deploy_failure_class:
+        runtime_suggestions.append(
+            {
+                "title": "Investigate deploy failure classification",
+                "reason": (
+                    f"deploy target `{deploy_target or 'unknown'}` 가 FAIL 이고 "
+                    f"failure class가 `{deploy_failure_class}`입니다."
+                ),
+                "command": "/deploy railway\n/inspect",
             }
         )
 
@@ -3625,7 +3721,7 @@ def _build_improvement_report(project_path: Path) -> str:
         if m:
             slug = m.group(1).split("/", 1)[1]
         if slug and ("_-_-" in slug or not re.search(r"[a-z]", slug)):
-            suggestions.append(
+            structure_suggestions.append(
                 {
                     "title": "Normalize repository slug",
                     "reason": f"repo slug `{slug}`가 가독성이 낮아 관리가 어렵습니다.",
@@ -3633,7 +3729,7 @@ def _build_improvement_report(project_path: Path) -> str:
                 }
             )
     if re.search(r"[^\x00-\x7F]", project_display_name) and not github_repo_url:
-        suggestions.append(
+        structure_suggestions.append(
             {
                 "title": "Separate display name and repo slug",
                 "reason": "프로젝트명이 비ASCII라 repo slug 정책 점검이 필요합니다.",
@@ -3642,7 +3738,7 @@ def _build_improvement_report(project_path: Path) -> str:
         )
 
     if current_selected is not None and last_selected is not None and current_selected.resolve() != last_selected.resolve():
-        suggestions.append(
+        structure_suggestions.append(
             {
                 "title": "Confirm target project selection",
                 "reason": f"current와 last project가 다릅니다: current={current_selected.name}, last={last_selected.name}",
@@ -3665,7 +3761,10 @@ def _build_improvement_report(project_path: Path) -> str:
         top = next_commands[0]
         cmd = str(top.get("command") or "").strip()
         reason = str(top.get("reason") or "").strip() or "기능 확장 관점의 다음 단계입니다."
-        suggestions.append(
+        runtime_consistent = runtime_detect_ok and runtime_backend_status not in {"FAIL", "STOPPED"} and not runtime_failure_class
+        if runtime_consistent:
+            reason = f"Runtime diagnostics look consistent; {reason}"
+        evolution_suggestions.append(
             {
                 "title": "Expand features incrementally",
                 "reason": reason,
@@ -3673,14 +3772,19 @@ def _build_improvement_report(project_path: Path) -> str:
             }
         )
     else:
-        suggestions.append(
+        runtime_consistent = runtime_detect_ok and runtime_backend_status not in {"FAIL", "STOPPED"} and not runtime_failure_class
+        reason = "기능 확장을 위해 엔티티/필드/페이지를 점진적으로 추가하세요."
+        if runtime_consistent:
+            reason = "Runtime diagnostics look consistent; expand model or pages next."
+        evolution_suggestions.append(
             {
                 "title": "Expand domain model",
-                "reason": "기능 확장을 위해 엔티티/필드/페이지를 점진적으로 추가하세요.",
+                "reason": reason,
                 "command": "/add_entity <name>\n/add_field <Entity> <field:type>\n/add_page <path>",
             }
         )
 
+    suggestions = runtime_suggestions + structure_suggestions + evolution_suggestions
     if not suggestions:
         suggestions.append(
             {
