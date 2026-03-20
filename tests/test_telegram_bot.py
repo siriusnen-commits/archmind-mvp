@@ -2633,6 +2633,9 @@ def test_inspect_command_summarizes_project_spec_reasoning_and_state(tmp_path: P
     assert "Modules: auth, db, dashboard" in out
     assert "Entities:" in out
     assert "- Task(title:string)" in out
+    assert "Entity Fields:" in out
+    assert "- Task" in out
+    assert "  - title:string" in out
     assert "API:" in out
     assert "- GET /tasks" in out
     assert "Frontend:" in out
@@ -4578,6 +4581,58 @@ def test_next_command_recommends_user_entity_for_auth_module(tmp_path: Path, mon
     assert "/add_entity User" in out
 
 
+def test_next_command_recommends_add_entity_when_entities_missing(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "entity_seed_proj"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "domains": ["notes"],
+                "template": "fastapi",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+                "reason_summary": "demo",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "/add_entity Note" in out
+
+
+def test_next_command_recommends_add_field_for_entity_without_fields(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "entity_field_seed_proj"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "domains": ["notes"],
+                "template": "fastapi",
+                "modules": [],
+                "entities": [{"name": "Note", "fields": []}],
+                "api_endpoints": [],
+                "frontend_pages": [],
+                "reason_summary": "demo",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "/add_field Note title:string" in out
+
+
 def test_next_command_recommends_api_and_pages_for_entity(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "task_tracker"
     archmind = project_dir / ".archmind"
@@ -4732,8 +4787,22 @@ def test_next_command_no_suggestions_shows_guidance(tmp_path: Path, monkeypatch)
                 "domains": ["notes"],
                 "template": "fastapi",
                 "modules": [],
-                "entities": [],
-                "api_endpoints": [],
+                "entities": [
+                    {
+                        "name": "Note",
+                        "fields": [
+                            {"name": "title", "type": "string"},
+                            {"name": "description", "type": "string"},
+                            {"name": "created_at", "type": "datetime"},
+                            {"name": "updated_at", "type": "datetime"},
+                        ],
+                    }
+                ],
+                "api_endpoints": [
+                    "GET /notes/{id}",
+                    "DELETE /notes/{id}",
+                    "PATCH /notes/{id}",
+                ],
                 "frontend_pages": [],
                 "reason_summary": "demo",
             }
@@ -4759,6 +4828,74 @@ def test_next_command_without_selected_project_shows_error(monkeypatch) -> None:
     assert "1. /design <idea>" in out
     assert "2. /plan <idea>" in out
     assert "3. /idea_local <idea>" in out
+
+
+def test_improve_command_reports_missing_entities_as_actionable_gap(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "improve_missing_entities"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "template": "fastapi",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(json.dumps({"runtime": {"backend_status": "RUNNING", "failure_class": ""}}), encoding="utf-8")
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    asyncio.run(command_improve(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Define your first entity" in out
+    assert "/add_entity Note" in out
+
+
+def test_improve_command_reports_entity_without_fields(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "improve_missing_fields"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "template": "fastapi",
+                "modules": [],
+                "entities": [{"name": "Note", "fields": []}],
+                "api_endpoints": [],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(json.dumps({"runtime": {"backend_status": "RUNNING", "failure_class": ""}}), encoding="utf-8")
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    asyncio.run(command_improve(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Add fields to Note" in out
+    assert "/add_field Note title:string" in out
 
 
 def test_plan_command_from_idea_includes_phases() -> None:
