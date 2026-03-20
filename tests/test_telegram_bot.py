@@ -1530,7 +1530,7 @@ def test_projects_command_returns_list(monkeypatch, tmp_path: Path) -> None:
     out = msg.sent[-1]
     assert "Recent ArchMind projects" in out
     assert "1. 20260312_210244_simple_nextjs_todo_dashboard_req" in out or "1. 20260312_140408_simple_fastapi_notes_api_require" in out
-    assert "Status: DONE" in out
+    assert "Status: STOPPED" in out
     assert "Type: frontend-web" in out
     assert "Template: nextjs" in out
     assert "Type: backend-api" in out
@@ -1707,7 +1707,7 @@ def test_current_shows_selected_project(monkeypatch, tmp_path: Path) -> None:
     out = msg.sent[-1]
     assert "Current project" in out
     assert "Project: current_proj" in out
-    assert "Status: DONE" in out
+    assert "Status: RUNNING" in out
     assert "Type: frontend-web" in out
     assert "Template: nextjs" in out
     assert "Runtime" in out
@@ -1840,17 +1840,119 @@ def test_projects_shows_runtime_status_and_urls(monkeypatch, tmp_path: Path) -> 
     set_current_project(p1)
     out = format_projects_list()
     assert "task-tracker [current]" in out
-    assert "Status: DONE" in out
+    assert "Status: RUNNING" in out
     assert "Type: fullstack-web" in out
     assert "Template: fullstack-ddd" in out
     assert "RUNNING" in out
     assert "Backend: http://127.0.0.1:8011" in out
     assert "Frontend: http://127.0.0.1:3011" in out
     assert "notes-api" in out
-    assert "STOPPED" in out
+    assert "Status: STOPPED" in out
     assert "worker-api-demo" in out
+    assert "Status: RUNNING" in out
     assert "RUNNING (backend)" in out
     assert "Backend: http://127.0.0.1:8050" in out
+
+
+def test_current_status_is_stopped_after_stop_state(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "current_stopped_proj"
+    archmind = project / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "last_status": "FAIL",
+                "runtime": {
+                    "backend_status": "STOPPED",
+                    "frontend_status": "STOPPED",
+                    "failure_class": "",
+                    "services": {
+                        "backend": {"status": "STOPPED", "pid": None, "url": ""},
+                        "frontend": {"status": "STOPPED", "pid": None, "url": ""},
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+    set_current_project(project)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_current(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "Status: STOPPED" in out
+
+
+def test_current_status_is_running_after_successful_run_all(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "current_running_proj"
+    archmind = project / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "last_status": "FAIL",
+                "runtime": {
+                    "backend_status": "RUNNING",
+                    "frontend_status": "RUNNING",
+                    "failure_class": "",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "RUNNING", "pid": 22001, "url": "http://127.0.0.1:8050"},
+            "frontend": {"status": "RUNNING", "pid": 22002, "url": "http://127.0.0.1:3000"},
+        },
+    )
+    set_current_project(project)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_current(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "Status: RUNNING" in out
+
+
+def test_current_status_is_fail_after_runtime_run_failure(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "current_failed_proj"
+    archmind = project / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "last_status": "DONE",
+                "runtime": {
+                    "backend_status": "FAIL",
+                    "frontend_status": "STOPPED",
+                    "failure_class": "runtime-execution-error",
+                    "preflight": {"status": "FAILED"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+    set_current_project(project)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_current(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "Status: FAIL" in out
 
 
 def test_projects_type_fallback_from_template_and_shape(monkeypatch, tmp_path: Path) -> None:
