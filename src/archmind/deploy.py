@@ -1959,10 +1959,13 @@ def stop_local_services(project_dir: Path) -> dict[str, Any]:
 
     backend_status, backend_detail = _stop_pid(backend_pid)
     frontend_status, frontend_detail = _stop_pid(frontend_pid)
+    warnings: list[str] = []
     if backend_status == "WARNING" and backend_detail == "process still running after SIGKILL" and not _is_local_service_responsive(backend_url):
         backend_status, backend_detail = "STOPPED", ""
+        warnings.append("backend process lingered briefly but service is down")
     if frontend_status == "WARNING" and frontend_detail == "process still running after SIGKILL" and not _is_local_service_responsive(frontend_url):
         frontend_status, frontend_detail = "STOPPED", ""
+        warnings.append("frontend process lingered briefly but service is down")
 
     payload["backend_pid"] = None
     payload["frontend_pid"] = None
@@ -2001,6 +2004,7 @@ def stop_local_services(project_dir: Path) -> dict[str, Any]:
     return {
         "ok": backend_status != "WARNING" and frontend_status != "WARNING",
         "target": "local",
+        "warnings": warnings,
         "backend": {
             "status": backend_status,
             "pid": backend_pid,

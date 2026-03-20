@@ -16,6 +16,7 @@ from archmind.brain import reason_architecture_from_idea
 from archmind.backend_runtime import detect_backend_runtime_entry
 from archmind.decision import decide_next_action, next_action_suggestions
 from archmind.failure import classify_failure
+from archmind.frontend_runtime import detect_frontend_runtime_entry
 from archmind.generator import (
     SUPPORTED_MODULES,
     apply_api_scaffold,
@@ -2272,6 +2273,21 @@ def _runtime_env_missing_parts(project_path: Path, *, fullstack_expected: bool, 
     return missing
 
 
+def _backend_env_values(project_path: Path, *, fullstack_expected: bool) -> dict[str, str]:
+    root = project_path.expanduser().resolve()
+    if fullstack_expected:
+        backend_env_path = root / "backend" / ".env"
+    elif (root / "backend").is_dir():
+        backend_env_path = root / "backend" / ".env"
+    else:
+        backend_env_path = root / ".env"
+    backend_env = _read_env_key_values(backend_env_path)
+    root_env = _read_env_key_values(root / ".env")
+    merged = dict(root_env)
+    merged.update(backend_env)
+    return merged
+
+
 def _backend_runtime_diagnostics_lines(project_dir: Path) -> list[str]:
     state = _load_json(project_dir / ".archmind" / "state.json") or {}
     runtime = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
@@ -4220,39 +4236,81 @@ def _build_improvement_report(project_path: Path) -> str:
     runtime_detect_ok = bool(runtime_ctx.get("detect_ok"))
     live_backend_status = ""
     live_backend_url = ""
+    live_frontend_status = ""
+    live_frontend_url = ""
     try:
         from archmind.deploy import get_local_runtime_status
 
         live_runtime = get_local_runtime_status(root)
         live_backend = live_runtime.get("backend") if isinstance(live_runtime.get("backend"), dict) else {}
+        live_frontend = live_runtime.get("frontend") if isinstance(live_runtime.get("frontend"), dict) else {}
         live_backend_status = str(live_backend.get("status") or "").strip().upper()
         live_backend_url = str(live_backend.get("url") or "").strip()
+        live_frontend_status = str(live_frontend.get("status") or "").strip().upper()
+        live_frontend_url = str(live_frontend.get("url") or "").strip()
     except Exception:
         live_backend_status = ""
         live_backend_url = ""
+        live_frontend_status = ""
+        live_frontend_url = ""
     runtime_block = state_payload.get("runtime") if isinstance(state_payload.get("runtime"), dict) else {}
+    services_block = runtime_block.get("services") if isinstance(runtime_block.get("services"), dict) else {}
+    backend_service_block = services_block.get("backend") if isinstance(services_block.get("backend"), dict) else {}
+    frontend_service_block = services_block.get("frontend") if isinstance(services_block.get("frontend"), dict) else {}
     latest_health_status = str(
         (runtime_block.get("healthcheck_status") if isinstance(runtime_block, dict) else "")
         or state_payload.get("healthcheck_status")
         or state_payload.get("backend_smoke_status")
         or ""
     ).strip().upper()
+    backend_service_health = str(backend_service_block.get("health") or "").strip().upper()
+    frontend_service_health = str(frontend_service_block.get("health") or "").strip().upper()
+    api_base_url = _read_frontend_api_base_url(root)
+    frontend_detect_ok = False
+    if has_frontend:
+        try:
+            frontend_detect_ok = bool(detect_frontend_runtime_entry(root).get("ok"))
+        except Exception:
+            frontend_detect_ok = False
+    backend_running = live_backend_status == "RUNNING" or runtime_backend_status == "RUNNING"
+    frontend_running = live_frontend_status == "RUNNING" or str(
+        _state_block_value(runtime_block, "frontend_status", state_payload.get("frontend_status")) or ""
+    ).strip().upper() == "RUNNING"
+    backend_health_ok = latest_health_status == "SUCCESS" or backend_service_health == "SUCCESS"
+    frontend_health_ok = frontend_service_health == "SUCCESS"
+    backend_env_values = _backend_env_values(root, fullstack_expected=env_fullstack_expected)
+    backend_base_url = str(backend_env_values.get("BACKEND_BASE_URL") or "").strip()
     runtime_usable = (
         runtime_detect_ok
-        and (live_backend_status == "RUNNING" or runtime_backend_status == "RUNNING")
-        and (latest_health_status == "SUCCESS" or bool(live_backend_url) or bool(_read_frontend_api_base_url(root)))
         and not runtime_failure_class
+        and (
+            backend_running
+            or backend_health_ok
+            or bool(live_backend_url)
+            or bool(backend_base_url)
+        )
     )
     if runtime_usable and env_missing_parts:
-        critical_env_parts = {
-            "backend/.env",
-            ".env",
-            "frontend/.env.local",
-            "APP_PORT",
-            "BACKEND_BASE_URL",
-            "NEXT_PUBLIC_API_BASE_URL",
-        }
-        env_missing_parts = [item for item in env_missing_parts if str(item).strip() in critical_env_parts]
+        filtered_missing: list[str] = []
+        for item in env_missing_parts:
+            key = str(item).strip()
+            if not key:
+                continue
+            # If runtime is already healthy/running, CORS-only gaps are not actionable.
+            if key == "CORS_ALLOW_ORIGINS" and (backend_running or backend_health_ok or bool(live_backend_url)):
+                continue
+            # Backend can be considered usable when runtime URL is available even if env file/key is absent.
+            if key in {"backend/.env", ".env", "APP_PORT", "BACKEND_BASE_URL"} and (
+                backend_running or backend_health_ok or bool(live_backend_url) or bool(backend_base_url)
+            ):
+                continue
+            # Frontend API URL key/file can be skipped when frontend runtime/detect is already usable.
+            if key in {"frontend/.env.local", "NEXT_PUBLIC_API_BASE_URL"} and (
+                bool(api_base_url) or bool(live_frontend_url) or frontend_running or frontend_health_ok or frontend_detect_ok
+            ):
+                continue
+            filtered_missing.append(key)
+        env_missing_parts = filtered_missing
     deploy_target = str(deploy_ctx.get("target") or "").strip()
     deploy_status = str(deploy_ctx.get("status") or "").strip().upper()
     deploy_failure_class = str(deploy_ctx.get("failure_class") or "").strip()
@@ -5566,8 +5624,6 @@ async def command_stop(update: Any, context: Any) -> None:
         projects_root = resolve_projects_dir()
         result = stop_all_local_services(projects_root)
         counts = result.get("counts") if isinstance(result.get("counts"), dict) else {}
-        stopped = result.get("stopped") if isinstance(result.get("stopped"), list) else []
-        already_stopped = result.get("already_stopped") if isinstance(result.get("already_stopped"), list) else []
         failed = result.get("failed") if isinstance(result.get("failed"), list) else []
         lines = [
             "All services stop finished",
@@ -5577,30 +5633,6 @@ async def command_stop(update: Any, context: Any) -> None:
             f"- already stopped: {int(counts.get('already_stopped') or 0)}",
             f"- failed: {int(counts.get('failed') or 0)}",
         ]
-        if stopped:
-            lines += ["", "Stopped:"]
-            for item in stopped[:10]:
-                if not isinstance(item, dict):
-                    continue
-                project_name = str(item.get("project_name") or "").strip() or "(unknown)"
-                service_parts: list[str] = []
-                backend_status = str(item.get("backend_status") or "").strip().upper()
-                frontend_status = str(item.get("frontend_status") or "").strip().upper()
-                backend_pid = item.get("backend_pid")
-                frontend_pid = item.get("frontend_pid")
-                if backend_status == "STOPPED":
-                    service_parts.append(f"backend (pid {backend_pid})" if backend_pid else "backend")
-                if frontend_status == "STOPPED":
-                    service_parts.append(f"frontend (pid {frontend_pid})" if frontend_pid else "frontend")
-                detail = ", ".join(service_parts) if service_parts else "services"
-                lines.append(f"- {project_name}: {detail}")
-        if already_stopped:
-            lines += ["", "Already stopped:"]
-            for item in already_stopped[:10]:
-                if not isinstance(item, dict):
-                    continue
-                project_name = str(item.get("project_name") or "").strip() or "(unknown)"
-                lines.append(f"- {project_name}")
         if failed:
             lines += ["", "Failed:"]
             for item in failed[:10]:
@@ -5624,6 +5656,9 @@ async def command_stop(update: Any, context: Any) -> None:
     result = stop_local_services(project_path)
     backend = result.get("backend") if isinstance(result.get("backend"), dict) else {}
     frontend = result.get("frontend") if isinstance(result.get("frontend"), dict) else {}
+    warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+    backend_status = str(backend.get("status") or "NOT RUNNING")
+    frontend_status = str(frontend.get("status") or "NOT RUNNING")
 
     lines = [
         "Local services stopped",
@@ -5632,17 +5667,21 @@ async def command_stop(update: Any, context: Any) -> None:
         project_path.name,
         "",
         "Backend:",
-        str(backend.get("status") or "NOT RUNNING"),
+        backend_status,
         "",
         "Frontend:",
-        str(frontend.get("status") or "NOT RUNNING"),
+        frontend_status,
     ]
     backend_detail = str(backend.get("detail") or "").strip()
     frontend_detail = str(frontend.get("detail") or "").strip()
-    if backend_detail:
+    if backend_detail and backend_status.upper() in {"WARNING", "FAIL"}:
         lines.extend(["", "Backend detail:", backend_detail])
-    if frontend_detail:
+    if frontend_detail and frontend_status.upper() in {"WARNING", "FAIL"}:
         lines.extend(["", "Frontend detail:", frontend_detail])
+    warning_lines = [str(item).strip() for item in warnings if str(item).strip()]
+    if warning_lines:
+        lines += ["", "Warnings:"]
+        lines += [f"- {item}" for item in warning_lines[:5]]
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 
 

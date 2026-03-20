@@ -3333,6 +3333,75 @@ def test_improve_command_suppresses_cors_only_env_hint_when_runtime_healthy(tmp_
     assert "Repair runtime env injection" not in out
 
 
+def test_improve_command_suppresses_env_repair_when_runtime_services_are_healthy(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "improve_runtime_services_healthy"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "backend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "backend" / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "backend" / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (project_dir / "frontend").mkdir(parents=True, exist_ok=True)
+    # Intentionally keep backend/.env incomplete to verify runtime-usability suppression.
+    (project_dir / "backend" / ".env").write_text(
+        "APP_PORT=8017\nBACKEND_BASE_URL=http://127.0.0.1:8017\n",
+        encoding="utf-8",
+    )
+    (project_dir / "frontend" / ".env.local").write_text(
+        "NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8017\n",
+        encoding="utf-8",
+    )
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "runtime": {
+                    "backend_status": "RUNNING",
+                    "frontend_status": "RUNNING",
+                    "failure_class": "",
+                    "healthcheck_status": "SUCCESS",
+                    "services": {
+                        "backend": {"status": "RUNNING", "health": "SUCCESS", "url": "http://127.0.0.1:8017"},
+                        "frontend": {"status": "RUNNING", "health": "SUCCESS", "url": "http://127.0.0.1:3017"},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_frontend_runtime_entry",
+        lambda _p, port=None, backend_base_url=None: {"ok": True, "frontend_port": 3017},
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "RUNNING", "pid": 32001, "url": "http://127.0.0.1:8017"},
+            "frontend": {"status": "RUNNING", "pid": 32002, "url": "http://127.0.0.1:3017"},
+        },
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_improve(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Repair runtime env injection" not in out
+
+
 def test_improve_command_formats_command_hints_as_single_line(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "improve_command_format"
     archmind = project_dir / ".archmind"
@@ -5553,8 +5622,7 @@ def test_stop_all_does_not_require_selected_project(monkeypatch, tmp_path: Path)
     assert "- stopped: 2" in out
     assert "- already stopped: 0" in out
     assert "- failed: 0" in out
-    assert "- project_a: backend (pid 1234)" in out
-    assert "- project_b: backend (pid 5678), frontend (pid 5679)" in out
+    assert "Failed:" not in out
 
 
 def test_stop_local_stops_services_and_prints_status(monkeypatch, tmp_path: Path) -> None:
@@ -5580,6 +5648,8 @@ def test_stop_local_stops_services_and_prints_status(monkeypatch, tmp_path: Path
     assert "Project:\nstop_local_proj" in out
     assert "Backend:\nSTOPPED" in out
     assert "Frontend:\nSTOPPED" in out
+    assert "Backend detail:" not in out
+    assert "Frontend detail:" not in out
 
 
 def test_stop_local_when_not_running(monkeypatch, tmp_path: Path) -> None:
@@ -5625,10 +5695,32 @@ def test_stop_all_includes_already_stopped_and_failed(monkeypatch, tmp_path: Pat
     assert "- stopped: 1" in out
     assert "- already stopped: 1" in out
     assert "- failed: 1" in out
-    assert "Already stopped:" in out
-    assert "- project_b" in out
     assert "Failed:" in out
     assert "- project_c: permission denied" in out
+
+
+def test_stop_local_includes_warning_section_when_present(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "stop_warning_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+
+    monkeypatch.setattr(
+        "archmind.deploy.stop_local_services",
+        lambda _p: {
+            "ok": True,
+            "target": "local",
+            "warnings": ["backend process lingered briefly but service is down"],
+            "backend": {"status": "STOPPED", "pid": 12001, "detail": ""},
+            "frontend": {"status": "STOPPED", "pid": 13001, "detail": ""},
+        },
+    )
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_stop(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "Warnings:" in out
+    assert "- backend process lingered briefly but service is down" in out
 
 
 def test_restart_without_selected_project_shows_message(monkeypatch) -> None:
