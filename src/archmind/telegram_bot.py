@@ -977,8 +977,8 @@ def _status_from_sources(project_dir: Path) -> str:
         return eval_status
 
     final_status = str(result.get("final_status") or state.get("final_status") or "").strip().upper()
-    if final_status in {"DONE", "NOT_DONE"}:
-        return final_status
+    if final_status == "DONE":
+        return "DONE"
 
     if not eval_status:
         raw_status = str(result.get("status") or state.get("last_status") or "").strip().upper()
@@ -1007,11 +1007,12 @@ def _status_from_sources(project_dir: Path) -> str:
     runtime_ctx = _improve_runtime_context(project_dir, state)
     runtime_failure = str(runtime_ctx.get("failure_class") or "").strip()
     detect_ok = bool(runtime_ctx.get("detect_ok"))
+    detect_required = _runtime_detect_required(project_dir, state, result)
     if generation_failed:
         return "NOT_DONE"
     if explicit_runtime_failure:
         return "NOT_DONE"
-    if runtime_failure and detect_ok:
+    if runtime_failure and (detect_ok or detect_required):
         return "NOT_DONE"
 
     step_failed = False
@@ -1028,8 +1029,14 @@ def _status_from_sources(project_dir: Path) -> str:
     if step_failed:
         return "NOT_DONE"
 
+    if detect_required and not detect_ok:
+        return "NOT_DONE"
+
     if detect_ok:
         return "DONE"
+
+    if final_status == "NOT_DONE":
+        return "NOT_DONE"
 
     if eval_status in {"DONE", "NOT_DONE"}:
         return eval_status
@@ -1037,14 +1044,64 @@ def _status_from_sources(project_dir: Path) -> str:
     return "DONE"
 
 
+def _runtime_detect_required(project_dir: Path, state: dict[str, Any], result: dict[str, Any]) -> bool:
+    root = project_dir.expanduser().resolve()
+    if (
+        (root / "app" / "main.py").exists()
+        or (root / "backend" / "app" / "main.py").exists()
+        or (root / "requirements.txt").exists()
+        or (root / "backend" / "requirements.txt").exists()
+    ):
+        return True
+
+    runtime_block = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
+    runtime_signals = (
+        "backend_entry",
+        "backend_run_mode",
+        "backend_run_command",
+        "backend_status",
+        "failure_class",
+    )
+    if any(str(_state_block_value(runtime_block, key, state.get(key)) or "").strip() for key in runtime_signals):
+        return True
+
+    steps = result.get("steps") if isinstance(result.get("steps"), dict) else {}
+    for key in ("run_before_fix", "run_after_fix"):
+        step = steps.get(key) if isinstance(steps, dict) else {}
+        if isinstance(step, dict) and step:
+            return True
+    return False
+
+
 def _current_runtime_actionable_failure(project_dir: Path, state: dict[str, Any], result: dict[str, Any]) -> bool:
     project_dir = project_dir.expanduser().resolve()
-    runtime_ctx = _improve_runtime_context(project_dir, state or {})
-    if str(runtime_ctx.get("failure_class") or "").strip():
+    runtime_block = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
+    explicit_runtime_failure = str(
+        _state_block_value(
+            runtime_block,
+            "failure_class",
+            state.get("runtime_failure_class") or state.get("last_failure_class"),
+        )
+        or ""
+    ).strip()
+    if explicit_runtime_failure:
         return True
-    if not bool(runtime_ctx.get("detect_ok")):
-        return True
+
     steps = result.get("steps") if isinstance(result.get("steps"), dict) else {}
+    generate_step = steps.get("generate") if isinstance(steps, dict) else {}
+    if isinstance(generate_step, dict) and (
+        generate_step.get("ok") is False or str(generate_step.get("failure_class") or "").strip()
+    ):
+        return True
+
+    runtime_ctx = _improve_runtime_context(project_dir, state or {})
+    detect_ok = bool(runtime_ctx.get("detect_ok"))
+    detect_required = _runtime_detect_required(project_dir, state or {}, result or {})
+    runtime_failure = str(runtime_ctx.get("failure_class") or "").strip()
+    if runtime_failure and (detect_ok or detect_required):
+        return True
+    if detect_required and not detect_ok:
+        return True
     for key in ("run_before_fix", "run_after_fix"):
         step = steps.get(key) if isinstance(steps, dict) else {}
         if not isinstance(step, dict):
@@ -1900,10 +1957,13 @@ def _runtime_env_missing_parts(project_path: Path, *, fullstack_expected: bool, 
     else:
         backend_env_path = root / ".env"
     backend_env = _read_env_key_values(backend_env_path)
+    root_env = _read_env_key_values(root / ".env")
+    merged_backend_env = dict(root_env)
+    merged_backend_env.update(backend_env)
     if not backend_env_path.exists():
         missing.append(backend_env_path.relative_to(root).as_posix())
     for key in ("APP_PORT", "BACKEND_BASE_URL", "CORS_ALLOW_ORIGINS"):
-        if not str(backend_env.get(key) or "").strip():
+        if not str(merged_backend_env.get(key) or "").strip():
             missing.append(key)
     if has_frontend:
         frontend_env_path = root / "frontend" / ".env.local"
@@ -3804,8 +3864,18 @@ def _build_improvement_report(project_path: Path) -> str:
     requirements_ok = (root / "backend" / "requirements.txt").exists() if fullstack_expected else (
         (root / "requirements.txt").exists() or (root / "backend" / "requirements.txt").exists()
     )
-    env_missing_parts = _runtime_env_missing_parts(root, fullstack_expected=fullstack_expected, has_frontend=has_frontend)
     runtime_ctx = _improve_runtime_context(root, state_payload)
+    env_fullstack_expected = fullstack_expected
+    if bool(runtime_ctx.get("detect_ok")):
+        if backend_entry_root.exists() and not backend_entry_nested.exists():
+            env_fullstack_expected = False
+        elif backend_entry_nested.exists():
+            env_fullstack_expected = True
+    env_missing_parts = _runtime_env_missing_parts(
+        root,
+        fullstack_expected=env_fullstack_expected,
+        has_frontend=has_frontend,
+    )
     deploy_ctx = _improve_deploy_context(state_payload)
     runtime_backend_status = str(runtime_ctx.get("backend_status") or "").strip().upper()
     runtime_failure_class = str(runtime_ctx.get("failure_class") or "").strip()
@@ -3836,11 +3906,7 @@ def _build_improvement_report(project_path: Path) -> str:
             {
                 "title": "Align intent with fullstack template",
                 "reason": "아이디어는 webapp 성격인데 현재 shape/template가 backend 중심입니다.",
-                "command": (
-                    f"/design {idea_hint}\n/idea_local {idea_hint}"
-                    if idea_hint
-                    else "/design <idea>\n/idea_local <idea>"
-                ),
+                "command": f"/idea_local {idea_hint}" if idea_hint else "/idea_local <idea>",
             }
         )
     if not has_backend:
@@ -3848,7 +3914,7 @@ def _build_improvement_report(project_path: Path) -> str:
             {
                 "title": "Restore backend entrypoint",
                 "reason": "backend entrypoint를 찾지 못해 runtime에서 실행 실패 가능성이 높습니다.",
-                "command": "/inspect\n/deploy local",
+                "command": "/inspect",
             }
         )
     if not requirements_ok:
@@ -3864,7 +3930,7 @@ def _build_improvement_report(project_path: Path) -> str:
             {
                 "title": "Add missing frontend structure",
                 "reason": "web/fullstack 프로젝트인데 frontend 경로가 없습니다.",
-                "command": "/plan <same idea>\n/idea_local <same idea>",
+                "command": "/idea_local <same idea>",
             }
         )
     if env_missing_parts:
@@ -3873,7 +3939,7 @@ def _build_improvement_report(project_path: Path) -> str:
             {
                 "title": "Repair runtime env injection",
                 "reason": f"runtime 연결 설정 누락: {', '.join(missing_parts)}",
-                "command": "/deploy local\n/inspect",
+                "command": "/deploy local",
             }
         )
     runtime_failure_needs_fix = runtime_backend_status in {"FAIL", "STOPPED"} and bool(runtime_failure_class) and (not runtime_detect_ok)
@@ -3882,7 +3948,7 @@ def _build_improvement_report(project_path: Path) -> str:
             {
                 "title": "Resolve runtime failure classification",
                 "reason": f"최근 failure class가 `{runtime_failure_class}`로 남아 있습니다.",
-                "command": "/logs backend\n/inspect",
+                "command": "/logs backend",
             }
         )
     if deploy_status == "FAIL" and deploy_failure_class:
@@ -3893,7 +3959,7 @@ def _build_improvement_report(project_path: Path) -> str:
                     f"deploy target `{deploy_target or 'unknown'}` 가 FAIL 이고 "
                     f"failure class가 `{deploy_failure_class}`입니다."
                 ),
-                "command": "/deploy railway\n/inspect",
+                "command": "/deploy railway",
             }
         )
 
@@ -3924,7 +3990,7 @@ def _build_improvement_report(project_path: Path) -> str:
             {
                 "title": "Confirm target project selection",
                 "reason": f"current와 last project가 다릅니다: current={current_selected.name}, last={last_selected.name}",
-                "command": "/current\n/projects\n/use <n>",
+                "command": "/projects",
             }
         )
 
@@ -3962,7 +4028,7 @@ def _build_improvement_report(project_path: Path) -> str:
             {
                 "title": "Expand domain model",
                 "reason": reason,
-                "command": "/add_entity <name>\n/add_field <Entity> <field:type>\n/add_page <path>",
+                "command": "/add_entity <name>",
             }
         )
 
@@ -3983,11 +4049,12 @@ def _build_improvement_report(project_path: Path) -> str:
         "Improve suggestions",
     ]
     for idx, item in enumerate(suggestions, start=1):
+        command_hint = str(item.get("command") or "").strip().splitlines()[0].strip() if str(item.get("command") or "").strip() else "/next"
         lines += [
             "",
             f"{idx}. {item['title']}",
             f"   reason: {item['reason']}",
-            f"   command: {item['command']}",
+            f"   command: {command_hint}",
         ]
     lines += [
         "",
