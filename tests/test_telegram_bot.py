@@ -726,6 +726,20 @@ def test_read_recent_logs_fallback_when_missing(tmp_path: Path) -> None:
     assert "Focus:" in msg_last
 
 
+def test_read_recent_backend_logs_detects_runtime_entry_when_state_missing(tmp_path: Path) -> None:
+    project_dir = tmp_path / "proj_runtime_detect"
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+
+    msg_back = read_recent_backend_logs(project_dir)
+    assert "Detected backend target: app.main:app" in msg_back
+    assert "Backend run mode: asgi-direct" in msg_back
+    assert "Run command: uvicorn app.main:app --host 0.0.0.0 --port 8000" in msg_back
+    assert "Detected backend target: (unknown)" not in msg_back
+    assert "environment-python" not in msg_back
+
+
 def test_logs_command_without_last_project_shows_help(monkeypatch) -> None:
     monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: None)
     msg = DummyMessage()

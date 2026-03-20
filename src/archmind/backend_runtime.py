@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 from typing import Any
 
@@ -126,4 +127,56 @@ def detect_backend_asgi_entry(
         "run_cwd": root,
         "run_command": [],
         "failure_reason": reason,
+    }
+
+
+def _contains_launcher_target(main_file: Path, target: str = "app.main:app") -> bool:
+    if not main_file.exists() or not main_file.is_file():
+        return False
+    try:
+        text = main_file.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return False
+    pattern = re.compile(rf"uvicorn\.run\(\s*['\"]{re.escape(target)}['\"]")
+    return bool(pattern.search(text))
+
+
+def detect_backend_runtime_entry(project_dir: Path, *, port: int) -> dict[str, Any]:
+    root = project_dir.expanduser().resolve()
+    asgi = detect_backend_asgi_entry(
+        root,
+        allowed_layouts=("fullstack", "flat"),
+        prefer_layout="fullstack",
+        port=port,
+    )
+    if bool(asgi.get("ok")):
+        return {
+            "ok": True,
+            "failure_class": "",
+            "failure_reason": "",
+            "backend_entry": str(asgi.get("backend_entry") or "app.main:app"),
+            "backend_run_mode": str(asgi.get("backend_run_mode") or "asgi-direct"),
+            "run_cwd": asgi.get("run_cwd") or root,
+            "run_command": [str(item) for item in (asgi.get("run_command") or [])],
+        }
+
+    if _contains_launcher_target(root / "main.py", "app.main:app"):
+        return {
+            "ok": True,
+            "failure_class": "",
+            "failure_reason": "",
+            "backend_entry": "app.main:app",
+            "backend_run_mode": "launcher-python",
+            "run_cwd": root,
+            "run_command": ["python", "main.py"],
+        }
+
+    return {
+        "ok": False,
+        "failure_class": "generation-error",
+        "failure_reason": str(asgi.get("failure_reason") or "backend entrypoint not found"),
+        "backend_entry": "",
+        "backend_run_mode": "",
+        "run_cwd": root,
+        "run_command": [],
     }
