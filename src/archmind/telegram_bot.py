@@ -964,17 +964,97 @@ def get_template_suggestions(idea: str, reasoning: dict[str, Any]) -> list[str]:
 
 
 def _status_from_sources(project_dir: Path) -> str:
+    project_dir = project_dir.expanduser().resolve()
     archmind_dir = project_dir / ".archmind"
-    evaluation = _load_json(archmind_dir / "evaluation.json")
-    if evaluation and evaluation.get("status"):
-        return str(evaluation.get("status"))
-    state = _load_json(archmind_dir / "state.json")
-    if state and state.get("last_status"):
-        return str(state.get("last_status"))
-    result = _load_json(archmind_dir / "result.json")
-    if result and result.get("status"):
-        return str(result.get("status"))
-    return "UNKNOWN"
+    evaluation = _load_json(archmind_dir / "evaluation.json") or {}
+    state = load_state(project_dir) or {}
+    result = _load_json(archmind_dir / "result.json") or {}
+    if not (evaluation or state or result):
+        return "UNKNOWN"
+
+    eval_status = str(evaluation.get("status") or "").strip().upper()
+    if eval_status in {"STUCK", "BLOCKED"}:
+        return eval_status
+
+    final_status = str(result.get("final_status") or state.get("final_status") or "").strip().upper()
+    if final_status in {"DONE", "NOT_DONE"}:
+        return final_status
+
+    if not eval_status:
+        raw_status = str(result.get("status") or state.get("last_status") or "").strip().upper()
+        if raw_status in {"FAIL", "FAILED", "ERROR", "PARTIAL", "NOT_DONE"}:
+            return "NOT_DONE"
+
+    steps = result.get("steps") if isinstance(result.get("steps"), dict) else {}
+    generation_failed = False
+    generate_step = steps.get("generate") if isinstance(steps, dict) else {}
+    if isinstance(generate_step, dict):
+        if generate_step.get("ok") is False:
+            generation_failed = True
+        if str(generate_step.get("failure_class") or "").strip():
+            generation_failed = True
+
+    runtime_block = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
+    explicit_runtime_failure = str(
+        _state_block_value(
+            runtime_block,
+            "failure_class",
+            state.get("runtime_failure_class") or state.get("last_failure_class"),
+        )
+        or ""
+    ).strip()
+
+    runtime_ctx = _improve_runtime_context(project_dir, state)
+    runtime_failure = str(runtime_ctx.get("failure_class") or "").strip()
+    detect_ok = bool(runtime_ctx.get("detect_ok"))
+    if generation_failed:
+        return "NOT_DONE"
+    if explicit_runtime_failure:
+        return "NOT_DONE"
+    if runtime_failure and detect_ok:
+        return "NOT_DONE"
+
+    step_failed = False
+    for key in ("run_before_fix", "run_after_fix"):
+        step = steps.get(key) if isinstance(steps, dict) else {}
+        if not isinstance(step, dict):
+            continue
+        detail = step.get("detail") if isinstance(step.get("detail"), dict) else {}
+        backend_status = str((detail.get("backend_status") if isinstance(detail, dict) else "") or step.get("status") or "").strip().upper()
+        frontend_status = str((detail.get("frontend_status") if isinstance(detail, dict) else "") or "").strip().upper()
+        if backend_status == "FAIL" or frontend_status == "FAIL":
+            step_failed = True
+            break
+    if step_failed:
+        return "NOT_DONE"
+
+    if detect_ok:
+        return "DONE"
+
+    if eval_status in {"DONE", "NOT_DONE"}:
+        return eval_status
+
+    return "DONE"
+
+
+def _current_runtime_actionable_failure(project_dir: Path, state: dict[str, Any], result: dict[str, Any]) -> bool:
+    project_dir = project_dir.expanduser().resolve()
+    runtime_ctx = _improve_runtime_context(project_dir, state or {})
+    if str(runtime_ctx.get("failure_class") or "").strip():
+        return True
+    if not bool(runtime_ctx.get("detect_ok")):
+        return True
+    steps = result.get("steps") if isinstance(result.get("steps"), dict) else {}
+    for key in ("run_before_fix", "run_after_fix"):
+        step = steps.get(key) if isinstance(steps, dict) else {}
+        if not isinstance(step, dict):
+            continue
+        detail = step.get("detail") if isinstance(step.get("detail"), dict) else {}
+        backend_status = str((detail.get("backend_status") if isinstance(detail, dict) else "") or step.get("status") or "").strip().upper()
+        frontend_status = str((detail.get("frontend_status") if isinstance(detail, dict) else "") or "").strip().upper()
+        if backend_status == "FAIL" or frontend_status == "FAIL":
+            return True
+    return False
 
 
 def _progress_fallback_for_command(command: str) -> str:
@@ -1003,7 +1083,7 @@ def _progress_text(project_dir: Path, fallback: str = "") -> str:
 
 def _current_task_label(project_dir: Path, status: str) -> Optional[str]:
     archmind_dir = project_dir / ".archmind"
-    state = load_state(project_path) or {}
+    state = load_state(project_dir) or {}
     signature = str(state.get("last_failure_signature") or "").strip()
     derived_label = str(state.get("derived_task_label") or "").strip() or derive_task_label_from_failure_signature(signature)
     if derived_label and str(status).upper() == "STUCK":
@@ -2130,13 +2210,17 @@ def _reconcile_summary_with_smoke_status(summary_lines: list[str], state: dict[s
 
 
 def _recommend_next_actions(
+    project_dir: Path,
     status: str,
     summary_lines: list[str],
     state: dict[str, Any],
     evaluation: dict[str, Any],
     result: dict[str, Any],
 ) -> list[str]:
-    del status, summary_lines
+    del summary_lines
+    normalized = str(status or "").strip().upper()
+    if normalized == "DONE" and not _current_runtime_actionable_failure(project_dir, state or {}, result or {}):
+        return next_action_suggestions("DONE")
     decision = decide_next_action(state, evaluation, result)
     return next_action_suggestions(str(decision.get("action") or "STOP"))
 
@@ -2148,6 +2232,7 @@ def build_finished_message(
     *,
     project_name: str,
     status: str,
+    project_dir: Optional[Path] = None,
     fallback_summary_lines: Optional[list[str]] = None,
     max_len: int = 1200,
     failure_class_override: Optional[str] = None,
@@ -2185,7 +2270,19 @@ def build_finished_message(
     auto_deploy_status = str(state.get("auto_deploy_status") or "").strip().upper() or "SKIPPED"
     if auto_deploy_enabled:
         summary_lines.append(f"Auto deploy: {auto_deploy_target} {auto_deploy_status}")
-    next_actions = _recommend_next_actions(status, summary_lines, state, evaluation, result)[:3]
+    candidate_project = project_dir
+    if candidate_project is None:
+        candidate_path = str(state.get("project_dir") or result.get("project_dir") or "").strip()
+        if candidate_path:
+            try:
+                candidate_project = Path(candidate_path).expanduser().resolve()
+            except Exception:
+                candidate_project = None
+    next_actions: list[str] = []
+    if candidate_project is not None:
+        next_actions = _recommend_next_actions(candidate_project, status, summary_lines, state, evaluation, result)[:3]
+    else:
+        next_actions = next_action_suggestions("DONE" if str(status or "").upper() == "DONE" else "STOP")[:3]
     repository_info = _repository_summary_from_state(state)
     github_repo_url = str(repository_info.get("url") or result.get("github_repo_url") or "").strip()
     repository_status = str(repository_info.get("status") or "").strip().upper()
@@ -2287,6 +2384,7 @@ def build_completion_message(
         result=result,
         project_name=project_dir.name,
         status=status,
+        project_dir=project_dir,
         fallback_summary_lines=fallback_summary,
         max_len=max_len,
         failure_class_override=display_failure_class,

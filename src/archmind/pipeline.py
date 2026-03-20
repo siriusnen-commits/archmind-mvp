@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from archmind.fixer import run_fix_loop
+from archmind.backend_runtime import detect_backend_runtime_entry as detect_backend_runtime_entry_shared
 from archmind.brain import reason_architecture_from_idea
 from archmind.failure_memory import append_failure_memory, get_failure_hints
 from archmind.idea_normalizer import normalize_idea
@@ -298,6 +299,24 @@ def compute_status(
     if run_after_ok:
         return "SUCCESS"
     return "FAIL"
+
+
+def _pipeline_final_status(project_dir: Path, status: str, state_payload: dict[str, Any]) -> str:
+    normalized = str(status or "").strip().upper()
+    runtime_block = state_payload.get("runtime") if isinstance(state_payload.get("runtime"), dict) else {}
+    runtime_failure_class = str(
+        (runtime_block.get("failure_class") if isinstance(runtime_block, dict) else "")
+        or state_payload.get("runtime_failure_class")
+        or ""
+    ).strip()
+    try:
+        detect = detect_backend_runtime_entry_shared(project_dir, port=8000)
+    except Exception:
+        detect = {"ok": False}
+    detect_ok = bool(detect.get("ok"))
+    if normalized == "SUCCESS" and detect_ok and not runtime_failure_class:
+        return "DONE"
+    return "NOT_DONE"
 
 
 def _build_result_text(payload: dict[str, Any]) -> str:
@@ -1117,6 +1136,8 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
             "current_task_id": state_payload.get("current_task_id"),
         }
         artifacts["state"] = str(project_dir / ".archmind" / "state.json")
+    final_status = _pipeline_final_status(project_dir, status, state_payload or {})
+    payload["final_status"] = final_status
 
     result_json, _ = write_result(project_dir, payload)
     try:
@@ -1131,6 +1152,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         synced_state["auto_deploy_enabled"] = bool(opts.auto_deploy)
         synced_state["auto_deploy_target"] = auto_deploy_target if opts.auto_deploy else ""
         synced_state["auto_deploy_status"] = auto_deploy_status if opts.auto_deploy else "SKIPPED"
+        synced_state["final_status"] = final_status
         write_state(project_dir, synced_state)
     except Exception as exc:
         print(f"[WARN] state template metadata sync failed: {exc}", file=sys.stderr)
@@ -1153,7 +1175,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
             project_dir,
             "finished",
             "Finished",
-            status="DONE" if status == "SUCCESS" else "NOT_DONE",
+            status=final_status,
             detail=str(finished_detail),
         )
     except Exception:
