@@ -190,6 +190,12 @@ def _default_runtime_state() -> dict[str, Any]:
         "healthcheck_url": "",
         "healthcheck_status": "",
         "healthcheck_detail": "",
+        "auto_fix": {
+            "attempts": 0,
+            "last_fix": "",
+            "last_detail": "",
+            "status": "",
+        },
     }
 
 
@@ -351,6 +357,15 @@ def _normalize_loaded_state(project_dir: Path, payload: dict[str, Any]) -> dict[
         str(runtime_defaults.get("healthcheck_status") or normalized.get("healthcheck_status") or "")
     )
     runtime_defaults["healthcheck_detail"] = str(runtime_defaults.get("healthcheck_detail") or normalized.get("healthcheck_detail") or "").strip()[:220]
+    auto_fix_block = runtime_defaults.get("auto_fix")
+    if not isinstance(auto_fix_block, dict):
+        auto_fix_block = {}
+    runtime_defaults["auto_fix"] = {
+        "attempts": max(0, _safe_int(auto_fix_block.get("attempts"), 0)),
+        "last_fix": str(auto_fix_block.get("last_fix") or "").strip()[:80],
+        "last_detail": str(auto_fix_block.get("last_detail") or "").strip()[:220],
+        "status": _safe_optional_status(str(auto_fix_block.get("status") or "")),
+    }
     normalized["runtime"] = runtime_defaults
     normalized["iterations"] = _safe_int(normalized.get("iterations"), 0)
     fix_attempts_raw = normalized.get("fix_attempts")
@@ -634,6 +649,15 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     runtime["healthcheck_url"] = str(runtime.get("healthcheck_url") or payload.get("healthcheck_url") or "").strip()[:300]
     runtime["healthcheck_status"] = _safe_healthcheck_status(str(runtime.get("healthcheck_status") or payload.get("healthcheck_status") or ""))
     runtime["healthcheck_detail"] = str(runtime.get("healthcheck_detail") or payload.get("healthcheck_detail") or "").strip()[:220]
+    auto_fix_block = runtime.get("auto_fix")
+    if not isinstance(auto_fix_block, dict):
+        auto_fix_block = {}
+    runtime["auto_fix"] = {
+        "attempts": max(0, _safe_int(auto_fix_block.get("attempts"), 0)),
+        "last_fix": str(auto_fix_block.get("last_fix") or "").strip()[:80],
+        "last_detail": str(auto_fix_block.get("last_detail") or "").strip()[:220],
+        "status": _safe_optional_status(str(auto_fix_block.get("status") or "")),
+    }
     payload["runtime"] = runtime
 
     # Deprecated flat keys are kept synchronized for backward compatibility.
@@ -1246,6 +1270,15 @@ def update_runtime_state(
         str(result.get("healthcheck_detail") or result.get("backend_smoke_detail") or runtime.get("healthcheck_detail") or ""),
         project_dir,
     )[:220]
+    auto_fix_block = result.get("auto_fix")
+    if not isinstance(auto_fix_block, dict):
+        auto_fix_block = runtime.get("auto_fix") if isinstance(runtime.get("auto_fix"), dict) else {}
+    runtime["auto_fix"] = {
+        "attempts": max(0, _safe_int(auto_fix_block.get("attempts"), 0)),
+        "last_fix": str(auto_fix_block.get("last_fix") or "").strip()[:80],
+        "last_detail": _sanitize_line(str(auto_fix_block.get("last_detail") or ""), project_dir)[:220],
+        "status": _safe_optional_status(str(auto_fix_block.get("status") or "")),
+    }
     payload["runtime"] = runtime
     payload["last_action"] = _sanitize_line(action, project_dir)
 

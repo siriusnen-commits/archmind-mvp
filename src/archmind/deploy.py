@@ -7,12 +7,16 @@ import signal
 import socket
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
 from urllib import error, parse, request
 
-from archmind.backend_runtime import detect_backend_runtime_entry as detect_backend_runtime_entry_shared
+from archmind.backend_runtime import (
+    analyze_backend_failure,
+    detect_backend_runtime_entry as detect_backend_runtime_entry_shared,
+)
 from archmind.state import ensure_state, load_state, update_after_deploy, update_runtime_state, write_state
 
 
@@ -704,23 +708,313 @@ def _classify_runtime_execution_failure(log_text: str, reason: str) -> str:
     return "runtime-execution-error"
 
 
+def _has_error_marker(log_text: str) -> bool:
+    text = str(log_text or "")
+    if not text.strip():
+        return False
+    return "ERROR" in text.upper()
+
+
+def _stop_pid_safe(pid: Any) -> None:
+    parsed = _to_pid(pid)
+    if parsed is None:
+        return
+    try:
+        os.kill(parsed, signal.SIGTERM)
+    except Exception:
+        return
+
+
+def _init_db(project_dir: Path) -> tuple[bool, str]:
+    root = project_dir.expanduser().resolve()
+    candidates = [
+        [sys.executable, "-m", "app.db.init_db"],
+        [sys.executable, "-m", "app.db.init"],
+        [sys.executable, "-m", "app.init_db"],
+    ]
+    for cmd in candidates:
+        try:
+            completed = subprocess.run(  # noqa: S603
+                cmd,
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                shell=False,
+                check=False,
+            )
+        except Exception as exc:
+            return False, f"db init execution failed: {exc}"
+        if completed.returncode == 0:
+            return True, "database initialized"
+    return False, "db init command not available"
+
+
+def _apply_default_env(project_dir: Path, app_port: int | None) -> tuple[bool, str]:
+    root = project_dir.expanduser().resolve()
+    env_example = root / ".env.example"
+    env_path = root / ".env"
+    if env_example.exists() and not env_path.exists():
+        try:
+            shutil.copyfile(env_example, env_path)
+        except Exception as exc:
+            return False, f".env copy failed: {exc}"
+    lines: list[str] = []
+    if env_path.exists():
+        try:
+            lines = env_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except Exception:
+            lines = []
+    keys = {line.split("=", 1)[0].strip() for line in lines if "=" in line and str(line).strip()}
+    if "APP_PORT" not in keys:
+        lines.append(f"APP_PORT={int(app_port)}" if app_port else "APP_PORT=8000")
+    if "BACKEND_BASE_URL" not in keys and app_port:
+        lines.append(f"BACKEND_BASE_URL=http://127.0.0.1:{int(app_port)}")
+    if "CORS_ALLOW_ORIGINS" not in keys:
+        lines.append("CORS_ALLOW_ORIGINS=http://localhost:3000,http://127.0.0.1:3000")
+    try:
+        env_path.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+    except Exception as exc:
+        return False, f".env write failed: {exc}"
+    return True, "runtime env defaults applied"
+
+
+def apply_auto_fix(
+    project_dir: Path,
+    analysis_result: dict[str, Any],
+    *,
+    used_fix_types: set[str] | None = None,
+    current_port: int | None = None,
+) -> dict[str, Any]:
+    root = project_dir.expanduser().resolve()
+    used = used_fix_types if used_fix_types is not None else set()
+    fix_type = str(analysis_result.get("type") or "unknown").strip().lower()
+    package = str(analysis_result.get("package") or "").strip()
+    if not fix_type or fix_type == "unknown":
+        return {"applied": False, "fix_type": "unknown", "detail": "auto-fix skipped: unknown failure type", "new_port": None, "package": ""}
+    if fix_type in used:
+        return {"applied": False, "fix_type": fix_type, "detail": f"auto-fix skipped: {fix_type} already attempted", "new_port": None, "package": package}
+
+    if fix_type == "missing_dependency":
+        if not package:
+            return {"applied": False, "fix_type": fix_type, "detail": "auto-fix skipped: missing package name", "new_port": None, "package": ""}
+        try:
+            completed = subprocess.run(  # noqa: S603
+                [sys.executable, "-m", "pip", "install", package],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=90,
+                shell=False,
+                check=False,
+            )
+        except Exception as exc:
+            return {"applied": False, "fix_type": fix_type, "detail": f"pip install failed: {exc}", "new_port": None, "package": package}
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout or "").strip() or f"pip install {package} failed"
+            return {"applied": False, "fix_type": fix_type, "detail": detail, "new_port": None, "package": package}
+        return {"applied": True, "fix_type": fix_type, "detail": f"missing_dependency -> {package} installed", "new_port": None, "package": package}
+
+    if fix_type == "db_not_initialized":
+        ok, detail = _init_db(root)
+        return {"applied": ok, "fix_type": fix_type, "detail": detail, "new_port": None, "package": ""}
+
+    if fix_type == "env_missing":
+        ok, detail = _apply_default_env(root, current_port)
+        return {"applied": ok, "fix_type": fix_type, "detail": detail, "new_port": None, "package": ""}
+
+    if fix_type == "port_in_use":
+        next_port = find_free_port()
+        if current_port is not None:
+            attempts = 0
+            while next_port == int(current_port) and attempts < 5:
+                next_port = find_free_port()
+                attempts += 1
+        return {"applied": True, "fix_type": fix_type, "detail": f"port_in_use -> switched port to {int(next_port)}", "new_port": int(next_port), "package": ""}
+
+    return {"applied": False, "fix_type": "unknown", "detail": "auto-fix skipped: unsupported failure type", "new_port": None, "package": package}
+
+
+def _auto_fix_meta(history: list[dict[str, Any]], status: str) -> dict[str, Any]:
+    last = history[-1] if history else {}
+    return {
+        "attempts": len(history),
+        "last_fix": str(last.get("fix_type") or ""),
+        "last_detail": str(last.get("detail") or ""),
+        "status": status,
+    }
+
+
 def run_backend_local_with_health(project_dir: Path, *, port: int | None = None) -> dict[str, Any]:
     root = project_dir.expanduser().resolve()
-    backend = deploy_backend_local(root, port=port)
-    backend_ok = str(backend.get("status") or "").upper() == "SUCCESS"
-    backend_url = str(backend.get("url") or "").strip()
-    backend_port = int(backend.get("backend_port") or 0) if str(backend.get("backend_port") or "").isdigit() else None
-    backend_log_path = str(backend.get("backend_log_path") or (root / ".archmind" / "backend.log"))
-    if not backend_ok:
+    max_retries = 2
+    current_port = int(port) if port else None
+    used_fix_types: set[str] = set()
+    auto_fix_history: list[dict[str, Any]] = []
+
+    for attempt in range(max_retries + 1):
+        backend = deploy_backend_local(root, port=current_port)
+        backend_ok = str(backend.get("status") or "").upper() == "SUCCESS"
+        backend_url = str(backend.get("url") or "").strip()
+        backend_port = int(backend.get("backend_port") or 0) if str(backend.get("backend_port") or "").isdigit() else current_port
+        backend_log_path = str(backend.get("backend_log_path") or (root / ".archmind" / "backend.log"))
+        log_tail_100 = str(read_last_lines(Path(backend_log_path), lines=100) or "").strip()
+
+        if not backend_ok:
+            failure_class = str(backend.get("failure_class") or "runtime-execution-error")
+            if failure_class == "generation-error":
+                return {
+                    "ok": False,
+                    "target": "local",
+                    "mode": "real",
+                    "kind": "backend",
+                    "status": "FAIL",
+                    "url": "",
+                    "detail": str(backend.get("detail") or "backend start failed"),
+                    "failure_class": failure_class,
+                    "backend_entry": str(backend.get("backend_entry") or ""),
+                    "backend_run_mode": str(backend.get("backend_run_mode") or ""),
+                    "run_cwd": str(backend.get("run_cwd") or ""),
+                    "run_command": str(backend.get("run_command") or ""),
+                    "backend_pid": backend.get("pid"),
+                    "backend_port": backend_port,
+                    "backend_log_path": backend_log_path,
+                    "backend_status": "FAIL",
+                    "healthcheck_url": "",
+                    "healthcheck_status": "SKIPPED",
+                    "healthcheck_detail": "backend deploy failed",
+                    "backend_smoke_url": "",
+                    "backend_smoke_status": "SKIPPED",
+                    "backend_smoke_detail": "backend deploy failed",
+                    "frontend_smoke_url": "",
+                    "frontend_smoke_status": "SKIPPED",
+                    "frontend_smoke_detail": "frontend not deployed",
+                    "auto_fix": _auto_fix_meta(auto_fix_history, "FAILED"),
+                }
+
+            if attempt < max_retries:
+                analysis = analyze_backend_failure(f"{str(backend.get('detail') or '')}\n{log_tail_100}")
+                fix = apply_auto_fix(root, analysis, used_fix_types=used_fix_types, current_port=backend_port)
+                if bool(fix.get("applied")):
+                    used_fix_types.add(str(fix.get("fix_type") or ""))
+                    auto_fix_history.append(
+                        {
+                            "attempt": attempt + 1,
+                            "fix_type": str(fix.get("fix_type") or ""),
+                            "detail": str(fix.get("detail") or ""),
+                            "analysis_type": str(analysis.get("type") or ""),
+                        }
+                    )
+                    if fix.get("new_port") is not None:
+                        current_port = int(fix.get("new_port"))
+                    continue
+
+            return {
+                "ok": False,
+                "target": "local",
+                "mode": "real",
+                "kind": "backend",
+                "status": "FAIL",
+                "url": "",
+                "detail": str(backend.get("detail") or "backend start failed"),
+                "failure_class": failure_class,
+                "backend_entry": str(backend.get("backend_entry") or ""),
+                "backend_run_mode": str(backend.get("backend_run_mode") or ""),
+                "run_cwd": str(backend.get("run_cwd") or ""),
+                "run_command": str(backend.get("run_command") or ""),
+                "backend_pid": backend.get("pid"),
+                "backend_port": backend_port,
+                "backend_log_path": backend_log_path,
+                "backend_status": "FAIL",
+                "healthcheck_url": "",
+                "healthcheck_status": "SKIPPED",
+                "healthcheck_detail": "backend deploy failed",
+                "backend_smoke_url": "",
+                "backend_smoke_status": "SKIPPED",
+                "backend_smoke_detail": "backend deploy failed",
+                "frontend_smoke_url": "",
+                "frontend_smoke_status": "SKIPPED",
+                "frontend_smoke_detail": "frontend not deployed",
+                "auto_fix": _auto_fix_meta(auto_fix_history, "FAILED"),
+            }
+
+        backend_smoke = _backend_smoke_with_retry(backend_url)
+        smoke_ok = str(backend_smoke.get("healthcheck_status") or "").upper() == "SUCCESS"
+        has_error = _has_error_marker(log_tail_100)
+        if smoke_ok and not has_error:
+            detail_text = str(backend.get("detail") or "local backend started")
+            auto_fix_meta = _auto_fix_meta(auto_fix_history, "SUCCESS" if auto_fix_history else "SKIPPED")
+            if auto_fix_history:
+                detail_text = f"{detail_text}\nAuto-fix applied: {auto_fix_meta.get('last_detail') or auto_fix_meta.get('last_fix')}"
+            return {
+                "ok": True,
+                "target": "local",
+                "mode": "real",
+                "kind": "backend",
+                "status": "SUCCESS",
+                "url": backend_url,
+                "detail": detail_text,
+                "failure_class": "",
+                "backend_entry": str(backend.get("backend_entry") or ""),
+                "backend_run_mode": str(backend.get("backend_run_mode") or ""),
+                "run_cwd": str(backend.get("run_cwd") or ""),
+                "run_command": str(backend.get("run_command") or ""),
+                "backend_pid": backend.get("pid"),
+                "backend_port": backend_port,
+                "backend_log_path": backend_log_path,
+                "backend_status": "RUNNING",
+                "healthcheck_url": str(backend_smoke.get("healthcheck_url") or ""),
+                "healthcheck_status": "SUCCESS",
+                "healthcheck_detail": str(backend_smoke.get("healthcheck_detail") or "health endpoint returned status ok"),
+                "backend_smoke_url": str(backend_smoke.get("healthcheck_url") or ""),
+                "backend_smoke_status": "SUCCESS",
+                "backend_smoke_detail": str(backend_smoke.get("healthcheck_detail") or "health endpoint returned status ok"),
+                "frontend_smoke_url": "",
+                "frontend_smoke_status": "SKIPPED",
+                "frontend_smoke_detail": "frontend not deployed",
+                "auto_fix": auto_fix_meta,
+            }
+
+        failure_reason = "backend log contains ERROR marker" if has_error else str(backend_smoke.get("healthcheck_detail") or "backend health check failed").strip()
+        analysis = analyze_backend_failure(f"{failure_reason}\n{log_tail_100}")
+        _stop_pid_safe(backend.get("pid"))
+
+        if attempt < max_retries:
+            fix = apply_auto_fix(root, analysis, used_fix_types=used_fix_types, current_port=backend_port)
+            if bool(fix.get("applied")):
+                used_fix_types.add(str(fix.get("fix_type") or ""))
+                auto_fix_history.append(
+                    {
+                        "attempt": attempt + 1,
+                        "fix_type": str(fix.get("fix_type") or ""),
+                        "detail": str(fix.get("detail") or ""),
+                        "analysis_type": str(analysis.get("type") or ""),
+                    }
+                )
+                if fix.get("new_port") is not None:
+                    current_port = int(fix.get("new_port"))
+                continue
+
+        stderr_tail = str(read_last_lines(Path(backend_log_path), lines=20) or "").strip()
+        failure_class = _classify_runtime_execution_failure(stderr_tail, failure_reason)
         return {
             "ok": False,
             "target": "local",
             "mode": "real",
             "kind": "backend",
             "status": "FAIL",
-            "url": "",
-            "detail": str(backend.get("detail") or "backend start failed"),
-            "failure_class": str(backend.get("failure_class") or "runtime-execution-error"),
+            "url": backend_url,
+            "detail": _compose_backend_runtime_failure_detail(
+                failure_class,
+                failure_reason,
+                detected_target=str(backend.get("backend_entry") or ""),
+                run_cwd=Path(str(backend.get("run_cwd") or root)),
+                run_command=[x for x in str(backend.get("run_command") or "").split(" ") if x],
+                backend_run_mode=str(backend.get("backend_run_mode") or ""),
+                log_path=Path(backend_log_path),
+                stderr_tail=stderr_tail,
+            ),
+            "failure_class": failure_class,
             "backend_entry": str(backend.get("backend_entry") or ""),
             "backend_run_mode": str(backend.get("backend_run_mode") or ""),
             "run_cwd": str(backend.get("run_cwd") or ""),
@@ -729,86 +1023,29 @@ def run_backend_local_with_health(project_dir: Path, *, port: int | None = None)
             "backend_port": backend_port,
             "backend_log_path": backend_log_path,
             "backend_status": "FAIL",
-            "healthcheck_url": "",
-            "healthcheck_status": "SKIPPED",
-            "healthcheck_detail": "backend deploy failed",
-            "backend_smoke_url": "",
-            "backend_smoke_status": "SKIPPED",
-            "backend_smoke_detail": "backend deploy failed",
-            "frontend_smoke_url": "",
-            "frontend_smoke_status": "SKIPPED",
-            "frontend_smoke_detail": "frontend not deployed",
-        }
-
-    backend_smoke = _backend_smoke_with_retry(backend_url)
-    smoke_ok = str(backend_smoke.get("healthcheck_status") or "").upper() == "SUCCESS"
-    if smoke_ok:
-        return {
-            "ok": True,
-            "target": "local",
-            "mode": "real",
-            "kind": "backend",
-            "status": "SUCCESS",
-            "url": backend_url,
-            "detail": str(backend.get("detail") or "local backend started"),
-            "failure_class": "",
-            "backend_entry": str(backend.get("backend_entry") or ""),
-            "backend_run_mode": str(backend.get("backend_run_mode") or ""),
-            "run_cwd": str(backend.get("run_cwd") or ""),
-            "run_command": str(backend.get("run_command") or ""),
-            "backend_pid": backend.get("pid"),
-            "backend_port": backend_port,
-            "backend_log_path": backend_log_path,
-            "backend_status": "RUNNING",
             "healthcheck_url": str(backend_smoke.get("healthcheck_url") or ""),
-            "healthcheck_status": "SUCCESS",
-            "healthcheck_detail": str(backend_smoke.get("healthcheck_detail") or "health endpoint returned status ok"),
+            "healthcheck_status": str(backend_smoke.get("healthcheck_status") or "FAIL"),
+            "healthcheck_detail": failure_reason,
             "backend_smoke_url": str(backend_smoke.get("healthcheck_url") or ""),
-            "backend_smoke_status": "SUCCESS",
-            "backend_smoke_detail": str(backend_smoke.get("healthcheck_detail") or "health endpoint returned status ok"),
+            "backend_smoke_status": str(backend_smoke.get("healthcheck_status") or "FAIL"),
+            "backend_smoke_detail": failure_reason,
             "frontend_smoke_url": "",
             "frontend_smoke_status": "SKIPPED",
             "frontend_smoke_detail": "frontend not deployed",
+            "auto_fix": _auto_fix_meta(auto_fix_history, "FAILED"),
         }
 
-    stderr_tail = str(read_last_lines(Path(backend_log_path), lines=20) or "").strip()
-    failure_reason = str(backend_smoke.get("healthcheck_detail") or "backend health check failed").strip()
-    failure_class = _classify_runtime_execution_failure(stderr_tail, failure_reason)
     return {
         "ok": False,
         "target": "local",
         "mode": "real",
         "kind": "backend",
         "status": "FAIL",
-        "url": backend_url,
-        "detail": _compose_backend_runtime_failure_detail(
-            failure_class,
-            failure_reason,
-            detected_target=str(backend.get("backend_entry") or ""),
-            run_cwd=Path(str(backend.get("run_cwd") or root)),
-            run_command=[x for x in str(backend.get("run_command") or "").split(" ") if x],
-            backend_run_mode=str(backend.get("backend_run_mode") or ""),
-            log_path=Path(backend_log_path),
-            stderr_tail=stderr_tail,
-        ),
-        "failure_class": failure_class,
-        "backend_entry": str(backend.get("backend_entry") or ""),
-        "backend_run_mode": str(backend.get("backend_run_mode") or ""),
-        "run_cwd": str(backend.get("run_cwd") or ""),
-        "run_command": str(backend.get("run_command") or ""),
-        "backend_pid": backend.get("pid"),
-        "backend_port": backend_port,
-        "backend_log_path": backend_log_path,
+        "url": "",
+        "detail": "runtime retry limit exceeded",
+        "failure_class": "runtime-execution-error",
         "backend_status": "FAIL",
-        "healthcheck_url": str(backend_smoke.get("healthcheck_url") or ""),
-        "healthcheck_status": str(backend_smoke.get("healthcheck_status") or "FAIL"),
-        "healthcheck_detail": failure_reason,
-        "backend_smoke_url": str(backend_smoke.get("healthcheck_url") or ""),
-        "backend_smoke_status": str(backend_smoke.get("healthcheck_status") or "FAIL"),
-        "backend_smoke_detail": failure_reason,
-        "frontend_smoke_url": "",
-        "frontend_smoke_status": "SKIPPED",
-        "frontend_smoke_detail": "frontend not deployed",
+        "auto_fix": _auto_fix_meta(auto_fix_history, "FAILED"),
     }
 
 

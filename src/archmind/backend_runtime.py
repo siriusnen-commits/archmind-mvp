@@ -180,3 +180,50 @@ def detect_backend_runtime_entry(project_dir: Path, *, port: int) -> dict[str, A
         "run_cwd": root,
         "run_command": [],
     }
+
+
+def analyze_backend_failure(log_text: str) -> dict[str, Any]:
+    text = str(log_text or "")
+    lower = text.lower()
+
+    if "address already in use" in lower:
+        return {
+            "type": "port_in_use",
+            "package": "",
+            "detail": "address already in use",
+        }
+
+    missing_match = re.search(r"No module named ['\"]([^'\"]+)['\"]", text)
+    if missing_match:
+        pkg = str(missing_match.group(1) or "").strip().split(".")[0]
+        return {
+            "type": "missing_dependency",
+            "package": pkg,
+            "detail": f"missing dependency: {pkg}" if pkg else "missing dependency",
+        }
+    if "modulenotfounderror" in lower or "importerror" in lower:
+        return {
+            "type": "missing_dependency",
+            "package": "",
+            "detail": "python import failed",
+        }
+
+    if "sqlite3.operationalerror" in lower or "no such table" in lower:
+        return {
+            "type": "db_not_initialized",
+            "package": "",
+            "detail": "database is not initialized",
+        }
+
+    if "environment variable" in lower or "settings" in lower:
+        return {
+            "type": "env_missing",
+            "package": "",
+            "detail": "runtime env configuration is missing",
+        }
+
+    return {
+        "type": "unknown",
+        "package": "",
+        "detail": "unknown runtime failure",
+    }
