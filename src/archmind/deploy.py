@@ -550,7 +550,7 @@ def _compose_backend_runtime_failure_detail(
     return "\n".join(lines)
 
 
-def _backend_smoke_with_retry(base_url: str, attempts: int = 5, interval_s: float = 0.4) -> dict[str, Any]:
+def _backend_smoke_with_retry(base_url: str, attempts: int = 12, interval_s: float = 0.5) -> dict[str, Any]:
     latest = verify_deploy_health(base_url)
     if str(latest.get("healthcheck_status") or "").upper() == "SUCCESS":
         return latest
@@ -585,6 +585,7 @@ def deploy_backend_local(project_dir: Path, *, port: int | None = None, frontend
     if not bool(entry.get("ok")):
         reason = str(entry.get("failure_reason") or "backend runtime entry detection failed")
         failure_class = str(entry.get("failure_class") or "generation-error")
+        log_path = root / ".archmind" / "backend.log"
         return {
             "status": "FAIL",
             "url": None,
@@ -595,12 +596,16 @@ def deploy_backend_local(project_dir: Path, *, port: int | None = None, frontend
                 run_cwd=Path(run_cwd) if isinstance(run_cwd, Path) else root,
                 run_command=run_command,
                 backend_run_mode=backend_run_mode,
+                log_path=log_path,
             ),
             "failure_class": failure_class,
             "backend_entry": backend_entry,
             "backend_run_mode": backend_run_mode,
             "run_cwd": str(run_cwd or root),
             "run_command": " ".join(run_command),
+            "backend_status": "FAIL",
+            "backend_port": picked_port,
+            "backend_log_path": str(log_path),
         }
 
     resolved_cwd = Path(run_cwd) if isinstance(run_cwd, Path) else root
@@ -628,6 +633,9 @@ def deploy_backend_local(project_dir: Path, *, port: int | None = None, frontend
             "backend_run_mode": backend_run_mode,
             "run_cwd": str(resolved_cwd),
             "run_command": " ".join(run_command),
+            "backend_status": "FAIL",
+            "backend_port": picked_port,
+            "backend_log_path": str(log_path),
         }
     time.sleep(0.35)
     exit_code = proc.poll()
@@ -653,6 +661,9 @@ def deploy_backend_local(project_dir: Path, *, port: int | None = None, frontend
             "backend_run_mode": backend_run_mode,
             "run_cwd": str(resolved_cwd),
             "run_command": " ".join(run_command),
+            "backend_status": "FAIL",
+            "backend_port": picked_port,
+            "backend_log_path": str(log_path),
         }
     return {
         "status": "SUCCESS",
@@ -664,6 +675,140 @@ def deploy_backend_local(project_dir: Path, *, port: int | None = None, frontend
         "backend_run_mode": backend_run_mode,
         "run_cwd": str(resolved_cwd),
         "run_command": " ".join(run_command),
+        "backend_status": "RUNNING",
+        "backend_port": picked_port,
+        "backend_log_path": str(log_path),
+    }
+
+
+def _classify_runtime_execution_failure(log_text: str, reason: str) -> str:
+    text = str(log_text or "").lower()
+    if any(
+        token in text
+        for token in (
+            "python: command not found",
+            "python3: command not found",
+            "modulenotfounderror",
+            "importerror",
+            "no module named",
+            "traceback (most recent call last)",
+        )
+    ):
+        return "environment-python"
+    if "address already in use" in text:
+        return "runtime-execution-error"
+    if "command not found" in text:
+        return "runtime-execution-error"
+    if reason:
+        return "runtime-execution-error"
+    return "runtime-execution-error"
+
+
+def run_backend_local_with_health(project_dir: Path, *, port: int | None = None) -> dict[str, Any]:
+    root = project_dir.expanduser().resolve()
+    backend = deploy_backend_local(root, port=port)
+    backend_ok = str(backend.get("status") or "").upper() == "SUCCESS"
+    backend_url = str(backend.get("url") or "").strip()
+    backend_port = int(backend.get("backend_port") or 0) if str(backend.get("backend_port") or "").isdigit() else None
+    backend_log_path = str(backend.get("backend_log_path") or (root / ".archmind" / "backend.log"))
+    if not backend_ok:
+        return {
+            "ok": False,
+            "target": "local",
+            "mode": "real",
+            "kind": "backend",
+            "status": "FAIL",
+            "url": "",
+            "detail": str(backend.get("detail") or "backend start failed"),
+            "failure_class": str(backend.get("failure_class") or "runtime-execution-error"),
+            "backend_entry": str(backend.get("backend_entry") or ""),
+            "backend_run_mode": str(backend.get("backend_run_mode") or ""),
+            "run_cwd": str(backend.get("run_cwd") or ""),
+            "run_command": str(backend.get("run_command") or ""),
+            "backend_pid": backend.get("pid"),
+            "backend_port": backend_port,
+            "backend_log_path": backend_log_path,
+            "backend_status": "FAIL",
+            "healthcheck_url": "",
+            "healthcheck_status": "SKIPPED",
+            "healthcheck_detail": "backend deploy failed",
+            "backend_smoke_url": "",
+            "backend_smoke_status": "SKIPPED",
+            "backend_smoke_detail": "backend deploy failed",
+            "frontend_smoke_url": "",
+            "frontend_smoke_status": "SKIPPED",
+            "frontend_smoke_detail": "frontend not deployed",
+        }
+
+    backend_smoke = _backend_smoke_with_retry(backend_url)
+    smoke_ok = str(backend_smoke.get("healthcheck_status") or "").upper() == "SUCCESS"
+    if smoke_ok:
+        return {
+            "ok": True,
+            "target": "local",
+            "mode": "real",
+            "kind": "backend",
+            "status": "SUCCESS",
+            "url": backend_url,
+            "detail": str(backend.get("detail") or "local backend started"),
+            "failure_class": "",
+            "backend_entry": str(backend.get("backend_entry") or ""),
+            "backend_run_mode": str(backend.get("backend_run_mode") or ""),
+            "run_cwd": str(backend.get("run_cwd") or ""),
+            "run_command": str(backend.get("run_command") or ""),
+            "backend_pid": backend.get("pid"),
+            "backend_port": backend_port,
+            "backend_log_path": backend_log_path,
+            "backend_status": "RUNNING",
+            "healthcheck_url": str(backend_smoke.get("healthcheck_url") or ""),
+            "healthcheck_status": "SUCCESS",
+            "healthcheck_detail": str(backend_smoke.get("healthcheck_detail") or "health endpoint returned status ok"),
+            "backend_smoke_url": str(backend_smoke.get("healthcheck_url") or ""),
+            "backend_smoke_status": "SUCCESS",
+            "backend_smoke_detail": str(backend_smoke.get("healthcheck_detail") or "health endpoint returned status ok"),
+            "frontend_smoke_url": "",
+            "frontend_smoke_status": "SKIPPED",
+            "frontend_smoke_detail": "frontend not deployed",
+        }
+
+    stderr_tail = str(read_last_lines(Path(backend_log_path), lines=20) or "").strip()
+    failure_reason = str(backend_smoke.get("healthcheck_detail") or "backend health check failed").strip()
+    failure_class = _classify_runtime_execution_failure(stderr_tail, failure_reason)
+    return {
+        "ok": False,
+        "target": "local",
+        "mode": "real",
+        "kind": "backend",
+        "status": "FAIL",
+        "url": backend_url,
+        "detail": _compose_backend_runtime_failure_detail(
+            failure_class,
+            failure_reason,
+            detected_target=str(backend.get("backend_entry") or ""),
+            run_cwd=Path(str(backend.get("run_cwd") or root)),
+            run_command=[x for x in str(backend.get("run_command") or "").split(" ") if x],
+            backend_run_mode=str(backend.get("backend_run_mode") or ""),
+            log_path=Path(backend_log_path),
+            stderr_tail=stderr_tail,
+        ),
+        "failure_class": failure_class,
+        "backend_entry": str(backend.get("backend_entry") or ""),
+        "backend_run_mode": str(backend.get("backend_run_mode") or ""),
+        "run_cwd": str(backend.get("run_cwd") or ""),
+        "run_command": str(backend.get("run_command") or ""),
+        "backend_pid": backend.get("pid"),
+        "backend_port": backend_port,
+        "backend_log_path": backend_log_path,
+        "backend_status": "FAIL",
+        "healthcheck_url": str(backend_smoke.get("healthcheck_url") or ""),
+        "healthcheck_status": str(backend_smoke.get("healthcheck_status") or "FAIL"),
+        "healthcheck_detail": failure_reason,
+        "backend_smoke_url": str(backend_smoke.get("healthcheck_url") or ""),
+        "backend_smoke_status": str(backend_smoke.get("healthcheck_status") or "FAIL"),
+        "backend_smoke_detail": failure_reason,
+        "frontend_smoke_url": "",
+        "frontend_smoke_status": "SKIPPED",
+        "frontend_smoke_detail": "frontend not deployed",
     }
 
 
@@ -1069,13 +1214,20 @@ def get_local_runtime_status(project_dir: Path) -> dict[str, Any]:
     deploy_target = str(state.get("deploy_target") or "").strip().lower()
     backend_url = str(state.get("backend_deploy_url") or state.get("deploy_url") or "").strip()
     frontend_url = str(state.get("frontend_deploy_url") or "").strip()
+    backend_state_status = str(state.get("backend_status") or "").strip().upper()
+    if backend_running:
+        backend_status = "RUNNING"
+    elif backend_state_status in {"FAIL", "WARNING"}:
+        backend_status = backend_state_status
+    else:
+        backend_status = "NOT RUNNING"
 
     return {
         "project_dir": root,
         "project_name": root.name,
         "deploy_target": deploy_target,
         "backend": {
-            "status": "RUNNING" if backend_running else "NOT RUNNING",
+            "status": backend_status,
             "pid": backend_pid,
             "url": backend_url,
         },
@@ -1165,12 +1317,20 @@ def restart_local_services(project_dir: Path) -> dict[str, Any]:
 
     stop_result = stop_local_services(root)
     if not backend_was_running and not frontend_was_running:
+        deploy_result = run_backend_local_with_health(root)
+        update_after_deploy(root, deploy_result, action="archmind restart --path <project>")
+        backend_ok = str(deploy_result.get("status") or "").upper() == "SUCCESS"
         return {
-            "ok": True,
+            "ok": backend_ok,
             "target": "local",
-            "backend": {"status": "NOT RUNNING", "url": "", "detail": ""},
+            "backend": {
+                "status": "RESTARTED" if backend_ok else "FAIL",
+                "url": str(deploy_result.get("url") or "").strip(),
+                "detail": str(deploy_result.get("detail") or "").strip(),
+            },
             "frontend": {"status": "NOT RUNNING", "url": "", "detail": ""},
             "stop": stop_result,
+            "deploy": deploy_result,
         }
 
     restart_kind = "fullstack" if (backend_was_running and frontend_was_running) else ("backend" if backend_was_running else "frontend")
