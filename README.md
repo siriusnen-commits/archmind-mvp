@@ -1,81 +1,82 @@
-# ArchMind v0.7.0
+# ArchMind v0.8.0
 
-ArchMind is an AI-driven architecture and development workflow engine.
+ArchMind is a spec-driven AI development workflow engine with multi-service local runtime orchestration.
 
-It now supports an end-to-end loop:
-`idea -> generation -> validation -> run -> health -> auto-fix`
+It now supports a practical loop from idea to runnable fullstack project:
+`idea -> generation -> validation -> run -> inspect -> evolve`
 
-## Major Milestone in v0.7.0
+## Major Milestone in v0.8.0
 
-ArchMind now supports a much more complete execution loop:
+ArchMind now supports:
 
-- Idea -> Project Generation
-- Structure Validation
-- Backend Runtime Detection
-- Local Backend Run with Health Check
-- Auto-Run after `/idea_local`
-- Deploy vs Runtime State Separation
-- Auto-Fix (self-healing runtime retry)
-- Preflight Check before execution
+- fullstack runtime orchestration
+- backend + frontend local execution
+- `/run all` for multi-service startup
+- `/restart`, `/stop`, `/stop all`
+- `/running` unified runtime view
+- `/logs backend` and `/logs frontend`
+- `runtime.services`-based runtime state model
+- consistent `RUNNING` / `STOPPED` / `FAIL` reporting
+- GitHub repository creation tracked separately from runtime completion
 
-## v0.7.0 Key Changes
+## v0.8.0 Key Changes
 
-### Preflight Check
-- Detects and fixes issues before execution:
-  - Missing dependencies
-  - Import errors
-  - Database initialization
-  - Environment setup
-  - Port conflicts
+### Runtime orchestration
+- backend + frontend service lifecycle management
+- `/run all`, `/restart`, `/stop`, `/stop all`
+- `/running`, `/logs backend`, `/logs frontend`
 
-### Auto-Fix (Self-Healing)
-- Analyzes runtime failures from logs
-- Applies fixes automatically
-- Retries backend execution with bounded attempts
+### Runtime state model
+- `runtime.services.backend` and `runtime.services.frontend`
+- clear separation of `RUNNING`, `STOPPED`, and `FAIL`
+- improved `/inspect`, `/running`, and `/logs` consistency
 
-### Local Runtime Execution
-- `/run backend` executes local backend with health check
-- `/idea_local` can auto-run backend right after generation
-- Runtime diagnostics are available from `/logs backend`
+### GitHub repository flow
+- scaffold generation and GitHub repo creation are decoupled from final runtime status
+- repository state is tracked separately from deploy/runtime state
 
-### State Architecture
-- Clear separation of state domains:
-  - `deploy`: cloud/deployment status
-  - `runtime`: local execution/runtime status
+### v0.7 strengths retained
+- preflight checks before execution
+- auto-fix (self-healing runtime retry)
+- local backend execution with health check
+- auto-run after `/idea_local`
 
 ## Core Workflow
 
-- design from idea
-- suggest project structure
-- build development plan
-- generate project
-- auto-run backend
-- inspect current project
-- improve or continue with next suggestions
+- idea to project generation
+- structure validation
+- runtime detection
+- backend/frontend execution
+- health and logs inspection
+- restart and stop operations
+- inspect, improve, and next-step evolution
 
 ## Key Commands
 
-- `/design <idea>`
-- `/plan <idea>`
 - `/idea_local <idea>`
-- `/run backend`
 - `/inspect`
-- `/improve`
 - `/next`
+- `/improve`
+- `/run backend`
+- `/run all`
+- `/running`
+- `/restart`
+- `/stop`
+- `/stop all`
+- `/logs backend`
+- `/logs frontend`
+
+## What v0.8.0 Means
+
+ArchMind can now generate and orchestrate fullstack projects locally with unified multi-service runtime control.
 
 ## Offline Install
 
 For offline environments, ArchMind supports installation using a bundled dependency archive such as `wheelhouse.zip`.
 You can verify offline installation with `scripts/offline_install_verify.sh`.
 
-## What v0.7.0 Means
-
-ArchMind can now:
-
-> generate, run, validate, and stabilize projects with minimal manual intervention.
-
 ## Next
 
-- multi-service orchestration
-- persistent process manager
-- UI layer
+- stronger spec/primitive evolution
+- local/cloud/hybrid provider layer
+- basic web UI dashboard
