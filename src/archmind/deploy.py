@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib import error, parse, request
 
+from archmind.backend_runtime import detect_backend_asgi_entry
 from archmind.state import ensure_state, load_state, update_after_deploy, write_state
 
 
@@ -488,35 +489,23 @@ def _contains_launcher_target(main_file: Path, target: str = "app.main:app") -> 
 
 def detect_backend_runtime_entry(project_dir: Path, *, port: int) -> dict[str, Any]:
     root = project_dir.expanduser().resolve()
-    app_main_root = root / "app" / "main.py"
-    app_main_backend = root / "backend" / "app" / "main.py"
     launcher_main = root / "main.py"
     launcher_mode = _contains_launcher_target(launcher_main, "app.main:app")
-
-    if app_main_root.exists():
-        target = "app.main:app"
-        run_cwd = root
+    detected = detect_backend_asgi_entry(
+        root,
+        allowed_layouts=("fullstack", "flat"),
+        prefer_layout="fullstack",
+        port=port,
+    )
+    if bool(detected.get("ok")):
         return {
             "ok": True,
             "failure_class": "",
             "failure_reason": "",
-            "backend_entry": target,
-            "backend_run_mode": "asgi-direct",
-            "run_cwd": run_cwd,
-            "run_command": ["uvicorn", target, "--host", "0.0.0.0", "--port", str(int(port))],
-            "launcher_mode_detected": launcher_mode,
-        }
-    if app_main_backend.exists():
-        target = "app.main:app"
-        run_cwd = root / "backend"
-        return {
-            "ok": True,
-            "failure_class": "",
-            "failure_reason": "",
-            "backend_entry": target,
-            "backend_run_mode": "asgi-direct",
-            "run_cwd": run_cwd,
-            "run_command": ["uvicorn", target, "--host", "0.0.0.0", "--port", str(int(port))],
+            "backend_entry": str(detected.get("backend_entry") or "app.main:app"),
+            "backend_run_mode": str(detected.get("backend_run_mode") or "asgi-direct"),
+            "run_cwd": detected.get("run_cwd") or root,
+            "run_command": [str(item) for item in (detected.get("run_command") or [])],
             "launcher_mode_detected": launcher_mode,
         }
 
@@ -532,7 +521,7 @@ def detect_backend_runtime_entry(project_dir: Path, *, port: int) -> dict[str, A
             "launcher_mode_detected": True,
         }
 
-    reason = "backend entrypoint not found"
+    reason = str(detected.get("failure_reason") or "backend entrypoint not found")
     return {
         "ok": False,
         "failure_class": "generation-error",

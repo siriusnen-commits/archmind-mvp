@@ -7,6 +7,7 @@ from archmind.deploy import (
     delete_github_repo,
     delete_local_project,
     delete_project,
+    detect_backend_runtime_entry,
     deploy_backend_local,
     deploy_frontend_local,
     deploy_frontend_to_railway_real,
@@ -26,11 +27,13 @@ from archmind.deploy import (
     verify_deploy_health,
 )
 from archmind.state import load_state, update_after_deploy, write_state
+from archmind.generator import validate_generated_project_structure
 
 
 def _write_app_main(root: Path) -> None:
     (root / "app").mkdir(parents=True, exist_ok=True)
     (root / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (root / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
 
 
 def test_deploy_project_returns_fail_when_railway_cli_missing(tmp_path: Path, monkeypatch) -> None:
@@ -157,6 +160,7 @@ def test_local_backend_deploy_returns_localhost_url(monkeypatch, tmp_path: Path)
 def test_local_backend_deploy_detects_backend_subdir_entrypoint(monkeypatch, tmp_path: Path) -> None:
     (tmp_path / "backend" / "app").mkdir(parents=True, exist_ok=True)
     (tmp_path / "backend" / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (tmp_path / "backend" / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
 
     class DummyProc:
         pid = 12002
@@ -181,9 +185,45 @@ def test_local_backend_deploy_reports_generation_error_when_backend_structure_mi
     result = deploy_backend_local(tmp_path)
     assert result["status"] == "FAIL"
     assert result["failure_class"] == "generation-error"
+    assert result["failure_class"] != "environment-python"
     detail = str(result.get("detail") or "")
     assert "Detected backend target: (none)" in detail
     assert "Run command: (none)" in detail
+
+
+def test_detect_backend_runtime_entry_for_flat_fastapi_contract(tmp_path: Path) -> None:
+    _write_app_main(tmp_path)
+    out = detect_backend_runtime_entry(tmp_path, port=8123)
+    assert out["ok"] is True
+    assert out["backend_entry"] == "app.main:app"
+    assert out["backend_run_mode"] == "asgi-direct"
+    assert Path(str(out["run_cwd"])) == tmp_path
+    assert out["run_command"] == ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8123"]
+
+
+def test_detect_backend_runtime_entry_for_fullstack_contract(tmp_path: Path) -> None:
+    (tmp_path / "backend" / "app").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "backend" / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (tmp_path / "backend" / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    out = detect_backend_runtime_entry(tmp_path, port=8456)
+    assert out["ok"] is True
+    assert out["backend_entry"] == "app.main:app"
+    assert out["backend_run_mode"] == "asgi-direct"
+    assert str(out["run_cwd"]).endswith("/backend")
+    assert out["run_command"] == ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8456"]
+
+
+def test_fullstack_validation_ok_implies_runtime_entry_detection_ok(tmp_path: Path) -> None:
+    (tmp_path / "backend" / "app").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "backend" / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (tmp_path / "backend" / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
+    check = validate_generated_project_structure(tmp_path, template_name="fullstack-ddd")
+    assert check["ok"] is True
+    out = detect_backend_runtime_entry(tmp_path, port=9012)
+    assert out["ok"] is True
+    assert out["backend_entry"] == "app.main:app"
+    assert out["backend_run_mode"] == "asgi-direct"
 
 
 def test_local_backend_deploy_falls_back_to_launcher_python_mode(monkeypatch, tmp_path: Path) -> None:
