@@ -99,6 +99,15 @@ def suggest_next_commands(spec: dict[str, Any], limit: int = 5) -> list[dict[str
     if "dashboard" in modules and "dashboard/home" not in frontend_pages:
         add("/add_page dashboard/home", "dashboard module present but dashboard page missing")
 
+    if shape == "fullstack" and not frontend_pages:
+        for name in entity_names:
+            slug = _entity_slug(name)
+            plural = f"{slug}s"
+            if not slug:
+                continue
+            add(f"/add_page {plural}/list", f"{name} entity exists but list page missing")
+            add(f"/add_page {plural}/detail", f"{name} entity exists but detail page missing")
+
     for entity in entities:
         if not isinstance(entity, dict):
             continue
@@ -107,6 +116,13 @@ def suggest_next_commands(spec: dict[str, Any], limit: int = 5) -> list[dict[str
         plural = f"{slug}s"
         if not name or not slug:
             continue
+
+        list_api = f"GET /{plural}"
+        create_api = f"POST /{plural}"
+        if list_api not in api_endpoints:
+            add(f"/add_api GET /{plural}", f"{name} entity exists but list API missing")
+        if create_api not in api_endpoints:
+            add(f"/add_api POST /{plural}", f"{name} entity exists but create API missing")
 
         expected_apis = [
             ("GET", f"/{plural}/{{id}}", "read API missing"),
