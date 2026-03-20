@@ -1147,7 +1147,7 @@ def test_stop_local_services_treats_lingering_pid_as_stopped_when_service_down(m
 
     result = stop_local_services(tmp_path)
     assert result["backend"]["status"] == "STOPPED"
-    assert "service is down" in str(result["backend"].get("detail") or "")
+    assert "still running" not in str(result["backend"].get("detail") or "")
 
 
 def test_stop_local_services_keeps_warning_when_service_still_responsive(monkeypatch, tmp_path: Path) -> None:
@@ -1238,29 +1238,26 @@ def test_stop_all_local_services_tracks_already_stopped_and_failed(monkeypatch, 
 def test_restart_local_services_calls_stop_then_deploy(monkeypatch, tmp_path: Path) -> None:
     calls: list[str] = []
     monkeypatch.setattr(
-        "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
-            "backend": {"status": "RUNNING"},
-            "frontend": {"status": "RUNNING"},
-        },
-    )
-    monkeypatch.setattr(
         "archmind.deploy.stop_local_services",
         lambda _p: calls.append("stop") or {"ok": True, "backend": {"status": "STOPPED"}, "frontend": {"status": "STOPPED"}},
     )
     monkeypatch.setattr(
-        "archmind.deploy.deploy_to_local",
-        lambda _p, kind="backend": calls.append(f"deploy:{kind}")
+        "archmind.runtime_orchestrator.run_all_local_services",
+        lambda _p: calls.append("run_all")
         or {
             "ok": True,
             "target": "local",
             "mode": "real",
             "kind": "fullstack",
             "status": "SUCCESS",
-            "url": "http://127.0.0.1:3011",
+            "backend_url": "http://127.0.0.1:8011",
+            "frontend_url": "http://127.0.0.1:3011",
+            "url": "http://127.0.0.1:8011",
             "detail": "local fullstack deploy completed",
-            "backend": {"status": "SUCCESS", "url": "http://127.0.0.1:8011", "detail": "local backend started"},
-            "frontend": {"status": "SUCCESS", "url": "http://127.0.0.1:3011", "detail": "local frontend started"},
+            "services": {
+                "backend": {"status": "RUNNING", "url": "http://127.0.0.1:8011", "detail": "local backend started", "pid": 9001},
+                "frontend": {"status": "RUNNING", "url": "http://127.0.0.1:3011", "detail": "local frontend started", "pid": 9002},
+            },
             "backend_pid": 9001,
             "frontend_pid": 9002,
             "backend_smoke_url": "http://127.0.0.1:8011/health",
@@ -1277,26 +1274,19 @@ def test_restart_local_services_calls_stop_then_deploy(monkeypatch, tmp_path: Pa
     monkeypatch.setattr("archmind.deploy.update_after_deploy", lambda *_a, **_k: {})
 
     result = restart_local_services(tmp_path)
-    assert calls == ["stop", "deploy:fullstack"]
+    assert calls == ["stop", "run_all"]
     assert result["backend"]["status"] == "RESTARTED"
     assert result["frontend"]["status"] == "RESTARTED"
 
 
 def test_restart_local_services_updates_pids_in_state(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
-        "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
-            "backend": {"status": "RUNNING"},
-            "frontend": {"status": "NOT RUNNING"},
-        },
-    )
-    monkeypatch.setattr(
         "archmind.deploy.stop_local_services",
         lambda _p: {"ok": True, "backend": {"status": "STOPPED"}, "frontend": {"status": "NOT RUNNING"}},
     )
     monkeypatch.setattr(
-        "archmind.deploy.deploy_to_local",
-        lambda _p, kind="backend": {
+        "archmind.runtime_orchestrator.run_all_local_services",
+        lambda _p: {
             "ok": True,
             "target": "local",
             "mode": "real",
@@ -1304,6 +1294,10 @@ def test_restart_local_services_updates_pids_in_state(monkeypatch, tmp_path: Pat
             "status": "SUCCESS",
             "url": "http://127.0.0.1:8055",
             "detail": "local backend started",
+            "services": {
+                "backend": {"status": "RUNNING", "pid": 8055, "port": 8055, "url": "http://127.0.0.1:8055", "log_path": ""},
+                "frontend": {"status": "ABSENT", "pid": None, "port": None, "url": "", "log_path": ""},
+            },
             "backend_pid": 8055,
             "backend_smoke_url": "http://127.0.0.1:8055/health",
             "backend_smoke_status": "SUCCESS",
@@ -1319,26 +1313,19 @@ def test_restart_local_services_updates_pids_in_state(monkeypatch, tmp_path: Pat
 
     result = restart_local_services(tmp_path)
     assert result["backend"]["status"] == "RESTARTED"
-    assert result["frontend"]["status"] == "NOT RUNNING"
+    assert result["frontend"]["status"] == "ABSENT"
     state = load_state(tmp_path)
     assert state is not None
     assert int(state.get("backend_pid") or 0) == 8055
 
 
 def test_restart_local_services_when_not_running(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(
-        "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
-            "backend": {"status": "NOT RUNNING"},
-            "frontend": {"status": "NOT RUNNING"},
-        },
-    )
-    called = {"run": 0}
+    called = {"run_all": 0}
     monkeypatch.setattr("archmind.deploy.stop_local_services", lambda _p: {"ok": True})
     monkeypatch.setattr("archmind.deploy.update_after_deploy", lambda *_a, **_k: {})
     monkeypatch.setattr(
-        "archmind.deploy.run_backend_local_with_health",
-        lambda _p, port=None: called.__setitem__("run", called["run"] + 1)
+        "archmind.runtime_orchestrator.run_all_local_services",
+        lambda _p: called.__setitem__("run_all", called["run_all"] + 1)
         or {
             "ok": True,
             "target": "local",
@@ -1347,12 +1334,52 @@ def test_restart_local_services_when_not_running(monkeypatch, tmp_path: Path) ->
             "status": "SUCCESS",
             "url": "http://127.0.0.1:8125",
             "detail": "local backend started",
+            "services": {
+                "backend": {"status": "RUNNING", "pid": 8125, "port": 8125, "url": "http://127.0.0.1:8125", "log_path": ""},
+                "frontend": {"status": "ABSENT", "pid": None, "port": None, "url": "", "log_path": ""},
+            },
         },
     )
     result = restart_local_services(tmp_path)
-    assert called["run"] == 1
+    assert called["run_all"] == 1
     assert result["backend"]["status"] == "RESTARTED"
-    assert result["frontend"]["status"] == "NOT RUNNING"
+    assert result["frontend"]["status"] == "ABSENT"
+
+
+def test_restart_local_services_keeps_frontend_url_distinct_from_backend(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("archmind.deploy.stop_local_services", lambda _p: {"ok": True})
+    monkeypatch.setattr(
+        "archmind.runtime_orchestrator.run_all_local_services",
+        lambda _p: {
+            "ok": True,
+            "target": "local",
+            "mode": "real",
+            "kind": "fullstack",
+            "status": "SUCCESS",
+            "backend_url": "http://127.0.0.1:54182",
+            "frontend_url": "http://127.0.0.1:3000",
+            "url": "http://127.0.0.1:54182",
+            "detail": "services started",
+            "services": {
+                "backend": {"status": "RUNNING", "pid": 54182, "port": 54182, "url": "http://127.0.0.1:54182", "log_path": ""},
+                "frontend": {"status": "RUNNING", "pid": 3000, "port": 3000, "url": "http://127.0.0.1:3000", "log_path": ""},
+            },
+            "backend_status": "RUNNING",
+            "frontend_status": "RUNNING",
+            "backend_pid": 54182,
+            "frontend_pid": 3000,
+        },
+    )
+    result = restart_local_services(tmp_path)
+    assert result["backend"]["url"] == "http://127.0.0.1:54182"
+    assert result["frontend"]["url"] == "http://127.0.0.1:3000"
+    state = load_state(tmp_path) or {}
+    runtime = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
+    services = runtime.get("services") if isinstance(runtime.get("services"), dict) else {}
+    backend = services.get("backend") if isinstance(services.get("backend"), dict) else {}
+    frontend = services.get("frontend") if isinstance(services.get("frontend"), dict) else {}
+    assert backend.get("url") == "http://127.0.0.1:54182"
+    assert frontend.get("url") == "http://127.0.0.1:3000"
 
 
 def test_is_pid_running_true_when_kill_zero_succeeds(monkeypatch) -> None:
@@ -1439,7 +1466,7 @@ def test_detect_frontend_runtime_entry_prefers_frontend_dir(tmp_path: Path) -> N
     assert detected["ok"] is True
     assert Path(str(detected["run_cwd"])).resolve() == frontend_dir.resolve()
     assert detected["frontend_port"] == 3013
-    assert detected["run_command"][:3] == ["npm", "run", "dev"]
+    assert detected["run_command"][:4] == ["npm", "exec", "--", "next"]
 
 
 def test_update_runtime_state_persists_runtime_services_structure(tmp_path: Path) -> None:

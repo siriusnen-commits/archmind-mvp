@@ -226,6 +226,9 @@ def _default_runtime_state() -> dict[str, Any]:
                 "port": None,
                 "url": "",
                 "log_path": "",
+                "health": "",
+                "framework": "",
+                "last_checked_at": "",
             },
             "frontend": {
                 "status": "",
@@ -233,6 +236,9 @@ def _default_runtime_state() -> dict[str, Any]:
                 "port": None,
                 "url": "",
                 "log_path": "",
+                "health": "",
+                "framework": "",
+                "last_checked_at": "",
             },
         },
     }
@@ -263,12 +269,18 @@ def _normalize_runtime_service(service: Any, fallback: dict[str, Any]) -> dict[s
     port = _safe_port(block.get("port") if "port" in block else fallback.get("port"))
     url = str(block.get("url") or fallback.get("url") or "").strip()[:300]
     log_path = str(block.get("log_path") or fallback.get("log_path") or "").strip()[:300]
+    health = str(block.get("health") or fallback.get("health") or "").strip().upper()[:20]
+    framework = str(block.get("framework") or fallback.get("framework") or "").strip()[:40]
+    last_checked_at = str(block.get("last_checked_at") or fallback.get("last_checked_at") or "").strip()[:40]
     return {
         "status": status,
         "pid": pid,
         "port": port,
         "url": url,
         "log_path": log_path,
+        "health": health,
+        "framework": framework,
+        "last_checked_at": last_checked_at,
     }
 
 
@@ -285,6 +297,8 @@ def _normalize_runtime_services(runtime_block: dict[str, Any], payload: dict[str
             "port": runtime_block.get("backend_port") or payload.get("backend_port"),
             "url": runtime_block.get("backend_url") or payload.get("backend_deploy_url") or payload.get("deploy_url"),
             "log_path": runtime_block.get("backend_log_path") or payload.get("backend_log_path"),
+            "health": runtime_block.get("healthcheck_status") or payload.get("healthcheck_status"),
+            "framework": "fastapi",
         },
     )
     frontend = _normalize_runtime_service(
@@ -295,6 +309,8 @@ def _normalize_runtime_services(runtime_block: dict[str, Any], payload: dict[str
             "port": runtime_block.get("frontend_port"),
             "url": runtime_block.get("frontend_url") or payload.get("frontend_deploy_url"),
             "log_path": runtime_block.get("frontend_log_path"),
+            "health": runtime_block.get("frontend_health") or payload.get("frontend_smoke_status"),
+            "framework": runtime_block.get("frontend_framework"),
         },
     )
     return {"backend": backend, "frontend": frontend}
@@ -466,6 +482,8 @@ def _normalize_loaded_state(project_dir: Path, payload: dict[str, Any]) -> dict[
     runtime_defaults["frontend_log_path"] = str(runtime_defaults.get("frontend_log_path") or "").strip()[:300]
     runtime_defaults["frontend_url"] = str(runtime_defaults.get("frontend_url") or normalized.get("frontend_deploy_url") or "").strip()[:300]
     runtime_defaults["frontend_status"] = str(runtime_defaults.get("frontend_status") or "").strip().upper()[:20]
+    runtime_defaults["frontend_framework"] = str(runtime_defaults.get("frontend_framework") or "").strip()[:40]
+    runtime_defaults["frontend_health"] = str(runtime_defaults.get("frontend_health") or "").strip().upper()[:20]
     auto_fix_block = runtime_defaults.get("auto_fix")
     if not isinstance(auto_fix_block, dict):
         auto_fix_block = {}
@@ -501,6 +519,8 @@ def _normalize_loaded_state(project_dir: Path, payload: dict[str, Any]) -> dict[
     runtime_defaults["frontend_log_path"] = str(runtime_defaults.get("frontend_log_path") or frontend_service.get("log_path") or "").strip()[:300]
     runtime_defaults["frontend_url"] = str(runtime_defaults.get("frontend_url") or frontend_service.get("url") or "").strip()[:300]
     runtime_defaults["frontend_status"] = str(runtime_defaults.get("frontend_status") or frontend_service.get("status") or "").strip().upper()[:20]
+    runtime_defaults["frontend_framework"] = str(runtime_defaults.get("frontend_framework") or frontend_service.get("framework") or "").strip()[:40]
+    runtime_defaults["frontend_health"] = str(runtime_defaults.get("frontend_health") or frontend_service.get("health") or "").strip().upper()[:20]
     normalized["runtime"] = runtime_defaults
     repository_defaults = _default_repository_state()
     repository_defaults.update(repository_block)
@@ -811,6 +831,8 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     runtime["frontend_log_path"] = str(runtime.get("frontend_log_path") or "").strip()[:300]
     runtime["frontend_url"] = str(runtime.get("frontend_url") or payload.get("frontend_deploy_url") or "").strip()[:300]
     runtime["frontend_status"] = str(runtime.get("frontend_status") or "").strip().upper()[:20]
+    runtime["frontend_framework"] = str(runtime.get("frontend_framework") or "").strip()[:40]
+    runtime["frontend_health"] = str(runtime.get("frontend_health") or "").strip().upper()[:20]
     auto_fix_block = runtime.get("auto_fix")
     if not isinstance(auto_fix_block, dict):
         auto_fix_block = {}
@@ -846,6 +868,8 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     runtime["frontend_log_path"] = str(runtime.get("frontend_log_path") or frontend_service.get("log_path") or "").strip()[:300]
     runtime["frontend_url"] = str(runtime.get("frontend_url") or frontend_service.get("url") or "").strip()[:300]
     runtime["frontend_status"] = str(runtime.get("frontend_status") or frontend_service.get("status") or "").strip().upper()[:20]
+    runtime["frontend_framework"] = str(runtime.get("frontend_framework") or frontend_service.get("framework") or "").strip()[:40]
+    runtime["frontend_health"] = str(runtime.get("frontend_health") or frontend_service.get("health") or "").strip().upper()[:20]
     payload["runtime"] = runtime
 
     # Deprecated flat keys are kept synchronized for backward compatibility.
@@ -1448,7 +1472,14 @@ def update_runtime_state(
     runtime["backend_run_mode"] = str(result.get("backend_run_mode") or runtime.get("backend_run_mode") or "").strip()[:40]
     runtime["backend_run_cwd"] = str(result.get("run_cwd") or runtime.get("backend_run_cwd") or "").strip()[:300]
     runtime["backend_run_command"] = str(result.get("run_command") or runtime.get("backend_run_command") or "").strip()[:300]
-    runtime["backend_url"] = str(result.get("url") or runtime.get("backend_url") or "").strip()[:300]
+    backend_result = result.get("backend") if isinstance(result.get("backend"), dict) else {}
+    runtime["backend_url"] = str(
+        result.get("backend_url")
+        or backend_result.get("url")
+        or result.get("url")
+        or runtime.get("backend_url")
+        or ""
+    ).strip()[:300]
     runtime["failure_class"] = str(result.get("failure_class") or "").strip()[:80]
     runtime["detail"] = _sanitize_line(str(result.get("detail") or runtime.get("detail") or ""), project_dir)[:220]
     runtime["healthcheck_url"] = str(result.get("healthcheck_url") or result.get("backend_smoke_url") or runtime.get("healthcheck_url") or "").strip()[:300]
@@ -1485,8 +1516,20 @@ def update_runtime_state(
     runtime["frontend_pid"] = _safe_pid(result.get("frontend_pid")) or _safe_pid(runtime.get("frontend_pid"))
     runtime["frontend_port"] = _safe_port(result.get("frontend_port")) or _safe_port(runtime.get("frontend_port"))
     runtime["frontend_log_path"] = str(result.get("frontend_log_path") or runtime.get("frontend_log_path") or "").strip()[:300]
-    runtime["frontend_url"] = str(result.get("frontend_url") or runtime.get("frontend_url") or "").strip()[:300]
+    runtime["frontend_url"] = str(
+        result.get("frontend_url")
+        or (result.get("frontend").get("url") if isinstance(result.get("frontend"), dict) else "")
+        or runtime.get("frontend_url")
+        or ""
+    ).strip()[:300]
     runtime["frontend_status"] = str(result.get("frontend_status") or runtime.get("frontend_status") or "").strip().upper()[:20]
+    runtime["frontend_framework"] = str(
+        result.get("frontend_framework")
+        or (result.get("frontend").get("framework") if isinstance(result.get("frontend"), dict) else "")
+        or runtime.get("frontend_framework")
+        or ""
+    ).strip()[:40]
+    runtime["frontend_health"] = str(result.get("frontend_smoke_status") or runtime.get("frontend_health") or "").strip().upper()[:20]
 
     services = _normalize_runtime_services(runtime, payload)
     backend_service = services.get("backend") if isinstance(services.get("backend"), dict) else {}
@@ -1501,12 +1544,24 @@ def update_runtime_state(
         backend_service["url"] = str(runtime.get("backend_url") or "").strip()[:300]
     if runtime.get("backend_log_path"):
         backend_service["log_path"] = str(runtime.get("backend_log_path") or "").strip()[:300]
+    backend_service["health"] = str(runtime.get("healthcheck_status") or backend_service.get("health") or "").strip().upper()[:20]
+    backend_service["framework"] = str(backend_service.get("framework") or "fastapi").strip()[:40]
+    backend_service["last_checked_at"] = _now()
 
     frontend_result = result.get("frontend")
     if isinstance(frontend_result, dict):
         runtime["frontend_status"] = str(frontend_result.get("status") or runtime.get("frontend_status") or "").strip().upper()[:20]
         runtime["frontend_pid"] = _safe_pid(frontend_result.get("pid")) or _safe_pid(runtime.get("frontend_pid"))
         runtime["frontend_url"] = str(frontend_result.get("url") or runtime.get("frontend_url") or "").strip()[:300]
+        runtime["frontend_port"] = _safe_port(frontend_result.get("port")) or _safe_port(runtime.get("frontend_port"))
+        runtime["frontend_log_path"] = str(frontend_result.get("log_path") or runtime.get("frontend_log_path") or "").strip()[:300]
+        runtime["frontend_framework"] = str(frontend_result.get("framework") or runtime.get("frontend_framework") or "").strip()[:40]
+        runtime["frontend_health"] = str(
+            result.get("frontend_smoke_status")
+            or frontend_result.get("health")
+            or runtime.get("frontend_health")
+            or ""
+        ).strip().upper()[:20]
     if runtime.get("frontend_status"):
         frontend_service["status"] = str(runtime.get("frontend_status") or "").strip().upper()[:20]
     if runtime.get("frontend_pid") is not None:
@@ -1517,6 +1572,9 @@ def update_runtime_state(
         frontend_service["url"] = str(runtime.get("frontend_url") or "").strip()[:300]
     if runtime.get("frontend_log_path"):
         frontend_service["log_path"] = str(runtime.get("frontend_log_path") or "").strip()[:300]
+    frontend_service["health"] = str(runtime.get("frontend_health") or frontend_service.get("health") or "").strip().upper()[:20]
+    frontend_service["framework"] = str(runtime.get("frontend_framework") or frontend_service.get("framework") or "").strip()[:40]
+    frontend_service["last_checked_at"] = _now()
     runtime["services"] = {
         "backend": _normalize_runtime_service(backend_service, {}),
         "frontend": _normalize_runtime_service(frontend_service, {}),
@@ -1532,6 +1590,8 @@ def update_runtime_state(
     runtime["frontend_url"] = str(runtime.get("frontend_url") or frontend_service_norm.get("url") or "").strip()[:300]
     runtime["frontend_log_path"] = str(runtime.get("frontend_log_path") or frontend_service_norm.get("log_path") or "").strip()[:300]
     runtime["frontend_status"] = str(runtime.get("frontend_status") or frontend_service_norm.get("status") or "").strip().upper()[:20]
+    runtime["frontend_framework"] = str(runtime.get("frontend_framework") or frontend_service_norm.get("framework") or "").strip()[:40]
+    runtime["frontend_health"] = str(runtime.get("frontend_health") or frontend_service_norm.get("health") or "").strip().upper()[:20]
 
     payload["runtime"] = runtime
     payload["last_action"] = _sanitize_line(action, project_dir)
@@ -1552,6 +1612,72 @@ def update_runtime_state(
     )
     write_state(project_dir, payload)
     return payload
+
+
+def update_service_runtime(project_dir: Path, service: str, values: dict[str, Any], *, action: str = "runtime service update") -> dict[str, Any]:
+    key = str(service or "").strip().lower()
+    if key not in {"backend", "frontend"}:
+        raise ValueError(f"unsupported service: {service}")
+    payload = ensure_state(project_dir.expanduser().resolve())
+    runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
+    services = runtime.get("services") if isinstance(runtime.get("services"), dict) else {}
+    current = services.get(key) if isinstance(services.get(key), dict) else {}
+    merged = dict(current)
+    merged.update(values or {})
+    normalized = _normalize_runtime_service(merged, {})
+    normalized["last_checked_at"] = _now_iso()
+    services[key] = normalized
+    runtime["services"] = services
+    if key == "backend":
+        runtime["backend_status"] = str(normalized.get("status") or runtime.get("backend_status") or "").strip().upper()[:20]
+        runtime["backend_pid"] = _safe_pid(normalized.get("pid"))
+        runtime["backend_port"] = _safe_port(normalized.get("port"))
+        runtime["backend_url"] = str(normalized.get("url") or runtime.get("backend_url") or "").strip()[:300]
+        runtime["backend_log_path"] = str(normalized.get("log_path") or runtime.get("backend_log_path") or "").strip()[:300]
+    else:
+        runtime["frontend_status"] = str(normalized.get("status") or runtime.get("frontend_status") or "").strip().upper()[:20]
+        runtime["frontend_pid"] = _safe_pid(normalized.get("pid"))
+        runtime["frontend_port"] = _safe_port(normalized.get("port"))
+        runtime["frontend_url"] = str(normalized.get("url") or runtime.get("frontend_url") or "").strip()[:300]
+        runtime["frontend_log_path"] = str(normalized.get("log_path") or runtime.get("frontend_log_path") or "").strip()[:300]
+        runtime["frontend_framework"] = str(normalized.get("framework") or runtime.get("frontend_framework") or "").strip()[:40]
+        runtime["frontend_health"] = str(normalized.get("health") or runtime.get("frontend_health") or "").strip().upper()[:20]
+    payload["runtime"] = runtime
+    payload["last_action"] = _sanitize_line(action, project_dir)
+    write_state(project_dir, payload)
+    return payload
+
+
+def clear_service_runtime(project_dir: Path, service: str, *, action: str = "runtime service clear") -> dict[str, Any]:
+    return update_service_runtime(
+        project_dir,
+        service,
+        {
+            "status": "NOT RUNNING",
+            "pid": None,
+            "port": None,
+            "url": "",
+            "log_path": "",
+            "health": "",
+        },
+        action=action,
+    )
+
+
+def mark_service_stopped(project_dir: Path, service: str, *, action: str = "runtime service stopped") -> dict[str, Any]:
+    return update_service_runtime(
+        project_dir,
+        service,
+        {
+            "status": "STOPPED",
+            "pid": None,
+            "port": None,
+            "url": "",
+            "log_path": "",
+            "health": "",
+        },
+        action=action,
+    )
 
 
 def sync_from_tasks(project_dir: Path, action: str = "tasks update", status: str = "UNKNOWN") -> dict[str, Any]:

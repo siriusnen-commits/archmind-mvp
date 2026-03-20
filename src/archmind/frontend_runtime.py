@@ -39,6 +39,20 @@ def _parse_port_from_text(text: str) -> int | None:
     return value if value > 0 else None
 
 
+def _parse_port_from_script(script: str) -> int | None:
+    text = str(script or "").strip()
+    if not text:
+        return None
+    match = re.search(r"(?:--port|-p)\s*(?:=|\s)\s*(\d+)", text)
+    if not match:
+        return None
+    try:
+        value = int(match.group(1))
+    except Exception:
+        return None
+    return value if value > 0 else None
+
+
 def detect_frontend_runtime_entry(
     project_dir: Path,
     *,
@@ -68,31 +82,41 @@ def detect_frontend_runtime_entry(
     deps = package_json.get("dependencies") if isinstance(package_json.get("dependencies"), dict) else {}
     dev_deps = package_json.get("devDependencies") if isinstance(package_json.get("devDependencies"), dict) else {}
     has_next_dependency = "next" in deps or "next" in dev_deps
+    # Backward-compatible default for simple frontend scaffolds that omit scripts/dev.
     if not dev_script and not has_next_dependency:
-        return {
-            "ok": False,
-            "frontend_present": True,
-            "failure_class": "runtime-entrypoint-error",
-            "failure_reason": "frontend dev runtime command not detected",
-            "run_cwd": str(frontend_dir),
-            "run_command": [],
-            "frontend_run_mode": "",
-            "frontend_port": None,
-            "frontend_url": "",
-            "backend_base_url": str(backend_base_url or "").strip(),
-        }
+        dev_script = "npm run dev"
 
-    selected_port = int(port) if port else 3000
-    run_command = [
-        "npm",
-        "run",
-        "dev",
-        "--",
-        "--hostname",
-        "0.0.0.0",
-        "--port",
-        str(selected_port),
-    ]
+    script_port = _parse_port_from_script(dev_script)
+    selected_port = int(port) if port else (script_port or 3000)
+    uses_next = "next" in dev_script.lower() or has_next_dependency
+    if uses_next:
+        # Avoid duplicate -p/--port from package.json scripts by invoking Next directly.
+        run_command = [
+            "npm",
+            "exec",
+            "--",
+            "next",
+            "dev",
+            "--hostname",
+            "0.0.0.0",
+            "--port",
+            str(selected_port),
+        ]
+        frontend_run_mode = "next-dev"
+        framework = "nextjs"
+    else:
+        run_command = [
+            "npm",
+            "run",
+            "dev",
+            "--",
+            "--hostname",
+            "0.0.0.0",
+            "--port",
+            str(selected_port),
+        ]
+        frontend_run_mode = "npm-dev"
+        framework = "generic"
     return {
         "ok": True,
         "frontend_present": True,
@@ -100,12 +124,14 @@ def detect_frontend_runtime_entry(
         "failure_reason": "",
         "run_cwd": str(frontend_dir),
         "run_command": run_command,
-        "frontend_run_mode": "next-dev",
+        "frontend_run_mode": frontend_run_mode,
         "frontend_port": selected_port,
         "frontend_url": f"http://127.0.0.1:{selected_port}",
         "backend_base_url": str(backend_base_url or "").strip(),
         "dev_script": dev_script,
-        "uses_next": "next" in dev_script.lower() or has_next_dependency,
+        "uses_next": uses_next,
+        "framework": framework,
+        "script_port": script_port,
     }
 
 

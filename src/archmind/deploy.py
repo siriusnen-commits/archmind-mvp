@@ -17,6 +17,7 @@ from archmind.backend_runtime import (
     analyze_backend_failure,
     detect_backend_runtime_entry as detect_backend_runtime_entry_shared,
 )
+from archmind.frontend_runtime import detect_frontend_runtime_entry
 from archmind.state import ensure_state, load_state, update_after_deploy, update_runtime_state, write_state
 
 
@@ -1331,14 +1332,30 @@ def deploy_frontend_local(
     backend_base_url: str | None = None,
 ) -> dict[str, Any]:
     root = project_dir.expanduser().resolve()
-    frontend_dir = get_frontend_deploy_dir(root)
-    if frontend_dir is None:
-        return _service_result("FAIL", None, "frontend deploy directory not found")
-    picked_port = int(port) if port else find_free_port()
+    selected_port = int(port) if port else find_free_port()
+    entry = detect_frontend_runtime_entry(root, port=selected_port, backend_base_url=backend_base_url)
+    if not bool(entry.get("ok")):
+        detail = str(entry.get("failure_reason") or "frontend runtime detection failed").strip()
+        return {
+            "status": "FAIL",
+            "url": None,
+            "detail": detail,
+            "failure_class": str(entry.get("failure_class") or "runtime-entrypoint-error").strip(),
+            "frontend_run_mode": str(entry.get("frontend_run_mode") or "").strip(),
+            "run_cwd": str(entry.get("run_cwd") or "").strip(),
+            "run_command": " ".join(str(x) for x in (entry.get("run_command") or [])),
+            "frontend_port": entry.get("frontend_port"),
+            "framework": str(entry.get("framework") or "").strip(),
+        }
+    picked_port = int(entry.get("frontend_port") or selected_port)
+    frontend_dir = Path(str(entry.get("run_cwd") or root))
+    run_command = [str(x) for x in (entry.get("run_command") or []) if str(x).strip()]
+    if not run_command:
+        return _service_result("FAIL", None, "frontend run command not detected")
     _write_runtime_env_files(root, frontend_port=picked_port, backend_base_url=backend_base_url)
-    cmd = ["npm", "run", "dev", "--", "--hostname", "0.0.0.0", "--port", str(picked_port)]
     try:
-        proc = _run_local_process_with_log(cmd, cwd=frontend_dir, log_path=(root / ".archmind" / "frontend.log"))
+        log_path = root / ".archmind" / "frontend.log"
+        proc = _run_local_process_with_log(run_command, cwd=frontend_dir, log_path=log_path)
     except Exception as exc:
         return _service_result("FAIL", None, f"local frontend start failed: {exc}")
     return {
@@ -1346,6 +1363,12 @@ def deploy_frontend_local(
         "url": f"http://127.0.0.1:{picked_port}",
         "detail": "local frontend started",
         "pid": int(proc.pid),
+        "frontend_port": picked_port,
+        "frontend_log_path": str(root / ".archmind" / "frontend.log"),
+        "frontend_run_mode": str(entry.get("frontend_run_mode") or "").strip(),
+        "run_cwd": str(frontend_dir),
+        "run_command": " ".join(run_command),
+        "framework": str(entry.get("framework") or "").strip(),
     }
 
 
@@ -1702,6 +1725,14 @@ def _to_pid(value: Any) -> int | None:
     return pid if pid > 0 else None
 
 
+def _to_port(value: Any) -> int | None:
+    try:
+        port = int(value)
+    except Exception:
+        return None
+    return port if port > 0 else None
+
+
 def is_pid_running(pid: int | None) -> bool:
     if pid is None:
         return False
@@ -1795,16 +1826,22 @@ def get_local_runtime_status(project_dir: Path) -> dict[str, Any]:
             "backend": {
                 "status": backend_status,
                 "pid": backend_pid,
-                "port": _to_pid((backend_service.get("port") if isinstance(backend_service, dict) else None) or runtime.get("backend_port")),
+                "port": _to_port((backend_service.get("port") if isinstance(backend_service, dict) else None) or runtime.get("backend_port")),
                 "url": backend_url,
                 "log_path": str((backend_service.get("log_path") if isinstance(backend_service, dict) else "") or runtime.get("backend_log_path") or "").strip(),
+                "health": str((backend_service.get("health") if isinstance(backend_service, dict) else "") or runtime.get("healthcheck_status") or "").strip().upper(),
+                "framework": str((backend_service.get("framework") if isinstance(backend_service, dict) else "") or "fastapi").strip(),
+                "last_checked_at": str((backend_service.get("last_checked_at") if isinstance(backend_service, dict) else "") or "").strip(),
             },
             "frontend": {
                 "status": frontend_status,
                 "pid": frontend_pid,
-                "port": _to_pid((frontend_service.get("port") if isinstance(frontend_service, dict) else None) or runtime.get("frontend_port")),
+                "port": _to_port((frontend_service.get("port") if isinstance(frontend_service, dict) else None) or runtime.get("frontend_port")),
                 "url": frontend_url,
                 "log_path": str((frontend_service.get("log_path") if isinstance(frontend_service, dict) else "") or runtime.get("frontend_log_path") or "").strip(),
+                "health": str((frontend_service.get("health") if isinstance(frontend_service, dict) else "") or runtime.get("frontend_health") or "").strip().upper(),
+                "framework": str((frontend_service.get("framework") if isinstance(frontend_service, dict) else "") or runtime.get("frontend_framework") or "").strip(),
+                "last_checked_at": str((frontend_service.get("last_checked_at") if isinstance(frontend_service, dict) else "") or "").strip(),
             },
         },
         "running": backend_running or frontend_running,
@@ -1888,10 +1925,23 @@ def stop_local_services(project_dir: Path) -> dict[str, Any]:
     root = project_dir.expanduser().resolve()
     payload = load_state(root) or ensure_state(root)
     runtime_block = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
+    services_block = runtime_block.get("services") if isinstance(runtime_block.get("services"), dict) else {}
+    backend_service = services_block.get("backend") if isinstance(services_block.get("backend"), dict) else {}
+    frontend_service = services_block.get("frontend") if isinstance(services_block.get("frontend"), dict) else {}
     deploy_block = payload.get("deploy") if isinstance(payload.get("deploy"), dict) else {}
-    backend_pid = _to_pid(payload.get("backend_pid") or runtime_block.get("backend_pid"))
-    frontend_pid = _to_pid(payload.get("frontend_pid") or runtime_block.get("frontend_pid"))
+    backend_pid = _to_pid(
+        (backend_service.get("pid") if isinstance(backend_service, dict) else None)
+        or payload.get("backend_pid")
+        or runtime_block.get("backend_pid")
+    )
+    frontend_pid = _to_pid(
+        (frontend_service.get("pid") if isinstance(frontend_service, dict) else None)
+        or payload.get("frontend_pid")
+        or runtime_block.get("frontend_pid")
+    )
     backend_url = str(
+        (backend_service.get("url") if isinstance(backend_service, dict) else "")
+        or
         runtime_block.get("backend_url")
         or payload.get("backend_deploy_url")
         or deploy_block.get("backend_url")
@@ -1899,6 +1949,8 @@ def stop_local_services(project_dir: Path) -> dict[str, Any]:
         or ""
     ).strip()
     frontend_url = str(
+        (frontend_service.get("url") if isinstance(frontend_service, dict) else "")
+        or
         deploy_block.get("frontend_url")
         or payload.get("frontend_deploy_url")
         or runtime_block.get("frontend_url")
@@ -1908,9 +1960,9 @@ def stop_local_services(project_dir: Path) -> dict[str, Any]:
     backend_status, backend_detail = _stop_pid(backend_pid)
     frontend_status, frontend_detail = _stop_pid(frontend_pid)
     if backend_status == "WARNING" and backend_detail == "process still running after SIGKILL" and not _is_local_service_responsive(backend_url):
-        backend_status, backend_detail = "STOPPED", "process lingering but backend service is down"
+        backend_status, backend_detail = "STOPPED", ""
     if frontend_status == "WARNING" and frontend_detail == "process still running after SIGKILL" and not _is_local_service_responsive(frontend_url):
-        frontend_status, frontend_detail = "STOPPED", "process lingering but frontend service is down"
+        frontend_status, frontend_detail = "STOPPED", ""
 
     payload["backend_pid"] = None
     payload["frontend_pid"] = None
@@ -1921,6 +1973,28 @@ def stop_local_services(project_dir: Path) -> dict[str, Any]:
     runtime_block["failure_class"] = ""
     runtime_block["healthcheck_status"] = ""
     runtime_block["healthcheck_detail"] = ""
+    runtime_block["backend_url"] = ""
+    runtime_block["frontend_url"] = ""
+    runtime_block["backend_port"] = None
+    runtime_block["frontend_port"] = None
+    runtime_block["backend_log_path"] = ""
+    runtime_block["frontend_log_path"] = ""
+    runtime_block["services"] = {
+        "backend": {
+            "status": "STOPPED" if backend_status == "STOPPED" else "NOT RUNNING",
+            "pid": None,
+            "port": None,
+            "url": "",
+            "log_path": "",
+        },
+        "frontend": {
+            "status": "STOPPED" if frontend_status == "STOPPED" else "NOT RUNNING",
+            "pid": None,
+            "port": None,
+            "url": "",
+            "log_path": "",
+        },
+    }
     payload["runtime"] = runtime_block
     write_state(root, payload)
 
@@ -1994,56 +2068,23 @@ def stop_all_local_services(projects_root: Path) -> dict[str, Any]:
 
 def restart_local_services(project_dir: Path) -> dict[str, Any]:
     root = project_dir.expanduser().resolve()
-    before = get_local_runtime_status(root)
-    backend_was_running = str(before.get("backend", {}).get("status") or "") == "RUNNING"
-    frontend_was_running = str(before.get("frontend", {}).get("status") or "") == "RUNNING"
-
     stop_result = stop_local_services(root)
-    if not backend_was_running and not frontend_was_running:
-        deploy_result = run_backend_local_with_health(root)
-        update_runtime_state(root, deploy_result, action="archmind restart --path <project>")
-        backend_ok = str(deploy_result.get("status") or "").upper() == "SUCCESS"
-        return {
-            "ok": backend_ok,
-            "target": "local",
-            "backend": {
-                "status": "RESTARTED" if backend_ok else "FAIL",
-                "url": str(deploy_result.get("url") or "").strip(),
-                "detail": str(deploy_result.get("detail") or "").strip(),
-            },
-            "frontend": {"status": "NOT RUNNING", "url": "", "detail": ""},
-            "stop": stop_result,
-            "deploy": deploy_result,
-        }
+    from archmind.runtime_orchestrator import run_all_local_services
 
-    restart_kind = "fullstack" if (backend_was_running and frontend_was_running) else ("backend" if backend_was_running else "frontend")
-    deploy_result = deploy_to_local(root, kind=restart_kind)
-    if restart_kind in {"backend", "fullstack"}:
-        update_runtime_state(root, deploy_result, action="archmind restart --path <project>")
+    deploy_result = run_all_local_services(root)
+    update_runtime_state(root, deploy_result, action="archmind restart --path <project>")
 
-    backend_status = "NOT RUNNING"
-    backend_url = ""
-    backend_detail = ""
-    if backend_was_running:
-        backend_source = deploy_result
-        if restart_kind == "fullstack":
-            backend_source = deploy_result.get("backend") if isinstance(deploy_result.get("backend"), dict) else {}
-        backend_ok = str(backend_source.get("status") or "").upper() == "SUCCESS"
-        backend_status = "RESTARTED" if backend_ok else "FAIL"
-        backend_url = str(backend_source.get("url") or "").strip()
-        backend_detail = str(backend_source.get("detail") or "").strip()
-
-    frontend_status = "NOT RUNNING"
-    frontend_url = ""
-    frontend_detail = ""
-    if frontend_was_running:
-        frontend_source = deploy_result
-        if restart_kind == "fullstack":
-            frontend_source = deploy_result.get("frontend") if isinstance(deploy_result.get("frontend"), dict) else {}
-        frontend_ok = str(frontend_source.get("status") or "").upper() == "SUCCESS"
-        frontend_status = "RESTARTED" if frontend_ok else "FAIL"
-        frontend_url = str(frontend_source.get("url") or "").strip()
-        frontend_detail = str(frontend_source.get("detail") or "").strip()
+    services = deploy_result.get("services") if isinstance(deploy_result.get("services"), dict) else {}
+    backend_service = services.get("backend") if isinstance(services.get("backend"), dict) else {}
+    frontend_service = services.get("frontend") if isinstance(services.get("frontend"), dict) else {}
+    backend_running = str(backend_service.get("status") or "").strip().upper() == "RUNNING"
+    frontend_running = str(frontend_service.get("status") or "").strip().upper() == "RUNNING"
+    backend_status = "RESTARTED" if backend_running else str(backend_service.get("status") or "NOT RUNNING")
+    frontend_status = "RESTARTED" if frontend_running else str(frontend_service.get("status") or "NOT RUNNING")
+    backend_url = str(backend_service.get("url") or "").strip()
+    frontend_url = str(frontend_service.get("url") or "").strip()
+    backend_detail = str(backend_service.get("detail") or deploy_result.get("detail") or "").strip()
+    frontend_detail = str(frontend_service.get("detail") or "").strip()
 
     ok = backend_status != "FAIL" and frontend_status != "FAIL"
     return {
