@@ -37,6 +37,7 @@ AGENT_STATES = (
 HEALTHCHECK_STATUSES = ("SUCCESS", "FAIL", "SKIPPED")
 SERVICE_DEPLOY_STATUSES = ("SUCCESS", "FAIL", "SKIPPED")
 PREFLIGHT_STATUSES = ("OK", "FIXED", "FAILED")
+REPOSITORY_STATUSES = ("CREATED", "FAILED", "SKIPPED", "")
 
 
 def derive_task_label_from_failure_signature(signature: str) -> str:
@@ -98,6 +99,11 @@ def _safe_service_deploy_status(value: str) -> str:
 def _safe_preflight_status(value: str) -> str:
     status = (value or "").upper()
     return status if status in PREFLIGHT_STATUSES else ""
+
+
+def _safe_repository_status(value: str) -> str:
+    status = (value or "").upper()
+    return status if status in REPOSITORY_STATUSES else ""
 
 
 def _safe_agent_state(value: str) -> str:
@@ -216,6 +222,16 @@ def _default_runtime_state() -> dict[str, Any]:
     }
 
 
+def _default_repository_state() -> dict[str, Any]:
+    return {
+        "status": "",
+        "url": "",
+        "name": "",
+        "reason": "",
+        "attempted": False,
+    }
+
+
 def _is_fix_action(action: str) -> bool:
     normalized = (action or "").strip().lower()
     if not normalized:
@@ -326,6 +342,9 @@ def _normalize_loaded_state(project_dir: Path, payload: dict[str, Any]) -> dict[
     runtime_block = normalized.get("runtime")
     if not isinstance(runtime_block, dict):
         runtime_block = {}
+    repository_block = normalized.get("repository")
+    if not isinstance(repository_block, dict):
+        repository_block = {}
 
     deploy_defaults = _default_deploy_state()
     deploy_defaults.update(deploy_block)
@@ -398,6 +417,15 @@ def _normalize_loaded_state(project_dir: Path, payload: dict[str, Any]) -> dict[
         "issues": [str(item).strip()[:160] for item in preflight_issues if str(item).strip()][:8],
     }
     normalized["runtime"] = runtime_defaults
+    repository_defaults = _default_repository_state()
+    repository_defaults.update(repository_block)
+    repository_defaults["status"] = _safe_repository_status(str(repository_defaults.get("status") or ""))
+    repository_defaults["url"] = str(repository_defaults.get("url") or normalized.get("github_repo_url") or "").strip()[:300]
+    repository_defaults["name"] = str(repository_defaults.get("name") or "").strip()[:160]
+    repository_defaults["reason"] = str(repository_defaults.get("reason") or "").strip()[:220]
+    repository_defaults["attempted"] = bool(repository_defaults.get("attempted"))
+    normalized["repository"] = repository_defaults
+    normalized["github_repo_url"] = repository_defaults["url"]
     normalized["iterations"] = _safe_int(normalized.get("iterations"), 0)
     fix_attempts_raw = normalized.get("fix_attempts")
     fix_attempts = _safe_int(fix_attempts_raw, -1)
@@ -473,6 +501,7 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "next_action": "STOP",
         "next_action_reason": "",
         "github_repo_url": "",
+        "repository": _default_repository_state(),
         "auto_deploy_enabled": False,
         "auto_deploy_target": "",
         "auto_deploy_status": "",
@@ -591,6 +620,18 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     payload["next_action"] = str(payload.get("next_action") or "STOP").strip()[:20]
     payload["next_action_reason"] = str(payload.get("next_action_reason") or "").strip()[:220]
     payload["github_repo_url"] = str(payload.get("github_repo_url") or "").strip()[:300]
+    repository_block = payload.get("repository")
+    if not isinstance(repository_block, dict):
+        repository_block = {}
+    repository = _default_repository_state()
+    repository.update(repository_block)
+    repository["status"] = _safe_repository_status(str(repository.get("status") or ""))
+    repository["url"] = str(repository.get("url") or payload.get("github_repo_url") or "").strip()[:300]
+    repository["name"] = str(repository.get("name") or "").strip()[:160]
+    repository["reason"] = str(repository.get("reason") or "").strip()[:220]
+    repository["attempted"] = bool(repository.get("attempted"))
+    payload["repository"] = repository
+    payload["github_repo_url"] = repository["url"]
     payload["auto_deploy_enabled"] = bool(payload.get("auto_deploy_enabled"))
     payload["auto_deploy_target"] = str(payload.get("auto_deploy_target") or "").strip()[:40]
     payload["auto_deploy_status"] = _safe_optional_status(str(payload.get("auto_deploy_status") or ""))

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -14,7 +15,7 @@ from archmind.failure_memory import append_failure_memory, get_failure_hints
 from archmind.idea_normalizer import normalize_idea
 from archmind.environment import ensure_environment_readiness
 from archmind.evaluator import write_evaluation
-from archmind.github_repo import create_github_repo
+from archmind.github_repo import create_github_repo_with_status
 from archmind.deploy import deploy_project
 from archmind.planner import write_project_plan
 from archmind.project_type import detect_project_type, normalize_project_type
@@ -65,6 +66,23 @@ class PipelineOptions:
     json_summary: bool
     auto_deploy: bool
     auto_deploy_target: str
+
+
+def _repository_default_payload(
+    *,
+    status: str = "SKIPPED",
+    url: str = "",
+    name: str = "",
+    reason: str = "",
+    attempted: bool = False,
+) -> dict[str, Any]:
+    return {
+        "status": str(status or "").strip().upper(),
+        "url": str(url or "").strip(),
+        "name": str(name or "").strip(),
+        "reason": str(reason or "").strip(),
+        "attempted": bool(attempted),
+    }
 
 
 def _filter_kwargs_for_callable(fn, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -652,11 +670,18 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
     if should_validate_generation_contract and not bool(structure_check.get("ok")):
         reason = str(structure_check.get("reason") or "invalid project structure")
         print(f"[ERROR] generation-error: {reason}", file=sys.stderr)
+        repository_payload = _repository_default_payload(
+            status="SKIPPED",
+            reason="generation failed before scaffold completed",
+            attempted=False,
+        )
         try:
             payload = ensure_state(project_dir)
             payload["last_status"] = "FAIL"
             payload["last_failure_class"] = "generation-error"
             payload["runtime_failure_class"] = "generation-error"
+            payload["repository"] = repository_payload
+            payload["github_repo_url"] = ""
             payload["backend_entry"] = str(structure_check.get("entrypoint") or "app.main:app")
             payload["backend_run_mode"] = "asgi-direct"
             payload["backend_run_cwd"] = str((project_dir / "backend") if app_shape == "fullstack" or effective_template == "fullstack-ddd" else project_dir)
@@ -669,6 +694,8 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         failure_payload = {
             "status": "FAIL",
             "project_type": normalize_project_type(_project_type_from_app_shape(app_shape)),
+            "github_repo_url": "",
+            "repository": repository_payload,
             "selected_template": selected_template,
             "effective_template": effective_template,
             "template_fallback_reason": template_fallback_reason or None,
@@ -745,6 +772,36 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
     except Exception as exc:
         print(f"[WARN] state initialization failed: {exc}", file=sys.stderr)
 
+    repository_result = _repository_default_payload(
+        status="SKIPPED",
+        reason="repository creation is only attempted for generated ideas",
+        attempted=False,
+    )
+    if opts.idea:
+        repo_enabled = str(os.getenv("ARCHMIND_DISABLE_GITHUB_REPO", "")).strip().lower() not in {"1", "true", "yes", "on"}
+        repo_raw = create_github_repo_with_status(project_dir, enabled=repo_enabled)
+        if isinstance(repo_raw, dict):
+            repository_result = _repository_default_payload(
+                status=str(repo_raw.get("status") or "FAILED"),
+                url=str(repo_raw.get("url") or ""),
+                name=str(repo_raw.get("name") or ""),
+                reason=str(repo_raw.get("reason") or ""),
+                attempted=bool(repo_raw.get("attempted")),
+            )
+        else:
+            repository_result = _repository_default_payload(
+                status="FAILED",
+                reason="repository creation returned invalid payload",
+                attempted=True,
+            )
+        try:
+            state_for_repo = load_state(project_dir) or {}
+            state_for_repo["repository"] = repository_result
+            state_for_repo["github_repo_url"] = str(repository_result.get("url") or "")
+            write_state(project_dir, state_for_repo)
+        except Exception as exc:
+            print(f"[WARN] repository state sync failed: {exc}", file=sys.stderr)
+
     run_config = _build_run_config(opts, project_dir)
     command = _build_command(opts)
     archmind_dir = project_dir / ".archmind"
@@ -782,7 +839,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
     rerun_exit: Optional[int] = None
     rerun_result: Optional[RunResult] = None
     run_result: Optional[RunResult] = None
-    github_repo_url: Optional[str] = None
+    github_repo_url: Optional[str] = str(repository_result.get("url") or "").strip() or None
 
     for iteration in range(1, opts.max_iterations + 1):
         try:
@@ -925,7 +982,8 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
 
     payload = {
         "status": status,
-        "github_repo_url": None,
+        "github_repo_url": str(repository_result.get("url") or "") or None,
+        "repository": repository_result,
         "project_type": project_type,
         "selected_template": selected_template,
         "effective_template": effective_template,
@@ -1077,26 +1135,13 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
     except Exception as exc:
         print(f"[WARN] state template metadata sync failed: {exc}", file=sys.stderr)
 
-    if status == "SUCCESS" and opts.idea:
-        try:
-            github_repo_url = create_github_repo(project_dir)
-        except Exception as exc:
-            github_repo_url = None
-            print(f"[WARN] github repo creation failed: {exc}", file=sys.stderr)
-        if github_repo_url:
-            payload["github_repo_url"] = github_repo_url
-            try:
-                write_result(project_dir, payload)
-            except Exception as exc:
-                print(f"[WARN] result github_repo_url sync failed: {exc}", file=sys.stderr)
-            try:
-                synced_state = load_state(project_dir) or {}
-                synced_state["github_repo_url"] = github_repo_url
-                write_state(project_dir, synced_state)
-            except Exception as exc:
-                print(f"[WARN] state github_repo_url sync failed: {exc}", file=sys.stderr)
-        elif opts.idea:
-            print("[WARN] github repo creation skipped/failed.", file=sys.stderr)
+    try:
+        synced_state = load_state(project_dir) or {}
+        synced_state["repository"] = repository_result
+        synced_state["github_repo_url"] = str(repository_result.get("url") or "")
+        write_state(project_dir, synced_state)
+    except Exception as exc:
+        print(f"[WARN] state repository sync failed: {exc}", file=sys.stderr)
 
     try:
         finished_detail = (
@@ -1148,9 +1193,13 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
                     print(f"[AUTO-DEPLOY] backend_smoke={backend_smoke}")
                 if frontend_smoke:
                     print(f"[AUTO-DEPLOY] frontend_smoke={frontend_smoke}")
+        print("GitHub repo:")
+        print(str(repository_result.get("status") or "SKIPPED"))
         if github_repo_url:
-            print("GitHub repo:")
             print(github_repo_url)
+        repo_reason = str(repository_result.get("reason") or "").strip()
+        if repo_reason:
+            print(f"Reason: {repo_reason}")
         if state_payload:
             print(f"[STATE] {state_payload.get('last_status')} iterations={state_payload.get('iterations')}")
         if evaluation_payload:
@@ -1163,6 +1212,13 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         return 0
 
     print(f"[FAIL] {status}. result: {result_json}")
+    print("GitHub repo:")
+    print(str(repository_result.get("status") or "SKIPPED"))
+    if github_repo_url:
+        print(github_repo_url)
+    repo_reason = str(repository_result.get("reason") or "").strip()
+    if repo_reason:
+        print(f"Reason: {repo_reason}")
     if state_payload:
         print(f"[STATE] {state_payload.get('last_status')} iterations={state_payload.get('iterations')}")
     if evaluation_payload:
