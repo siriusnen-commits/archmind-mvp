@@ -432,8 +432,194 @@ def _help_text() -> str:
     return HELP_TEXT
 
 
+def _help_quick_text() -> str:
+    return (
+        "ArchMind quick actions\n\n"
+        "Create\n"
+        "- /idea_local <idea>\n"
+        "- /design <idea>\n"
+        "- /plan <idea>\n\n"
+        "Current project\n"
+        "- /inspect\n"
+        "- /next\n"
+        "- /improve\n\n"
+        "Runtime\n"
+        "- /run backend\n"
+        "- /running\n"
+        "- /restart\n"
+        "- /stop\n"
+        "- /stop all\n\n"
+        "More help\n"
+        "- /help create\n"
+        "- /help runtime\n"
+        "- /help project\n"
+        "- /help deploy\n"
+        "- /help code\n"
+        "- /help cleanup\n"
+        "- /help all\n\n"
+        "Example workflow\n"
+        "/design defect tracker\n"
+        "/plan defect tracker\n"
+        "/idea_local defect tracker\n"
+        "/inspect\n"
+        "/next"
+    )
+
+
+def _help_section_text(section: str) -> str:
+    key = str(section or "").strip().lower()
+    if key == "create":
+        return (
+            "Help: create\n\n"
+            "- /idea <idea>           generate project\n"
+            "- /idea_local <idea>     generate + run locally\n"
+            "- /pipeline <idea>       alias of /idea\n"
+            "- /preview <idea>        preview Brain reasoning\n"
+            "- /suggest <idea>        show architecture suggestions\n"
+            "- /design <idea>         generate architecture design document\n"
+            "- /plan <idea>           build development plan from an idea\n"
+            "- /apply_plan            execute saved development plan"
+        )
+    if key == "runtime":
+        return (
+            "Help: runtime\n\n"
+            "- /run backend           start backend locally\n"
+            "- /running               show running local services\n"
+            "- /restart               restart current project services\n"
+            "- /stop                  stop current project services\n"
+            "- /stop all              stop all local services\n"
+            "- /logs                  show runtime logs"
+        )
+    if key == "project":
+        return (
+            "Help: project\n\n"
+            "- /inspect               show project summary\n"
+            "- /next                  suggest next development steps\n"
+            "- /improve               analyze mismatches and corrections\n"
+            "- /projects              list projects\n"
+            "- /use <n>               select project\n"
+            "- /current               show selected project\n"
+            "- /status                show current status\n"
+            "- /state                 show raw pipeline state"
+        )
+    if key == "deploy":
+        return (
+            "Help: deploy\n\n"
+            "- /deploy local\n"
+            "- /deploy railway\n\n"
+            "Deploy current project to target runtime."
+        )
+    if key == "code":
+        return (
+            "Help: code\n\n"
+            "- /tree                  show file tree\n"
+            "- /open <file>           open file\n"
+            "- /diff                  show changes"
+        )
+    if key == "cleanup":
+        return (
+            "Help: cleanup\n\n"
+            "- /delete_project\n"
+            "- /delete_project repo\n"
+            "- /delete_project all\n\n"
+            "repo/all requires confirmation: DELETE YES"
+        )
+    return _help_quick_text()
+
+
+def _help_sections_keyboard(section: str = "") -> Any:
+    key = str(section or "").strip().lower()
+    InlineKeyboardButton, InlineKeyboardMarkup = _inline_keyboard_classes()
+    if key in ("", "quick"):
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(text="Create", callback_data=_encode_callback_data("help", "create")),
+                    InlineKeyboardButton(text="Runtime", callback_data=_encode_callback_data("help", "runtime")),
+                ],
+                [
+                    InlineKeyboardButton(text="Project", callback_data=_encode_callback_data("help", "project")),
+                    InlineKeyboardButton(text="Deploy", callback_data=_encode_callback_data("help", "deploy")),
+                ],
+                [
+                    InlineKeyboardButton(text="Code", callback_data=_encode_callback_data("help", "code")),
+                    InlineKeyboardButton(text="Cleanup", callback_data=_encode_callback_data("help", "cleanup")),
+                ],
+                [InlineKeyboardButton(text="All Commands", callback_data=_encode_callback_data("help", "all"))],
+            ]
+        )
+    if key == "runtime":
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(text="Run backend", callback_data=_encode_callback_data("cmd", "/run backend")),
+                    InlineKeyboardButton(text="Running", callback_data=_encode_callback_data("cmd", "/running")),
+                ],
+                [
+                    InlineKeyboardButton(text="Restart", callback_data=_encode_callback_data("cmd", "/restart")),
+                    InlineKeyboardButton(text="Stop", callback_data=_encode_callback_data("cmd", "/stop")),
+                ],
+                [
+                    InlineKeyboardButton(text="Stop all", callback_data=_encode_callback_data("cmd", "/stop all")),
+                    InlineKeyboardButton(text="Logs", callback_data=_encode_callback_data("cmd", "/logs")),
+                ],
+                [InlineKeyboardButton(text="Back", callback_data=_encode_callback_data("help", "quick"))],
+            ]
+        )
+    if key == "create":
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(text="Idea local", callback_data=_encode_callback_data("cmd", "/idea_local sample idea")),
+                    InlineKeyboardButton(text="Design", callback_data=_encode_callback_data("cmd", "/design sample idea")),
+                ],
+                [InlineKeyboardButton(text="Back", callback_data=_encode_callback_data("help", "quick"))],
+            ]
+        )
+    if key == "project":
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(text="Inspect", callback_data=_encode_callback_data("cmd", "/inspect")),
+                    InlineKeyboardButton(text="Next", callback_data=_encode_callback_data("cmd", "/next")),
+                ],
+                [InlineKeyboardButton(text="Improve", callback_data=_encode_callback_data("cmd", "/improve"))],
+                [InlineKeyboardButton(text="Back", callback_data=_encode_callback_data("help", "quick"))],
+            ]
+        )
+    if key == "deploy":
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(text="Deploy local", callback_data=_encode_callback_data("cmd", "/deploy local")),
+                    InlineKeyboardButton(text="Deploy railway", callback_data=_encode_callback_data("cmd", "/deploy railway")),
+                ],
+                [InlineKeyboardButton(text="Back", callback_data=_encode_callback_data("help", "quick"))],
+            ]
+        )
+    if key == "code":
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(text="Tree", callback_data=_encode_callback_data("cmd", "/tree")),
+                    InlineKeyboardButton(text="Diff", callback_data=_encode_callback_data("cmd", "/diff")),
+                ],
+                [InlineKeyboardButton(text="Back", callback_data=_encode_callback_data("help", "quick"))],
+            ]
+        )
+    if key in {"cleanup", "all"}:
+        return InlineKeyboardMarkup([[InlineKeyboardButton(text="Back", callback_data=_encode_callback_data("help", "quick"))]])
+    return None
+
+
 def _help_topic_text(topic: str) -> str:
     key = str(topic or "").strip().lower()
+    if key in ("", "quick"):
+        return _help_quick_text()
+    if key in {"create", "runtime", "project", "deploy", "code", "cleanup"}:
+        return _help_section_text(key)
+    if key in {"all", "full"}:
+        return _help_text()
     if key == "idea":
         return (
             "/idea <idea>\n\n"
@@ -4770,17 +4956,27 @@ async def command_suggestion_callback(update: Any, context: Any) -> None:
             return
         await handler(callback_update, callback_context)
         return
+    if action == "help":
+        topic = str(payload or "").strip().lower()
+        callback_context.args = [topic] if topic else []
+        await command_help(callback_update, callback_context)
+        return
     if action == "cmd":
         cmd, args = _parse_command_string(payload)
         callback_context.args = args
         handlers: dict[str, Any] = {
+            "/help": command_help,
             "/inspect": command_inspect,
             "/next": command_next,
+            "/improve": command_improve,
             "/fix": command_fix,
             "/retry": command_retry,
             "/logs": command_logs,
             "/deploy": command_deploy,
             "/run": command_run,
+            "/stop": command_stop,
+            "/tree": command_tree,
+            "/diff": command_diff,
             "/continue": command_continue,
             "/projects": command_projects,
             "/current": command_current,
@@ -5546,10 +5742,13 @@ async def command_text(update: Any, context: Any) -> None:
 
 async def command_help(update: Any, context: Any) -> None:
     args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
-    if args:
-        await update.message.reply_text(_help_topic_text(args[0]))
+    topic = str(args[0]).lower() if args else ""
+    text = _help_topic_text(topic)
+    reply_markup = _help_sections_keyboard(topic)
+    if reply_markup is not None:
+        await update.message.reply_text(text, reply_markup=reply_markup)
         return
-    await update.message.reply_text(_help_text())
+    await update.message.reply_text(text)
 
 
 def run_bot() -> None:
