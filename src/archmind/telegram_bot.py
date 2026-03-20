@@ -3565,23 +3565,68 @@ async def command_inspect(update: Any, context: Any) -> None:
     runtime_failure_class = str(runtime_ctx.get("failure_class") or "").strip()
     api_base_url = _read_frontend_api_base_url(project_path)
 
+    live_runtime = {}
+    live_backend = {}
+    live_frontend = {}
+    try:
+        from archmind.deploy import get_local_runtime_status
+
+        live_runtime = get_local_runtime_status(project_path)
+        live_backend = live_runtime.get("backend") if isinstance(live_runtime.get("backend"), dict) else {}
+        live_frontend = live_runtime.get("frontend") if isinstance(live_runtime.get("frontend"), dict) else {}
+    except Exception:
+        live_runtime = {}
+        live_backend = {}
+        live_frontend = {}
+
+    live_backend_status = str(live_backend.get("status") or "").strip().upper()
+    live_frontend_status = str(live_frontend.get("status") or "").strip().upper()
+    if live_backend:
+        backend_url = str(live_backend.get("url") or backend_url).strip()
+    if live_frontend:
+        frontend_url = str(live_frontend.get("url") or frontend_url).strip()
+    live_backend_pid = live_backend.get("pid")
+    live_frontend_pid = live_frontend.get("pid")
+    if live_backend_pid is not None:
+        backend_pid = live_backend_pid
+    if live_frontend_pid is not None:
+        frontend_pid = live_frontend_pid
+
     runtime_backend = ""
     runtime_frontend = ""
-    if backend_status:
-        runtime_backend = backend_status
+    state_backend_failed = backend_status in {"FAIL", "FAILED", "WARNING"} or bool(runtime_failure_class)
+    if live_backend_status == "RUNNING":
+        runtime_backend = "RUNNING"
+    elif live_backend_status in {"NOT RUNNING", "STOPPED"}:
+        runtime_backend = "FAIL" if state_backend_failed and runtime_failure_class else "NOT RUNNING"
+    elif live_backend_status:
+        runtime_backend = live_backend_status
+    elif backend_status:
+        runtime_backend = "FAIL" if backend_status in {"FAIL", "FAILED", "WARNING"} and runtime_failure_class else backend_status
     elif backend_pid:
         runtime_backend = "RUNNING"
-    if frontend_status:
+    if live_frontend_status in {"RUNNING", "NOT RUNNING", "STOPPED"}:
+        runtime_frontend = "RUNNING" if live_frontend_status == "RUNNING" else "NOT RUNNING"
+    elif live_frontend_status:
+        runtime_frontend = live_frontend_status
+    elif frontend_status:
         runtime_frontend = frontend_status
     elif frontend_pid:
         runtime_frontend = "RUNNING"
+
+    if runtime_backend == "RUNNING":
+        runtime_failure_class = ""
 
     if runtime_backend or runtime_frontend:
         lines += ["", "Runtime:"]
         if runtime_backend:
             lines.append(f"Backend: {runtime_backend}")
+        if backend_pid:
+            lines.append(f"Backend PID: {backend_pid}")
         if runtime_frontend:
             lines.append(f"Frontend: {runtime_frontend}")
+        if frontend_pid:
+            lines.append(f"Frontend PID: {frontend_pid}")
 
     if backend_url:
         lines += ["", "Backend URL:", backend_url]

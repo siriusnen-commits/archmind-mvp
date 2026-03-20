@@ -2379,6 +2379,13 @@ def test_inspect_command_summarizes_project_spec_reasoning_and_state(tmp_path: P
         encoding="utf-8",
     )
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "RUNNING", "pid": 12001, "url": "http://127.0.0.1:8011"},
+            "frontend": {"status": "RUNNING", "pid": 13001, "url": "http://127.0.0.1:3011"},
+        },
+    )
 
     msg = DummyMessage()
     update = DummyUpdate(message=msg, effective_chat=DummyChat())
@@ -2628,6 +2635,200 @@ def test_inspect_command_keeps_runtime_and_repository_status_separate(tmp_path: 
     assert "Repository:" in out
     assert "Status: CREATED" in out
     assert "https://github.com/siriusnen-commits/inspect_runtime_repo_separate" in out
+
+
+def test_inspect_command_prefers_live_runtime_over_stale_fail_state(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect_live_runtime_override"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps({"shape": "backend", "template": "fastapi", "modules": [], "entities": [], "api_endpoints": [], "frontend_pages": []}),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps({"runtime": {"backend_status": "FAIL", "failure_class": "runtime-execution-error"}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": False, "failure_class": "runtime-execution-error", "failure_reason": "recent failure"},
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "RUNNING", "pid": 45127, "url": "http://127.0.0.1:8000"},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Runtime:" in out
+    assert "Backend: RUNNING" in out
+    assert "Backend PID: 45127" in out
+    assert "Backend URL:" in out
+    assert "http://127.0.0.1:8000" in out
+    assert "Failure Class: runtime-execution-error" not in out
+
+
+def test_inspect_and_running_show_consistent_runtime_for_current_project(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect_running_consistent"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps({"shape": "backend", "template": "fastapi", "modules": [], "entities": [], "api_endpoints": [], "frontend_pages": []}),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(json.dumps({}), encoding="utf-8")
+    set_current_project(project_dir)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "project_dir": project_dir,
+            "project_name": project_dir.name,
+            "backend": {"status": "RUNNING", "pid": 55123, "url": "http://127.0.0.1:8000"},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.list_running_local_projects",
+        lambda _root: [
+            {
+                "project_dir": project_dir,
+                "project_name": project_dir.name,
+                "backend": {"status": "RUNNING", "pid": 55123, "url": "http://127.0.0.1:8000"},
+                "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+            }
+        ],
+    )
+
+    inspect_msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=inspect_msg, effective_chat=DummyChat()), DummyContext()))
+    inspect_out = inspect_msg.sent[-1]
+    running_msg = DummyMessage()
+    asyncio.run(command_running(DummyUpdate(message=running_msg, effective_chat=DummyChat()), DummyContext()))
+    running_out = running_msg.sent[-1]
+    assert "Backend: RUNNING" in inspect_out
+    assert "Backend: RUNNING (pid 55123)" in running_out
+    assert "http://127.0.0.1:8000" in inspect_out
+    assert "http://127.0.0.1:8000" in running_out
+
+
+def test_inspect_command_shows_fail_only_when_not_running_with_unresolved_failure(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect_real_fail"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps({"shape": "backend", "template": "fastapi", "modules": [], "entities": [], "api_endpoints": [], "frontend_pages": []}),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps({"runtime": {"backend_status": "FAIL", "failure_class": "runtime-execution-error"}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": False, "failure_class": "runtime-execution-error", "failure_reason": "startup failed"},
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Runtime:" in out
+    assert "Backend: FAIL" in out
+    assert "Failure Class: runtime-execution-error" in out
+
+
+def test_inspect_command_shows_runtime_status_and_backend_runtime_info_together(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect_runtime_and_detect"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps({"shape": "backend", "template": "fastapi", "modules": [], "entities": [], "api_endpoints": [], "frontend_pages": []}),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(json.dumps({}), encoding="utf-8")
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "RUNNING", "pid": 42001, "url": "http://127.0.0.1:8010"},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Runtime:" in out
+    assert "Backend: RUNNING" in out
+    assert "Backend Runtime:" in out
+    assert "Backend Entry: app.main:app" in out
+    assert "Backend Run Mode: asgi-direct" in out
+
+
+def test_inspect_command_separates_runtime_url_from_deploy_state(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect_runtime_deploy_separate"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps({"shape": "backend", "template": "fastapi", "modules": [], "entities": [], "api_endpoints": [], "frontend_pages": []}),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "deploy": {"target": "railway", "status": "SUCCESS", "backend_url": "https://prod.example.com"},
+                "runtime": {"backend_status": "FAIL"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "RUNNING", "pid": 77123, "url": "http://127.0.0.1:8000"},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Runtime:" in out
+    assert "Backend: RUNNING" in out
+    assert "Backend URL:" in out
+    assert "http://127.0.0.1:8000" in out
+    assert "Deploy:" in out
+    assert "Target: railway" in out
 
 
 def test_improve_command_without_project_shows_guidance(monkeypatch) -> None:
