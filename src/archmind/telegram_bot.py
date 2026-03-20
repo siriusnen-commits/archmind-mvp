@@ -78,6 +78,7 @@ PIPELINE CONTROL
 
 LOCAL RUNTIME
 /run backend           start backend locally
+/run all               start backend + frontend locally
 /running               show running services
 /logs                  show logs
 /restart               restart services
@@ -445,6 +446,7 @@ def _help_quick_text() -> str:
         "- /improve\n\n"
         "Runtime\n"
         "- /run backend\n"
+        "- /run all\n"
         "- /running\n"
         "- /restart\n"
         "- /stop\n"
@@ -484,6 +486,7 @@ def _help_section_text(section: str) -> str:
         return (
             "Help: runtime\n\n"
             "- /run backend           start backend locally\n"
+            "- /run all               start backend + frontend locally\n"
             "- /running               show running local services\n"
             "- /restart               restart current project services\n"
             "- /stop                  stop current project services\n"
@@ -553,6 +556,9 @@ def _help_sections_keyboard(section: str = "") -> Any:
             [
                 [
                     InlineKeyboardButton(text="Run backend", callback_data=_encode_callback_data("cmd", "/run backend")),
+                    InlineKeyboardButton(text="Run all", callback_data=_encode_callback_data("cmd", "/run all")),
+                ],
+                [
                     InlineKeyboardButton(text="Running", callback_data=_encode_callback_data("cmd", "/running")),
                 ],
                 [
@@ -5353,8 +5359,45 @@ async def command_run(update: Any, context: Any) -> None:
         return
 
     args = [str(x).strip().lower() for x in getattr(context, "args", []) if str(x).strip()]
-    if len(args) != 1 or args[0] != "backend":
-        await update.message.reply_text("Usage: /run backend")
+    if len(args) != 1 or args[0] not in {"backend", "all"}:
+        await update.message.reply_text("Usage: /run backend|all")
+        return
+
+    if args[0] == "all":
+        from archmind.runtime_orchestrator import run_all_local_services
+
+        result = run_all_local_services(project_path)
+        update_runtime_state(project_path, result, action="telegram /run all")
+        services = result.get("services") if isinstance(result.get("services"), dict) else {}
+        backend = services.get("backend") if isinstance(services.get("backend"), dict) else {}
+        frontend = services.get("frontend") if isinstance(services.get("frontend"), dict) else {}
+        backend_status = str(backend.get("status") or result.get("backend_status") or "UNKNOWN").strip().upper()
+        frontend_status = str(frontend.get("status") or result.get("frontend_status") or "UNKNOWN").strip().upper()
+        lines = [
+            "Run all finished",
+            "",
+            "Project:",
+            project_path.name,
+            "",
+            "Backend:",
+            backend_status,
+        ]
+        backend_url = str(backend.get("url") or "").strip()
+        if backend_url:
+            lines += ["", "Backend URL:", backend_url]
+        lines += ["", "Frontend:", frontend_status]
+        frontend_url = str(frontend.get("url") or "").strip()
+        if frontend_url:
+            lines += ["", "Frontend URL:", frontend_url]
+        if str(result.get("status") or "").strip().upper() == "FAIL":
+            failure_class = str(result.get("failure_class") or "runtime-execution-error").strip()
+            detail = str(result.get("detail") or "").strip()
+            if failure_class:
+                lines += ["", "Failure class:", failure_class]
+            if detail:
+                lines += ["", "Detail:", detail]
+        lines += ["", "Next:", "- /running", "- /logs", "- /inspect"]
+        await update.message.reply_text(_truncate_message("\n".join(lines)))
         return
 
     from archmind.deploy import get_local_runtime_status, run_backend_local_with_health
