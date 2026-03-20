@@ -338,6 +338,8 @@ def _write_runtime_env_files(
     backend_env_path = _backend_env_file(root)
     legacy_backend_env_path = root / ".env"
     frontend_dir = get_frontend_deploy_dir(root)
+    if frontend_dir is None and (root / "frontend").is_dir():
+        frontend_dir = root / "frontend"
     frontend_env_path = (frontend_dir / ".env.local") if frontend_dir is not None else None
 
     resolved_backend_url, cors_origins = _build_runtime_urls(backend_port, frontend_port)
@@ -370,6 +372,102 @@ def _write_runtime_env_files(
         "frontend_env": str(frontend_env_path) if frontend_env_path is not None else "",
         "backend_base_url": resolved_backend_url,
         "cors_allow_origins": ",".join(cors_origins),
+    }
+
+
+def _read_env_key_values(path: Path) -> dict[str, str]:
+    if not path.exists() or not path.is_file():
+        return {}
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return {}
+    out: dict[str, str] = {}
+    for raw in lines:
+        line = str(raw).strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        k = key.strip()
+        if not k:
+            continue
+        out[k] = value.strip()
+    return out
+
+
+def _ensure_env_keys(path: Path, defaults: dict[str, str]) -> dict[str, Any]:
+    existing_text = ""
+    if path.exists() and path.is_file():
+        try:
+            existing_text = path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            existing_text = ""
+    lines = existing_text.splitlines() if existing_text else []
+    keys = {line.split("=", 1)[0].strip() for line in lines if "=" in line and str(line).strip() and not str(line).strip().startswith("#")}
+    added: list[str] = []
+    for key, value in defaults.items():
+        if key in keys:
+            continue
+        lines.append(f"{key}={value}")
+        added.append(key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = "\n".join(lines).strip()
+    if payload:
+        payload += "\n"
+    try:
+        path.write_text(payload, encoding="utf-8")
+    except Exception:
+        return {"ok": False, "added_keys": added}
+    return {"ok": True, "added_keys": added}
+
+
+def ensure_runtime_env_defaults(
+    project_dir: Path,
+    *,
+    backend_port: int | None = None,
+    frontend_port: int | None = None,
+) -> dict[str, Any]:
+    root = project_dir.expanduser().resolve()
+    resolved_backend_port = int(backend_port) if backend_port else 8000
+    resolved_frontend_port = int(frontend_port) if frontend_port else 3000
+    backend_base_url, cors_origins = _build_runtime_urls(resolved_backend_port, resolved_frontend_port)
+
+    backend_defaults = {
+        "APP_PORT": str(resolved_backend_port),
+        "BACKEND_BASE_URL": backend_base_url,
+        "CORS_ALLOW_ORIGINS": ",".join(cors_origins),
+    }
+    backend_dir_mode = (root / "backend").is_dir()
+    backend_env_path = (root / "backend" / ".env") if backend_dir_mode else (root / ".env")
+    backend_result = _ensure_env_keys(backend_env_path, backend_defaults)
+
+    root_env_result: dict[str, Any] = {"ok": True, "added_keys": []}
+    if backend_dir_mode:
+        root_env_result = _ensure_env_keys(root / ".env", backend_defaults)
+
+    frontend_env_path: Path | None = None
+    frontend_result: dict[str, Any] = {"ok": True, "added_keys": []}
+    frontend_dir = get_frontend_deploy_dir(root)
+    if frontend_dir is None and (root / "frontend").is_dir():
+        frontend_dir = root / "frontend"
+    if frontend_dir is not None:
+        frontend_env_path = frontend_dir / ".env.local"
+        frontend_defaults = {
+            "NEXT_PUBLIC_API_BASE_URL": backend_base_url,
+            "NEXT_PUBLIC_FRONTEND_PORT": str(resolved_frontend_port),
+        }
+        frontend_result = _ensure_env_keys(frontend_env_path, frontend_defaults)
+
+    ok = bool(backend_result.get("ok")) and bool(root_env_result.get("ok")) and bool(frontend_result.get("ok"))
+    return {
+        "ok": ok,
+        "backend_env": str(backend_env_path),
+        "root_env": str(root / ".env"),
+        "frontend_env": str(frontend_env_path) if frontend_env_path is not None else "",
+        "backend_added_keys": list(backend_result.get("added_keys") or []),
+        "root_added_keys": list(root_env_result.get("added_keys") or []),
+        "frontend_added_keys": list(frontend_result.get("added_keys") or []),
+        "backend_base_url": backend_base_url,
     }
 
 
