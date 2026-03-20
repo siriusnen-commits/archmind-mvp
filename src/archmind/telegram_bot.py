@@ -3732,95 +3732,68 @@ async def command_inspect(update: Any, context: Any) -> None:
     runtime_block = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
     runtime_ctx = _improve_runtime_context(project_path, state)
     runtime_detect_ok = bool(runtime_ctx.get("detect_ok"))
-    backend_url = str(
-        (runtime_block.get("backend_url") if isinstance(runtime_block, dict) else "")
-        or state.get("backend_deploy_url")
-        or ""
-    ).strip()
-    frontend_url = str(
-        (deploy_block.get("frontend_url") if isinstance(deploy_block, dict) else "")
-        or state.get("frontend_deploy_url")
-        or ""
-    ).strip()
-    backend_status = str(runtime_ctx.get("backend_status") or "").strip().upper() or str(
-        (runtime_block.get("backend_status") if isinstance(runtime_block, dict) else "")
-        or state.get("backend_smoke_status")
-        or ""
-    ).strip().upper()
-    frontend_status = str(
-        (deploy_block.get("frontend_status") if isinstance(deploy_block, dict) else "")
-        or state.get("frontend_smoke_status")
-        or ""
-    ).strip().upper()
-    backend_pid = (runtime_block.get("backend_pid") if isinstance(runtime_block, dict) else None) or state.get("backend_pid")
-    frontend_pid = (runtime_block.get("frontend_pid") if isinstance(runtime_block, dict) else None) or state.get("frontend_pid")
+    runtime_services = runtime_block.get("services") if isinstance(runtime_block.get("services"), dict) else {}
+    backend_service = runtime_services.get("backend") if isinstance(runtime_services.get("backend"), dict) else {}
+    frontend_service = runtime_services.get("frontend") if isinstance(runtime_services.get("frontend"), dict) else {}
     backend_entry = str(runtime_ctx.get("backend_entry") or "").strip()
     backend_run_mode = str(runtime_ctx.get("backend_run_mode") or "").strip()
     runtime_failure_class = str(runtime_ctx.get("failure_class") or "").strip()
     api_base_url = _read_frontend_api_base_url(project_path)
 
-    live_runtime = {}
-    live_backend = {}
-    live_frontend = {}
     try:
         from archmind.deploy import get_local_runtime_status
 
         live_runtime = get_local_runtime_status(project_path)
-        live_backend = live_runtime.get("backend") if isinstance(live_runtime.get("backend"), dict) else {}
-        live_frontend = live_runtime.get("frontend") if isinstance(live_runtime.get("frontend"), dict) else {}
+        live_services = live_runtime.get("services") if isinstance(live_runtime.get("services"), dict) else {}
+        if isinstance(live_services.get("backend"), dict):
+            backend_service = dict(live_services.get("backend") or {})
+        elif isinstance(live_runtime.get("backend"), dict):
+            backend_raw = live_runtime.get("backend") or {}
+            backend_service = {
+                "status": str(backend_raw.get("status") or "").strip().upper(),
+                "pid": backend_raw.get("pid"),
+                "url": str(backend_raw.get("url") or "").strip(),
+                "port": None,
+                "log_path": "",
+            }
+        if isinstance(live_services.get("frontend"), dict):
+            frontend_service = dict(live_services.get("frontend") or {})
+        elif isinstance(live_runtime.get("frontend"), dict):
+            frontend_raw = live_runtime.get("frontend") or {}
+            frontend_service = {
+                "status": str(frontend_raw.get("status") or "").strip().upper(),
+                "pid": frontend_raw.get("pid"),
+                "url": str(frontend_raw.get("url") or "").strip(),
+                "port": None,
+                "log_path": "",
+            }
     except Exception:
-        live_runtime = {}
-        live_backend = {}
-        live_frontend = {}
+        pass
 
-    live_backend_status = str(live_backend.get("status") or "").strip().upper()
-    live_frontend_status = str(live_frontend.get("status") or "").strip().upper()
-    if live_backend:
-        backend_url = str(live_backend.get("url") or backend_url).strip()
-    if live_frontend:
-        frontend_url = str(live_frontend.get("url") or frontend_url).strip()
-    live_backend_pid = live_backend.get("pid")
-    live_frontend_pid = live_frontend.get("pid")
-    if live_backend_pid is not None:
-        backend_pid = live_backend_pid
-    if live_frontend_pid is not None:
-        frontend_pid = live_frontend_pid
-
-    runtime_backend = ""
-    runtime_frontend = ""
-    state_backend_failed = backend_status in {"FAIL", "FAILED", "WARNING"} or bool(runtime_failure_class)
-    if live_backend_status == "RUNNING":
-        runtime_backend = "RUNNING"
-    elif live_backend_status in {"NOT RUNNING", "STOPPED"}:
-        runtime_backend = "FAIL" if state_backend_failed and runtime_failure_class else "NOT RUNNING"
-    elif live_backend_status:
-        runtime_backend = live_backend_status
-    elif backend_status:
-        runtime_backend = "FAIL" if backend_status in {"FAIL", "FAILED", "WARNING"} and runtime_failure_class else backend_status
-    elif backend_pid:
-        runtime_backend = "RUNNING"
-    if live_frontend_status in {"RUNNING", "NOT RUNNING", "STOPPED"}:
-        runtime_frontend = "RUNNING" if live_frontend_status == "RUNNING" else "NOT RUNNING"
-    elif live_frontend_status:
-        runtime_frontend = live_frontend_status
-    elif frontend_status:
-        runtime_frontend = frontend_status
-    elif frontend_pid:
-        runtime_frontend = "RUNNING"
+    runtime_backend = str(backend_service.get("status") or runtime_block.get("backend_status") or "").strip().upper()
+    runtime_frontend = str(frontend_service.get("status") or runtime_block.get("frontend_status") or "").strip().upper()
+    if not runtime_backend:
+        runtime_backend = "NOT RUNNING"
+    if not runtime_frontend:
+        runtime_frontend = "NOT RUNNING"
+    state_backend_status = str(runtime_block.get("backend_status") or "").strip().upper()
+    if runtime_backend in {"NOT RUNNING", "STOPPED"} and runtime_failure_class and state_backend_status in {"FAIL", "FAILED", "WARNING"}:
+        runtime_backend = "FAIL"
+    backend_pid = backend_service.get("pid") or runtime_block.get("backend_pid") or state.get("backend_pid")
+    frontend_pid = frontend_service.get("pid") or runtime_block.get("frontend_pid") or state.get("frontend_pid")
+    backend_url = str(backend_service.get("url") or runtime_block.get("backend_url") or state.get("backend_deploy_url") or "").strip()
+    frontend_url = str(frontend_service.get("url") or runtime_block.get("frontend_url") or state.get("frontend_deploy_url") or "").strip()
 
     if runtime_backend == "RUNNING":
         runtime_failure_class = ""
 
-    if runtime_backend or runtime_frontend:
-        lines += ["", "Runtime:"]
-        if runtime_backend:
-            lines.append(f"Backend: {runtime_backend}")
-        if backend_pid:
-            lines.append(f"Backend PID: {backend_pid}")
-        if runtime_frontend:
-            lines.append(f"Frontend: {runtime_frontend}")
-        if frontend_pid:
-            lines.append(f"Frontend PID: {frontend_pid}")
+    lines += ["", "Runtime:"]
+    lines.append(f"Backend: {runtime_backend}")
+    if backend_pid:
+        lines.append(f"Backend PID: {backend_pid}")
+    lines.append(f"Frontend: {runtime_frontend}")
+    if frontend_pid:
+        lines.append(f"Frontend PID: {frontend_pid}")
 
     if backend_url:
         lines += ["", "Backend URL:", backend_url]
@@ -5129,7 +5102,7 @@ async def command_logs(update: Any, context: Any) -> None:
         return
 
     if mode in ("local", "backend", "frontend"):
-        from archmind.deploy import read_last_lines
+        from archmind.deploy import get_local_runtime_status, read_last_lines
 
         if mode == "backend":
             local_scope = "backend"
@@ -5143,8 +5116,33 @@ async def command_logs(update: Any, context: Any) -> None:
         show_backend = local_scope in ("all", "backend")
         show_frontend = local_scope in ("all", "frontend")
 
-        backend_text = read_last_lines(project_path / ".archmind" / "backend.log", lines=20) if show_backend else None
-        frontend_text = read_last_lines(project_path / ".archmind" / "frontend.log", lines=20) if show_frontend else None
+        runtime_payload = get_local_runtime_status(project_path)
+        services = runtime_payload.get("services") if isinstance(runtime_payload.get("services"), dict) else {}
+        backend_service = services.get("backend") if isinstance(services.get("backend"), dict) else {}
+        frontend_service = services.get("frontend") if isinstance(services.get("frontend"), dict) else {}
+        backend_log = str(backend_service.get("log_path") or "").strip() or str(project_path / ".archmind" / "backend.log")
+        frontend_log = str(frontend_service.get("log_path") or "").strip() or str(project_path / ".archmind" / "frontend.log")
+        backend_text = read_last_lines(Path(backend_log), lines=20) if show_backend else None
+        frontend_text = read_last_lines(Path(frontend_log), lines=20) if show_frontend else None
+
+        frontend_known = bool(frontend_service) or bool((project_path / "frontend").exists()) or bool((project_path / "package.json").exists())
+        if show_frontend and not frontend_known and local_scope != "all":
+            await update.message.reply_text(
+                _truncate_message(
+                    "\n".join(
+                        [
+                            "Local logs",
+                            "",
+                            "Project:",
+                            project_path.name,
+                            "",
+                            "Frontend service not detected for this project.",
+                        ]
+                    ),
+                    limit=3500,
+                )
+            )
+            return
         if (show_backend and not backend_text) and (show_frontend and not frontend_text):
             lines = [
                 "Local logs",

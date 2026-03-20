@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from datetime import datetime
 
 from archmind.deploy import (
     deploy_frontend_local,
@@ -22,6 +23,8 @@ def _service_payload(
     url: str = "",
     log_path: str = "",
     detail: str = "",
+    health: str = "",
+    framework: str = "",
 ) -> dict[str, Any]:
     return {
         "status": str(status or "").strip().upper() or "UNKNOWN",
@@ -30,6 +33,9 @@ def _service_payload(
         "url": str(url or "").strip(),
         "log_path": str(log_path or "").strip(),
         "detail": str(detail or "").strip(),
+        "health": str(health or "").strip().upper(),
+        "framework": str(framework or "").strip(),
+        "last_checked_at": datetime.now().isoformat(timespec="seconds"),
     }
 
 
@@ -56,6 +62,8 @@ def run_all_local_services(project_dir: Path) -> dict[str, Any]:
                 port=frontend_runtime_port_hint(str(before_backend.get("url") or "")),
                 url=str(before_backend.get("url") or ""),
                 detail="already running",
+                health="SUCCESS",
+                framework="fastapi",
             )
         else:
             backend_result = run_backend_local_with_health(root)
@@ -68,6 +76,8 @@ def run_all_local_services(project_dir: Path) -> dict[str, Any]:
                 url=backend_url,
                 log_path=str(backend_result.get("backend_log_path") or ""),
                 detail=str(backend_result.get("detail") or ""),
+                health=str(backend_result.get("backend_smoke_status") or backend_result.get("healthcheck_status") or ""),
+                framework="fastapi",
             )
             if not backend_ok:
                 failure_class = str(backend_result.get("failure_class") or "").strip() or "runtime-execution-error"
@@ -84,6 +94,8 @@ def run_all_local_services(project_dir: Path) -> dict[str, Any]:
                 port=frontend_runtime_port_hint(str(before_frontend.get("url") or "")),
                 url=str(before_frontend.get("url") or ""),
                 detail="already running",
+                health="SUCCESS",
+                framework="nextjs",
             )
             frontend_smoke = {"status": "SUCCESS", "url": str(before_frontend.get("url") or ""), "detail": "frontend already running"}
         else:
@@ -92,6 +104,7 @@ def run_all_local_services(project_dir: Path) -> dict[str, Any]:
                 frontend_service = _service_payload(
                     status="FAIL",
                     detail=str(frontend_entry.get("failure_reason") or "frontend runtime detection failed"),
+                    framework=str(frontend_entry.get("framework") or "").strip(),
                 )
                 if not failure_class:
                     failure_class = str(frontend_entry.get("failure_class") or "").strip() or "runtime-execution-error"
@@ -113,12 +126,15 @@ def run_all_local_services(project_dir: Path) -> dict[str, Any]:
                     url=frontend_url,
                     log_path=str(root / ".archmind" / "frontend.log"),
                     detail=str(frontend_result.get("detail") or ""),
+                    framework=str(frontend_result.get("framework") or frontend_entry.get("framework") or "").strip(),
                 )
                 frontend_smoke = verify_frontend_smoke(frontend_url) if frontend_ok else {
                     "status": "SKIPPED",
                     "url": frontend_url,
                     "detail": "frontend deploy failed",
                 }
+                if frontend_ok:
+                    frontend_service["health"] = str(frontend_smoke.get("status") or "").strip().upper()
                 if not frontend_ok and not failure_class:
                     failure_class = "runtime-execution-error"
 
@@ -136,6 +152,8 @@ def run_all_local_services(project_dir: Path) -> dict[str, Any]:
         "kind": kind,
         "status": top_status,
         "url": str(backend_service.get("url") or "") or str(frontend_service.get("url") or ""),
+        "backend_url": str(backend_service.get("url") or ""),
+        "frontend_url": str(frontend_service.get("url") or ""),
         "detail": top_detail,
         "failure_class": failure_class if top_status != "SUCCESS" else "",
         "services": {

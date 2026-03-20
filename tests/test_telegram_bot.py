@@ -984,6 +984,33 @@ def test_logs_local_no_logs_available(tmp_path: Path) -> None:
     assert "Run command:" in out
 
 
+def test_logs_frontend_uses_runtime_service_log_path(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "local_logs_frontend_runtime_service"
+    (project_dir / ".archmind" / "logs").mkdir(parents=True, exist_ok=True)
+    set_current_project(project_dir)
+    frontend_log = project_dir / ".archmind" / "logs" / "frontend.custom.log"
+    frontend_log.write_text("front-service-line\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "services": {
+                "backend": {"status": "NOT RUNNING", "log_path": "", "url": ""},
+                "frontend": {"status": "RUNNING", "log_path": str(frontend_log), "url": "http://127.0.0.1:3000"},
+            },
+            "backend": {"status": "NOT RUNNING", "url": ""},
+            "frontend": {"status": "RUNNING", "url": "http://127.0.0.1:3000"},
+        },
+    )
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_logs(update, DummyContext(args=["frontend"])))
+    out = msg.sent[-1]
+    assert "Frontend logs (last 20 lines):" in out
+    assert "front-service-line" in out
+
+
 def test_extract_key_error_lines_backend_priority() -> None:
     raw = """
     project_dir: /tmp/demo
@@ -5621,6 +5648,7 @@ def test_restart_local_restarts_services_and_displays_urls(monkeypatch, tmp_path
     assert "http://127.0.0.1:8011" in out
     assert "Frontend:\nRUNNING" in out
     assert "Frontend URL:\nhttp://127.0.0.1:3011" in out
+    assert "Frontend URL:\nhttp://127.0.0.1:8011" not in out
     assert "http://127.0.0.1:3011" in out
     assert "Next:\n- /running\n- /logs" in out
 
