@@ -58,8 +58,19 @@ def suggest_next_commands(spec: dict[str, Any], limit: int = 5) -> list[dict[str
         seen_commands.add(command)
         suggestions.append({"command": command, "reason": reason})
 
+    if not entity_names:
+        add("/add_entity Note", "no entities defined yet")
+
     if "auth" in modules and "user" not in lower_entity_names:
         add("/add_entity User", "auth module present but User entity missing")
+
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        name = str(entity.get("name") or "").strip()
+        fields = entity.get("fields") if isinstance(entity.get("fields"), list) else []
+        if name and not fields:
+            add(f"/add_field {name} title:string", f"{name} entity has no fields yet")
 
     # Domain-specific field quality rules
     for entity in entities:

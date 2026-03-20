@@ -1002,6 +1002,38 @@ def _entity_summaries_for_inspect(entities: Any, max_fields: int = 5) -> list[st
     return summaries
 
 
+def _entity_tree_lines_for_inspect(entities: Any, max_entities: int = 10, max_fields: int = 8) -> list[str]:
+    lines: list[str] = []
+    normalized = _normalize_entities(entities)
+    if not normalized:
+        return ["- (none)"]
+    for entity in normalized[:max_entities]:
+        name = str(entity.get("name") or "").strip()
+        if not name:
+            continue
+        lines.append(f"- {name}")
+        fields = entity.get("fields") if isinstance(entity.get("fields"), list) else []
+        pairs: list[str] = []
+        for field in fields:
+            if not isinstance(field, dict):
+                continue
+            field_name = str(field.get("name") or "").strip()
+            field_type = str(field.get("type") or "").strip().lower()
+            if field_name and field_type:
+                pairs.append(f"{field_name}:{field_type}")
+        if not pairs:
+            lines.append("  - (no fields)")
+            continue
+        for pair in pairs[:max_fields]:
+            lines.append(f"  - {pair}")
+        if len(pairs) > max_fields:
+            lines.append(f"  - ... +{len(pairs) - max_fields} more fields")
+    extra_entities = len(normalized) - max_entities
+    if extra_entities > 0:
+        lines.append(f"- ... +{extra_entities} more entities")
+    return lines
+
+
 def _append_truncated_bullets(lines: list[str], title: str, items: list[str], limit: int, suffix_label: str) -> None:
     if not items:
         return
@@ -3776,6 +3808,7 @@ async def command_inspect(update: Any, context: Any) -> None:
     domains = [str(x) for x in (spec.get("domains") or reasoning.get("domains") or []) if str(x).strip()]
     modules = [str(x) for x in (spec.get("modules") or reasoning.get("modules") or []) if str(x).strip()]
     entities = _entity_summaries_for_inspect(spec.get("entities"), max_fields=5)
+    entity_tree_lines = _entity_tree_lines_for_inspect(spec.get("entities"), max_entities=10, max_fields=8)
     api_endpoints = [str(x) for x in (spec.get("api_endpoints") or []) if str(x).strip()]
     frontend_pages = [str(x) for x in (spec.get("frontend_pages") or []) if str(x).strip()]
     reason_summary = str(spec.get("reason_summary") or reasoning.get("reason_summary") or "").strip()
@@ -3837,6 +3870,7 @@ async def command_inspect(update: Any, context: Any) -> None:
         f"Modules: {', '.join(modules) if modules else '(none)'}",
     ]
     _append_truncated_bullets(lines, "Entities:", entities, limit=10, suffix_label="entities")
+    lines += ["", "Entity Fields:"] + entity_tree_lines
     _append_truncated_bullets(lines, "API:", api_endpoints, limit=10, suffix_label="endpoints")
     _append_truncated_bullets(lines, "Frontend:", frontend_pages, limit=10, suffix_label="pages")
     if reason_summary:
@@ -4399,6 +4433,7 @@ def _build_improvement_report(project_path: Path) -> str:
     runtime_suggestions: list[dict[str, str]] = []
     structure_suggestions: list[dict[str, str]] = []
     evolution_suggestions: list[dict[str, str]] = []
+    entities_for_spec = _normalize_entities(spec.get("entities"))
     if fullstack_expected and (not backend_entry_nested.exists() or not frontend_root_ok):
         structure_suggestions.append(
             {
@@ -4501,11 +4536,33 @@ def _build_improvement_report(project_path: Path) -> str:
         )
 
     # B-category: feature/model expansion suggestions
+    if not entities_for_spec:
+        evolution_suggestions.append(
+            {
+                "title": "Define your first entity",
+                "reason": "No entities defined yet in project spec.",
+                "command": "/add_entity Note",
+            }
+        )
+    else:
+        empty_entity = next(
+            (str(item.get("name") or "").strip() for item in entities_for_spec if not (item.get("fields") or [])),
+            "",
+        )
+        if empty_entity:
+            evolution_suggestions.append(
+                {
+                    "title": f"Add fields to {empty_entity}",
+                    "reason": f"Entity {empty_entity} has no fields yet.",
+                    "command": f"/add_field {empty_entity} title:string",
+                }
+            )
+
     next_commands = suggest_next_commands(
         {
             "shape": shape or "unknown",
             "modules": spec.get("modules") if isinstance(spec.get("modules"), list) else [],
-            "entities": _normalize_entities(spec.get("entities")),
+            "entities": entities_for_spec,
             "api_endpoints": spec.get("api_endpoints") if isinstance(spec.get("api_endpoints"), list) else [],
             "frontend_pages": spec.get("frontend_pages") if isinstance(spec.get("frontend_pages"), list) else [],
         },
