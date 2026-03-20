@@ -54,3 +54,36 @@ def test_validate_generated_project_structure_for_fullstack_contract(tmp_path: P
     (project / "frontend").mkdir(parents=True, exist_ok=True)
     check = validate_generated_project_structure(project, template_name="fullstack-ddd")
     assert check["ok"] is True
+
+
+def test_validate_generated_project_structure_for_fastapi_accepts_backend_prefixed_layout(tmp_path: Path) -> None:
+    project = tmp_path / "fastapi_backend_prefixed"
+    (project / "backend" / "app").mkdir(parents=True, exist_ok=True)
+    (project / "backend" / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project / "backend" / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+
+    check = validate_generated_project_structure(project, template_name="fastapi-ddd")
+    assert check["ok"] is True
+
+
+def test_validate_generated_project_structure_for_data_tool_contract(tmp_path: Path) -> None:
+    project = tmp_path / "data_tool_contract"
+    (project / "backend" / "app").mkdir(parents=True, exist_ok=True)
+    (project / "backend" / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project / "backend" / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project / "frontend" / "package.json").write_text("{\"name\":\"demo\"}\n", encoding="utf-8")
+    (project / "frontend" / "app" / "page.tsx").write_text("export default function Page(){return null}\n", encoding="utf-8")
+
+    check = validate_generated_project_structure(project, template_name="data-tool")
+    assert check["ok"] is True
+
+
+def test_validate_generated_project_structure_for_data_tool_reports_template_specific_reason(tmp_path: Path) -> None:
+    project = tmp_path / "data_tool_invalid"
+    (project / "frontend").mkdir(parents=True, exist_ok=True)
+    (project / "frontend" / "package.json").write_text("{\"name\":\"demo\"}\n", encoding="utf-8")
+
+    check = validate_generated_project_structure(project, template_name="data-tool")
+    assert check["ok"] is False
+    assert str(check.get("reason", "")).startswith("invalid data-tool structure:")

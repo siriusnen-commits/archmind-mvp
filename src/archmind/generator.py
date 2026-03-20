@@ -986,14 +986,184 @@ def validate_generated_project_structure(
     shape = str(app_shape or "").strip().lower()
     template = str(template_name or "").strip().lower()
     is_fullstack = shape == "fullstack" or template == "fullstack-ddd"
-    requires_backend_contract = is_fullstack or shape == "backend" or template in {
-        "fastapi",
-        "fastapi-ddd",
-        "worker-api",
-        "internal-tool",
-        "data-tool",
-    }
 
+    def _has_fastapi_app(path: Path) -> bool:
+        if not path.exists():
+            return False
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            return False
+        return bool(re.search(r"\bapp\s*=\s*FastAPI\(", text))
+
+    # fullstack-ddd contract is strict and intentionally backend-prefixed.
+    if is_fullstack:
+        backend_main = root / "backend" / "app" / "main.py"
+        backend_requirements = root / "backend" / "requirements.txt"
+        frontend_dir = root / "frontend"
+
+        backend_ok = backend_main.exists()
+        requirements_ok = backend_requirements.exists()
+        frontend_ok = frontend_dir.is_dir()
+        root_launcher_ok = not (root / "main.py").exists()
+        entrypoint_contains_app = _has_fastapi_app(backend_main)
+
+        reasons: list[str] = []
+        if not backend_ok:
+            reasons.append("missing backend entrypoint: backend/app/main.py")
+        if not requirements_ok:
+            reasons.append("missing requirements: backend/requirements.txt")
+        if not frontend_ok:
+            reasons.append("missing frontend directory: frontend")
+        if not root_launcher_ok:
+            reasons.append("root main.py is not allowed for fullstack template")
+        if backend_ok and not entrypoint_contains_app:
+            reasons.append("invalid FastAPI app declaration in: backend/app/main.py")
+
+        if reasons:
+            return {
+                "ok": False,
+                "failure_class": "generation-error",
+                "reason": "invalid fullstack-ddd structure: " + "; ".join(reasons),
+                "entrypoint": "app.main:app",
+                "backend": "OK" if backend_ok else "MISSING",
+                "frontend": "OK" if frontend_ok else "MISSING",
+                "requirements": "OK" if requirements_ok else "MISSING",
+            }
+        return {
+            "ok": True,
+            "failure_class": "",
+            "reason": "",
+            "entrypoint": "app.main:app",
+            "backend": "OK",
+            "frontend": "OK",
+            "requirements": "OK",
+        }
+
+    # fastapi / fastapi-ddd: accept either root contract or backend-prefixed contract.
+    if template in {"fastapi", "fastapi-ddd"}:
+        root_main = root / "app" / "main.py"
+        root_requirements = root / "requirements.txt"
+        backend_main = root / "backend" / "app" / "main.py"
+        backend_requirements = root / "backend" / "requirements.txt"
+
+        root_contract_ok = root_main.exists() and root_requirements.exists()
+        backend_contract_ok = backend_main.exists() and backend_requirements.exists()
+
+        selected_main: Path | None = None
+        selected_requirements: Path | None = None
+        if root_contract_ok:
+            selected_main, selected_requirements = root_main, root_requirements
+        elif backend_contract_ok:
+            selected_main, selected_requirements = backend_main, backend_requirements
+
+        reasons: list[str] = []
+        if selected_main is None or selected_requirements is None:
+            reasons.append(
+                "missing backend contract: expected (app/main.py + requirements.txt) "
+                "or (backend/app/main.py + backend/requirements.txt)"
+            )
+        else:
+            if not _has_fastapi_app(selected_main):
+                rel_main = selected_main.relative_to(root).as_posix()
+                reasons.append(f"invalid FastAPI app declaration in: {rel_main}")
+
+        if reasons:
+            return {
+                "ok": False,
+                "failure_class": "generation-error",
+                "reason": f"invalid {template} structure: " + "; ".join(reasons),
+                "entrypoint": "app.main:app",
+                "backend": "OK" if (root_contract_ok or backend_contract_ok) else "MISSING",
+                "frontend": "N/A",
+                "requirements": "OK" if (root_contract_ok or backend_contract_ok) else "MISSING",
+            }
+        return {
+            "ok": True,
+            "failure_class": "",
+            "reason": "",
+            "entrypoint": "app.main:app",
+            "backend": "OK",
+            "frontend": "N/A",
+            "requirements": "OK",
+        }
+
+    # data-tool has its own template contract; do not apply fastapi/root checks.
+    if template == "data-tool":
+        backend_main = root / "backend" / "app" / "main.py"
+        backend_requirements = root / "backend" / "requirements.txt"
+        frontend_dir = root / "frontend"
+        frontend_package = root / "frontend" / "package.json"
+        frontend_page = root / "frontend" / "app" / "page.tsx"
+        required: list[tuple[Path, str]] = [
+            (backend_main, "missing backend entrypoint: backend/app/main.py"),
+            (backend_requirements, "missing requirements: backend/requirements.txt"),
+            (frontend_dir, "missing frontend directory: frontend"),
+            (frontend_package, "missing frontend package manifest: frontend/package.json"),
+            (frontend_page, "missing frontend page: frontend/app/page.tsx"),
+        ]
+        reasons = [msg for path, msg in required if not path.exists()]
+        backend_ok = backend_main.exists()
+        requirements_ok = backend_requirements.exists()
+        frontend_ok = frontend_dir.exists() and frontend_package.exists() and frontend_page.exists()
+        if reasons:
+            return {
+                "ok": False,
+                "failure_class": "generation-error",
+                "reason": "invalid data-tool structure: " + "; ".join(reasons),
+                "entrypoint": "app.main:app",
+                "backend": "OK" if backend_ok else "MISSING",
+                "frontend": "OK" if frontend_ok else "MISSING",
+                "requirements": "OK" if requirements_ok else "MISSING",
+            }
+        return {
+            "ok": True,
+            "failure_class": "",
+            "reason": "",
+            "entrypoint": "app.main:app",
+            "backend": "OK",
+            "frontend": "OK",
+            "requirements": "OK",
+        }
+
+    if template == "internal-tool":
+        backend_main = root / "backend" / "app" / "main.py"
+        backend_requirements = root / "backend" / "requirements.txt"
+        frontend_dir = root / "frontend"
+        frontend_package = root / "frontend" / "package.json"
+        frontend_page = root / "frontend" / "app" / "page.tsx"
+        required: list[tuple[Path, str]] = [
+            (backend_main, "missing backend entrypoint: backend/app/main.py"),
+            (backend_requirements, "missing requirements: backend/requirements.txt"),
+            (frontend_dir, "missing frontend directory: frontend"),
+            (frontend_package, "missing frontend package manifest: frontend/package.json"),
+            (frontend_page, "missing frontend page: frontend/app/page.tsx"),
+        ]
+        reasons = [msg for path, msg in required if not path.exists()]
+        backend_ok = backend_main.exists()
+        requirements_ok = backend_requirements.exists()
+        frontend_ok = frontend_dir.exists() and frontend_package.exists() and frontend_page.exists()
+        if reasons:
+            return {
+                "ok": False,
+                "failure_class": "generation-error",
+                "reason": "invalid internal-tool structure: " + "; ".join(reasons),
+                "entrypoint": "app.main:app",
+                "backend": "OK" if backend_ok else "MISSING",
+                "frontend": "OK" if frontend_ok else "MISSING",
+                "requirements": "OK" if requirements_ok else "MISSING",
+            }
+        return {
+            "ok": True,
+            "failure_class": "",
+            "reason": "",
+            "entrypoint": "app.main:app",
+            "backend": "OK",
+            "frontend": "OK",
+            "requirements": "OK",
+        }
+
+    requires_backend_contract = shape == "backend" or template in {"worker-api"}
     if not requires_backend_contract:
         return {
             "ok": True,
@@ -1005,43 +1175,25 @@ def validate_generated_project_structure(
             "requirements": "N/A",
         }
 
-    backend_main = (root / "backend" / "app" / "main.py") if is_fullstack else (root / "app" / "main.py")
-    backend_requirements = (root / "backend" / "requirements.txt") if is_fullstack else (root / "requirements.txt")
-    frontend_dir = root / "frontend"
-
+    backend_main = root / "app" / "main.py"
+    backend_requirements = root / "requirements.txt"
     backend_ok = backend_main.exists()
     requirements_ok = backend_requirements.exists()
-    frontend_ok = (frontend_dir.exists() and frontend_dir.is_dir()) if is_fullstack else True
-    root_launcher_ok = not ((root / "main.py").exists()) if is_fullstack else True
-
-    entrypoint_contains_app = False
-    if backend_ok:
-        try:
-            text = backend_main.read_text(encoding="utf-8", errors="replace")
-            entrypoint_contains_app = bool(re.search(r"\bapp\s*=\s*FastAPI\(", text))
-        except Exception:
-            entrypoint_contains_app = False
-
-    reasons: list[str] = []
+    reasons = []
     if not backend_ok:
-        reasons.append(f"missing backend entrypoint: {backend_main.relative_to(root)}")
+        reasons.append("missing backend entrypoint: app/main.py")
     if not requirements_ok:
-        reasons.append(f"missing requirements: {backend_requirements.relative_to(root)}")
-    if not frontend_ok:
-        reasons.append("missing frontend directory: frontend")
-    if not root_launcher_ok:
-        reasons.append("root main.py is not allowed for fullstack template")
-    if backend_ok and not entrypoint_contains_app:
-        reasons.append(f"invalid FastAPI app declaration in: {backend_main.relative_to(root)}")
-
+        reasons.append("missing requirements: requirements.txt")
+    if backend_ok and not _has_fastapi_app(backend_main):
+        reasons.append("invalid FastAPI app declaration in: app/main.py")
     if reasons:
         return {
             "ok": False,
             "failure_class": "generation-error",
-            "reason": "invalid project structure: " + "; ".join(reasons),
+            "reason": "invalid backend structure: " + "; ".join(reasons),
             "entrypoint": "app.main:app",
             "backend": "OK" if backend_ok else "MISSING",
-            "frontend": "OK" if frontend_ok else "MISSING",
+            "frontend": "N/A",
             "requirements": "OK" if requirements_ok else "MISSING",
         }
     return {
@@ -1050,7 +1202,7 @@ def validate_generated_project_structure(
         "reason": "",
         "entrypoint": "app.main:app",
         "backend": "OK",
-        "frontend": "OK" if is_fullstack else "N/A",
+        "frontend": "N/A",
         "requirements": "OK",
     }
 

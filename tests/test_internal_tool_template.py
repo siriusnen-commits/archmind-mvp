@@ -10,7 +10,8 @@ def test_generate_internal_tool_template_scaffold(tmp_path: Path) -> None:
     project_dir = generate_project("internal admin dashboard for device status", opt)
 
     assert project_dir == tmp_path / "internal_tool_demo"
-    assert (project_dir / "requirements.txt").exists()
+    assert (project_dir / "backend" / "app" / "main.py").exists()
+    assert (project_dir / "backend" / "requirements.txt").exists()
     assert (project_dir / "frontend" / "package.json").exists()
     assert (project_dir / "frontend" / "app" / "page.tsx").exists()
 

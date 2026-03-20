@@ -10,7 +10,8 @@ def test_generate_data_tool_template_scaffold(tmp_path: Path) -> None:
     project_dir = generate_project("inventory management tool for small business", opt)
 
     assert project_dir == tmp_path / "data_tool_demo"
-    assert (project_dir / "requirements.txt").exists()
+    assert (project_dir / "backend" / "app" / "main.py").exists()
+    assert (project_dir / "backend" / "requirements.txt").exists()
     assert (project_dir / "frontend" / "package.json").exists()
     assert (project_dir / "frontend" / "app" / "page.tsx").exists()
 
