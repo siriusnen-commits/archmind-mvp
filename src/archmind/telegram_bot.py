@@ -32,7 +32,7 @@ from archmind.plan_suggester import build_plan_from_project_spec, build_plan_fro
 from archmind.project_type import detect_project_type, normalize_project_type
 from archmind.design_suggester import build_architecture_design
 from archmind.spec_suggester import suggest_project_spec
-from archmind.state import derive_task_label_from_failure_signature, load_state, set_agent_state, update_after_deploy
+from archmind.state import derive_task_label_from_failure_signature, load_state, set_agent_state, update_after_deploy, update_runtime_state
 from archmind.template_selector import is_supported_template, select_template_for_project_type
 
 LAST_PROJECT_PATH_FILE = Path.home() / ".archmind_telegram_last_project"
@@ -1312,7 +1312,7 @@ def build_logs_message(
         "Key lines:",
     ]
     if key_lines:
-        lines.extend(f"- {line}" for line in key_lines[:6])
+        lines.extend(f"- {line}" for line in key_lines[:10])
     else:
         lines.append("- (no key lines found)")
     lines += ["", "Focus:"]
@@ -1802,13 +1802,21 @@ def _read_frontend_api_base_url(project_dir: Path) -> str:
 
 def _backend_runtime_diagnostics_lines(project_dir: Path) -> list[str]:
     state = _load_json(project_dir / ".archmind" / "state.json") or {}
-    backend_entry = str(state.get("backend_entry") or "").strip()
-    backend_run_mode = str(state.get("backend_run_mode") or "").strip()
-    backend_run_cwd = str(state.get("backend_run_cwd") or "").strip()
-    backend_run_command = str(state.get("backend_run_command") or "").strip()
-    runtime_failure_class = str(state.get("runtime_failure_class") or state.get("last_failure_class") or "").strip()
-    backend_detail = str(state.get("backend_deploy_detail") or state.get("last_deploy_detail") or "").strip()
-    backend_log_path = project_dir / ".archmind" / "backend.log"
+    runtime = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
+    backend_entry = str((runtime.get("backend_entry") if isinstance(runtime, dict) else "") or state.get("backend_entry") or "").strip()
+    backend_run_mode = str((runtime.get("backend_run_mode") if isinstance(runtime, dict) else "") or state.get("backend_run_mode") or "").strip()
+    backend_run_cwd = str((runtime.get("backend_run_cwd") if isinstance(runtime, dict) else "") or state.get("backend_run_cwd") or "").strip()
+    backend_run_command = str((runtime.get("backend_run_command") if isinstance(runtime, dict) else "") or state.get("backend_run_command") or "").strip()
+    runtime_failure_class = str(
+        (runtime.get("failure_class") if isinstance(runtime, dict) else "")
+        or state.get("runtime_failure_class")
+        or state.get("last_failure_class")
+        or ""
+    ).strip()
+    backend_detail = str((runtime.get("detail") if isinstance(runtime, dict) else "") or "").strip()
+    backend_log_path = Path(
+        str((runtime.get("backend_log_path") if isinstance(runtime, dict) else "") or (project_dir / ".archmind" / "backend.log"))
+    )
 
     try:
         detected = detect_backend_runtime_entry(project_dir, port=8000)
@@ -2392,7 +2400,7 @@ def _auto_run_backend_after_idea_local(project_dir: Path) -> str:
         return "\n".join(lines)
 
     result = run_backend_local_with_health(project_path)
-    update_after_deploy(project_path, result, action="telegram /idea_local auto-run backend")
+    update_runtime_state(project_path, result, action="telegram /idea_local auto-run backend")
     backend_status = "RUNNING" if str(result.get("status") or "").upper() == "SUCCESS" else "FAIL"
     lines = ["Backend auto-run", "", "Backend:", backend_status]
     backend_url = str(result.get("url") or "").strip()
@@ -3238,15 +3246,33 @@ async def command_inspect(update: Any, context: Any) -> None:
         f"- entrypoint: {entrypoint_label}",
     ]
 
-    backend_url = str(state.get("backend_deploy_url") or state.get("backend_url") or "").strip()
-    frontend_url = str(state.get("frontend_deploy_url") or state.get("frontend_url") or "").strip()
-    backend_status = str(state.get("backend_smoke_status") or state.get("backend_status") or "").strip().upper()
-    frontend_status = str(state.get("frontend_smoke_status") or state.get("frontend_status") or "").strip().upper()
-    backend_pid = state.get("backend_pid")
-    frontend_pid = state.get("frontend_pid")
-    backend_entry = str(state.get("backend_entry") or "").strip()
-    backend_run_mode = str(state.get("backend_run_mode") or "").strip()
-    runtime_failure_class = str(state.get("runtime_failure_class") or "").strip()
+    deploy_block = state.get("deploy") if isinstance(state.get("deploy"), dict) else {}
+    runtime_block = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
+    backend_url = str(
+        (runtime_block.get("backend_url") if isinstance(runtime_block, dict) else "")
+        or state.get("backend_deploy_url")
+        or ""
+    ).strip()
+    frontend_url = str(
+        (deploy_block.get("frontend_url") if isinstance(deploy_block, dict) else "")
+        or state.get("frontend_deploy_url")
+        or ""
+    ).strip()
+    backend_status = str(
+        (runtime_block.get("backend_status") if isinstance(runtime_block, dict) else "")
+        or state.get("backend_smoke_status")
+        or ""
+    ).strip().upper()
+    frontend_status = str(
+        (deploy_block.get("frontend_status") if isinstance(deploy_block, dict) else "")
+        or state.get("frontend_smoke_status")
+        or ""
+    ).strip().upper()
+    backend_pid = (runtime_block.get("backend_pid") if isinstance(runtime_block, dict) else None) or state.get("backend_pid")
+    frontend_pid = (runtime_block.get("frontend_pid") if isinstance(runtime_block, dict) else None) or state.get("frontend_pid")
+    backend_entry = str((runtime_block.get("backend_entry") if isinstance(runtime_block, dict) else "") or "").strip()
+    backend_run_mode = str((runtime_block.get("backend_run_mode") if isinstance(runtime_block, dict) else "") or "").strip()
+    runtime_failure_class = str((runtime_block.get("failure_class") if isinstance(runtime_block, dict) else "") or "").strip()
     last_failure_class = str(state.get("last_failure_class") or "").strip()
     api_base_url = _read_frontend_api_base_url(project_path)
 
@@ -3281,8 +3307,18 @@ async def command_inspect(update: Any, context: Any) -> None:
         if backend_run_mode:
             lines.append(f"Backend Run Mode: {backend_run_mode}")
 
-    deploy_target = str(state.get("deploy_target") or state.get("auto_deploy_target") or "").strip()
-    deploy_status = str(state.get("last_deploy_status") or state.get("auto_deploy_status") or "").strip().upper()
+    deploy_target = str(
+        (deploy_block.get("target") if isinstance(deploy_block, dict) else "")
+        or state.get("deploy_target")
+        or state.get("auto_deploy_target")
+        or ""
+    ).strip()
+    deploy_status = str(
+        (deploy_block.get("status") if isinstance(deploy_block, dict) else "")
+        or state.get("last_deploy_status")
+        or state.get("auto_deploy_status")
+        or ""
+    ).strip().upper()
     if deploy_target or deploy_status:
         lines += ["", "Deploy:"]
         if deploy_target:
@@ -3353,13 +3389,23 @@ def _build_selected_project_summary(project_path: Path) -> str:
     nested_backend_main = project_path / "backend" / "app" / "main.py"
     has_backend = bool(root_backend_main.exists() or nested_backend_main.exists())
     has_frontend = (project_path / "frontend").is_dir()
+    deploy_block = state.get("deploy") if isinstance(state.get("deploy"), dict) else {}
+    runtime_block = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
     runtime_backend = ""
     runtime_frontend = ""
-    backend_url = str(state.get("backend_deploy_url") or "").strip()
-    frontend_url = str(state.get("frontend_deploy_url") or "").strip()
-    backend_entry = str(state.get("backend_entry") or "").strip()
-    backend_run_mode = str(state.get("backend_run_mode") or "").strip()
-    runtime_failure_class = str(state.get("runtime_failure_class") or "").strip()
+    backend_url = str(
+        (runtime_block.get("backend_url") if isinstance(runtime_block, dict) else "")
+        or state.get("backend_deploy_url")
+        or ""
+    ).strip()
+    frontend_url = str(
+        (deploy_block.get("frontend_url") if isinstance(deploy_block, dict) else "")
+        or state.get("frontend_deploy_url")
+        or ""
+    ).strip()
+    backend_entry = str((runtime_block.get("backend_entry") if isinstance(runtime_block, dict) else "") or "").strip()
+    backend_run_mode = str((runtime_block.get("backend_run_mode") if isinstance(runtime_block, dict) else "") or "").strip()
+    runtime_failure_class = str((runtime_block.get("failure_class") if isinstance(runtime_block, dict) else "") or "").strip()
     last_failure_class = str(state.get("last_failure_class") or "").strip()
     api_base_url = _read_frontend_api_base_url(project_path)
     try:
@@ -3375,9 +3421,11 @@ def _build_selected_project_summary(project_path: Path) -> str:
             runtime_frontend = "RUNNING" if str(frontend.get("status") or "").strip().upper() == "RUNNING" else "STOPPED"
             frontend_url = str(frontend.get("url") or frontend_url).strip()
     except Exception:
-        if state.get("backend_pid") is not None:
+        backend_pid = (runtime_block.get("backend_pid") if isinstance(runtime_block, dict) else None) or state.get("backend_pid")
+        frontend_pid = (runtime_block.get("frontend_pid") if isinstance(runtime_block, dict) else None) or state.get("frontend_pid")
+        if backend_pid is not None:
             runtime_backend = "RUNNING"
-        if state.get("frontend_pid") is not None:
+        if frontend_pid is not None:
             runtime_frontend = "RUNNING"
 
     if runtime_backend or runtime_frontend:
@@ -3407,8 +3455,18 @@ def _build_selected_project_summary(project_path: Path) -> str:
         if backend_run_mode:
             lines.append(f"Backend Run Mode: {backend_run_mode}")
 
-    deploy_target = str(state.get("deploy_target") or state.get("auto_deploy_target") or "").strip()
-    deploy_status = str(state.get("last_deploy_status") or state.get("auto_deploy_status") or "").strip().upper()
+    deploy_target = str(
+        (deploy_block.get("target") if isinstance(deploy_block, dict) else "")
+        or state.get("deploy_target")
+        or state.get("auto_deploy_target")
+        or ""
+    ).strip()
+    deploy_status = str(
+        (deploy_block.get("status") if isinstance(deploy_block, dict) else "")
+        or state.get("last_deploy_status")
+        or state.get("auto_deploy_status")
+        or ""
+    ).strip().upper()
     if deploy_target or deploy_status:
         lines += ["", "Deploy:"]
         if deploy_target:
@@ -4576,7 +4634,7 @@ async def command_run(update: Any, context: Any) -> None:
         return
 
     result = run_backend_local_with_health(project_path)
-    update_after_deploy(project_path, result, action="telegram /run backend")
+    update_runtime_state(project_path, result, action="telegram /run backend")
 
     backend_entry = str(result.get("backend_entry") or "").strip()
     backend_run_mode = str(result.get("backend_run_mode") or "").strip()

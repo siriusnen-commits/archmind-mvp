@@ -146,6 +146,53 @@ def _safe_pid(value: Any) -> Optional[int]:
     return pid if pid > 0 else None
 
 
+def _default_deploy_state() -> dict[str, Any]:
+    return {
+        "target": "",
+        "mode": "",
+        "kind": "",
+        "status": "",
+        "url": "",
+        "detail": "",
+        "backend_url": "",
+        "backend_status": "",
+        "backend_detail": "",
+        "frontend_url": "",
+        "frontend_status": "",
+        "frontend_detail": "",
+        "backend_smoke_url": "",
+        "backend_smoke_status": "",
+        "backend_smoke_detail": "",
+        "frontend_smoke_url": "",
+        "frontend_smoke_status": "",
+        "frontend_smoke_detail": "",
+        "healthcheck_url": "",
+        "healthcheck_status": "",
+        "healthcheck_detail": "",
+        "failure_class": "",
+    }
+
+
+def _default_runtime_state() -> dict[str, Any]:
+    return {
+        "mode": "",
+        "backend_status": "",
+        "backend_port": None,
+        "backend_pid": None,
+        "backend_log_path": "",
+        "backend_entry": "",
+        "backend_run_mode": "",
+        "backend_run_cwd": "",
+        "backend_run_command": "",
+        "backend_url": "",
+        "failure_class": "",
+        "detail": "",
+        "healthcheck_url": "",
+        "healthcheck_status": "",
+        "healthcheck_detail": "",
+    }
+
+
 def _is_fix_action(action: str) -> bool:
     normalized = (action or "").strip().lower()
     if not normalized:
@@ -250,6 +297,61 @@ def _normalize_loaded_state(project_dir: Path, payload: dict[str, Any]) -> dict[
     base = _default_state(project_dir)
     normalized = dict(base)
     normalized.update(payload)
+    deploy_block = normalized.get("deploy")
+    if not isinstance(deploy_block, dict):
+        deploy_block = {}
+    runtime_block = normalized.get("runtime")
+    if not isinstance(runtime_block, dict):
+        runtime_block = {}
+
+    deploy_defaults = _default_deploy_state()
+    deploy_defaults.update(deploy_block)
+    deploy_defaults["target"] = str(deploy_defaults.get("target") or normalized.get("deploy_target") or "").strip()[:40]
+    deploy_defaults["mode"] = str(deploy_defaults.get("mode") or normalized.get("deploy_mode") or "").strip()[:20]
+    deploy_defaults["kind"] = str(deploy_defaults.get("kind") or normalized.get("deploy_kind") or "").strip()[:20]
+    deploy_defaults["status"] = _safe_optional_status(str(deploy_defaults.get("status") or normalized.get("last_deploy_status") or ""))
+    deploy_defaults["url"] = str(deploy_defaults.get("url") or normalized.get("deploy_url") or "").strip()[:300]
+    deploy_defaults["detail"] = str(deploy_defaults.get("detail") or normalized.get("last_deploy_detail") or "").strip()[:220]
+    deploy_defaults["backend_url"] = str(deploy_defaults.get("backend_url") or normalized.get("backend_deploy_url") or "").strip()[:300]
+    deploy_defaults["backend_status"] = _safe_service_deploy_status(str(deploy_defaults.get("backend_status") or normalized.get("backend_deploy_status") or ""))
+    deploy_defaults["backend_detail"] = str(deploy_defaults.get("backend_detail") or normalized.get("backend_deploy_detail") or "").strip()[:220]
+    deploy_defaults["frontend_url"] = str(deploy_defaults.get("frontend_url") or normalized.get("frontend_deploy_url") or "").strip()[:300]
+    deploy_defaults["frontend_status"] = _safe_service_deploy_status(str(deploy_defaults.get("frontend_status") or normalized.get("frontend_deploy_status") or ""))
+    deploy_defaults["frontend_detail"] = str(deploy_defaults.get("frontend_detail") or normalized.get("frontend_deploy_detail") or "").strip()[:220]
+    deploy_defaults["backend_smoke_url"] = str(deploy_defaults.get("backend_smoke_url") or normalized.get("backend_smoke_url") or "").strip()[:300]
+    deploy_defaults["backend_smoke_status"] = _safe_service_deploy_status(str(deploy_defaults.get("backend_smoke_status") or normalized.get("backend_smoke_status") or ""))
+    deploy_defaults["backend_smoke_detail"] = str(deploy_defaults.get("backend_smoke_detail") or normalized.get("backend_smoke_detail") or "").strip()[:220]
+    deploy_defaults["frontend_smoke_url"] = str(deploy_defaults.get("frontend_smoke_url") or normalized.get("frontend_smoke_url") or "").strip()[:300]
+    deploy_defaults["frontend_smoke_status"] = _safe_service_deploy_status(str(deploy_defaults.get("frontend_smoke_status") or normalized.get("frontend_smoke_status") or ""))
+    deploy_defaults["frontend_smoke_detail"] = str(deploy_defaults.get("frontend_smoke_detail") or normalized.get("frontend_smoke_detail") or "").strip()[:220]
+    deploy_defaults["healthcheck_url"] = str(deploy_defaults.get("healthcheck_url") or normalized.get("healthcheck_url") or "").strip()[:300]
+    deploy_defaults["healthcheck_status"] = _safe_healthcheck_status(str(deploy_defaults.get("healthcheck_status") or normalized.get("healthcheck_status") or ""))
+    deploy_defaults["healthcheck_detail"] = str(deploy_defaults.get("healthcheck_detail") or normalized.get("healthcheck_detail") or "").strip()[:220]
+    deploy_defaults["failure_class"] = str(deploy_defaults.get("failure_class") or "").strip()[:80]
+    normalized["deploy"] = deploy_defaults
+
+    runtime_defaults = _default_runtime_state()
+    runtime_defaults.update(runtime_block)
+    runtime_defaults["mode"] = str(runtime_defaults.get("mode") or "local").strip()[:20]
+    runtime_defaults["backend_status"] = str(runtime_defaults.get("backend_status") or normalized.get("backend_status") or "").strip().upper()[:20]
+    runtime_defaults["backend_port"] = _safe_pid(runtime_defaults.get("backend_port") or normalized.get("backend_port"))
+    runtime_defaults["backend_pid"] = _safe_pid(runtime_defaults.get("backend_pid") or normalized.get("backend_pid"))
+    runtime_defaults["backend_log_path"] = str(runtime_defaults.get("backend_log_path") or normalized.get("backend_log_path") or "").strip()[:300]
+    runtime_defaults["backend_entry"] = str(runtime_defaults.get("backend_entry") or normalized.get("backend_entry") or "").strip()[:120]
+    runtime_defaults["backend_run_mode"] = str(runtime_defaults.get("backend_run_mode") or normalized.get("backend_run_mode") or "").strip()[:40]
+    runtime_defaults["backend_run_cwd"] = str(runtime_defaults.get("backend_run_cwd") or normalized.get("backend_run_cwd") or "").strip()[:300]
+    runtime_defaults["backend_run_command"] = str(runtime_defaults.get("backend_run_command") or normalized.get("backend_run_command") or "").strip()[:300]
+    runtime_defaults["backend_url"] = str(runtime_defaults.get("backend_url") or normalized.get("backend_deploy_url") or normalized.get("deploy_url") or "").strip()[:300]
+    runtime_defaults["failure_class"] = str(
+        runtime_defaults.get("failure_class") or normalized.get("runtime_failure_class") or ""
+    ).strip()[:80]
+    runtime_defaults["detail"] = str(runtime_defaults.get("detail") or "").strip()[:220]
+    runtime_defaults["healthcheck_url"] = str(runtime_defaults.get("healthcheck_url") or normalized.get("healthcheck_url") or "").strip()[:300]
+    runtime_defaults["healthcheck_status"] = _safe_healthcheck_status(
+        str(runtime_defaults.get("healthcheck_status") or normalized.get("healthcheck_status") or "")
+    )
+    runtime_defaults["healthcheck_detail"] = str(runtime_defaults.get("healthcheck_detail") or normalized.get("healthcheck_detail") or "").strip()[:220]
+    normalized["runtime"] = runtime_defaults
     normalized["iterations"] = _safe_int(normalized.get("iterations"), 0)
     fix_attempts_raw = normalized.get("fix_attempts")
     fix_attempts = _safe_int(fix_attempts_raw, -1)
@@ -328,6 +430,8 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "auto_deploy_enabled": False,
         "auto_deploy_target": "",
         "auto_deploy_status": "",
+        "deploy": _default_deploy_state(),
+        "runtime": _default_runtime_state(),
         "deploy_target": "",
         "deploy_mode": "",
         "deploy_kind": "",
@@ -480,6 +584,90 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     payload["current_step_status"] = str(payload.get("current_step_status") or "").strip()[:20]
     payload["current_step_detail"] = str(payload.get("current_step_detail") or "").strip()[:220]
     payload["last_progress_at"] = str(payload.get("last_progress_at") or "").strip()[:40]
+
+    deploy_block = payload.get("deploy")
+    if not isinstance(deploy_block, dict):
+        deploy_block = {}
+    deploy = _default_deploy_state()
+    deploy.update(deploy_block)
+    deploy["target"] = str(deploy.get("target") or payload.get("deploy_target") or "").strip()[:40]
+    deploy["mode"] = str(deploy.get("mode") or payload.get("deploy_mode") or "").strip()[:20]
+    deploy["kind"] = str(deploy.get("kind") or payload.get("deploy_kind") or "").strip()[:20]
+    deploy["status"] = _safe_optional_status(str(deploy.get("status") or payload.get("last_deploy_status") or ""))
+    deploy["url"] = str(deploy.get("url") or payload.get("deploy_url") or "").strip()[:300]
+    deploy["detail"] = str(deploy.get("detail") or payload.get("last_deploy_detail") or "").strip()[:220]
+    deploy["backend_url"] = str(deploy.get("backend_url") or payload.get("backend_deploy_url") or "").strip()[:300]
+    deploy["backend_status"] = _safe_service_deploy_status(str(deploy.get("backend_status") or payload.get("backend_deploy_status") or ""))
+    deploy["backend_detail"] = str(deploy.get("backend_detail") or payload.get("backend_deploy_detail") or "").strip()[:220]
+    deploy["frontend_url"] = str(deploy.get("frontend_url") or payload.get("frontend_deploy_url") or "").strip()[:300]
+    deploy["frontend_status"] = _safe_service_deploy_status(str(deploy.get("frontend_status") or payload.get("frontend_deploy_status") or ""))
+    deploy["frontend_detail"] = str(deploy.get("frontend_detail") or payload.get("frontend_deploy_detail") or "").strip()[:220]
+    deploy["backend_smoke_url"] = str(deploy.get("backend_smoke_url") or payload.get("backend_smoke_url") or "").strip()[:300]
+    deploy["backend_smoke_status"] = _safe_service_deploy_status(str(deploy.get("backend_smoke_status") or payload.get("backend_smoke_status") or ""))
+    deploy["backend_smoke_detail"] = str(deploy.get("backend_smoke_detail") or payload.get("backend_smoke_detail") or "").strip()[:220]
+    deploy["frontend_smoke_url"] = str(deploy.get("frontend_smoke_url") or payload.get("frontend_smoke_url") or "").strip()[:300]
+    deploy["frontend_smoke_status"] = _safe_service_deploy_status(str(deploy.get("frontend_smoke_status") or payload.get("frontend_smoke_status") or ""))
+    deploy["frontend_smoke_detail"] = str(deploy.get("frontend_smoke_detail") or payload.get("frontend_smoke_detail") or "").strip()[:220]
+    deploy["healthcheck_url"] = str(deploy.get("healthcheck_url") or payload.get("healthcheck_url") or "").strip()[:300]
+    deploy["healthcheck_status"] = _safe_healthcheck_status(str(deploy.get("healthcheck_status") or payload.get("healthcheck_status") or ""))
+    deploy["healthcheck_detail"] = str(deploy.get("healthcheck_detail") or payload.get("healthcheck_detail") or "").strip()[:220]
+    deploy["failure_class"] = str(deploy.get("failure_class") or "").strip()[:80]
+    payload["deploy"] = deploy
+
+    runtime_block = payload.get("runtime")
+    if not isinstance(runtime_block, dict):
+        runtime_block = {}
+    runtime = _default_runtime_state()
+    runtime.update(runtime_block)
+    runtime["mode"] = str(runtime.get("mode") or "local").strip()[:20]
+    runtime["backend_status"] = str(runtime.get("backend_status") or payload.get("backend_status") or "").strip().upper()[:20]
+    runtime["backend_port"] = _safe_pid(runtime.get("backend_port") or payload.get("backend_port"))
+    runtime["backend_pid"] = _safe_pid(runtime.get("backend_pid") or payload.get("backend_pid"))
+    runtime["backend_log_path"] = str(runtime.get("backend_log_path") or payload.get("backend_log_path") or "").strip()[:300]
+    runtime["backend_entry"] = str(runtime.get("backend_entry") or payload.get("backend_entry") or "").strip()[:120]
+    runtime["backend_run_mode"] = str(runtime.get("backend_run_mode") or payload.get("backend_run_mode") or "").strip()[:40]
+    runtime["backend_run_cwd"] = str(runtime.get("backend_run_cwd") or payload.get("backend_run_cwd") or "").strip()[:300]
+    runtime["backend_run_command"] = str(runtime.get("backend_run_command") or payload.get("backend_run_command") or "").strip()[:300]
+    runtime["backend_url"] = str(runtime.get("backend_url") or payload.get("backend_deploy_url") or payload.get("deploy_url") or "").strip()[:300]
+    runtime["failure_class"] = str(runtime.get("failure_class") or payload.get("runtime_failure_class") or "").strip()[:80]
+    runtime["detail"] = str(runtime.get("detail") or "").strip()[:220]
+    runtime["healthcheck_url"] = str(runtime.get("healthcheck_url") or payload.get("healthcheck_url") or "").strip()[:300]
+    runtime["healthcheck_status"] = _safe_healthcheck_status(str(runtime.get("healthcheck_status") or payload.get("healthcheck_status") or ""))
+    runtime["healthcheck_detail"] = str(runtime.get("healthcheck_detail") or payload.get("healthcheck_detail") or "").strip()[:220]
+    payload["runtime"] = runtime
+
+    # Deprecated flat keys are kept synchronized for backward compatibility.
+    payload["deploy_target"] = deploy["target"]
+    payload["deploy_mode"] = deploy["mode"]
+    payload["deploy_kind"] = deploy["kind"]
+    payload["last_deploy_status"] = deploy["status"]
+    payload["deploy_url"] = deploy["url"]
+    payload["last_deploy_detail"] = deploy["detail"]
+    payload["backend_deploy_url"] = deploy["backend_url"]
+    payload["backend_deploy_status"] = deploy["backend_status"]
+    payload["backend_deploy_detail"] = deploy["backend_detail"]
+    payload["frontend_deploy_url"] = deploy["frontend_url"]
+    payload["frontend_deploy_status"] = deploy["frontend_status"]
+    payload["frontend_deploy_detail"] = deploy["frontend_detail"]
+    payload["backend_smoke_url"] = deploy["backend_smoke_url"]
+    payload["backend_smoke_status"] = deploy["backend_smoke_status"]
+    payload["backend_smoke_detail"] = deploy["backend_smoke_detail"]
+    payload["frontend_smoke_url"] = deploy["frontend_smoke_url"]
+    payload["frontend_smoke_status"] = deploy["frontend_smoke_status"]
+    payload["frontend_smoke_detail"] = deploy["frontend_smoke_detail"]
+    payload["healthcheck_url"] = deploy["healthcheck_url"]
+    payload["healthcheck_status"] = deploy["healthcheck_status"]
+    payload["healthcheck_detail"] = deploy["healthcheck_detail"]
+
+    payload["backend_pid"] = runtime["backend_pid"]
+    payload["backend_entry"] = runtime["backend_entry"]
+    payload["backend_run_mode"] = runtime["backend_run_mode"]
+    payload["backend_run_cwd"] = runtime["backend_run_cwd"]
+    payload["backend_run_command"] = runtime["backend_run_command"]
+    payload["backend_port"] = runtime["backend_port"]
+    payload["backend_log_path"] = runtime["backend_log_path"]
+    payload["backend_status"] = runtime["backend_status"]
+    payload["runtime_failure_class"] = runtime["failure_class"]
     history = payload.get("history")
     if not isinstance(history, list):
         payload["history"] = []
@@ -947,48 +1135,59 @@ def update_after_deploy(
     payload["frontend_smoke_url"] = frontend_smoke_url[:300]
     payload["frontend_smoke_status"] = frontend_smoke_status
     payload["frontend_smoke_detail"] = frontend_smoke_detail[:220]
-    payload["backend_pid"] = _safe_pid(result.get("backend_pid"))
-    payload["frontend_pid"] = _safe_pid(result.get("frontend_pid"))
-    payload["backend_entry"] = str(result.get("backend_entry") or payload.get("backend_entry") or "").strip()[:120]
-    payload["backend_run_mode"] = str(result.get("backend_run_mode") or payload.get("backend_run_mode") or "").strip()[:40]
-    payload["backend_run_cwd"] = str(result.get("run_cwd") or payload.get("backend_run_cwd") or "").strip()[:300]
-    payload["backend_run_command"] = str(result.get("run_command") or payload.get("backend_run_command") or "").strip()[:300]
-    payload["backend_port"] = _safe_pid(result.get("backend_port")) or _safe_pid(payload.get("backend_port"))
-    payload["backend_log_path"] = str(result.get("backend_log_path") or payload.get("backend_log_path") or "").strip()[:300]
-    if kind in {"backend", "fullstack"}:
-        next_backend_status = str(result.get("backend_status") or "").strip().upper()
-        if not next_backend_status:
-            if status == "SUCCESS":
-                next_backend_status = "RUNNING"
-            elif status == "FAIL":
-                next_backend_status = "FAIL"
-        payload["backend_status"] = next_backend_status[:20]
-    has_runtime_failure_class = "failure_class" in result
-    if has_runtime_failure_class:
-        payload["runtime_failure_class"] = str(result.get("failure_class") or "").strip()[:80]
-    elif kind in {"backend", "fullstack"} and status == "SUCCESS":
-        payload["runtime_failure_class"] = ""
-    else:
-        payload["runtime_failure_class"] = str(payload.get("runtime_failure_class") or "").strip()[:80]
+    deploy_block = payload.get("deploy")
+    if not isinstance(deploy_block, dict):
+        deploy_block = {}
+    deploy = _default_deploy_state()
+    deploy.update(deploy_block)
+    deploy["target"] = target[:40]
+    deploy["mode"] = mode[:20]
+    deploy["kind"] = kind[:20]
+    deploy["status"] = status
+    deploy["url"] = deploy_url[:300]
+    deploy["detail"] = detail[:220]
+    deploy["healthcheck_url"] = healthcheck_url[:300]
+    deploy["healthcheck_status"] = healthcheck_status
+    deploy["healthcheck_detail"] = healthcheck_detail[:220]
+    deploy["backend_smoke_url"] = backend_smoke_url[:300]
+    deploy["backend_smoke_status"] = backend_smoke_status
+    deploy["backend_smoke_detail"] = backend_smoke_detail[:220]
+    deploy["frontend_smoke_url"] = frontend_smoke_url[:300]
+    deploy["frontend_smoke_status"] = frontend_smoke_status
+    deploy["frontend_smoke_detail"] = frontend_smoke_detail[:220]
+    deploy["failure_class"] = str(result.get("failure_class") or "").strip()[:80]
+    payload["deploy"] = deploy
     backend = result.get("backend")
     if isinstance(backend, dict):
         payload["backend_deploy_url"] = str(backend.get("url") or "").strip()[:300]
         payload["backend_deploy_status"] = _safe_service_deploy_status(str(backend.get("status") or ""))
         payload["backend_deploy_detail"] = _sanitize_line(str(backend.get("detail") or ""), project_dir)[:220]
+        deploy["backend_url"] = payload["backend_deploy_url"]
+        deploy["backend_status"] = payload["backend_deploy_status"]
+        deploy["backend_detail"] = payload["backend_deploy_detail"]
     elif kind == "backend":
         payload["backend_deploy_url"] = deploy_url[:300]
         payload["backend_deploy_status"] = _safe_service_deploy_status(status or "SUCCESS")
         payload["backend_deploy_detail"] = detail[:220]
+        deploy["backend_url"] = payload["backend_deploy_url"]
+        deploy["backend_status"] = payload["backend_deploy_status"]
+        deploy["backend_detail"] = payload["backend_deploy_detail"]
 
     frontend = result.get("frontend")
     if isinstance(frontend, dict):
         payload["frontend_deploy_url"] = str(frontend.get("url") or "").strip()[:300]
         payload["frontend_deploy_status"] = _safe_service_deploy_status(str(frontend.get("status") or ""))
         payload["frontend_deploy_detail"] = _sanitize_line(str(frontend.get("detail") or ""), project_dir)[:220]
+        deploy["frontend_url"] = payload["frontend_deploy_url"]
+        deploy["frontend_status"] = payload["frontend_deploy_status"]
+        deploy["frontend_detail"] = payload["frontend_deploy_detail"]
     elif kind == "frontend":
         payload["frontend_deploy_url"] = deploy_url[:300]
         payload["frontend_deploy_status"] = _safe_service_deploy_status(status or "SUCCESS")
         payload["frontend_deploy_detail"] = detail[:220]
+        deploy["frontend_url"] = payload["frontend_deploy_url"]
+        deploy["frontend_status"] = payload["frontend_deploy_status"]
+        deploy["frontend_detail"] = payload["frontend_deploy_detail"]
 
     payload["last_action"] = _sanitize_line(action, project_dir)
 
@@ -1004,6 +1203,64 @@ def update_after_deploy(
             "current_task_title": _sanitize_line(_task_title(project_dir, payload.get("current_task_id")) or "", project_dir),
             "failure_signature": "",
             "failure_class": "",
+        },
+    )
+    write_state(project_dir, payload)
+    return payload
+
+
+def update_runtime_state(
+    project_dir: Path,
+    result: dict[str, Any],
+    *,
+    action: str = "archmind run backend",
+) -> dict[str, Any]:
+    project_dir = project_dir.expanduser().resolve()
+    payload = ensure_state(project_dir)
+
+    status = _safe_optional_status(str(result.get("status") or ""))
+    runtime_block = payload.get("runtime")
+    if not isinstance(runtime_block, dict):
+        runtime_block = {}
+    runtime = _default_runtime_state()
+    runtime.update(runtime_block)
+    runtime["mode"] = str(result.get("mode") or runtime.get("mode") or "local").strip()[:20]
+    runtime["backend_status"] = str(result.get("backend_status") or "").strip().upper()[:20]
+    if not runtime["backend_status"]:
+        runtime["backend_status"] = "RUNNING" if status == "SUCCESS" else ("FAIL" if status == "FAIL" else "")
+    runtime["backend_port"] = _safe_pid(result.get("backend_port")) or _safe_pid(runtime.get("backend_port"))
+    runtime["backend_pid"] = _safe_pid(result.get("backend_pid")) or _safe_pid(runtime.get("backend_pid"))
+    runtime["backend_log_path"] = str(result.get("backend_log_path") or runtime.get("backend_log_path") or "").strip()[:300]
+    runtime["backend_entry"] = str(result.get("backend_entry") or runtime.get("backend_entry") or "").strip()[:120]
+    runtime["backend_run_mode"] = str(result.get("backend_run_mode") or runtime.get("backend_run_mode") or "").strip()[:40]
+    runtime["backend_run_cwd"] = str(result.get("run_cwd") or runtime.get("backend_run_cwd") or "").strip()[:300]
+    runtime["backend_run_command"] = str(result.get("run_command") or runtime.get("backend_run_command") or "").strip()[:300]
+    runtime["backend_url"] = str(result.get("url") or runtime.get("backend_url") or "").strip()[:300]
+    runtime["failure_class"] = str(result.get("failure_class") or "").strip()[:80]
+    runtime["detail"] = _sanitize_line(str(result.get("detail") or runtime.get("detail") or ""), project_dir)[:220]
+    runtime["healthcheck_url"] = str(result.get("healthcheck_url") or result.get("backend_smoke_url") or runtime.get("healthcheck_url") or "").strip()[:300]
+    runtime["healthcheck_status"] = _safe_healthcheck_status(
+        str(result.get("healthcheck_status") or result.get("backend_smoke_status") or runtime.get("healthcheck_status") or "")
+    )
+    runtime["healthcheck_detail"] = _sanitize_line(
+        str(result.get("healthcheck_detail") or result.get("backend_smoke_detail") or runtime.get("healthcheck_detail") or ""),
+        project_dir,
+    )[:220]
+    payload["runtime"] = runtime
+    payload["last_action"] = _sanitize_line(action, project_dir)
+
+    _append_history(
+        payload,
+        {
+            "timestamp": _now(),
+            "action": _sanitize_line(action, project_dir),
+            "status": status or "UNKNOWN",
+            "agent_state": _safe_agent_state(str(payload.get("agent_state") or "UNKNOWN")),
+            "summary": _sanitize_line(f"runtime backend {runtime.get('backend_status') or status or 'UNKNOWN'}", project_dir)[:160],
+            "current_task_id": str(payload.get("current_task_id") or ""),
+            "current_task_title": _sanitize_line(_task_title(project_dir, payload.get("current_task_id")) or "", project_dir),
+            "failure_signature": "",
+            "failure_class": str(runtime.get("failure_class") or "")[:80],
         },
     )
     write_state(project_dir, payload)

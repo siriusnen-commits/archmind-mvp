@@ -13,7 +13,7 @@ from typing import Any
 from urllib import error, parse, request
 
 from archmind.backend_runtime import detect_backend_runtime_entry as detect_backend_runtime_entry_shared
-from archmind.state import ensure_state, load_state, update_after_deploy, write_state
+from archmind.state import ensure_state, load_state, update_after_deploy, update_runtime_state, write_state
 
 
 MOCK_RAILWAY_URL = "https://example.up.railway.app"
@@ -1207,14 +1207,22 @@ def is_pid_running(pid: int | None) -> bool:
 def get_local_runtime_status(project_dir: Path) -> dict[str, Any]:
     root = project_dir.expanduser().resolve()
     state = load_state(root) or {}
-    backend_pid = _to_pid(state.get("backend_pid"))
+    runtime = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
+    deploy = state.get("deploy") if isinstance(state.get("deploy"), dict) else {}
+    backend_pid = _to_pid(runtime.get("backend_pid") if isinstance(runtime, dict) else state.get("backend_pid"))
     frontend_pid = _to_pid(state.get("frontend_pid"))
     backend_running = is_pid_running(backend_pid)
     frontend_running = is_pid_running(frontend_pid)
-    deploy_target = str(state.get("deploy_target") or "").strip().lower()
-    backend_url = str(state.get("backend_deploy_url") or state.get("deploy_url") or "").strip()
-    frontend_url = str(state.get("frontend_deploy_url") or "").strip()
-    backend_state_status = str(state.get("backend_status") or "").strip().upper()
+    deploy_target = str((deploy.get("target") if isinstance(deploy, dict) else "") or state.get("deploy_target") or "").strip().lower()
+    backend_url = str(
+        (runtime.get("backend_url") if isinstance(runtime, dict) else "")
+        or (deploy.get("backend_url") if isinstance(deploy, dict) else "")
+        or state.get("backend_deploy_url")
+        or state.get("deploy_url")
+        or ""
+    ).strip()
+    frontend_url = str((deploy.get("frontend_url") if isinstance(deploy, dict) else "") or state.get("frontend_deploy_url") or "").strip()
+    backend_state_status = str((runtime.get("backend_status") if isinstance(runtime, dict) else "") or state.get("backend_status") or "").strip().upper()
     if backend_running:
         backend_status = "RUNNING"
     elif backend_state_status in {"FAIL", "WARNING"}:
@@ -1291,6 +1299,15 @@ def stop_local_services(project_dir: Path) -> dict[str, Any]:
 
     payload["backend_pid"] = None
     payload["frontend_pid"] = None
+    runtime_block = payload.get("runtime")
+    if not isinstance(runtime_block, dict):
+        runtime_block = {}
+    runtime_block["backend_pid"] = None
+    runtime_block["backend_status"] = "NOT RUNNING"
+    runtime_block["failure_class"] = ""
+    runtime_block["healthcheck_status"] = ""
+    runtime_block["healthcheck_detail"] = ""
+    payload["runtime"] = runtime_block
     write_state(root, payload)
 
     return {
@@ -1318,7 +1335,7 @@ def restart_local_services(project_dir: Path) -> dict[str, Any]:
     stop_result = stop_local_services(root)
     if not backend_was_running and not frontend_was_running:
         deploy_result = run_backend_local_with_health(root)
-        update_after_deploy(root, deploy_result, action="archmind restart --path <project>")
+        update_runtime_state(root, deploy_result, action="archmind restart --path <project>")
         backend_ok = str(deploy_result.get("status") or "").upper() == "SUCCESS"
         return {
             "ok": backend_ok,
@@ -1335,7 +1352,8 @@ def restart_local_services(project_dir: Path) -> dict[str, Any]:
 
     restart_kind = "fullstack" if (backend_was_running and frontend_was_running) else ("backend" if backend_was_running else "frontend")
     deploy_result = deploy_to_local(root, kind=restart_kind)
-    update_after_deploy(root, deploy_result, action="archmind restart --path <project>")
+    if restart_kind in {"backend", "fullstack"}:
+        update_runtime_state(root, deploy_result, action="archmind restart --path <project>")
 
     backend_status = "NOT RUNNING"
     backend_url = ""
