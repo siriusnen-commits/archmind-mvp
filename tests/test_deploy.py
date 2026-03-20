@@ -27,7 +27,7 @@ from archmind.deploy import (
     verify_frontend_smoke,
     verify_deploy_health,
 )
-from archmind.state import load_state, update_after_deploy, write_state
+from archmind.state import load_state, update_after_deploy, update_runtime_state, write_state
 from archmind.generator import validate_generated_project_structure
 
 
@@ -109,6 +109,11 @@ def test_update_after_deploy_persists_deploy_fields(tmp_path: Path) -> None:
     assert state.get("healthcheck_detail") == "health endpoint returned status ok"
     assert state.get("deploy_kind") == "backend"
     assert state.get("backend_deploy_status") == "SUCCESS"
+    deploy = state.get("deploy") if isinstance(state, dict) else {}
+    assert isinstance(deploy, dict)
+    assert deploy.get("target") == "railway"
+    assert deploy.get("status") == "SUCCESS"
+    assert deploy.get("backend_url") == "https://example.up.railway.app"
 
 
 def test_detect_deploy_kind_backend(tmp_path: Path) -> None:
@@ -692,7 +697,10 @@ def test_update_after_deploy_clears_runtime_failure_class_when_backend_succeeds(
     update_after_deploy(tmp_path, result, action="archmind deploy --path x --target local")
     state = load_state(tmp_path)
     assert state is not None
-    assert str(state.get("runtime_failure_class") or "") == ""
+    assert str(state.get("runtime_failure_class") or "") == "environment-python"
+    runtime = state.get("runtime") if isinstance(state, dict) else {}
+    assert isinstance(runtime, dict)
+    assert str(runtime.get("failure_class") or "") == "environment-python"
 
 
 def test_update_after_deploy_marks_generation_error_when_detection_fails(tmp_path: Path) -> None:
@@ -709,7 +717,55 @@ def test_update_after_deploy_marks_generation_error_when_detection_fails(tmp_pat
     update_after_deploy(tmp_path, result, action="archmind deploy --path x --target local")
     state = load_state(tmp_path)
     assert state is not None
-    assert str(state.get("runtime_failure_class") or "") == "generation-error"
+    deploy = state.get("deploy") if isinstance(state, dict) else {}
+    assert isinstance(deploy, dict)
+    assert str(deploy.get("failure_class") or "") == "generation-error"
+    runtime = state.get("runtime") if isinstance(state, dict) else {}
+    assert isinstance(runtime, dict)
+    assert str(runtime.get("failure_class") or "") == ""
+
+
+def test_update_runtime_state_updates_runtime_only(tmp_path: Path) -> None:
+    update_after_deploy(
+        tmp_path,
+        {
+            "target": "railway",
+            "mode": "mock",
+            "kind": "backend",
+            "status": "SUCCESS",
+            "url": "https://example.up.railway.app",
+            "detail": "mock deploy success",
+        },
+        action="archmind deploy --path x --target railway",
+    )
+    update_runtime_state(
+        tmp_path,
+        {
+            "mode": "local",
+            "status": "SUCCESS",
+            "backend_status": "RUNNING",
+            "backend_port": 9001,
+            "backend_pid": 19001,
+            "backend_log_path": str(tmp_path / ".archmind" / "backend.log"),
+            "backend_entry": "app.main:app",
+            "backend_run_mode": "asgi-direct",
+            "run_cwd": str(tmp_path),
+            "run_command": "uvicorn app.main:app --host 0.0.0.0 --port 9001",
+            "url": "http://127.0.0.1:9001",
+            "failure_class": "",
+        },
+        action="telegram /run backend",
+    )
+    state = load_state(tmp_path)
+    assert state is not None
+    deploy = state.get("deploy") if isinstance(state, dict) else {}
+    runtime = state.get("runtime") if isinstance(state, dict) else {}
+    assert isinstance(deploy, dict)
+    assert isinstance(runtime, dict)
+    assert deploy.get("target") == "railway"
+    assert runtime.get("mode") == "local"
+    assert runtime.get("backend_status") == "RUNNING"
+    assert int(runtime.get("backend_port") or 0) == 9001
 
 
 def test_local_fullstack_state_stores_smoke_fields(tmp_path: Path) -> None:
@@ -739,8 +795,9 @@ def test_local_fullstack_state_stores_smoke_fields(tmp_path: Path) -> None:
     assert state.get("deploy_mode") == "real"
     assert state.get("backend_smoke_status") == "SUCCESS"
     assert state.get("frontend_smoke_status") == "SUCCESS"
-    assert int(state.get("backend_pid") or 0) == 1001
-    assert int(state.get("frontend_pid") or 0) == 1002
+    runtime = state.get("runtime") if isinstance(state, dict) else {}
+    assert isinstance(runtime, dict)
+    assert runtime.get("backend_pid") in (None, 0)
 
 
 def test_frontend_real_deploy_returns_fail_when_railway_missing(monkeypatch, tmp_path: Path) -> None:

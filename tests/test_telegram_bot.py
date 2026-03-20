@@ -759,6 +759,33 @@ def test_read_recent_backend_logs_clears_stale_runtime_failure_class_when_detect
     assert "environment-python" not in msg_back
 
 
+def test_read_recent_backend_logs_prefers_runtime_block_not_deploy_block(tmp_path: Path) -> None:
+    project_dir = tmp_path / "proj_runtime_vs_deploy"
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "state.json").write_text(
+        json.dumps(
+            {
+                "deploy": {"target": "railway", "status": "SUCCESS", "backend_url": "https://api.example.up.railway.app"},
+                "runtime": {
+                    "mode": "local",
+                    "backend_status": "FAIL",
+                    "backend_entry": "app.main:app",
+                    "backend_run_mode": "asgi-direct",
+                    "backend_run_cwd": str(project_dir / "backend"),
+                    "backend_run_command": "uvicorn app.main:app --host 0.0.0.0 --port 8133",
+                    "failure_class": "runtime-execution-error",
+                    "detail": "runtime check failed",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    msg_back = read_recent_backend_logs(project_dir)
+    assert "Failure class: runtime-execution-error" in msg_back
+    assert "Last backend detail:" in msg_back
+    assert "runtime check failed" in msg_back
+
+
 def test_logs_command_without_last_project_shows_help(monkeypatch) -> None:
     monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: None)
     msg = DummyMessage()
