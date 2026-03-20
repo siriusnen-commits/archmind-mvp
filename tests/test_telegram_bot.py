@@ -2169,56 +2169,81 @@ def test_help_mentions_command_groups() -> None:
     asyncio.run(command_help(update, ctx))
     assert msg.sent
     out = msg.sent[-1]
-    assert "ArchMind commands" in out
-    assert "PROJECT CREATION" in out
-    assert "PROJECT EVOLUTION" in out
-    assert "PROJECT MANAGEMENT" in out
-    assert "PIPELINE CONTROL" in out
-    assert "LOCAL RUNTIME" in out
-    assert "DEPLOY" in out
-    assert "CODE" in out
-    assert "INSPECTION" in out
-    assert "CLEANUP" in out
-    assert "/idea <idea>" in out
+    assert "ArchMind quick actions" in out
+    assert "Create" in out
+    assert "Current project" in out
+    assert "Runtime" in out
+    assert "More help" in out
     assert "/idea_local <idea>" in out
-    assert "/pipeline <idea>" in out
-    assert "/preview <idea>" in out
-    assert "/suggest <idea>" in out
     assert "/design <idea>" in out
     assert "/plan <idea>" in out
-    assert "/add_entity <name>" in out
-    assert "/add_field <E> <f:t>" in out
-    assert "/add_api <M> <path>" in out
-    assert "/add_page <path>" in out
-    assert "/apply_suggestion" in out
+    assert "/inspect" in out
     assert "/next" in out
-    assert "/projects" in out
-    assert "/help" in out
-    assert "/use <n>" in out
-    assert "/current" in out
-    assert "/status" in out
-    assert "/state" in out
-    assert "/continue" in out
-    assert "/fix" in out
-    assert "/retry" in out
+    assert "/improve" in out
+    assert "/run backend" in out
     assert "/running" in out
-    assert "/logs" in out
+    assert "/restart" in out
+    assert "/stop" in out
+    assert "/stop all" in out
+    assert "/help runtime" in out
+    assert "/help all" in out
+    assert "Example workflow" in out
+    assert "/design defect tracker" in out
+    assert "/idea_local defect tracker" in out
+    assert msg.sent_kwargs
+    reply_markup = msg.sent_kwargs[-1].get("reply_markup")
+    assert reply_markup is not None
+    buttons = [btn for row in getattr(reply_markup, "inline_keyboard", []) for btn in row]
+    callback_values = [str(getattr(btn, "callback_data", "")) for btn in buttons]
+    assert any(value == "help|create" for value in callback_values)
+    assert any(value == "help|runtime" for value in callback_values)
+    assert any(value == "help|project" for value in callback_values)
+    assert any(value == "help|deploy" for value in callback_values)
+    assert any(value == "help|all" for value in callback_values)
+
+
+def test_help_runtime_section_text_and_buttons() -> None:
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_help(update, DummyContext(args=["runtime"])))
+    out = msg.sent[-1]
+    assert "Help: runtime" in out
+    assert "/run backend" in out
+    assert "/running" in out
     assert "/restart" in out
     assert "/stop" in out
     assert "/stop all" in out
     assert "stop all local services" in out
-    assert "/deploy local" in out
-    assert "/tree" in out
-    assert "/open <file>" in out
-    assert "/diff" in out
-    assert "/inspect" in out
-    assert "/apply_plan" in out
-    assert "/delete_project" in out
-    assert "Example workflow" in out
-    assert "/design defect tracker" in out
-    assert "/idea_local defect tracker" in out
-    assert "/inspect" in out
-    assert "/next" in out
+    reply_markup = msg.sent_kwargs[-1].get("reply_markup")
+    assert reply_markup is not None
+    buttons = [btn for row in getattr(reply_markup, "inline_keyboard", []) for btn in row]
+    callback_values = [str(getattr(btn, "callback_data", "")) for btn in buttons]
+    assert any(value == "cmd|/stop all" for value in callback_values)
+    assert any(value == "help|quick" for value in callback_values)
+
+
+def test_help_callback_renders_runtime_section(monkeypatch) -> None:
+    msg = DummyMessage()
+    query = DummyCallbackQuery(data="help|runtime", message=msg)
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    update.callback_query = query  # type: ignore[attr-defined]
+    asyncio.run(command_suggestion_callback(update, DummyContext()))
+    assert query.answered is True
+    assert msg.sent
+    out = msg.sent[-1]
+    assert "Help: runtime" in out
+    assert "/stop all" in out
+
+
+def test_help_all_keeps_full_command_list() -> None:
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_help(update, DummyContext(args=["all"])))
+    out = msg.sent[-1]
+    assert "ArchMind commands" in out
+    assert "PROJECT CREATION" in out
+    assert "LOCAL RUNTIME" in out
+    assert "/stop all" in out
 
 
 def test_preview_command_outputs_brain_reasoning_fields() -> None:
