@@ -20,49 +20,56 @@ jobs:
         run: python -m pip install --upgrade pip
       - name: Install
         run: python -m pip install -e ".[dev]"
-      - name: Test
+      - name: Preflight
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo "GITHUB_WORKSPACE=${GITHUB_WORKSPACE}"
+          pwd
+          ls -la
+          ls -la "${GITHUB_WORKSPACE}"
+      - name: Create diagnostics dir
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "${GITHUB_WORKSPACE}/.ci-logs"
+          echo "created" > "${GITHUB_WORKSPACE}/.ci-logs/_created.txt"
+          ls -la "${GITHUB_WORKSPACE}/.ci-logs"
+      - name: Python diagnostics
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python --version | tee "${GITHUB_WORKSPACE}/.ci-logs/env.txt"
+          which python | tee -a "${GITHUB_WORKSPACE}/.ci-logs/env.txt"
+          git status --short | tee "${GITHUB_WORKSPACE}/.ci-logs/git-status.txt" || true
+          python -m pip list > "${GITHUB_WORKSPACE}/.ci-logs/pip-list.txt" 2>&1 || true
+          ls -la tests | tee "${GITHUB_WORKSPACE}/.ci-logs/tests-ls.txt" || true
+          ls -la src | tee "${GITHUB_WORKSPACE}/.ci-logs/src-ls.txt" || true
+      - name: Run pytest
         shell: bash
         run: |
           set -uo pipefail
-          # Keep diagnostics under workspace so later steps (artifact upload) use the same absolute base path.
-          LOG_DIR="${GITHUB_WORKSPACE}/.ci-logs"
-          mkdir -p "${LOG_DIR}"
-
-          echo "GITHUB_WORKSPACE=${GITHUB_WORKSPACE}" | tee "${LOG_DIR}/env.txt"
-          pwd | tee -a "${LOG_DIR}/env.txt"
-          ls -la "${GITHUB_WORKSPACE}" | tee "${LOG_DIR}/workspace-ls.txt" || true
-
-          echo "pwd=$(pwd)" | tee -a "${LOG_DIR}/env.txt"
-          python --version | tee -a "${LOG_DIR}/env.txt"
-          which python | tee -a "${LOG_DIR}/env.txt"
-          ls -la | tee "${LOG_DIR}/root-ls.txt" || true
-          ls -la src | tee "${LOG_DIR}/src-ls.txt" || true
-          ls -la tests | tee "${LOG_DIR}/tests-ls.txt" || true
-          git status --short | tee "${LOG_DIR}/git-status.txt" || true
-          python -m pip list > "${LOG_DIR}/pip-list.txt" 2>&1 || true
-
-          echo "starting pytest"
-          python -m pytest -vv -rA --maxfail=1 2>&1 | tee "${LOG_DIR}/pytest.log"
+          echo "starting pytest" | tee "${GITHUB_WORKSPACE}/.ci-logs/result.txt"
+          python -m pytest -vv -rA --maxfail=1 2>&1 | tee "${GITHUB_WORKSPACE}/.ci-logs/pytest.log"
           test_exit=${PIPESTATUS[0]}
-
-          echo "pytest_exit=${test_exit}" | tee "${LOG_DIR}/result.txt"
-
-          echo "===== LAST 200 LINES OF PYTEST LOG ====="
-          tail -n 200 "${LOG_DIR}/pytest.log" || true
-
+          echo "pytest_exit=${test_exit}" | tee -a "${GITHUB_WORKSPACE}/.ci-logs/result.txt"
+          tail -n 200 "${GITHUB_WORKSPACE}/.ci-logs/pytest.log" || true
           exit ${test_exit}
-      - name: Dump pytest log on failure
+      - name: Dump diagnostics on failure
         if: failure()
         shell: bash
         run: |
-          LOG_DIR="${GITHUB_WORKSPACE}/.ci-logs"
-          echo "===== DUMP PYTEST LOG ====="
-          cat "${LOG_DIR}/pytest.log" || true
-          echo "===== DUMP ENV ====="
-          cat "${LOG_DIR}/env.txt" || true
-          echo "===== DUMP RESULT ====="
-          cat "${LOG_DIR}/result.txt" || true
-      - name: Upload CI test logs artifact
+          echo "===== WORKSPACE ====="
+          echo "${GITHUB_WORKSPACE}"
+          echo "===== LOG DIR ====="
+          ls -la "${GITHUB_WORKSPACE}/.ci-logs" || true
+          echo "===== RESULT ====="
+          cat "${GITHUB_WORKSPACE}/.ci-logs/result.txt" || true
+          echo "===== PYTEST LOG ====="
+          cat "${GITHUB_WORKSPACE}/.ci-logs/pytest.log" || true
+          echo "===== ENV ====="
+          cat "${GITHUB_WORKSPACE}/.ci-logs/env.txt" || true
+      - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v6
         with:
