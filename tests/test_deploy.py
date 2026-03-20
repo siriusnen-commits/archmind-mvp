@@ -14,6 +14,7 @@ from archmind.deploy import (
     deploy_fullstack_local,
     deploy_project,
     deploy_to_local,
+    run_backend_local_with_health,
     detect_deploy_kind,
     generate_deploy_slug,
     get_frontend_deploy_dir,
@@ -296,6 +297,87 @@ def test_local_backend_deploy_classifies_entrypoint_error_from_stderr_tail(monke
     assert result["status"] == "FAIL"
     assert result["failure_class"] == "runtime-entrypoint-error"
     assert "Detected backend target: app.main:app" in str(result.get("detail") or "")
+
+
+def test_run_backend_local_with_health_success(monkeypatch, tmp_path: Path) -> None:
+    _write_app_main(tmp_path)
+
+    class DummyProc:
+        pid = 22001
+
+        def poll(self) -> int | None:
+            return None
+
+    monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 8122)
+    monkeypatch.setattr("archmind.deploy.time.sleep", lambda _s: None)
+    monkeypatch.setattr("archmind.deploy._run_local_process_with_log", lambda *a, **k: DummyProc())
+    monkeypatch.setattr(
+        "archmind.deploy._backend_smoke_with_retry",
+        lambda _url: {
+            "healthcheck_url": "http://127.0.0.1:8122/health",
+            "healthcheck_status": "SUCCESS",
+            "healthcheck_detail": "health endpoint returned status ok",
+        },
+    )
+    result = run_backend_local_with_health(tmp_path)
+    assert result["ok"] is True
+    assert result["status"] == "SUCCESS"
+    assert result["backend_status"] == "RUNNING"
+    assert result["failure_class"] == ""
+    assert result["backend_smoke_status"] == "SUCCESS"
+    assert result["backend_port"] == 8122
+    assert str(result.get("backend_log_path") or "").endswith("/.archmind/backend.log")
+
+
+def test_run_backend_local_with_health_fail_on_health_timeout(monkeypatch, tmp_path: Path) -> None:
+    _write_app_main(tmp_path)
+
+    class DummyProc:
+        pid = 22002
+
+        def poll(self) -> int | None:
+            return None
+
+    monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 8123)
+    monkeypatch.setattr("archmind.deploy.time.sleep", lambda _s: None)
+    monkeypatch.setattr("archmind.deploy._run_local_process_with_log", lambda *a, **k: DummyProc())
+    monkeypatch.setattr(
+        "archmind.deploy._backend_smoke_with_retry",
+        lambda _url: {
+            "healthcheck_url": "http://127.0.0.1:8123/health",
+            "healthcheck_status": "FAIL",
+            "healthcheck_detail": "health request failed: timed out",
+        },
+    )
+    monkeypatch.setattr("archmind.deploy.read_last_lines", lambda *_a, **_k: "uvicorn worker started")
+    result = run_backend_local_with_health(tmp_path)
+    assert result["ok"] is False
+    assert result["status"] == "FAIL"
+    assert result["failure_class"] == "runtime-execution-error"
+    assert result["backend_smoke_status"] == "FAIL"
+
+
+def test_run_backend_local_with_health_detect_failure_not_environment_python(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "archmind.deploy.deploy_backend_local",
+        lambda *_a, **_k: {
+            "status": "FAIL",
+            "url": None,
+            "detail": "generation-error: invalid project structure",
+            "failure_class": "generation-error",
+            "backend_entry": "",
+            "backend_run_mode": "",
+            "run_cwd": str(tmp_path),
+            "run_command": "",
+            "backend_port": 8124,
+            "backend_log_path": str(tmp_path / ".archmind" / "backend.log"),
+        },
+    )
+    result = run_backend_local_with_health(tmp_path)
+    assert result["ok"] is False
+    assert result["status"] == "FAIL"
+    assert result["failure_class"] == "generation-error"
+    assert result["failure_class"] != "environment-python"
 
 
 def test_local_frontend_deploy_returns_localhost_url(monkeypatch, tmp_path: Path) -> None:
@@ -886,15 +968,25 @@ def test_restart_local_services_when_not_running(monkeypatch, tmp_path: Path) ->
             "frontend": {"status": "NOT RUNNING"},
         },
     )
-    called = {"deploy": 0}
+    called = {"run": 0}
     monkeypatch.setattr("archmind.deploy.stop_local_services", lambda _p: {"ok": True})
+    monkeypatch.setattr("archmind.deploy.update_after_deploy", lambda *_a, **_k: {})
     monkeypatch.setattr(
-        "archmind.deploy.deploy_to_local",
-        lambda _p, kind="backend": called.__setitem__("deploy", called["deploy"] + 1) or {"ok": True},
+        "archmind.deploy.run_backend_local_with_health",
+        lambda _p, port=None: called.__setitem__("run", called["run"] + 1)
+        or {
+            "ok": True,
+            "target": "local",
+            "mode": "real",
+            "kind": "backend",
+            "status": "SUCCESS",
+            "url": "http://127.0.0.1:8125",
+            "detail": "local backend started",
+        },
     )
     result = restart_local_services(tmp_path)
-    assert called["deploy"] == 0
-    assert result["backend"]["status"] == "NOT RUNNING"
+    assert called["run"] == 1
+    assert result["backend"]["status"] == "RESTARTED"
     assert result["frontend"]["status"] == "NOT RUNNING"
 
 

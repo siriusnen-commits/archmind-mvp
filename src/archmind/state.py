@@ -352,6 +352,9 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "backend_run_mode": "",
         "backend_run_cwd": "",
         "backend_run_command": "",
+        "backend_port": None,
+        "backend_log_path": "",
+        "backend_status": "",
         "runtime_failure_class": "",
         "healthcheck_url": "",
         "healthcheck_status": "",
@@ -465,6 +468,9 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     payload["backend_run_mode"] = str(payload.get("backend_run_mode") or "").strip()[:40]
     payload["backend_run_cwd"] = str(payload.get("backend_run_cwd") or "").strip()[:300]
     payload["backend_run_command"] = str(payload.get("backend_run_command") or "").strip()[:300]
+    payload["backend_port"] = _safe_pid(payload.get("backend_port"))
+    payload["backend_log_path"] = str(payload.get("backend_log_path") or "").strip()[:300]
+    payload["backend_status"] = str(payload.get("backend_status") or "").strip().upper()[:20]
     payload["runtime_failure_class"] = str(payload.get("runtime_failure_class") or "").strip()[:80]
     payload["healthcheck_url"] = str(payload.get("healthcheck_url") or "").strip()[:300]
     payload["healthcheck_status"] = _safe_healthcheck_status(str(payload.get("healthcheck_status") or ""))
@@ -947,6 +953,16 @@ def update_after_deploy(
     payload["backend_run_mode"] = str(result.get("backend_run_mode") or payload.get("backend_run_mode") or "").strip()[:40]
     payload["backend_run_cwd"] = str(result.get("run_cwd") or payload.get("backend_run_cwd") or "").strip()[:300]
     payload["backend_run_command"] = str(result.get("run_command") or payload.get("backend_run_command") or "").strip()[:300]
+    payload["backend_port"] = _safe_pid(result.get("backend_port")) or _safe_pid(payload.get("backend_port"))
+    payload["backend_log_path"] = str(result.get("backend_log_path") or payload.get("backend_log_path") or "").strip()[:300]
+    if kind in {"backend", "fullstack"}:
+        next_backend_status = str(result.get("backend_status") or "").strip().upper()
+        if not next_backend_status:
+            if status == "SUCCESS":
+                next_backend_status = "RUNNING"
+            elif status == "FAIL":
+                next_backend_status = "FAIL"
+        payload["backend_status"] = next_backend_status[:20]
     has_runtime_failure_class = "failure_class" in result
     if has_runtime_failure_class:
         payload["runtime_failure_class"] = str(result.get("failure_class") or "").strip()[:80]

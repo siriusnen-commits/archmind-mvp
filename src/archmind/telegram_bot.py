@@ -77,6 +77,7 @@ PIPELINE CONTROL
 /retry                 fix + continue
 
 LOCAL RUNTIME
+/run backend           start backend locally
 /running               show running services
 /logs                  show logs
 /restart               restart services
@@ -4456,6 +4457,120 @@ async def command_deploy(update: Any, context: Any) -> None:
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 
 
+async def command_run(update: Any, context: Any) -> None:
+    running = _get_running_job()
+    if running is not None:
+        await update.message.reply_text(_busy_message(running))
+        return
+
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text("No project selected. Use /projects then /use <n>.")
+        return
+
+    args = [str(x).strip().lower() for x in getattr(context, "args", []) if str(x).strip()]
+    if len(args) != 1 or args[0] != "backend":
+        await update.message.reply_text("Usage: /run backend")
+        return
+
+    from archmind.deploy import get_local_runtime_status, run_backend_local_with_health
+
+    runtime = get_local_runtime_status(project_path)
+    backend_runtime = runtime.get("backend") if isinstance(runtime.get("backend"), dict) else {}
+    backend_running = str(backend_runtime.get("status") or "").upper() == "RUNNING"
+    if backend_running:
+        backend_url = str(backend_runtime.get("url") or "").strip()
+        lines = [
+            "Run skipped",
+            "",
+            "Project:",
+            project_path.name,
+            "",
+            "Backend:",
+            "RUNNING",
+        ]
+        if backend_url:
+            lines += ["", "Backend URL:", backend_url]
+        lines += ["", "Next:", "- /logs backend", "- /running", "- /restart"]
+        await update.message.reply_text(_truncate_message("\n".join(lines)))
+        return
+
+    result = run_backend_local_with_health(project_path)
+    update_after_deploy(project_path, result, action="telegram /run backend")
+
+    backend_entry = str(result.get("backend_entry") or "").strip()
+    backend_run_mode = str(result.get("backend_run_mode") or "").strip()
+    run_cwd = str(result.get("run_cwd") or "").strip()
+    run_command = str(result.get("run_command") or "").strip()
+    backend_url = str(result.get("url") or "").strip()
+    backend_smoke_status = str(result.get("backend_smoke_status") or result.get("healthcheck_status") or "").strip().upper()
+    backend_smoke_url = str(result.get("backend_smoke_url") or result.get("healthcheck_url") or "").strip()
+    backend_status = "RUNNING" if str(result.get("status") or "").upper() == "SUCCESS" else "FAIL"
+    if backend_status == "RUNNING":
+        lines = [
+            "Run finished",
+            "",
+            "Project:",
+            project_path.name,
+            "",
+            "Backend:",
+            backend_status,
+        ]
+        if backend_url:
+            lines += ["", "Backend URL:", backend_url]
+        if backend_smoke_status:
+            lines += ["", "Backend smoke:", backend_smoke_status]
+            if backend_smoke_url:
+                lines.append(backend_smoke_url)
+        lines += [
+            "",
+            "Detected backend target:",
+            backend_entry or "(none)",
+            "",
+            "Run mode:",
+            backend_run_mode or "(none)",
+            "",
+            "Next:",
+            "- /logs backend",
+            "- /running",
+            "- /restart",
+        ]
+        await update.message.reply_text(_truncate_message("\n".join(lines)))
+        return
+
+    failure_class = str(result.get("failure_class") or "runtime-execution-error").strip()
+    detail = str(result.get("detail") or "backend run failed").strip()
+    lines = [
+        "Run failed",
+        "",
+        "Project:",
+        project_path.name,
+        "",
+        "Backend:",
+        "FAIL",
+        "",
+        "Failure class:",
+        failure_class,
+        "",
+        "Detail:",
+        detail,
+        "",
+        "Detected backend target:",
+        backend_entry or "(none)",
+        "",
+        "Run cwd:",
+        run_cwd or str(project_path),
+        "",
+        "Run command:",
+        run_command or "(none)",
+        "",
+        "Next:",
+        "- /logs backend",
+        "- /inspect",
+    ]
+    await update.message.reply_text(_truncate_message("\n".join(lines)))
+
+
 async def command_stop(update: Any, context: Any) -> None:
     running = _get_running_job()
     if running is not None:
@@ -4722,6 +4837,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("state", command_state))
     app.add_handler(CommandHandler("status", command_status))
     app.add_handler(CommandHandler("deploy", command_deploy))
+    app.add_handler(CommandHandler("run", command_run))
     app.add_handler(CommandHandler("stop", command_stop))
     app.add_handler(CommandHandler("restart", command_restart))
     app.add_handler(CommandHandler("delete_project", command_delete_project))

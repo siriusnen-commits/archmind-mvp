@@ -27,6 +27,7 @@ from archmind.telegram_bot import (
     command_projects,
     command_status,
     command_deploy,
+    command_run,
     command_delete_project,
     command_restart,
     command_stop,
@@ -3833,6 +3834,14 @@ def test_help_topic_deploy() -> None:
     assert "/deploy railway" in out
 
 
+def test_help_text_includes_run_backend_command() -> None:
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_help(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "/run backend" in out
+
+
 def test_idea_local_starts_pipeline_with_auto_deploy_local(monkeypatch, tmp_path: Path) -> None:
     project_dir = tmp_path / "20260315_auto_local"
     log_path = tmp_path / "20260315_auto_local.telegram.log"
@@ -4140,6 +4149,136 @@ def test_deploy_local_target_parses_and_displays(monkeypatch, tmp_path: Path) ->
     assert "http://127.0.0.1:8011" in out
     assert "Frontend:\nSUCCESS" in out
     assert "http://127.0.0.1:3011" in out
+
+
+def test_run_backend_without_selected_project_shows_message(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: None)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_run(update, DummyContext(args=["backend"])))
+    assert msg.sent
+    assert msg.sent[-1] == "No project selected. Use /projects then /use <n>."
+
+
+def test_run_backend_usage_validation(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "run_usage_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_run(update, DummyContext(args=[])))
+    assert msg.sent[-1] == "Usage: /run backend"
+    asyncio.run(command_run(update, DummyContext(args=["frontend"])))
+    assert msg.sent[-1] == "Usage: /run backend"
+
+
+def test_run_backend_success_message_and_running_integration(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "run_backend_ok_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.run_backend_local_with_health",
+        lambda _p: {
+            "ok": True,
+            "target": "local",
+            "mode": "real",
+            "kind": "backend",
+            "status": "SUCCESS",
+            "url": "http://127.0.0.1:8126",
+            "detail": "local backend started",
+            "backend_entry": "app.main:app",
+            "backend_run_mode": "asgi-direct",
+            "run_cwd": str(project / "backend"),
+            "run_command": "uvicorn app.main:app --host 0.0.0.0 --port 8126",
+            "backend_smoke_url": "http://127.0.0.1:8126/health",
+            "backend_smoke_status": "SUCCESS",
+            "backend_smoke_detail": "health endpoint returned status ok",
+        },
+    )
+    monkeypatch.setattr("archmind.telegram_bot.update_after_deploy", lambda *a, **k: {})
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_run(update, DummyContext(args=["backend"])))
+    out = msg.sent[-1]
+    assert "Run finished" in out
+    assert "Backend:\nRUNNING" in out
+    assert "Backend URL:\nhttp://127.0.0.1:8126" in out
+    assert "Backend smoke:\nSUCCESS" in out
+    assert "http://127.0.0.1:8126/health" in out
+    assert "Detected backend target:\napp.main:app" in out
+    assert "Run mode:\nasgi-direct" in out
+    assert "Next:\n- /logs backend\n- /running\n- /restart" in out
+
+
+def test_run_backend_failure_message(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "run_backend_fail_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.run_backend_local_with_health",
+        lambda _p: {
+            "ok": False,
+            "target": "local",
+            "mode": "real",
+            "kind": "backend",
+            "status": "FAIL",
+            "url": "",
+            "detail": "runtime-execution-error: health request failed",
+            "failure_class": "runtime-execution-error",
+            "backend_entry": "app.main:app",
+            "run_cwd": str(project / "backend"),
+            "run_command": "uvicorn app.main:app --host 0.0.0.0 --port 8127",
+        },
+    )
+    monkeypatch.setattr("archmind.telegram_bot.update_after_deploy", lambda *a, **k: {})
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_run(update, DummyContext(args=["backend"])))
+    out = msg.sent[-1]
+    assert "Run failed" in out
+    assert "Backend:\nFAIL" in out
+    assert "Failure class:\nruntime-execution-error" in out
+    assert "Detected backend target:\napp.main:app" in out
+    assert "Run command:\nuvicorn app.main:app --host 0.0.0.0 --port 8127" in out
+    assert "Next:\n- /logs backend\n- /inspect" in out
+
+
+def test_run_backend_skips_when_already_running(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "run_backend_already_proj"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "RUNNING", "pid": 9999, "url": "http://127.0.0.1:8128"},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_run(update, DummyContext(args=["backend"])))
+    out = msg.sent[-1]
+    assert "Run skipped" in out
+    assert "Backend:\nRUNNING" in out
+    assert "Backend URL:\nhttp://127.0.0.1:8128" in out
 
 
 def test_stop_without_selected_project_shows_message(monkeypatch) -> None:
