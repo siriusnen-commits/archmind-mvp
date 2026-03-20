@@ -751,3 +751,94 @@ def test_pipeline_generation_failure_marks_repository_skipped(monkeypatch, tmp_p
     result_payload = json.loads((tmp_path / "repo_skipped_generation_fail" / ".archmind" / "result.json").read_text(encoding="utf-8"))
     repository = result_payload.get("repository") or {}
     assert repository.get("status") == "SKIPPED"
+
+
+def test_pipeline_final_status_done_when_detect_ok_and_no_failure(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project)
+    monkeypatch.setattr(
+        "archmind.pipeline.create_github_repo_with_status",
+        lambda _project_dir, enabled=True: {"status": "FAILED", "url": "", "name": "x", "reason": "gh auth missing", "attempted": True},
+    )
+    monkeypatch.setattr(
+        "archmind.pipeline.detect_backend_runtime_entry_shared",
+        lambda _project_dir, port=8000: {"ok": True, "backend_entry": "app.main:app"},
+    )
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "simple fastapi notes api",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "final_status_done",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+    result_payload = json.loads((tmp_path / "final_status_done" / ".archmind" / "result.json").read_text(encoding="utf-8"))
+    assert result_payload.get("final_status") == "DONE"
+
+
+def test_pipeline_final_status_not_done_when_detect_fails(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project)
+    monkeypatch.setattr(
+        "archmind.pipeline.create_github_repo_with_status",
+        lambda _project_dir, enabled=True: {"status": "CREATED", "url": "https://github.com/siriusnen-commits/detect_fail", "name": "detect_fail", "reason": "", "attempted": True},
+    )
+    monkeypatch.setattr(
+        "archmind.pipeline.detect_backend_runtime_entry_shared",
+        lambda _project_dir, port=8000: {"ok": False, "failure_class": "generation-error"},
+    )
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "simple fastapi notes api",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "final_status_not_done",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+    result_payload = json.loads((tmp_path / "final_status_not_done" / ".archmind" / "result.json").read_text(encoding="utf-8"))
+    assert result_payload.get("final_status") == "NOT_DONE"
+    repository = result_payload.get("repository") or {}
+    assert repository.get("status") == "CREATED"
+
+
+def test_pipeline_auto_deploy_skipped_only_does_not_make_not_done(monkeypatch, tmp_path: Path) -> None:
+    _write_backend_project(tmp_path)
+    monkeypatch.setattr(
+        "archmind.pipeline.detect_backend_runtime_entry_shared",
+        lambda _project_dir, port=8000: {"ok": True, "backend_entry": "app.main:app"},
+    )
+    exit_code = main(
+        [
+            "pipeline",
+            "--path",
+            str(tmp_path),
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+            "--auto-deploy",
+            "--deploy-target",
+            "railway",
+        ]
+    )
+    assert exit_code == 0
+    result_payload = json.loads((tmp_path / ".archmind" / "result.json").read_text(encoding="utf-8"))
+    assert result_payload.get("auto_deploy_status") == "SKIPPED"
+    assert result_payload.get("final_status") == "DONE"

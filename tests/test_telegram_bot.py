@@ -351,6 +351,12 @@ def test_build_completion_message_separates_auto_deploy_fail_from_done(tmp_path:
     project_dir = tmp_path / "auto_deploy_fail_done"
     archmind = project_dir / ".archmind"
     archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text(
+        "from fastapi import FastAPI\napp = FastAPI()\n",
+        encoding="utf-8",
+    )
+    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
     (archmind / "evaluation.json").write_text(json.dumps({"status": "DONE"}), encoding="utf-8")
     (archmind / "result.json").write_text(json.dumps({"status": "SUCCESS"}), encoding="utf-8")
     (archmind / "state.json").write_text(
@@ -455,6 +461,36 @@ def test_build_completion_message_suppresses_stale_failure_when_detect_ok(tmp_pa
     )
     msg = build_completion_message(project_dir, tmp_path / "unused.log")
     assert "Failure class: environment-python" not in msg
+
+
+def test_build_completion_message_marks_done_and_avoids_retry_when_detect_ok_without_actionable_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_dir = tmp_path / "summary_no_retry"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "last_status": "NOT_DONE",
+                "fix_attempts": 2,
+                "runtime": {"backend_status": "RUNNING", "failure_class": ""},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "evaluation.json").write_text(json.dumps({"status": "NOT_DONE"}), encoding="utf-8")
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+    msg = build_completion_message(project_dir, tmp_path / "unused.log")
+    assert "Status: DONE" in msg
+    assert "run /retry" not in msg
+    assert "run /fix" not in msg
 
 
 def test_build_completion_message_includes_stuck_reason_and_next(tmp_path: Path) -> None:
@@ -1094,6 +1130,27 @@ def test_retry_done_status_is_blocked_with_message(monkeypatch, tmp_path: Path) 
     assert "Project already complete." in msg.sent[-1]
 
 
+def test_retry_is_blocked_when_evaluation_not_done_but_runtime_detect_is_clean(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "retry_clean_runtime"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (archmind / "state.json").write_text(json.dumps({"last_status": "NOT_DONE", "runtime": {"failure_class": ""}}), encoding="utf-8")
+    (archmind / "evaluation.json").write_text(json.dumps({"status": "NOT_DONE"}), encoding="utf-8")
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app"},
+    )
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_retry(update, DummyContext(application=None)))
+    assert msg.sent
+    assert "Project already complete." in msg.sent[-1]
+
+
 def test_retry_sets_retrying_state_on_start(monkeypatch, tmp_path: Path) -> None:
     project_dir = tmp_path / "retry_proj"
     project_dir.mkdir(parents=True, exist_ok=True)
@@ -1140,6 +1197,12 @@ def test_watch_retry_reads_latest_state_after_steps(monkeypatch, tmp_path: Path)
     project_dir = tmp_path / "retry_project"
     archmind = project_dir / ".archmind"
     archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text(
+        "from fastapi import FastAPI\napp = FastAPI()\n",
+        encoding="utf-8",
+    )
+    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
     temp_log = tmp_path / "retry.log"
 
     (archmind / "state.json").write_text(
