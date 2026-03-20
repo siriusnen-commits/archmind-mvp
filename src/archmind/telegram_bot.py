@@ -1060,23 +1060,60 @@ def _entity_endpoint_set(entity_name: str) -> list[str]:
     ]
 
 
+def _normalize_api_path(value: str) -> str:
+    path = str(value or "").strip()
+    if not path:
+        return ""
+    if not path.startswith("/"):
+        path = "/" + path
+    path = re.sub(r"/{2,}", "/", path)
+    if " " in path:
+        return ""
+    return path
+
+
+def _normalize_api_endpoint(method: str, path: str) -> tuple[str, str, str]:
+    normalized_method = str(method or "").strip().upper()
+    normalized_path = _normalize_api_path(path)
+    if normalized_method not in set(SUPPORTED_API_METHODS):
+        return "", "", ""
+    if not normalized_path:
+        return "", "", ""
+    return normalized_method, normalized_path, f"{normalized_method} {normalized_path}"
+
+
+def _normalize_api_endpoint_text(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    parts = text.split(maxsplit=1)
+    if len(parts) != 2:
+        return ""
+    _, _, endpoint = _normalize_api_endpoint(parts[0], parts[1])
+    return endpoint
+
+
 def _rebuild_api_endpoints(spec: dict[str, Any]) -> list[str]:
     endpoints: list[str] = []
     seen: set[str] = set()
     existing = spec.get("api_endpoints")
     if isinstance(existing, list):
         for item in existing:
-            endpoint = str(item).strip()
-            if not endpoint or endpoint in seen:
+            endpoint = _normalize_api_endpoint_text(str(item))
+            if not endpoint:
                 continue
-            seen.add(endpoint)
+            key = endpoint.upper()
+            if key in seen:
+                continue
+            seen.add(key)
             endpoints.append(endpoint)
     for entity in _normalize_entities(spec.get("entities")):
         name = str(entity.get("name") or "").strip()
         for endpoint in _entity_endpoint_set(name):
-            if endpoint in seen:
+            key = endpoint.upper()
+            if key in seen:
                 continue
-            seen.add(endpoint)
+            seen.add(key)
             endpoints.append(endpoint)
     spec["api_endpoints"] = endpoints
     return endpoints
@@ -1091,23 +1128,35 @@ def _entity_frontend_pages(entity_name: str) -> list[str]:
     return [f"{plural}/list", f"{plural}/detail"]
 
 
+def _normalize_frontend_page_path(value: str) -> str:
+    page = str(value or "").strip().replace("\\", "/")
+    page = re.sub(r"/{2,}", "/", page).strip("/")
+    if not page or " " in page:
+        return ""
+    return page
+
+
 def _rebuild_frontend_pages(spec: dict[str, Any]) -> list[str]:
     pages: list[str] = []
     seen: set[str] = set()
     existing = spec.get("frontend_pages")
     if isinstance(existing, list):
         for item in existing:
-            page = str(item).strip().strip("/")
-            if not page or " " in page or page in seen:
+            page = _normalize_frontend_page_path(str(item))
+            if not page:
                 continue
-            seen.add(page)
+            key = page.lower()
+            if key in seen:
+                continue
+            seen.add(key)
             pages.append(page)
     for entity in _normalize_entities(spec.get("entities")):
         name = str(entity.get("name") or "").strip()
         for page in _entity_frontend_pages(name):
-            if page in seen:
+            key = page.lower()
+            if key in seen:
                 continue
-            seen.add(page)
+            seen.add(key)
             pages.append(page)
     spec["frontend_pages"] = pages
     return pages
@@ -3871,8 +3920,8 @@ async def command_inspect(update: Any, context: Any) -> None:
     ]
     _append_truncated_bullets(lines, "Entities:", entities, limit=10, suffix_label="entities")
     lines += ["", "Entity Fields:"] + entity_tree_lines
-    _append_truncated_bullets(lines, "API:", api_endpoints, limit=10, suffix_label="endpoints")
-    _append_truncated_bullets(lines, "Frontend:", frontend_pages, limit=10, suffix_label="pages")
+    _append_truncated_bullets(lines, "APIs:", api_endpoints, limit=10, suffix_label="endpoints")
+    _append_truncated_bullets(lines, "Pages:", frontend_pages, limit=10, suffix_label="pages")
     if reason_summary:
         lines += ["", "Reasoning:", reason_summary]
     if structure:
@@ -4306,6 +4355,7 @@ def _build_improvement_report(project_path: Path) -> str:
     root = project_path.expanduser().resolve()
     archmind_dir = root / ".archmind"
     spec, _ = _read_or_init_project_spec(root)
+    raw_spec = _load_json(archmind_dir / "project_spec.json") or {}
     reasoning = _load_json(archmind_dir / "architecture_reasoning.json") or {}
     state_payload = load_state(root) or {}
     shape = str(spec.get("shape") or reasoning.get("app_shape") or state_payload.get("architecture_app_shape") or "unknown").strip().lower()
@@ -4535,6 +4585,27 @@ def _build_improvement_report(project_path: Path) -> str:
             }
         )
 
+    normalized_api_endpoints = [
+        endpoint
+        for endpoint in (_normalize_api_endpoint_text(str(x)) for x in (spec.get("api_endpoints") or []))
+        if endpoint
+    ]
+    normalized_frontend_pages = [
+        page
+        for page in (_normalize_frontend_page_path(str(x)) for x in (spec.get("frontend_pages") or []))
+        if page
+    ]
+    explicit_api_endpoints = [
+        endpoint
+        for endpoint in (_normalize_api_endpoint_text(str(x)) for x in (raw_spec.get("api_endpoints") or []))
+        if endpoint
+    ]
+    explicit_frontend_pages = [
+        page
+        for page in (_normalize_frontend_page_path(str(x)) for x in (raw_spec.get("frontend_pages") or []))
+        if page
+    ]
+
     # B-category: feature/model expansion suggestions
     if not entities_for_spec:
         evolution_suggestions.append(
@@ -4557,6 +4628,31 @@ def _build_improvement_report(project_path: Path) -> str:
                     "command": f"/add_field {empty_entity} title:string",
                 }
             )
+
+    api_endpoints_for_gap = explicit_api_endpoints if isinstance(raw_spec.get("api_endpoints"), list) else normalized_api_endpoints
+    if entities_for_spec and not api_endpoints_for_gap:
+        first_entity = str(entities_for_spec[0].get("name") or "").strip()
+        default_endpoint = next((ep for ep in _entity_endpoint_set(first_entity) if ep.startswith("GET ")), "GET /notes")
+        evolution_suggestions.append(
+            {
+                "title": "Add your first API endpoint",
+                "reason": "No API endpoints defined yet.",
+                "command": f"/add_api {default_endpoint}",
+            }
+        )
+
+    frontend_expected = bool(has_frontend or fullstack_expected or fullstack_intent or shape == "fullstack")
+    pages_for_gap = explicit_frontend_pages if isinstance(raw_spec.get("frontend_pages"), list) else normalized_frontend_pages
+    if frontend_expected and entities_for_spec and not pages_for_gap:
+        first_entity = str(entities_for_spec[0].get("name") or "").strip()
+        default_page = (_entity_frontend_pages(first_entity) or ["notes/list"])[0]
+        evolution_suggestions.append(
+            {
+                "title": "Add your first frontend page",
+                "reason": "No frontend pages defined yet.",
+                "command": f"/add_page {default_page}",
+            }
+        )
 
     next_commands = suggest_next_commands(
         {
@@ -4914,21 +5010,21 @@ async def command_add_api(update: Any, context: Any) -> None:
         await update.message.reply_text("Usage: /add_api <METHOD> <path>")
         return
 
-    method = args[0].upper()
-    path = args[1].strip()
-    if method not in set(SUPPORTED_API_METHODS):
+    raw_method = str(args[0]).upper().strip()
+    if raw_method not in set(SUPPORTED_API_METHODS):
         await update.message.reply_text(
-            "Unknown method: " + method + "\n\nAvailable methods:\n" + ", ".join(SUPPORTED_API_METHODS)
+            "Unknown method: " + raw_method + "\n\nAvailable methods:\n" + ", ".join(SUPPORTED_API_METHODS)
         )
         return
-    if not path.startswith("/") or " " in path:
+    method, path, endpoint = _normalize_api_endpoint(raw_method, args[1])
+    if not path:
         await update.message.reply_text("Invalid path. Use /add_api <METHOD> /path")
         return
 
-    endpoint = f"{method} {path}"
     spec, spec_path = _read_or_init_project_spec(project_path)
-    current = [str(x).strip() for x in (spec.get("api_endpoints") or []) if str(x).strip()]
-    if endpoint in current:
+    current = _rebuild_api_endpoints(spec)
+    current_keys = {str(item).upper() for item in current}
+    if endpoint.upper() in current_keys:
         await update.message.reply_text(
             "API already exists\n\n"
             "Project:\n"
@@ -4951,6 +5047,10 @@ async def command_add_api(update: Any, context: Any) -> None:
 
     auto_restart_lines, restart_failed = _auto_restart_backend_lines(project_path)
     next_lines = ["- /inspect", "- /restart"]
+    if method == "GET" and "{id}" not in path:
+        next_lines.insert(0, f"- /add_api POST {path}")
+    elif method == "POST" and "{id}" not in path:
+        next_lines.insert(0, f"- /add_api GET {path}")
     if restart_failed:
         next_lines.append("- /logs")
 
@@ -4977,14 +5077,15 @@ async def command_add_page(update: Any, context: Any) -> None:
     if not args:
         await update.message.reply_text("Usage: /add_page <path>")
         return
-    page_path = args[0].strip().strip("/")
-    if not page_path or " " in page_path:
+    page_path = _normalize_frontend_page_path(args[0])
+    if not page_path:
         await update.message.reply_text("Invalid page path. Use /add_page reports/list")
         return
 
     spec, spec_path = _read_or_init_project_spec(project_path)
-    current = [str(x).strip().strip("/") for x in (spec.get("frontend_pages") or []) if str(x).strip()]
-    if page_path in current:
+    current = _rebuild_frontend_pages(spec)
+    current_keys = {str(item).lower() for item in current}
+    if page_path.lower() in current_keys:
         await update.message.reply_text(
             "Page already exists\n\n"
             "Project:\n"
@@ -5020,7 +5121,12 @@ async def command_add_page(update: Any, context: Any) -> None:
         lines += ["", "Frontend scaffold:", "SKIPPED (no frontend structure)"]
     elif generated:
         lines += ["", "Generated:"] + [f"- {item}" for item in generated]
-    lines += ["", *auto_restart_lines, "", "Next:", "- /inspect", "- /restart"]
+    next_lines = ["- /inspect", "- /restart"]
+    if page_path.endswith("/list"):
+        next_lines.insert(0, f"- /add_page {page_path[:-5]}/detail")
+    elif page_path.endswith("/detail"):
+        next_lines.insert(0, f"- /add_page {page_path[:-7]}/list")
+    lines += ["", *auto_restart_lines, "", "Next:", *next_lines]
     if restart_failed:
         lines.append("- /logs")
     await update.message.reply_text("\n".join(lines))
