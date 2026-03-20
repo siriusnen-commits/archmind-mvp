@@ -25,6 +25,7 @@ from archmind.deploy import (
     list_running_local_projects,
     read_last_lines,
     restart_local_services,
+    stop_all_local_services,
     stop_local_services,
     verify_frontend_smoke,
     verify_deploy_health,
@@ -1100,6 +1101,7 @@ def test_stop_local_services_calls_kill_and_clears_pids(monkeypatch, tmp_path: P
         killed.append((pid, sig))
 
     monkeypatch.setattr("archmind.deploy.os.kill", fake_kill)
+    monkeypatch.setattr("archmind.deploy.is_pid_running", lambda _pid: False)
     result = stop_local_services(tmp_path)
     assert result["backend"]["status"] == "STOPPED"
     assert result["frontend"]["status"] == "STOPPED"
@@ -1109,6 +1111,9 @@ def test_stop_local_services_calls_kill_and_clears_pids(monkeypatch, tmp_path: P
     assert state is not None
     assert state.get("backend_pid") is None
     assert state.get("frontend_pid") is None
+    runtime = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
+    assert runtime.get("backend_status") == "STOPPED"
+    assert runtime.get("frontend_status") == "STOPPED"
 
 
 def test_stop_local_services_handles_missing_pids(tmp_path: Path) -> None:
@@ -1120,6 +1125,75 @@ def test_stop_local_services_handles_missing_pids(tmp_path: Path) -> None:
     assert state is not None
     assert state.get("backend_pid") is None
     assert state.get("frontend_pid") is None
+    runtime = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
+    assert runtime.get("backend_status") == "NOT RUNNING"
+    assert runtime.get("frontend_status") == "NOT RUNNING"
+
+
+def test_stop_all_local_services_stops_every_running_project(monkeypatch, tmp_path: Path) -> None:
+    proj_a = tmp_path / "project_a"
+    proj_b = tmp_path / "project_b"
+    proj_a.mkdir(parents=True, exist_ok=True)
+    proj_b.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        "archmind.deploy.list_running_local_projects",
+        lambda _root: [
+            {"project_dir": proj_a, "project_name": "project_a"},
+            {"project_dir": proj_b, "project_name": "project_b"},
+        ],
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.stop_local_services",
+        lambda p: {
+            "ok": True,
+            "backend": {"status": "STOPPED", "pid": 1111 if p == proj_a else 2222, "detail": ""},
+            "frontend": {"status": "STOPPED", "pid": None if p == proj_a else 2223, "detail": ""},
+        },
+    )
+
+    result = stop_all_local_services(tmp_path)
+    counts = result.get("counts") if isinstance(result.get("counts"), dict) else {}
+    assert result["ok"] is True
+    assert counts.get("projects") == 2
+    assert counts.get("stopped") == 2
+    assert counts.get("already_stopped") == 0
+    assert counts.get("failed") == 0
+
+
+def test_stop_all_local_services_tracks_already_stopped_and_failed(monkeypatch, tmp_path: Path) -> None:
+    proj_a = tmp_path / "project_a"
+    proj_b = tmp_path / "project_b"
+    proj_c = tmp_path / "project_c"
+    for p in (proj_a, proj_b, proj_c):
+        p.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        "archmind.deploy.list_running_local_projects",
+        lambda _root: [
+            {"project_dir": proj_a, "project_name": "project_a"},
+            {"project_dir": proj_b, "project_name": "project_b"},
+            {"project_dir": proj_c, "project_name": "project_c"},
+        ],
+    )
+
+    def fake_stop(project_dir: Path) -> dict[str, object]:
+        if project_dir == proj_a:
+            return {"ok": True, "backend": {"status": "STOPPED", "pid": 1001, "detail": ""}, "frontend": {"status": "NOT RUNNING", "pid": None, "detail": ""}}
+        if project_dir == proj_b:
+            return {"ok": True, "backend": {"status": "NOT RUNNING", "pid": None, "detail": ""}, "frontend": {"status": "NOT RUNNING", "pid": None, "detail": ""}}
+        return {
+            "ok": False,
+            "backend": {"status": "WARNING", "pid": 3001, "detail": "permission denied"},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "detail": ""},
+        }
+
+    monkeypatch.setattr("archmind.deploy.stop_local_services", fake_stop)
+    result = stop_all_local_services(tmp_path)
+    counts = result.get("counts") if isinstance(result.get("counts"), dict) else {}
+    assert result["ok"] is False
+    assert counts.get("projects") == 3
+    assert counts.get("stopped") == 1
+    assert counts.get("already_stopped") == 1
+    assert counts.get("failed") == 1
 
 
 def test_restart_local_services_calls_stop_then_deploy(monkeypatch, tmp_path: Path) -> None:

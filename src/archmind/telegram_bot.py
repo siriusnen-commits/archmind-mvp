@@ -5267,14 +5267,68 @@ async def command_stop(update: Any, context: Any) -> None:
         await update.message.reply_text(_busy_message(running))
         return
 
+    args = [str(x).strip().lower() for x in getattr(context, "args", []) if str(x).strip()]
+    if args and args[0] not in ("local", "all"):
+        await update.message.reply_text("Usage: /stop or /stop local or /stop all")
+        return
+
+    if args and args[0] == "all":
+        from archmind.deploy import stop_all_local_services
+
+        projects_root = resolve_projects_dir()
+        result = stop_all_local_services(projects_root)
+        counts = result.get("counts") if isinstance(result.get("counts"), dict) else {}
+        stopped = result.get("stopped") if isinstance(result.get("stopped"), list) else []
+        already_stopped = result.get("already_stopped") if isinstance(result.get("already_stopped"), list) else []
+        failed = result.get("failed") if isinstance(result.get("failed"), list) else []
+        lines = [
+            "All services stop finished",
+            "",
+            "Details:",
+            f"- stopped: {int(counts.get('stopped') or 0)}",
+            f"- already stopped: {int(counts.get('already_stopped') or 0)}",
+            f"- failed: {int(counts.get('failed') or 0)}",
+        ]
+        if stopped:
+            lines += ["", "Stopped:"]
+            for item in stopped[:10]:
+                if not isinstance(item, dict):
+                    continue
+                project_name = str(item.get("project_name") or "").strip() or "(unknown)"
+                service_parts: list[str] = []
+                backend_status = str(item.get("backend_status") or "").strip().upper()
+                frontend_status = str(item.get("frontend_status") or "").strip().upper()
+                backend_pid = item.get("backend_pid")
+                frontend_pid = item.get("frontend_pid")
+                if backend_status == "STOPPED":
+                    service_parts.append(f"backend (pid {backend_pid})" if backend_pid else "backend")
+                if frontend_status == "STOPPED":
+                    service_parts.append(f"frontend (pid {frontend_pid})" if frontend_pid else "frontend")
+                detail = ", ".join(service_parts) if service_parts else "services"
+                lines.append(f"- {project_name}: {detail}")
+        if already_stopped:
+            lines += ["", "Already stopped:"]
+            for item in already_stopped[:10]:
+                if not isinstance(item, dict):
+                    continue
+                project_name = str(item.get("project_name") or "").strip() or "(unknown)"
+                lines.append(f"- {project_name}")
+        if failed:
+            lines += ["", "Failed:"]
+            for item in failed[:10]:
+                if not isinstance(item, dict):
+                    continue
+                project_name = str(item.get("project_name") or "").strip() or "(unknown)"
+                backend_detail = str(item.get("backend_detail") or "").strip()
+                frontend_detail = str(item.get("frontend_detail") or "").strip()
+                detail = backend_detail or frontend_detail or "unknown error"
+                lines.append(f"- {project_name}: {detail}")
+        await update.message.reply_text(_truncate_message("\n".join(lines)))
+        return
+
     project_path = _resolve_target_project()
     if project_path is None:
         await update.message.reply_text("No project selected. Use /projects then /use <n>.")
-        return
-
-    args = [str(x).strip().lower() for x in getattr(context, "args", []) if str(x).strip()]
-    if args and args[0] not in ("local",):
-        await update.message.reply_text("Usage: /stop or /stop local")
         return
 
     from archmind.deploy import stop_local_services

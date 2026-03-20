@@ -5252,6 +5252,34 @@ def test_stop_without_selected_project_shows_message(monkeypatch) -> None:
     assert msg.sent[-1] == "No project selected. Use /projects then /use <n>."
 
 
+def test_stop_all_does_not_require_selected_project(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: None)
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "archmind.deploy.stop_all_local_services",
+        lambda _root: {
+            "ok": True,
+            "counts": {"projects": 2, "stopped": 2, "already_stopped": 0, "failed": 0},
+            "stopped": [
+                {"project_name": "project_a", "backend_status": "STOPPED", "backend_pid": 1234, "frontend_status": "NOT RUNNING", "frontend_pid": None},
+                {"project_name": "project_b", "backend_status": "STOPPED", "backend_pid": 5678, "frontend_status": "STOPPED", "frontend_pid": 5679},
+            ],
+            "already_stopped": [],
+            "failed": [],
+        },
+    )
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_stop(update, DummyContext(args=["all"])))
+    out = msg.sent[-1]
+    assert "All services stop finished" in out
+    assert "- stopped: 2" in out
+    assert "- already stopped: 0" in out
+    assert "- failed: 0" in out
+    assert "- project_a: backend (pid 1234)" in out
+    assert "- project_b: backend (pid 5678), frontend (pid 5679)" in out
+
+
 def test_stop_local_stops_services_and_prints_status(monkeypatch, tmp_path: Path) -> None:
     project = tmp_path / "stop_local_proj"
     project.mkdir(parents=True, exist_ok=True)
@@ -5298,6 +5326,32 @@ def test_stop_local_when_not_running(monkeypatch, tmp_path: Path) -> None:
     out = msg.sent[-1]
     assert "Backend:\nNOT RUNNING" in out
     assert "Frontend:\nNOT RUNNING" in out
+
+
+def test_stop_all_includes_already_stopped_and_failed(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(tmp_path))
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: None)
+    monkeypatch.setattr(
+        "archmind.deploy.stop_all_local_services",
+        lambda _root: {
+            "ok": False,
+            "counts": {"projects": 3, "stopped": 1, "already_stopped": 1, "failed": 1},
+            "stopped": [{"project_name": "project_a", "backend_status": "STOPPED", "backend_pid": 1001, "frontend_status": "NOT RUNNING", "frontend_pid": None}],
+            "already_stopped": [{"project_name": "project_b"}],
+            "failed": [{"project_name": "project_c", "backend_detail": "permission denied", "frontend_detail": ""}],
+        },
+    )
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_stop(update, DummyContext(args=["all"])))
+    out = msg.sent[-1]
+    assert "- stopped: 1" in out
+    assert "- already stopped: 1" in out
+    assert "- failed: 1" in out
+    assert "Already stopped:" in out
+    assert "- project_b" in out
+    assert "Failed:" in out
+    assert "- project_c: permission denied" in out
 
 
 def test_restart_without_selected_project_shows_message(monkeypatch) -> None:
