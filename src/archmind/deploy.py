@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib import error, parse, request
 
-from archmind.backend_runtime import detect_backend_asgi_entry
+from archmind.backend_runtime import detect_backend_runtime_entry as detect_backend_runtime_entry_shared
 from archmind.state import ensure_state, load_state, update_after_deploy, write_state
 
 
@@ -476,62 +476,10 @@ def _run_local_process_with_log(cmd: list[str], *, cwd: Path, log_path: Path) ->
     return proc
 
 
-def _contains_launcher_target(main_file: Path, target: str = "app.main:app") -> bool:
-    if not main_file.exists() or not main_file.is_file():
-        return False
-    try:
-        text = main_file.read_text(encoding="utf-8", errors="replace")
-    except Exception:
-        return False
-    pattern = re.compile(rf"uvicorn\.run\(\s*['\"]{re.escape(target)}['\"]")
-    return bool(pattern.search(text))
-
-
 def detect_backend_runtime_entry(project_dir: Path, *, port: int) -> dict[str, Any]:
-    root = project_dir.expanduser().resolve()
-    launcher_main = root / "main.py"
-    launcher_mode = _contains_launcher_target(launcher_main, "app.main:app")
-    detected = detect_backend_asgi_entry(
-        root,
-        allowed_layouts=("fullstack", "flat"),
-        prefer_layout="fullstack",
-        port=port,
-    )
-    if bool(detected.get("ok")):
-        return {
-            "ok": True,
-            "failure_class": "",
-            "failure_reason": "",
-            "backend_entry": str(detected.get("backend_entry") or "app.main:app"),
-            "backend_run_mode": str(detected.get("backend_run_mode") or "asgi-direct"),
-            "run_cwd": detected.get("run_cwd") or root,
-            "run_command": [str(item) for item in (detected.get("run_command") or [])],
-            "launcher_mode_detected": launcher_mode,
-        }
-
-    if launcher_mode:
-        return {
-            "ok": True,
-            "failure_class": "",
-            "failure_reason": "",
-            "backend_entry": "app.main:app",
-            "backend_run_mode": "launcher-python",
-            "run_cwd": root,
-            "run_command": ["python", "main.py"],
-            "launcher_mode_detected": True,
-        }
-
-    reason = str(detected.get("failure_reason") or "backend entrypoint not found")
-    return {
-        "ok": False,
-        "failure_class": "generation-error",
-        "failure_reason": reason,
-        "backend_entry": "",
-        "backend_run_mode": "",
-        "run_cwd": root,
-        "run_command": [],
-        "launcher_mode_detected": False,
-    }
+    out = dict(detect_backend_runtime_entry_shared(project_dir, port=port))
+    out["launcher_mode_detected"] = str(out.get("backend_run_mode") or "").strip() == "launcher-python"
+    return out
 
 
 def _classify_backend_runtime_failure(detail: str) -> str:
@@ -554,8 +502,6 @@ def _classify_backend_runtime_failure(detail: str) -> str:
             "python: command not found",
             "python3: command not found",
             "no module named pip",
-            "virtualenv",
-            "venv",
         )
     ):
         return "environment-python"
@@ -767,6 +713,7 @@ def deploy_fullstack_local(project_dir: Path) -> dict[str, Any]:
         if frontend_ok
         else {"url": "", "status": "SKIPPED", "detail": "frontend deploy failed"}
     )
+    runtime_failure_class = str(backend.get("failure_class") or "").strip() if not backend_ok else ""
     return {
         "ok": backend_ok or frontend_ok,
         "target": "local",
@@ -777,7 +724,7 @@ def deploy_fullstack_local(project_dir: Path) -> dict[str, Any]:
         "detail": "local fullstack deploy completed",
         "backend": _service_result(str(backend.get("status") or "FAIL"), backend.get("url"), str(backend.get("detail") or "")),
         "frontend": _service_result(str(frontend.get("status") or "FAIL"), frontend.get("url"), str(frontend.get("detail") or "")),
-        "failure_class": str(backend.get("failure_class") or ""),
+        "failure_class": runtime_failure_class,
         "backend_entry": str(backend.get("backend_entry") or ""),
         "backend_run_mode": str(backend.get("backend_run_mode") or ""),
         "run_cwd": str(backend.get("run_cwd") or ""),
@@ -841,6 +788,7 @@ def deploy_to_local(project_dir: Path, kind: str = "backend") -> dict[str, Any]:
         frontend_port = int(match.group(1))
     backend = deploy_backend_local(root, frontend_port=frontend_port)
     ok = str(backend.get("status") or "").upper() == "SUCCESS"
+    runtime_failure_class = str(backend.get("failure_class") or "").strip() if not ok else ""
     backend_smoke = (
         _backend_smoke_with_retry(str(backend.get("url") or ""))
         if ok
@@ -854,7 +802,7 @@ def deploy_to_local(project_dir: Path, kind: str = "backend") -> dict[str, Any]:
         "status": "SUCCESS" if ok else "FAIL",
         "url": backend.get("url"),
         "detail": str(backend.get("detail") or ""),
-        "failure_class": str(backend.get("failure_class") or ""),
+        "failure_class": runtime_failure_class,
         "backend_entry": str(backend.get("backend_entry") or ""),
         "backend_run_mode": str(backend.get("backend_run_mode") or ""),
         "run_cwd": str(backend.get("run_cwd") or ""),

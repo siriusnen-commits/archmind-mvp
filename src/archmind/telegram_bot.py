@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from archmind.brain import reason_architecture_from_idea
+from archmind.backend_runtime import detect_backend_runtime_entry
 from archmind.decision import decide_next_action, next_action_suggestions
 from archmind.failure import classify_failure
 from archmind.generator import (
@@ -1808,13 +1809,28 @@ def _backend_runtime_diagnostics_lines(project_dir: Path) -> list[str]:
     backend_detail = str(state.get("backend_deploy_detail") or state.get("last_deploy_detail") or "").strip()
     backend_log_path = project_dir / ".archmind" / "backend.log"
 
+    try:
+        detected = detect_backend_runtime_entry(project_dir, port=8000)
+    except Exception:
+        detected = {"ok": False}
+
+    if bool(detected.get("ok")):
+        backend_entry = str(detected.get("backend_entry") or backend_entry or "").strip()
+        backend_run_mode = str(detected.get("backend_run_mode") or backend_run_mode or "").strip()
+        backend_run_cwd = str(detected.get("run_cwd") or backend_run_cwd or "").strip()
+        cmd_items = [str(item) for item in (detected.get("run_command") or [])]
+        backend_run_command = " ".join(cmd_items).strip() or backend_run_command
+        runtime_failure_class = ""
+    elif (not backend_entry or not backend_run_mode or not backend_run_command) and not runtime_failure_class:
+        runtime_failure_class = str(detected.get("failure_class") or "generation-error").strip()
+
     lines = [
         "Backend runtime diagnostics:",
-        f"- Detected backend target: {backend_entry or '(unknown)'}",
-        f"- Backend run mode: {backend_run_mode or '(unknown)'}",
+        f"- Detected backend target: {backend_entry or '(none)'}",
+        f"- Backend run mode: {backend_run_mode or '(none)'}",
         f"- Run cwd: {backend_run_cwd or str(project_dir)}",
-        f"- Run command: {backend_run_command or '(unknown)'}",
-        f"- Failure class: {runtime_failure_class or '(unknown)'}",
+        f"- Run command: {backend_run_command or '(none)'}",
+        f"- Failure class: {runtime_failure_class or '(none)'}",
         f"- Log path: {backend_log_path}",
     ]
     if backend_detail:
