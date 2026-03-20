@@ -2,125 +2,27 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
-
-permissions:
-  contents: write
+    tags:
+      - "v*"
 
 jobs:
-  build:
+  release-validation:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-      # Node 20 deprecation 대응: node24-compatible action versions
       - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      - name: Show Python version
+        run: python --version
       - name: Install
         run: python -m pip install -e ".[dev]"
-      - name: Test
-        run: python -m pytest -q -rA
-      - name: Build
-        run: python -m build
-      - name: Build wheelhouse
+      - name: Run tests
+        run: python -m pytest -q
+      - name: Show release info
         run: |
-          mkdir -p wheelhouse
-          cp dist/archmind-*.whl wheelhouse/
-          python - <<'PY'
-          import tomllib
-          from pathlib import Path
-
-          data = tomllib.loads(Path("pyproject.toml").read_text())
-          deps = data.get("project", {}).get("dependencies", [])
-          Path("requirements_runtime.txt").write_text("\n".join(deps) + "\n")
-          PY
-          python -m pip download -d wheelhouse -r requirements_runtime.txt
-          python - <<'PY'
-          import zipfile
-          from pathlib import Path
-
-          wheelhouse = Path("wheelhouse")
-          zip_path = Path("wheelhouse.zip")
-          with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for path in wheelhouse.rglob("*"):
-              if path.is_file():
-                rel = path.relative_to(wheelhouse)
-                zf.write(path, str(rel))
-          PY
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: dist
-          path: dist/*
-      - name: Upload wheelhouse
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheelhouse
-          path: wheelhouse.zip
-
-      - name: Generate release notes
-        run: |
-          set -euo pipefail
-          CUR_TAG="${GITHUB_REF_NAME}"
-          PREV_TAG=$(git tag --sort=-v:refname | grep '^v' | grep -v "^${CUR_TAG}$" | head -n 1 || true)
-
-          if [ -n "${PREV_TAG}" ]; then
-            RANGE="${PREV_TAG}..${CUR_TAG}"
-          else
-            RANGE="${CUR_TAG}"
-          fi
-
-          printf "# ArchMind %s\n\n" "${CUR_TAG}" > notes.md
-          printf "## Highlights\n" >> notes.md
-          HIGHLIGHTS=$(git log ${RANGE} --pretty=format:'- %s' | head -n 3)
-          if [ -n "${HIGHLIGHTS}" ]; then
-            printf -- "%s\n" "${HIGHLIGHTS}" >> notes.md
-          else
-            printf -- "- No changes recorded for this tag.\n" >> notes.md
-          fi
-          printf "\n\n## Changes\n" >> notes.md
-          CHANGES=$(git log ${RANGE} --pretty=format:'- %h %s' | head -n 200)
-          if [ -n "${CHANGES}" ]; then
-            printf -- "%s\n" "${CHANGES}" >> notes.md
-          else
-            printf -- "- No commits found in range.\n" >> notes.md
-          fi
-          printf "\n\n## Install\n" >> notes.md
-          printf -- "- pip install archmind==%s\n" "${CUR_TAG#v}" >> notes.md
-          printf -- "- Or download wheelhouse.zip and use offline_install_verify.sh\n" >> notes.md
-
-      - name: Create or update GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          TAG="${GITHUB_REF_NAME}"
-          TITLE="${TAG}"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" --title "$TITLE" --notes-file notes.md
-          else
-            gh release create "$TAG" --title "$TITLE" --notes-file notes.md
-          fi
-          if ls dist/* >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/* --clobber
-          else
-            echo "[WARN] dist/* not found; skipping dist upload."
-          fi
-          if [ -f wheelhouse.zip ]; then
-            gh release upload "$TAG" wheelhouse.zip --clobber
-          else
-            echo "[WARN] wheelhouse.zip not found; skipping wheelhouse upload."
-          fi
-
-      # PyPI publish (disabled by default)
-      # - name: Publish to PyPI
-      #   uses: pypa/gh-action-pypi-publish@release/v1
-      #   with:
-      #     # Set up Trusted Publisher or PYPI_API_TOKEN
-      #     # password: ${{ secrets.PYPI_API_TOKEN }}
-      #     skip-existing: true
+          echo "release validation workflow"
+          echo "tag=${GITHUB_REF_NAME}"
+          echo "ref=${GITHUB_REF}"
+          echo "sha=${GITHUB_SHA}"
