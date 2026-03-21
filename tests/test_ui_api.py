@@ -461,6 +461,58 @@ def test_ui_select_project_reuses_telegram_selection_helpers(monkeypatch, tmp_pa
     assert calls["last"] == project.resolve()
 
 
+def test_ui_add_entity_succeeds_and_returns_updated_spec(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "entity-project")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.post("/ui/projects/entity-project/entities", json={"entity_name": "task"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["project_name"] == "entity-project"
+    assert payload["entity_name"] == "Task"
+    assert payload["spec_summary"]["entities"] >= 2
+    assert any("add_entity Task" in str(item) for item in payload["recent_evolution"])
+
+    detail_response = client.get("/ui/projects/entity-project")
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.json()
+    assert detail_payload["spec_summary"]["entities"] >= 2
+    assert any("add_entity Task" in str(item) for item in detail_payload["recent_evolution"])
+
+
+def test_ui_add_entity_rejects_empty_name_safely(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "entity-empty")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.post("/ui/projects/entity-empty/entities", json={"entity_name": "   "})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["project_name"] == "entity-empty"
+    assert payload["entity_name"] == ""
+    assert "invalid entity name" in str(payload["detail"]).lower()
+
+
+def test_ui_add_entity_rejects_invalid_name_safely(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "entity-invalid")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.post("/ui/projects/entity-invalid/entities", json={"entity_name": "123-Task"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["project_name"] == "entity-invalid"
+    assert payload["entity_name"] == "123-Task"
+    assert "invalid entity name" in str(payload["detail"]).lower()
+
+
 def test_ui_display_name_falls_back_to_identifier(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     project_dir = projects_root / "safe-id"

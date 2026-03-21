@@ -7,6 +7,7 @@ from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
 from archmind.project_query import (
+    add_project_entity,
     build_project_detail,
     build_project_list_item,
     delete_project_all,
@@ -23,6 +24,8 @@ from archmind.project_query import (
 )
 from archmind.deploy import get_local_runtime_status
 from archmind.ui_models import (
+    AddEntityRequest,
+    AddEntityResponse,
     CurrentProjectResponse,
     DeleteActionResponse,
     ProjectListItem,
@@ -171,6 +174,39 @@ def post_ui_project_select(project_name: str) -> CurrentProjectResponse:
             project_name=project_name,
             is_current=False,
             detail="Failed to set current project",
+            error=str(exc),
+        )
+
+
+@router.post("/projects/{project_name}/entities", response_model=AddEntityResponse)
+def post_ui_project_add_entity(project_name: str, body: AddEntityRequest) -> AddEntityResponse:
+    try:
+        project_dir = find_project_by_name(project_name)
+        if project_dir is None:
+            return AddEntityResponse(
+                ok=False,
+                project_name=project_name,
+                entity_name=str(body.entity_name or ""),
+                detail="Project not found",
+                error="Project not found",
+            )
+        result = add_project_entity(project_dir, str(body.entity_name or ""))
+        return AddEntityResponse(
+            ok=bool(result.get("ok")),
+            project_name=str(result.get("project_name") or project_name),
+            entity_name=str(result.get("entity_name") or ""),
+            detail=str(result.get("detail") or ""),
+            error=str(result.get("error") or ""),
+            spec_summary=result.get("spec_summary") if isinstance(result.get("spec_summary"), dict) else {},
+            recent_evolution=[str(x) for x in (result.get("recent_evolution") or []) if str(x).strip()],
+        )
+    except Exception as exc:
+        logger.exception("Failed to add entity: %s", project_name)
+        return AddEntityResponse(
+            ok=False,
+            project_name=project_name,
+            entity_name=str(body.entity_name or ""),
+            detail="Failed to add entity",
             error=str(exc),
         )
 
