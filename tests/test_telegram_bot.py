@@ -99,6 +99,10 @@ def test_extract_idea_parsing() -> None:
     assert extract_idea([]) == ""
 
 
+def _mark_archmind_project(path: Path) -> None:
+    (path / ".archmind").mkdir(parents=True, exist_ok=True)
+
+
 def test_last_project_path_save_and_load(tmp_path: Path) -> None:
     path_file = tmp_path / "last_project"
     project_path = tmp_path / "demo_project"
@@ -112,6 +116,17 @@ def test_load_valid_last_project_path_rejects_stale_target_and_clears_file(tmp_p
     stale_project = tmp_path / "beta"
     # stale target intentionally does not exist
     save_last_project_path(stale_project, file_path=path_file)
+
+    loaded = load_valid_last_project_path(file_path=path_file)
+    assert loaded is None
+    assert not path_file.exists()
+
+
+def test_load_valid_last_project_path_rejects_non_archmind_directory(tmp_path: Path) -> None:
+    path_file = tmp_path / "last_project"
+    non_archmind = tmp_path / "beta"
+    non_archmind.mkdir(parents=True, exist_ok=True)
+    save_last_project_path(non_archmind, file_path=path_file)
 
     loaded = load_valid_last_project_path(file_path=path_file)
     assert loaded is None
@@ -745,6 +760,7 @@ def test_fix_command_sets_fixing_state(monkeypatch, tmp_path: Path) -> None:
     archmind_dir = project_dir / ".archmind"
     archmind_dir.mkdir(parents=True, exist_ok=True)
     (archmind_dir / "state.json").write_text("{}", encoding="utf-8")
+    _mark_archmind_project(project_dir)
     monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project_dir)
     captured_states: list[str] = []
 
@@ -1143,6 +1159,7 @@ def test_retry_without_last_project_shows_help(monkeypatch) -> None:
 def test_continue_started_message_contains_running_state(monkeypatch, tmp_path: Path) -> None:
     project_dir = tmp_path / "cont_proj"
     project_dir.mkdir(parents=True, exist_ok=True)
+    _mark_archmind_project(project_dir)
     monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project_dir)
     monkeypatch.setattr("archmind.telegram_bot.set_agent_state", lambda *a, **k: {})
 
@@ -1164,6 +1181,7 @@ def test_continue_started_message_contains_running_state(monkeypatch, tmp_path: 
 def test_busy_message_when_long_running_command_already_running(monkeypatch, tmp_path: Path) -> None:
     project_dir = tmp_path / "busy_proj"
     project_dir.mkdir(parents=True, exist_ok=True)
+    _mark_archmind_project(project_dir)
     monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project_dir)
     monkeypatch.setattr("archmind.telegram_bot.set_agent_state", lambda *a, **k: {})
 
@@ -1191,6 +1209,7 @@ def test_busy_message_when_long_running_command_already_running(monkeypatch, tmp
 def test_retry_done_status_is_blocked_with_message(monkeypatch, tmp_path: Path) -> None:
     project_dir = tmp_path / "done_proj"
     project_dir.mkdir(parents=True, exist_ok=True)
+    _mark_archmind_project(project_dir)
     monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project_dir)
     monkeypatch.setattr("archmind.telegram_bot._status_from_sources", lambda _p: "DONE")
     msg = DummyMessage()
@@ -1210,6 +1229,7 @@ def test_retry_is_blocked_when_evaluation_not_done_but_runtime_detect_is_clean(m
     (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
     (archmind / "state.json").write_text(json.dumps({"last_status": "NOT_DONE", "runtime": {"failure_class": ""}}), encoding="utf-8")
     (archmind / "evaluation.json").write_text(json.dumps({"status": "NOT_DONE"}), encoding="utf-8")
+    _mark_archmind_project(project_dir)
     monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project_dir)
     monkeypatch.setattr(
         "archmind.telegram_bot.detect_backend_runtime_entry",
@@ -1225,6 +1245,7 @@ def test_retry_is_blocked_when_evaluation_not_done_but_runtime_detect_is_clean(m
 def test_retry_sets_retrying_state_on_start(monkeypatch, tmp_path: Path) -> None:
     project_dir = tmp_path / "retry_proj"
     project_dir.mkdir(parents=True, exist_ok=True)
+    _mark_archmind_project(project_dir)
     monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project_dir)
     monkeypatch.setattr("archmind.telegram_bot._status_from_sources", lambda _p: "NOT_DONE")
     states: list[str] = []
@@ -1349,6 +1370,7 @@ def test_watch_retry_runs_fix_then_pipeline_order(monkeypatch, tmp_path: Path) -
 def test_state_command_forwards_state_summary(monkeypatch, tmp_path: Path) -> None:
     project_dir = tmp_path / "state_proj"
     project_dir.mkdir(parents=True, exist_ok=True)
+    _mark_archmind_project(project_dir)
     monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project_dir)
     state_text = "\n".join(
         [
@@ -1373,6 +1395,7 @@ def test_state_command_forwards_state_summary(monkeypatch, tmp_path: Path) -> No
 def test_state_command_shows_running_state_quickly(monkeypatch, tmp_path: Path) -> None:
     project_dir = tmp_path / "running_state_proj"
     project_dir.mkdir(parents=True, exist_ok=True)
+    _mark_archmind_project(project_dir)
     monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project_dir)
     monkeypatch.setattr("archmind.telegram_bot.set_agent_state", lambda *a, **k: {})
 
@@ -1401,6 +1424,7 @@ def test_status_command_returns_summary(monkeypatch, tmp_path: Path) -> None:
     project_dir = tmp_path / "status_proj"
     archmind = project_dir / ".archmind"
     archmind.mkdir(parents=True, exist_ok=True)
+    _mark_archmind_project(project_dir)
     monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project_dir)
     (archmind / "state.json").write_text(
         json.dumps(
@@ -1443,6 +1467,7 @@ def test_status_command_works_when_running(monkeypatch, tmp_path: Path) -> None:
     project_dir = tmp_path / "status_running"
     archmind = project_dir / ".archmind"
     archmind.mkdir(parents=True, exist_ok=True)
+    _mark_archmind_project(project_dir)
     monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project_dir)
     (archmind / "state.json").write_text(
         json.dumps({"agent_state": "IDLE", "iterations": 4, "fix_attempts": 2, "project_type": "backend-api", "effective_template": "fastapi"}),
@@ -1745,7 +1770,7 @@ def test_current_uses_persisted_selection_when_in_memory_current_is_missing(monk
         encoding="utf-8",
     )
     clear_current_project()
-    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project)
+    monkeypatch.setattr("archmind.telegram_bot.get_validated_current_project", lambda: project)
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
         lambda _p: {
@@ -1766,7 +1791,7 @@ def test_current_returns_no_selection_when_persisted_project_is_stale(monkeypatc
     stale_project = tmp_path / "beta"
     stale_project.mkdir(parents=True, exist_ok=True)
     clear_current_project()
-    monkeypatch.setattr("archmind.telegram_bot.load_valid_last_project_path", lambda: None)
+    monkeypatch.setattr("archmind.telegram_bot.get_validated_current_project", lambda: None)
 
     msg = DummyMessage()
     update = DummyUpdate(message=msg, effective_chat=DummyChat())
@@ -2159,6 +2184,7 @@ def test_tree_falls_back_to_last_project(monkeypatch, tmp_path: Path) -> None:
     project = tmp_path / "tree_last_proj"
     (project / "app").mkdir(parents=True, exist_ok=True)
     (project / "app" / "layout.tsx").write_text("export default function Layout(){}", encoding="utf-8")
+    _mark_archmind_project(project)
     monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project)
     msg = DummyMessage()
     update = DummyUpdate(message=msg, effective_chat=DummyChat())
@@ -6859,6 +6885,7 @@ def test_delete_project_local_clears_current_selection(monkeypatch, tmp_path: Pa
             "repo_detail": "",
         },
     )
+    _mark_archmind_project(project)
     monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project)
     monkeypatch.setattr("archmind.telegram_bot.LAST_PROJECT_PATH_FILE", tmp_path / "last_proj")
     (tmp_path / "last_proj").write_text(str(project), encoding="utf-8")
