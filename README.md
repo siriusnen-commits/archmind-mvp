@@ -1,55 +1,61 @@
-# ArchMind v0.8.0
+# ArchMind v0.9.0
 
-ArchMind is a spec-driven AI development workflow engine with multi-service local runtime orchestration.
+ArchMind is a spec-driven AI development workflow engine with multi-service local runtime orchestration and primitive-based project evolution.
 
-It now supports a practical loop from idea to runnable fullstack project:
+It now supports a practical loop from idea to runnable and evolvable fullstack project:
 `idea -> generation -> validation -> run -> inspect -> evolve`
 
-## Major Milestone in v0.8.0
+## Major Milestone in v0.9.0
 
 ArchMind now supports:
 
-- fullstack runtime orchestration
+- primitive-based project evolution with `/add_entity`, `/add_field`, `/add_api`, `/add_page`
+- progression-aware `/inspect`, `/next`, and `/improve`
+- Recent evolution visibility in `/inspect`
+- multi-service local runtime orchestration retained and stabilized
 - backend + frontend local execution
-- `/run all` for multi-service startup
-- `/restart`, `/stop`, `/stop all`
-- `/running` unified runtime view
-- `/logs backend` and `/logs frontend`
-- `runtime.services`-based runtime state model
-- consistent `RUNNING` / `STOPPED` / `FAIL` reporting
-- GitHub repository creation tracked separately from runtime completion
+- `/run all`, `/restart`, `/stop`, `/stop all`
+- `/running`, `/logs backend`, `/logs frontend`
+- cleaned project operations and deletion handling
 
-## v0.8.0 Key Changes
+## v0.9.0 Key Changes
 
-### Runtime orchestration
+### Spec-driven evolution
+- `/add_entity <name>`
+- `/add_field <Entity> <field:type>`
+- `/add_api <METHOD> <path>`
+- `/add_page <path>`
+- spec progression model (entity -> field -> api -> page)
+- `/inspect`, `/next`, `/improve` aligned around progression stages
+
+### Inspection and guidance
+- Spec Summary in `/inspect`
+- stage-based recommendations in `/next`
+- actionable improvements in `/improve`
+- Recent evolution section in `/inspect`
+
+### Runtime orchestration retained
 - backend + frontend service lifecycle management
 - `/run all`, `/restart`, `/stop`, `/stop all`
 - `/running`, `/logs backend`, `/logs frontend`
+- `runtime.services`-based runtime state model
+- consistent `RUNNING` / `STOPPED` / `FAIL` reporting
 
-### Runtime state model
-- `runtime.services.backend` and `runtime.services.frontend`
-- clear separation of `RUNNING`, `STOPPED`, and `FAIL`
-- improved `/inspect`, `/running`, and `/logs` consistency
-
-### GitHub repository flow
-- scaffold generation and GitHub repo creation are decoupled from final runtime status
-- repository state is tracked separately from deploy/runtime state
-
-### v0.7 strengths retained
-- preflight checks before execution
-- auto-fix (self-healing runtime retry)
-- local backend execution with health check
-- auto-run after `/idea_local`
+### Project operations
+- GitHub repo creation/deletion state handling
+- idempotent repo delete behavior for already-removed repositories
+- cleaner `/projects` output and stale runtime/url suppression
+- current selection cleanup after local project deletion
 
 ## Core Workflow
 
-- idea to project generation
+- idea -> project generation
 - structure validation
 - runtime detection
 - backend/frontend execution
-- health and logs inspection
-- restart and stop operations
-- inspect, improve, and next-step evolution
+- inspect project state (runtime + spec)
+- evolve spec with entities / fields / APIs / pages
+- review next steps and improvements
 
 ## Key Commands
 
@@ -57,6 +63,10 @@ ArchMind now supports:
 - `/inspect`
 - `/next`
 - `/improve`
+- `/add_entity <name>`
+- `/add_field <Entity> <field:type>`
+- `/add_api <METHOD> <path>`
+- `/add_page <path>`
 - `/run backend`
 - `/run all`
 - `/running`
@@ -66,9 +76,9 @@ ArchMind now supports:
 - `/logs backend`
 - `/logs frontend`
 
-## What v0.8.0 Means
+## What v0.9.0 Means
 
-ArchMind can now generate and orchestrate fullstack projects locally with unified multi-service runtime control.
+ArchMind can now evolve a project through spec primitives while keeping runtime orchestration and inspection consistent.
 
 ## Offline Install
 
@@ -77,6 +87,6 @@ You can verify offline installation with `scripts/offline_install_verify.sh`.
 
 ## Next
 
-- stronger spec/primitive evolution
 - local/cloud/hybrid provider layer
 - basic web UI dashboard
+- stronger provider-agnostic workflow
