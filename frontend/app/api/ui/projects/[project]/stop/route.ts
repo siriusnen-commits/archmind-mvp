@@ -21,7 +21,8 @@ export async function POST(_request: Request, { params }: Params) {
         "content-type": response.headers.get("content-type") || "application/json; charset=utf-8",
       },
     });
-  } catch {
-    return NextResponse.json({ detail: "Failed to proxy UI API" }, { status: 502 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error || "unknown error");
+    return NextResponse.json({ detail: "Failed to proxy UI API", error: message }, { status: 502 });
   }
 }

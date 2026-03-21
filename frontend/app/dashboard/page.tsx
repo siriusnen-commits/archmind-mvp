@@ -20,6 +20,8 @@ type RuntimeInfo = {
   frontend_status?: string;
   backend_url?: string;
   frontend_url?: string;
+  backend_urls?: string[];
+  frontend_urls?: string[];
 };
 
 type RepositoryInfo = {
@@ -91,8 +93,8 @@ export default async function DashboardPage() {
   return (
     <main className="mx-auto w-full max-w-6xl p-6">
       <header className="mb-5 flex items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold text-zinc-900">ArchMind Dashboard</h1>
-        <Link href="/dashboard" className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50">
+        <h1 className="text-xl font-semibold text-slate-100">ArchMind Dashboard</h1>
+        <Link href="/dashboard" className="rounded-md border border-slate-500 px-3 py-1.5 text-sm text-slate-100 hover:bg-slate-800">
           Refresh
         </Link>
       </header>
@@ -101,9 +103,9 @@ export default async function DashboardPage() {
         <ProjectList projects={projects} selectedName={selectedName} />
 
         <section className="space-y-3">
-          {projectsResult.error ? <p className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{projectsResult.error}</p> : null}
-          {!projects.length ? <p className="rounded-md border border-zinc-200 bg-white p-4 text-sm text-zinc-600">No projects found</p> : null}
-          {detailResult.error ? <p className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">{detailResult.error}</p> : null}
+          {projectsResult.error ? <p className="rounded-md border border-rose-700 bg-rose-950/50 p-3 text-sm text-rose-200">{projectsResult.error}</p> : null}
+          {!projects.length ? <p className="rounded-md border border-slate-700 bg-slate-900 p-4 text-sm text-slate-300">No projects found</p> : null}
+          {detailResult.error ? <p className="rounded-md border border-rose-700 bg-rose-950/50 p-3 text-sm text-rose-200">{detailResult.error}</p> : null}
 
           {detail ? (
             <>
@@ -113,7 +115,7 @@ export default async function DashboardPage() {
               <EvolutionCard items={Array.isArray(detail.recent_evolution) ? detail.recent_evolution : []} />
             </>
           ) : projects.length ? (
-            <p className="rounded-md border border-zinc-200 bg-white p-4 text-sm text-zinc-600">Project not found</p>
+            <p className="rounded-md border border-slate-700 bg-slate-900 p-4 text-sm text-slate-300">Project not found</p>
           ) : null}
         </section>
       </div>

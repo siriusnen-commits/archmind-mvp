@@ -38,7 +38,9 @@ export default function ProviderCard({ projectName, mode }: Props) {
         body: JSON.stringify({ mode: nextMode }),
       });
       if (!response.ok) {
-        setError("Failed to update provider");
+        const payload = (await response.json().catch(() => ({}))) as { detail?: string; error?: string };
+        const detail = String(payload.detail || payload.error || "").trim();
+        setError(detail ? `Failed to update provider: ${detail}` : "Failed to update provider");
         return;
       }
       const payload = (await response.json()) as { mode?: string };
@@ -52,9 +54,9 @@ export default function ProviderCard({ projectName, mode }: Props) {
   }
 
   return (
-    <section className="rounded-md border border-zinc-200 bg-white p-4">
-      <h3 className="text-sm font-semibold text-zinc-900">Provider</h3>
-      <p className="mt-2 text-sm text-zinc-700">Mode: {currentMode}</p>
+    <section className="rounded-md border border-slate-700 bg-slate-900 p-4">
+      <h3 className="text-sm font-semibold text-slate-100">Provider</h3>
+      <p className="mt-2 text-sm text-slate-200">Mode: {currentMode}</p>
       <div className="mt-3 flex flex-wrap gap-2">
         {(["local", "cloud", "auto"] as ProviderMode[]).map((item) => {
           const selected = item === currentMode;
@@ -67,8 +69,8 @@ export default function ProviderCard({ projectName, mode }: Props) {
               className={[
                 "rounded-md border px-3 py-1.5 text-sm",
                 selected
-                  ? "border-zinc-900 bg-zinc-900 text-white"
-                  : "border-zinc-300 bg-white text-zinc-800 hover:bg-zinc-50",
+                  ? "border-cyan-500 bg-cyan-600 text-white"
+                  : "border-slate-500 bg-slate-800 text-slate-100 hover:bg-slate-700",
                 loading ? "opacity-60" : "",
               ].join(" ")}
             >
@@ -77,7 +79,7 @@ export default function ProviderCard({ projectName, mode }: Props) {
           );
         })}
       </div>
-      {error ? <p className="mt-2 text-xs text-red-600">{error}</p> : null}
+      {error ? <p className="mt-2 break-words text-xs text-rose-300">{error}</p> : null}
     </section>
   );
 }
