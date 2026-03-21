@@ -17,6 +17,7 @@ from archmind.telegram_bot import (
     _project_runtime_status,
     _repository_summary_from_state,
     _resolve_project_type,
+    add_entity_to_project,
     save_last_project_path,
     summarize_recent_evolution,
 )
@@ -482,3 +483,8 @@ def select_current_project(project_dir: Path) -> dict[str, Any]:
             "detail": "Failed to set current project",
             "error": str(exc),
         }
+
+
+def add_project_entity(project_dir: Path, entity_name: str) -> dict[str, Any]:
+    result = add_entity_to_project(project_dir, entity_name, auto_restart_backend=False)
+    return result if isinstance(result, dict) else {}

@@ -79,6 +79,20 @@ class CurrentProjectResponse(BaseModel):
     error: str = ""
 
 
+class AddEntityRequest(BaseModel):
+    entity_name: str = ""
+
+
+class AddEntityResponse(BaseModel):
+    ok: bool = False
+    project_name: str = ""
+    entity_name: str = ""
+    detail: str = ""
+    error: str = ""
+    spec_summary: SpecSummary = Field(default_factory=SpecSummary)
+    recent_evolution: list[str] = Field(default_factory=list)
+
+
 class RuntimeActionResponse(BaseModel):
     ok: bool = False
     action: str = ""

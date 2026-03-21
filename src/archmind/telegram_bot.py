@@ -4950,6 +4950,207 @@ async def command_add_module(update: Any, context: Any) -> None:
     )
 
 
+def add_entity_to_project(
+    project_path: Path,
+    entity_name_raw: str,
+    *,
+    auto_restart_backend: bool = False,
+) -> dict[str, Any]:
+    target = project_path.expanduser().resolve()
+    if not target.exists() or not target.is_dir():
+        return {
+            "ok": False,
+            "status": "not_found",
+            "project_name": project_path.name,
+            "entity_name": "",
+            "detail": "Project not found",
+            "error": "Project not found",
+            "spec_summary": {},
+            "recent_evolution": [],
+            "message_text": "Project not found",
+        }
+
+    entity_name = _normalize_entity_name(entity_name_raw)
+    if not entity_name:
+        return {
+            "ok": False,
+            "status": "invalid",
+            "project_name": target.name,
+            "entity_name": "",
+            "detail": "Invalid entity name",
+            "error": "entity name is required",
+            "spec_summary": {},
+            "recent_evolution": [],
+            "message_text": "Usage: /add_entity <name>",
+        }
+    if not re.match(r"^[A-Za-z][A-Za-z0-9_]*$", entity_name):
+        return {
+            "ok": False,
+            "status": "invalid",
+            "project_name": target.name,
+            "entity_name": entity_name,
+            "detail": "Invalid entity name",
+            "error": "entity name must match ^[A-Za-z][A-Za-z0-9_]*$",
+            "spec_summary": {},
+            "recent_evolution": [],
+            "message_text": "Invalid entity name. Use letters, numbers, and underscore; start with a letter.",
+        }
+
+    try:
+        spec, spec_path = _read_or_init_project_spec(target)
+        entities = _normalize_entities(spec.get("entities"))
+        exists_in_spec = _find_entity_in_spec(entities, entity_name) is not None
+        exists_in_files = _entity_exists_in_files(target, entity_name)
+        if exists_in_spec or exists_in_files:
+            if not exists_in_spec:
+                entities.append({"name": entity_name, "fields": []})
+                spec["entities"] = _normalize_entities(entities)
+                _rebuild_api_endpoints(spec)
+                _rebuild_frontend_pages(spec)
+                spec_path.parent.mkdir(parents=True, exist_ok=True)
+                spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+            progression = analyze_spec_progression(spec)
+            recent = summarize_recent_evolution(spec, limit=5)
+            return {
+                "ok": False,
+                "status": "exists",
+                "project_name": target.name,
+                "entity_name": entity_name,
+                "detail": "Entity already exists",
+                "error": "Entity already exists",
+                "spec_summary": {
+                    "stage": str(progression.get("stage_label") or "Stage 0"),
+                    "entities": int(progression.get("entities_count") or 0),
+                    "apis": int(progression.get("apis_count") or 0),
+                    "pages": int(progression.get("pages_count") or 0),
+                    "history_count": len(
+                        (spec.get("evolution") or {}).get("history")
+                        if isinstance((spec.get("evolution") or {}).get("history"), list)
+                        else []
+                    ),
+                },
+                "recent_evolution": recent,
+                "message_text": (
+                    "Entity already exists\n\n"
+                    "Project:\n"
+                    f"{target.name}\n\n"
+                    "Entity:\n"
+                    f"{entity_name}"
+                ),
+            }
+
+        prev_api = [
+            endpoint
+            for endpoint in (_normalize_api_endpoint_text(str(x)) for x in (spec.get("api_endpoints") or []))
+            if endpoint
+        ]
+        prev_pages = [
+            page
+            for page in (_normalize_frontend_page_path(str(x)) for x in (spec.get("frontend_pages") or []))
+            if page
+        ]
+
+        entities.append({"name": entity_name, "fields": []})
+        spec["entities"] = _normalize_entities(entities)
+        rebuilt_api = _rebuild_api_endpoints(spec)
+        rebuilt_pages = _rebuild_frontend_pages(spec)
+        _append_evolution_event(spec, {"action": "add_entity", "entity": entity_name})
+
+        prev_api_set = {endpoint.upper() for endpoint in prev_api}
+        auto_api_candidates = {endpoint.upper() for endpoint in _entity_endpoint_set(entity_name)[:2]}
+        for endpoint in rebuilt_api:
+            upper = str(endpoint).upper()
+            if upper in prev_api_set or upper not in auto_api_candidates:
+                continue
+            parts = str(endpoint).split(maxsplit=1)
+            if len(parts) != 2:
+                continue
+            _append_evolution_event(spec, {"action": "auto_add_api", "method": parts[0], "path": parts[1]})
+
+        prev_pages_set = {page.lower() for page in prev_pages}
+        auto_page_candidates = {page.lower() for page in _entity_frontend_pages(entity_name)}
+        for page in rebuilt_pages:
+            key = str(page).lower()
+            if key in prev_pages_set or key not in auto_page_candidates:
+                continue
+            _append_evolution_event(spec, {"action": "auto_add_page", "page": str(page)})
+
+        generated_files = apply_entity_scaffold(target, entity_name)
+        frontend_generated = apply_frontend_page_scaffold(target, entity_name)
+        for path in frontend_generated:
+            if path not in generated_files:
+                generated_files.append(path)
+        frontend_exists = has_frontend_structure(target)
+
+        spec_path.parent.mkdir(parents=True, exist_ok=True)
+        spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        code_lines: list[str]
+        if generated_files:
+            code_lines = ["Generated:"] + [f"- {path}" for path in generated_files]
+            next_lines = ["Next:", "- /inspect"] + (["- /restart"] if frontend_exists else [])
+        else:
+            code_lines = ["Code scaffold:", "SKIPPED (no backend structure)"]
+            next_lines = ["Next:", "- /inspect"]
+        if not frontend_exists:
+            code_lines += ["", "Frontend scaffold:", "SKIPPED (no frontend structure)"]
+
+        auto_restart_lines = ["Auto restart:", "SKIPPED"]
+        restart_failed = False
+        if auto_restart_backend:
+            auto_restart_lines, restart_failed = _auto_restart_backend_lines(target)
+            if restart_failed and "- /logs" not in next_lines:
+                next_lines.append("- /logs")
+
+        progression = analyze_spec_progression(spec)
+        recent = summarize_recent_evolution(spec, limit=5)
+        return {
+            "ok": True,
+            "status": "added",
+            "project_name": target.name,
+            "entity_name": entity_name,
+            "detail": "Entity added",
+            "error": "",
+            "spec_summary": {
+                "stage": str(progression.get("stage_label") or "Stage 0"),
+                "entities": int(progression.get("entities_count") or 0),
+                "apis": int(progression.get("apis_count") or 0),
+                "pages": int(progression.get("pages_count") or 0),
+                "history_count": len(
+                    (spec.get("evolution") or {}).get("history")
+                    if isinstance((spec.get("evolution") or {}).get("history"), list)
+                    else []
+                ),
+            },
+            "recent_evolution": recent,
+            "generated_files": generated_files,
+            "message_text": (
+                "Entity added\n\n"
+                "Project:\n"
+                f"{target.name}\n\n"
+                "Entity:\n"
+                f"{entity_name}\n\n"
+                + "\n".join(code_lines)
+                + "\n\n"
+                + "\n".join(auto_restart_lines)
+                + "\n\n"
+                + "\n".join(next_lines)
+            ),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status": "error",
+            "project_name": target.name,
+            "entity_name": entity_name,
+            "detail": "Failed to add entity",
+            "error": str(exc),
+            "spec_summary": {},
+            "recent_evolution": [],
+            "message_text": f"Failed to add entity: {exc}",
+        }
+
+
 async def command_add_entity(update: Any, context: Any) -> None:
     project_path = _resolve_target_project()
     if project_path is None:
@@ -4961,109 +5162,12 @@ async def command_add_entity(update: Any, context: Any) -> None:
         await update.message.reply_text("Usage: /add_entity <name>")
         return
 
-    entity_name = _normalize_entity_name(args[0])
-    if not entity_name:
+    result = add_entity_to_project(project_path, args[0], auto_restart_backend=True)
+    status = str(result.get("status") or "").strip().lower()
+    if status == "invalid" and not str(args[0]).strip():
         await update.message.reply_text("Usage: /add_entity <name>")
         return
-
-    spec, spec_path = _read_or_init_project_spec(project_path)
-    entities = _normalize_entities(spec.get("entities"))
-    exists_in_spec = _find_entity_in_spec(entities, entity_name) is not None
-    exists_in_files = _entity_exists_in_files(project_path, entity_name)
-    if exists_in_spec or exists_in_files:
-        if not exists_in_spec:
-            entities.append({"name": entity_name, "fields": []})
-            spec["entities"] = _normalize_entities(entities)
-            _rebuild_api_endpoints(spec)
-            _rebuild_frontend_pages(spec)
-            spec_path.parent.mkdir(parents=True, exist_ok=True)
-            spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
-        await update.message.reply_text(
-            "Entity already exists\n\n"
-            "Project:\n"
-            f"{project_path.name}\n\n"
-            "Entity:\n"
-            f"{entity_name}"
-        )
-        return
-
-    prev_api = [
-        endpoint
-        for endpoint in (_normalize_api_endpoint_text(str(x)) for x in (spec.get("api_endpoints") or []))
-        if endpoint
-    ]
-    prev_pages = [
-        page
-        for page in (_normalize_frontend_page_path(str(x)) for x in (spec.get("frontend_pages") or []))
-        if page
-    ]
-
-    entities.append({"name": entity_name, "fields": []})
-    spec["entities"] = _normalize_entities(entities)
-    rebuilt_api = _rebuild_api_endpoints(spec)
-    rebuilt_pages = _rebuild_frontend_pages(spec)
-    _append_evolution_event(spec, {"action": "add_entity", "entity": entity_name})
-
-    prev_api_set = {endpoint.upper() for endpoint in prev_api}
-    auto_api_candidates = {endpoint.upper() for endpoint in _entity_endpoint_set(entity_name)[:2]}
-    for endpoint in rebuilt_api:
-        upper = str(endpoint).upper()
-        if upper in prev_api_set:
-            continue
-        if upper not in auto_api_candidates:
-            continue
-        parts = str(endpoint).split(maxsplit=1)
-        if len(parts) != 2:
-            continue
-        _append_evolution_event(spec, {"action": "auto_add_api", "method": parts[0], "path": parts[1]})
-
-    prev_pages_set = {page.lower() for page in prev_pages}
-    auto_page_candidates = {page.lower() for page in _entity_frontend_pages(entity_name)}
-    for page in rebuilt_pages:
-        key = str(page).lower()
-        if key in prev_pages_set:
-            continue
-        if key not in auto_page_candidates:
-            continue
-        _append_evolution_event(spec, {"action": "auto_add_page", "page": str(page)})
-
-    generated_files = apply_entity_scaffold(project_path, entity_name)
-    frontend_generated = apply_frontend_page_scaffold(project_path, entity_name)
-    for path in frontend_generated:
-        if path not in generated_files:
-            generated_files.append(path)
-    frontend_exists = has_frontend_structure(project_path)
-
-    spec_path.parent.mkdir(parents=True, exist_ok=True)
-    spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    code_lines = []
-    if generated_files:
-        code_lines = ["Generated:"] + [f"- {path}" for path in generated_files]
-        next_lines = ["Next:", "- /inspect"] + (["- /restart"] if frontend_exists else [])
-    else:
-        code_lines = ["Code scaffold:", "SKIPPED (no backend structure)"]
-        next_lines = ["Next:", "- /inspect"]
-
-    if not frontend_exists:
-        code_lines += ["", "Frontend scaffold:", "SKIPPED (no frontend structure)"]
-
-    auto_restart_lines, restart_failed = _auto_restart_backend_lines(project_path)
-    if restart_failed and "- /logs" not in next_lines:
-        next_lines.append("- /logs")
-
-    await update.message.reply_text(
-        "Entity added\n\n"
-        "Project:\n"
-        f"{project_path.name}\n\n"
-        "Entity:\n"
-        f"{entity_name}\n\n"
-        + "\n".join(code_lines)
-        + "\n\n"
-        + "\n".join(auto_restart_lines)
-        + "\n\n"
-        + "\n".join(next_lines)
-    )
+    await update.message.reply_text(str(result.get("message_text") or result.get("detail") or "Failed to add entity"))
 
 
 async def command_add_field(update: Any, context: Any) -> None:
