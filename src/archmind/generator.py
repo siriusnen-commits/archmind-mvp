@@ -9,8 +9,6 @@ from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional
 
-import requests
-
 from .templates.fastapi import enforce_fastapi_runtime
 from .templates.fastapi_ddd import enforce_fastapi_ddd
 from .templates.nextjs import enforce_nextjs_runtime
@@ -18,6 +16,7 @@ from .templates.internal_tool import enforce_internal_tool
 from .templates.worker_api import enforce_worker_api
 from .templates.data_tool import enforce_data_tool
 from .backend_runtime import detect_backend_asgi_entry, has_fastapi_app_declaration
+from .reasoning import generate_reasoning_text
 
 DEBUG_RAW_OUTPUT = Path("examples/last_raw_output.txt")
 DEBUG_REPAIRED_OUTPUT = Path("examples/last_repaired_output.txt")
@@ -43,29 +42,22 @@ def call_ollama_chat(req: str, *, model: str, base_url: str, timeout_s: int) -> 
     """
     Call Ollama /api/chat and return message.content as a string.
     """
-    url = f"{base_url.rstrip('/')}/api/chat"
-    payload = {
-        "model": model,
-        "format": "json",
-        "messages": [
-            {"role": "system", "content": "Return ONLY valid JSON. No markdown. No commentary."},
-            {"role": "user", "content": req},
-        ],
-        "stream": False,
-        "options": {"temperature": 0.2},
-    }
-    r = requests.post(url, json=payload, timeout=timeout_s)
-    r.raise_for_status()
-    data = r.json()
-    msg = data.get("message") or {}
-    return (msg.get("content") or "").strip()
+    return generate_reasoning_text(
+        req,
+        mode="local",
+        local_model=model,
+        local_base_url=base_url,
+        timeout_s=timeout_s,
+        system_prompt="Return ONLY valid JSON. No markdown. No commentary.",
+        format_json=True,
+        temperature=0.2,
+    )
 
 
 def repair_json_with_model(raw: str, *, model: str, base_url: str, timeout_s: int) -> str:
     """
     Ask the model to repair invalid JSON. Returns a string that should be valid JSON.
     """
-    url = f"{base_url.rstrip('/')}/api/chat"
     repair_prompt = (
         "You will be given INVALID JSON. Return ONLY a repaired VALID JSON object.\n"
         "Rules:\n"
@@ -75,21 +67,16 @@ def repair_json_with_model(raw: str, *, model: str, base_url: str, timeout_s: in
         "INVALID JSON:\n"
         f"{raw}\n"
     )
-    payload = {
-        "model": model,
-        "format": "json",
-        "messages": [
-            {"role": "system", "content": "Return ONLY valid JSON. No markdown. No commentary."},
-            {"role": "user", "content": repair_prompt},
-        ],
-        "stream": False,
-        "options": {"temperature": 0.0},
-    }
-    r = requests.post(url, json=payload, timeout=timeout_s)
-    r.raise_for_status()
-    data = r.json()
-    msg = data.get("message") or {}
-    return (msg.get("content") or "").strip()
+    return generate_reasoning_text(
+        repair_prompt,
+        mode="local",
+        local_model=model,
+        local_base_url=base_url,
+        timeout_s=timeout_s,
+        system_prompt="Return ONLY valid JSON. No markdown. No commentary.",
+        format_json=True,
+        temperature=0.0,
+    )
 
 
 # -----------------------------
