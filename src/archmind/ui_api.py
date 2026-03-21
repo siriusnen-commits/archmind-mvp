@@ -27,6 +27,7 @@ from archmind.ui_models import (
     ProjectDetailResponse,
     ProjectListResponse,
     ProviderModeResponse,
+    RepositorySummary,
     ProviderUpdateRequest,
     RuntimeActionResponse,
 )
@@ -55,6 +56,7 @@ def get_ui_projects() -> ProjectListResponse:
                         template="unknown",
                         backend_url="",
                         frontend_url="",
+                        repository=RepositorySummary(),
                         is_current=False,
                         warning=f"Failed to inspect project metadata: {exc}",
                     )
