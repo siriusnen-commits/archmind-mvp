@@ -33,6 +33,7 @@ class RepositorySummary(BaseModel):
 
 class ProjectListItem(BaseModel):
     name: str
+    display_name: str = ""
     path: str
     status: str
     runtime: str
@@ -49,6 +50,8 @@ class ProjectListResponse(BaseModel):
 
 class ProjectDetailResponse(BaseModel):
     name: str
+    display_name: str = ""
+    is_current: bool = False
     shape: str = "unknown"
     template: str = "unknown"
     provider_mode: ProviderMode = "local"

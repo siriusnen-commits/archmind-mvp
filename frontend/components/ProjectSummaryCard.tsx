@@ -3,6 +3,8 @@
 type Props = {
   project: {
     name: string;
+    display_name: string;
+    is_current: boolean;
     shape: string;
     template: string;
     spec_summary: {
@@ -19,7 +21,28 @@ export default function ProjectSummaryCard({ project }: Props) {
   return (
     <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 12 }}>
       <h3 style={{ marginTop: 0 }}>Project Summary</h3>
-      <div>Name: {project.name}</div>
+      <div style={{ marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: "#666" }}>Name</div>
+        <div style={{ fontSize: 18, fontWeight: 700, overflowWrap: "anywhere" }}>{project.display_name || project.name}</div>
+        <div style={{ fontSize: 12, color: "#666", overflowWrap: "anywhere" }}>ID: {project.name}</div>
+        {project.is_current ? (
+          <div style={{ marginTop: 4 }}>
+            <span
+              style={{
+                fontSize: 11,
+                lineHeight: "16px",
+                border: "1px solid #0a7",
+                color: "#075",
+                borderRadius: 999,
+                padding: "0 8px",
+                background: "#edfdf8",
+              }}
+            >
+              current project
+            </span>
+          </div>
+        ) : null}
+      </div>
       <div>Shape: {project.shape}</div>
       <div>Template: {project.template}</div>
       <hr />

@@ -10,6 +10,8 @@ import RuntimeCard from "../../components/RuntimeCard";
 
 type ProjectDetail = {
   name: string;
+  display_name: string;
+  is_current: boolean;
   shape: string;
   template: string;
   provider_mode: "local" | "cloud" | "auto";
@@ -36,40 +38,76 @@ export default function DashboardPage() {
   const [selected, setSelected] = useState<string>("");
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [loading, setLoading] = useState(false);
+  const [projectsError, setProjectsError] = useState<string>("");
+  const [detailError, setDetailError] = useState<string>("");
 
-  const selectedName = useMemo(() => selected || (projects[0]?.name || ""), [selected, projects]);
+  const selectedName = useMemo(() => {
+    if (selected) {
+      return selected;
+    }
+    const currentProject = projects.find((item) => item.is_current);
+    return currentProject?.name || projects[0]?.name || "";
+  }, [selected, projects]);
 
-  const loadProjects = async () => {
-    const response = await fetch(apiBase + "/ui/projects", { cache: "no-store" });
-    if (response.ok) {
-      const payload = (await response.json()) as { projects: ProjectListItem[] };
-      setProjects(payload.projects || []);
-      if (selected.length === 0 && payload.projects.length > 0) {
-        setSelected(payload.projects[0].name);
+  const loadProjects = async (): Promise<ProjectListItem[]> => {
+    setProjectsError("");
+    try {
+      const response = await fetch(apiBase + "/ui/projects", { cache: "no-store" });
+      if (!response.ok) {
+        setProjects([]);
+        setProjectsError("Failed to load project data");
+        return [];
       }
+      const payload = (await response.json()) as { projects: ProjectListItem[] };
+      const items = payload.projects || [];
+      setProjects(items);
+      if (items.length === 0) {
+        setSelected("");
+      } else if (selected.length === 0) {
+        setSelected(items.find((item) => item.is_current)?.name || items[0].name);
+      } else if (!items.some((item) => item.name === selected)) {
+        setSelected(items.find((item) => item.is_current)?.name || items[0].name);
+      }
+      return items;
+    } catch {
+      setProjects([]);
+      setProjectsError("Failed to load project data");
+      return [];
     }
   };
 
   const loadDetail = async (projectName: string) => {
     if (projectName.length === 0) {
       setDetail(null);
+      setDetailError("");
       return;
     }
+    setDetailError("");
     setLoading(true);
     try {
       const response = await fetch(apiBase + "/ui/projects/" + encodeURIComponent(projectName), { cache: "no-store" });
       if (response.ok) {
         const payload = (await response.json()) as ProjectDetail;
         setDetail(payload);
+      } else if (response.status === 404) {
+        setDetail(null);
+        setDetailError("Project not found");
+      } else {
+        setDetail(null);
+        setDetailError("Failed to load project data");
       }
+    } catch {
+      setDetail(null);
+      setDetailError("Failed to load project data");
     } finally {
       setLoading(false);
     }
   };
 
   const refresh = async () => {
-    await loadProjects();
-    await loadDetail(selectedName);
+    const nextProjects = await loadProjects();
+    const target = selected || nextProjects.find((item) => item.is_current)?.name || nextProjects[0]?.name || "";
+    await loadDetail(target);
   };
 
   useEffect(() => {
@@ -91,11 +129,12 @@ export default function DashboardPage() {
         </button>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "320px minmax(0, 1fr)", gap: 16 }}>
         <ProjectList projects={projects} selected={selectedName} onSelect={(name) => setSelected(name)} />
 
         <div style={{ display: "grid", gap: 12 }}>
           {loading ? <div>Loading...</div> : null}
+          {projectsError ? <div style={{ color: "#b42318" }}>{projectsError}</div> : null}
           {detail ? (
             <>
               <ProjectSummaryCard project={detail} />
@@ -104,12 +143,19 @@ export default function DashboardPage() {
                 projectName={detail.name}
                 mode={detail.provider_mode}
                 apiBaseUrl={apiBase}
-                onUpdated={(mode) => setDetail({ ...detail, provider_mode: mode })}
+                onUpdated={async (mode) => {
+                  setDetail((prev) => (prev ? { ...prev, provider_mode: mode } : prev));
+                  const target = selectedName || detail.name;
+                  await loadProjects();
+                  await loadDetail(target);
+                }}
               />
               <EvolutionCard items={detail.recent_evolution} />
             </>
           ) : (
-            <div>Select a project.</div>
+            <div style={{ color: detailError ? "#b42318" : "#555" }}>
+              {detailError || (projects.length === 0 ? "No projects found" : "Select a project.")}
+            </div>
           )}
         </div>
       </div>
