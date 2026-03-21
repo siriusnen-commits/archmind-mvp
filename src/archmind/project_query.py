@@ -280,6 +280,29 @@ def _fallback_list_item(project_dir: Path, warning: str = "") -> ProjectListItem
     )
 
 
+def resolve_repository_metadata(
+    project_dir: Path,
+    *,
+    state_payload: dict[str, Any] | None = None,
+    result_payload: dict[str, Any] | None = None,
+) -> RepositorySummary:
+    try:
+        state = state_payload if isinstance(state_payload, dict) else (load_state(project_dir) or {})
+        result = result_payload if isinstance(result_payload, dict) else {}
+        if not result:
+            result = _load_json(project_dir / ".archmind" / "result.json") or {}
+        repository_info = _repository_summary_from_state(state if isinstance(state, dict) else {})
+        status = str(repository_info.get("status") or "").strip().upper()
+        url = str(repository_info.get("url") or "").strip()
+        if not url:
+            url = str(result.get("github_repo_url") or "").strip()
+        if not status:
+            status = "CREATED" if url else "SKIPPED"
+        return RepositorySummary(status=status or "SKIPPED", url=url)
+    except Exception:
+        return RepositorySummary()
+
+
 def build_project_list_item(project_dir: Path) -> ProjectListItem:
     try:
         archmind_dir = project_dir / ".archmind"
@@ -304,7 +327,11 @@ def build_project_list_item(project_dir: Path) -> ProjectListItem:
             runtime = "FAIL"
         else:
             runtime = "STOPPED"
-        repository_info = _repository_summary_from_state(state_payload)
+        repository = resolve_repository_metadata(
+            project_dir,
+            state_payload=state_payload if isinstance(state_payload, dict) else {},
+            result_payload=result_payload if isinstance(result_payload, dict) else {},
+        )
 
         return ProjectListItem(
             name=project_dir.name,
@@ -316,10 +343,7 @@ def build_project_list_item(project_dir: Path) -> ProjectListItem:
             template=str(state_payload.get("effective_template") or "unknown").strip() or "unknown",
             backend_url=backend_url,
             frontend_url=frontend_url,
-            repository=RepositorySummary(
-                status=str(repository_info.get("status") or "SKIPPED"),
-                url=str(repository_info.get("url") or ""),
-            ),
+            repository=repository,
             is_current=_is_current_project(project_dir),
             warning="",
         )
@@ -351,7 +375,11 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
         progression = analyze_spec_progression(spec if isinstance(spec, dict) else {})
         evolution = spec.get("evolution") if isinstance(spec.get("evolution"), dict) else {}
         history = evolution.get("history") if isinstance(evolution.get("history"), list) else []
-        repository_info = _repository_summary_from_state(state_payload)
+        repository = resolve_repository_metadata(
+            project_dir,
+            state_payload=state_payload if isinstance(state_payload, dict) else {},
+            result_payload=result_payload if isinstance(result_payload, dict) else {},
+        )
         return ProjectDetailResponse(
             name=project_dir.name,
             display_name=_display_name_from_payloads(project_dir, state_payload, spec if isinstance(spec, dict) else {}),
@@ -375,10 +403,7 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
                 frontend_urls=frontend_urls,
             ),
             recent_evolution=summarize_recent_evolution(spec, limit=5),
-            repository=RepositorySummary(
-                status=str(repository_info.get("status") or "SKIPPED"),
-                url=str(repository_info.get("url") or ""),
-            ),
+            repository=repository,
             warning="",
             safe=True,
         )

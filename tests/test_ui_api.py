@@ -192,6 +192,44 @@ def test_ui_projects_response_tolerates_malformed_repository_metadata(monkeypatc
     assert item["repository"]["url"] == "12345"
 
 
+def test_ui_repository_visibility_is_consistent_between_list_and_detail_with_repo(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "repo-consistent")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    list_response = client.get("/ui/projects")
+    assert list_response.status_code == 200
+    list_item = list_response.json()["projects"][0]
+
+    detail_response = client.get("/ui/projects/repo-consistent")
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.json()
+
+    assert list_item["repository"]["status"] == detail_payload["repository"]["status"]
+    assert list_item["repository"]["url"] == detail_payload["repository"]["url"]
+    assert list_item["repository"]["url"] == "https://github.com/example/repo-consistent"
+
+
+def test_ui_repository_visibility_is_consistent_between_list_and_detail_without_repo(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "repo-missing", repository={"status": "SKIPPED", "url": ""})
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    list_response = client.get("/ui/projects")
+    assert list_response.status_code == 200
+    list_item = list_response.json()["projects"][0]
+
+    detail_response = client.get("/ui/projects/repo-missing")
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.json()
+
+    assert list_item["repository"]["status"] == detail_payload["repository"]["status"]
+    assert list_item["repository"]["url"] == detail_payload["repository"]["url"]
+    assert list_item["repository"]["url"] == ""
+
+
 def test_ui_provider_get(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     _make_project(projects_root, "gamma", provider_mode="cloud")

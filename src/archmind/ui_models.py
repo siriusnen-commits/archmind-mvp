@@ -62,7 +62,7 @@ class ProjectDetailResponse(BaseModel):
     spec_summary: SpecSummary
     runtime: RuntimeSummary
     recent_evolution: list[str] = Field(default_factory=list)
-    repository: RepositorySummary
+    repository: RepositorySummary = Field(default_factory=RepositorySummary)
     warning: str = ""
     safe: bool = True
 
