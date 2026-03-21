@@ -1843,15 +1843,56 @@ def test_projects_shows_runtime_status_and_urls(monkeypatch, tmp_path: Path) -> 
     assert "Status: RUNNING" in out
     assert "Type: fullstack-web" in out
     assert "Template: fullstack-ddd" in out
-    assert "RUNNING" in out
+    assert "Runtime: RUNNING (backend+frontend)" in out
     assert "Backend: http://127.0.0.1:8011" in out
     assert "Frontend: http://127.0.0.1:3011" in out
     assert "notes-api" in out
     assert "Status: STOPPED" in out
+    assert "Runtime: STOPPED" in out
     assert "worker-api-demo" in out
     assert "Status: RUNNING" in out
-    assert "RUNNING (backend)" in out
+    assert "Runtime: RUNNING (backend)" in out
     assert "Backend: http://127.0.0.1:8050" in out
+
+
+def test_projects_hides_stale_urls_when_runtime_is_stopped(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(root))
+    project = root / "stale-runtime"
+    arch = project / ".archmind"
+    arch.mkdir(parents=True, exist_ok=True)
+    (arch / "state.json").write_text(
+        json.dumps(
+            {
+                "runtime": {
+                    "backend_status": "RUNNING",
+                    "backend_url": "http://127.0.0.1:8111",
+                    "frontend_status": "RUNNING",
+                    "frontend_url": "http://127.0.0.1:3111",
+                    "services": {
+                        "backend": {"status": "RUNNING", "url": "http://127.0.0.1:8111"},
+                        "frontend": {"status": "RUNNING", "url": "http://127.0.0.1:3111"},
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _project_dir: {
+            "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+
+    out = format_projects_list()
+    assert "Status: STOPPED" in out
+    assert "Runtime: STOPPED" in out
+    assert "Status: RUNNING\n   Runtime: STOPPED" not in out
+    assert "Backend: http://127.0.0.1:8111" not in out
+    assert "Frontend: http://127.0.0.1:3111" not in out
 
 
 def test_current_status_is_stopped_after_stop_state(monkeypatch, tmp_path: Path) -> None:
@@ -6866,6 +6907,71 @@ def test_delete_project_confirmation_executes_delete(monkeypatch, tmp_path: Path
     assert calls == ["all"]
     assert "Project deleted" in confirm_msg.sent[-1]
     assert "Mode:\nall" in confirm_msg.sent[-1]
+
+
+def test_delete_project_all_treats_repo_404_as_already_deleted(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "delete_all_idempotent_repo"
+    project.mkdir(parents=True, exist_ok=True)
+    set_current_project(project)
+    monkeypatch.setattr(
+        "archmind.deploy.delete_project",
+        lambda _p, mode="all": {
+            "ok": True,
+            "mode": mode,
+            "local_status": "DELETED",
+            "local_detail": "local project directory deleted",
+            "repo_status": "ALREADY_DELETED",
+            "repo_detail": "github repository already deleted",
+        },
+    )
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat(id=109))
+    asyncio.run(command_delete_project(update, DummyContext(args=["all"])))
+
+    confirm_msg = DummyMessage()
+    confirm_update = DummyUpdate(message=confirm_msg, effective_chat=DummyChat(id=109))
+    confirm_update.message.text = "DELETE YES"  # type: ignore[attr-defined]
+    asyncio.run(telegram_bot.command_text(confirm_update, DummyContext()))
+    out = confirm_msg.sent[-1]
+    assert "GitHub repository:\nALREADY_DELETED" in out
+    assert "Repo detail:\ngithub repository already deleted" in out
+    assert get_current_project() is None
+
+
+def test_delete_project_repo_only_keeps_current_and_persists_state(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "delete_repo_state_proj"
+    archmind = project / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "state.json").write_text(json.dumps({"last_status": "DONE"}), encoding="utf-8")
+    set_current_project(project)
+    monkeypatch.setattr(
+        "archmind.deploy.delete_project",
+        lambda _p, mode="repo": {
+            "ok": True,
+            "mode": mode,
+            "local_status": "UNCHANGED",
+            "local_detail": "",
+            "repo_status": "ALREADY_DELETED",
+            "repo_detail": "github repository already deleted",
+        },
+    )
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat(id=111))
+    asyncio.run(command_delete_project(update, DummyContext(args=["repo"])))
+
+    confirm_msg = DummyMessage()
+    confirm_update = DummyUpdate(message=confirm_msg, effective_chat=DummyChat(id=111))
+    confirm_update.message.text = "DELETE YES"  # type: ignore[attr-defined]
+    asyncio.run(telegram_bot.command_text(confirm_update, DummyContext()))
+
+    assert get_current_project() == project.resolve()
+    payload = telegram_bot.load_state(project) or {}
+    deletion = payload.get("deletion") if isinstance(payload.get("deletion"), dict) else {}
+    assert deletion.get("mode") == "repo"
+    assert deletion.get("repo_status") == "ALREADY_DELETED"
+    assert deletion.get("local_status") == "UNCHANGED"
 
 
 def test_delete_yes_without_pending_is_ignored() -> None:

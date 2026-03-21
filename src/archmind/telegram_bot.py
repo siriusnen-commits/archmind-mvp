@@ -33,7 +33,14 @@ from archmind.plan_suggester import build_plan_from_project_spec, build_plan_fro
 from archmind.project_type import detect_project_type, normalize_project_type
 from archmind.design_suggester import build_architecture_design
 from archmind.spec_suggester import suggest_project_spec
-from archmind.state import derive_task_label_from_failure_signature, load_state, set_agent_state, update_after_deploy, update_runtime_state
+from archmind.state import (
+    derive_task_label_from_failure_signature,
+    load_state,
+    set_agent_state,
+    update_after_deploy,
+    update_runtime_state,
+    write_state,
+)
 from archmind.template_selector import is_supported_template, select_template_for_project_type
 
 LAST_PROJECT_PATH_FILE = Path.home() / ".archmind_telegram_last_project"
@@ -2058,20 +2065,21 @@ def _project_runtime_status(
     normalized_backend = [_normalize_runtime_state_label(x) for x in backend_states if str(x).strip()]
     normalized_frontend = [_normalize_runtime_state_label(x) for x in frontend_states if str(x).strip()]
     runtime_signal_present = bool(normalized_backend or normalized_frontend)
-    if "RUNNING" in normalized_backend or "RUNNING" in normalized_frontend:
+
+    live_backend_status = _normalize_runtime_state_label(str(backend_live.get("status") or ""))
+    live_frontend_status = _normalize_runtime_state_label(str(frontend_live.get("status") or ""))
+    live_signal_present = bool(str(backend_live.get("status") or "").strip() or str(frontend_live.get("status") or "").strip())
+
+    if live_signal_present:
+        if live_backend_status == "RUNNING" or live_frontend_status == "RUNNING":
+            return "RUNNING"
+    elif "RUNNING" in normalized_backend or "RUNNING" in normalized_frontend:
         return "RUNNING"
 
     runtime_failure_class = str(runtime_block.get("failure_class") or "").strip()
-    if runtime_failure_class:
-        return "FAIL"
-
     preflight = runtime_block.get("preflight") if isinstance(runtime_block.get("preflight"), dict) else {}
-    if str(preflight.get("status") or "").strip().upper() == "FAILED":
-        return "FAIL"
-
-    if "FAIL" in normalized_backend or "FAIL" in normalized_frontend:
-        return "FAIL"
-
+    preflight_failed = str(preflight.get("status") or "").strip().upper() == "FAILED"
+    step_failed = False
     steps = result_payload.get("steps") if isinstance(result_payload.get("steps"), dict) else {}
     for key in ("run_before_fix", "run_after_fix"):
         step = steps.get(key) if isinstance(steps, dict) else {}
@@ -2081,7 +2089,27 @@ def _project_runtime_status(
         backend_status = str((detail.get("backend_status") if isinstance(detail, dict) else "") or step.get("status") or "").strip().upper()
         frontend_status = str((detail.get("frontend_status") if isinstance(detail, dict) else "") or "").strip().upper()
         if backend_status in {"FAIL", "FAILED", "ERROR"} or frontend_status in {"FAIL", "FAILED", "ERROR"}:
+            step_failed = True
+            break
+
+    if live_signal_present:
+        if live_backend_status == "FAIL" or live_frontend_status == "FAIL":
             return "FAIL"
+        if preflight_failed or (runtime_failure_class and step_failed):
+            return "FAIL"
+        return "STOPPED"
+
+    if runtime_failure_class:
+        return "FAIL"
+
+    if preflight_failed:
+        return "FAIL"
+
+    if "FAIL" in normalized_backend or "FAIL" in normalized_frontend:
+        return "FAIL"
+
+    if step_failed:
+        return "FAIL"
 
     if bool(state_payload.get("backend_pid")) or bool(state_payload.get("frontend_pid")):
         return "RUNNING"
@@ -2251,22 +2279,46 @@ def format_projects_list(projects_dir: Optional[Path] = None, limit: int = 10) -
         lines.append(f"   Type: {project_type}")
         lines.append(f"   Template: {template}")
 
-        if runtime_backend_running and runtime_frontend_running:
-            runtime_line = "RUNNING"
-        elif runtime_backend_running:
-            runtime_line = "RUNNING (backend)"
-        elif runtime_frontend_running:
-            runtime_line = "RUNNING (frontend)"
+        if status == "RUNNING":
+            if runtime_backend_running and runtime_frontend_running:
+                lines.append("   Runtime: RUNNING (backend+frontend)")
+            elif runtime_backend_running:
+                lines.append("   Runtime: RUNNING (backend)")
+            elif runtime_frontend_running:
+                lines.append("   Runtime: RUNNING (frontend)")
+            else:
+                lines.append("   Runtime: RUNNING")
+        elif status == "FAIL":
+            lines.append("   Runtime: FAIL")
         else:
-            runtime_line = "STOPPED"
-        lines.append(f"   {runtime_line}")
-        if backend_url:
+            lines.append("   Runtime: STOPPED")
+        if runtime_backend_running and backend_url:
             lines.append(f"   Backend: {backend_url}")
-        if frontend_url:
+        if runtime_frontend_running and frontend_url:
             lines.append(f"   Frontend: {frontend_url}")
         if idx != len(picked):
             lines.append("")
     return _truncate_message("\n".join(lines), limit=3500)
+
+
+def _persist_delete_outcome(project_dir: Path, mode: str, result: dict[str, Any]) -> None:
+    project = project_dir.expanduser().resolve()
+    if not project.exists() or not project.is_dir():
+        return
+    payload = load_state(project) or {}
+    payload["deletion"] = {
+        "attempted": True,
+        "mode": str(mode or "").strip().lower() or "local",
+        "local_status": str(result.get("local_status") or "UNCHANGED").strip().upper(),
+        "local_detail": str(result.get("local_detail") or "").strip(),
+        "repo_status": str(result.get("repo_status") or "UNCHANGED").strip().upper(),
+        "repo_detail": str(result.get("repo_detail") or "").strip(),
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    try:
+        write_state(project, payload)
+    except Exception:
+        pass
 
 
 def format_project_tree(project_dir: Path, depth: int = 2, max_depth: int = 4, max_lines: int = 80) -> str:
@@ -6112,6 +6164,7 @@ async def command_delete_project(update: Any, context: Any) -> None:
     from archmind.deploy import delete_project
 
     result = delete_project(project_path, mode="local")
+    _persist_delete_outcome(project_path, "local", result)
     if str(result.get("local_status") or "").upper() == "DELETED":
         _clear_project_selection_if_deleted(project_path)
 
@@ -6151,6 +6204,7 @@ async def command_text(update: Any, context: Any) -> None:
     from archmind.deploy import delete_project
 
     result = delete_project(pending.project_dir, mode=pending.mode)
+    _persist_delete_outcome(pending.project_dir, pending.mode, result)
     if str(result.get("local_status") or "").upper() == "DELETED":
         _clear_project_selection_if_deleted(pending.project_dir)
     lines = [

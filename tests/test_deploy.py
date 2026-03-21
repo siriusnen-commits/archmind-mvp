@@ -1577,6 +1577,23 @@ def test_delete_github_repo_uses_gh_delete(monkeypatch, tmp_path: Path) -> None:
     assert captured["cmd"] == ["gh", "repo", "delete", "siriusnen-commits/demo-repo", "--yes"]
 
 
+def test_delete_github_repo_treats_404_as_already_deleted(monkeypatch, tmp_path: Path) -> None:
+    write_state(tmp_path, {"github_repo_url": "https://github.com/siriusnen-commits/demo-repo"})
+
+    class DummyCompleted:
+        returncode = 1
+        stdout = ""
+        stderr = "HTTP 404: Not Found"
+
+    monkeypatch.setattr("archmind.deploy.subprocess.run", lambda *_a, **_k: DummyCompleted())
+    result = delete_github_repo(tmp_path)
+    assert result["ok"] is True
+    assert result["repo_status"] == "ALREADY_DELETED"
+    assert "already deleted" in str(result["repo_detail"]).lower()
+    state = load_state(tmp_path) or {}
+    assert state.get("github_repo_url") == ""
+
+
 def test_delete_project_all_runs_repo_then_local(monkeypatch, tmp_path: Path) -> None:
     calls: list[str] = []
     monkeypatch.setattr(
