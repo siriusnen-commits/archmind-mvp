@@ -80,3 +80,14 @@ class RuntimeActionResponse(BaseModel):
     frontend_status: str = "STOPPED"
     backend_url: str = ""
     frontend_url: str = ""
+
+
+class DeleteActionResponse(BaseModel):
+    ok: bool = False
+    action: str = ""
+    project_name: str = ""
+    local_deleted: bool = False
+    github_deleted: bool = False
+    runtime_stopped: bool = False
+    detail: str = ""
+    error: str = ""

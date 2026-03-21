@@ -2408,4 +2408,5 @@ def delete_project(project_dir: Path, mode: str = "local") -> dict[str, Any]:
         "repo_status": str(repo.get("repo_status") or "UNCHANGED"),
         "repo_detail": str(repo.get("repo_detail") or ""),
         "repo_slug": str(repo.get("repo_slug") or ""),
+        "stop": local.get("stop") if isinstance(local, dict) else {},
     }

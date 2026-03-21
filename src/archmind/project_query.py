@@ -21,7 +21,7 @@ from archmind.telegram_bot import (
     load_last_project_path,
     summarize_recent_evolution,
 )
-from archmind.deploy import restart_local_services, run_backend_local_with_health, stop_local_services
+from archmind.deploy import delete_project, restart_local_services, run_backend_local_with_health, stop_local_services
 from archmind.ui_models import ProjectDetailResponse, ProjectListItem, RepositorySummary, RuntimeSummary, SpecSummary
 
 
@@ -408,4 +408,19 @@ def restart_project_runtime(project_dir: Path) -> dict[str, Any]:
 
 def stop_project_runtime(project_dir: Path) -> dict[str, Any]:
     result = stop_local_services(project_dir)
+    return result if isinstance(result, dict) else {}
+
+
+def delete_project_local(project_dir: Path) -> dict[str, Any]:
+    result = delete_project(project_dir, mode="local")
+    return result if isinstance(result, dict) else {}
+
+
+def delete_project_repo(project_dir: Path) -> dict[str, Any]:
+    result = delete_project(project_dir, mode="repo")
+    return result if isinstance(result, dict) else {}
+
+
+def delete_project_all(project_dir: Path) -> dict[str, Any]:
+    result = delete_project(project_dir, mode="all")
     return result if isinstance(result, dict) else {}

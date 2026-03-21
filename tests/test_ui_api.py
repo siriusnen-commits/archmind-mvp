@@ -294,6 +294,135 @@ def test_ui_runtime_action_endpoints(monkeypatch, tmp_path: Path) -> None:
         assert payload["error"] == ""
 
 
+def test_ui_delete_local_action_does_not_call_repo_delete(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "delete-local-only")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    calls = {"local": 0, "repo": 0}
+
+    def fake_local(_project_dir: Path):  # type: ignore[no-untyped-def]
+        calls["local"] += 1
+        return {
+            "ok": True,
+            "mode": "local",
+            "local_status": "DELETED",
+            "local_detail": "local project directory deleted",
+            "repo_status": "UNCHANGED",
+            "repo_detail": "",
+            "stop": {
+                "backend": {"status": "STOPPED"},
+                "frontend": {"status": "STOPPED"},
+            },
+        }
+
+    def fake_repo(_project_dir: Path):  # type: ignore[no-untyped-def]
+        calls["repo"] += 1
+        return {"ok": True}
+
+    monkeypatch.setattr("archmind.ui_api.delete_project_local", fake_local)
+    monkeypatch.setattr("archmind.ui_api.delete_project_repo", fake_repo)
+
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/delete-local-only/delete-local")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["action"] == "delete-local"
+    assert payload["project_name"] == "delete-local-only"
+    assert payload["local_deleted"] is True
+    assert payload["github_deleted"] is False
+    assert payload["runtime_stopped"] is True
+    assert calls["local"] == 1
+    assert calls["repo"] == 0
+
+
+def test_ui_delete_repo_action_is_separate_from_local(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "delete-repo-only")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    calls = {"local": 0, "repo": 0}
+
+    def fake_local(_project_dir: Path):  # type: ignore[no-untyped-def]
+        calls["local"] += 1
+        return {"ok": True}
+
+    def fake_repo(_project_dir: Path):  # type: ignore[no-untyped-def]
+        calls["repo"] += 1
+        return {
+            "ok": True,
+            "mode": "repo",
+            "repo_status": "DELETED",
+            "repo_detail": "github repository deleted",
+            "repo_slug": "example/demo",
+        }
+
+    monkeypatch.setattr("archmind.ui_api.delete_project_local", fake_local)
+    monkeypatch.setattr("archmind.ui_api.delete_project_repo", fake_repo)
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/delete-repo-only/delete-repo")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["local_deleted"] is False
+    assert payload["github_deleted"] is True
+    assert payload["runtime_stopped"] is False
+    assert calls["repo"] == 1
+    assert calls["local"] == 0
+
+
+def test_ui_delete_all_reports_partial_failure_safely(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "delete-all-mixed")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setattr(
+        "archmind.ui_api.delete_project_all",
+        lambda _project_dir: {
+            "ok": False,
+            "mode": "all",
+            "local_status": "DELETED",
+            "local_detail": "local project directory deleted",
+            "repo_status": "FAIL",
+            "repo_detail": "github repo delete failed",
+            "stop": {"backend": {"status": "STOPPED"}, "frontend": {"status": "STOPPED"}},
+        },
+    )
+
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/delete-all-mixed/delete-all")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["local_deleted"] is True
+    assert payload["github_deleted"] is False
+    assert payload["runtime_stopped"] is True
+    assert "github repo delete failed" in payload["error"]
+
+
+def test_ui_delete_local_removes_project_from_projects_list(tmp_path: Path, monkeypatch) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "to-be-deleted")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    before = client.get("/ui/projects")
+    assert before.status_code == 200
+    before_names = {item["name"] for item in before.json().get("projects", [])}
+    assert "to-be-deleted" in before_names
+    assert project_dir.exists()
+
+    deleted = client.post("/ui/projects/to-be-deleted/delete-local")
+    assert deleted.status_code == 200
+    payload = deleted.json()
+    assert payload["ok"] is True
+    assert payload["local_deleted"] is True
+    assert not project_dir.exists()
+
+    after = client.get("/ui/projects")
+    assert after.status_code == 200
+    after_names = {item["name"] for item in after.json().get("projects", [])}
+    assert "to-be-deleted" not in after_names
+
+
 def test_ui_runtime_url_expansion_with_lan_and_tailscale(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     _make_project(projects_root, "runtime-url-project")
