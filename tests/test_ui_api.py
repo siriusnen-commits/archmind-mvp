@@ -6,6 +6,7 @@ from urllib.parse import quote
 
 from fastapi.testclient import TestClient
 
+import archmind.current_project as current_project_state
 from archmind.state import write_state
 from archmind.telegram_bot import clear_current_project, get_validated_current_project, set_current_project
 from archmind.ui_api import create_ui_app
@@ -375,6 +376,25 @@ def test_ui_projects_reflect_backend_current_change_from_telegram_use(monkeypatc
         beta_detail = client.get("/ui/projects/beta").json()
         assert alpha_detail["is_current"] is False
         assert beta_detail["is_current"] is True
+    finally:
+        clear_current_project()
+
+
+def test_ui_projects_reflects_persisted_current_update_even_when_process_cache_is_stale(
+    monkeypatch, tmp_path: Path
+) -> None:
+    projects_root = tmp_path / "projects"
+    alpha = _make_project(projects_root, "alpha")
+    beta = _make_project(projects_root, "beta")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    current_project_state._CURRENT_PROJECT = alpha.resolve()
+    current_project_state.save_last_project_path(beta)
+
+    client = TestClient(create_ui_app())
+    try:
+        rows = {item["name"]: item for item in client.get("/ui/projects").json()["projects"]}
+        assert rows["beta"]["is_current"] is True
+        assert rows["alpha"]["is_current"] is False
     finally:
         clear_current_project()
 
