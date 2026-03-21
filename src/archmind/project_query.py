@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
+import socket
+import subprocess
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, urlunparse
@@ -79,8 +82,8 @@ def _expand_runtime_urls(primary_url: str) -> list[str]:
         return []
     out: list[str] = [base]
     seen: set[str] = {base}
-    for env_key in ("ARCHMIND_LAN_HOST", "ARCHMIND_TAILSCALE_HOST"):
-        host = str(os.getenv(env_key, "") or "").strip()
+    hosts = _resolved_runtime_hosts()
+    for host in hosts:
         if not host:
             continue
         alt = _replace_url_host(base, host)
@@ -88,6 +91,97 @@ def _expand_runtime_urls(primary_url: str) -> list[str]:
             continue
         seen.add(alt)
         out.append(alt)
+    return out
+
+
+def _runtime_hosts_config_path() -> Path:
+    override = str(os.getenv("ARCHMIND_UI_RUNTIME_HOSTS_PATH", "") or "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    return (Path.home() / ".archmind" / "ui_runtime_hosts.json").expanduser().resolve()
+
+
+def _load_persisted_runtime_hosts() -> dict[str, str]:
+    path = _runtime_hosts_config_path()
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key in ("lan_host", "tailscale_host"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            out[key] = value
+    return out
+
+
+def _save_persisted_runtime_hosts(lan_host: str, tailscale_host: str) -> None:
+    path = _runtime_hosts_config_path()
+    payload = {
+        "lan_host": str(lan_host or "").strip(),
+        "tailscale_host": str(tailscale_host or "").strip(),
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        return
+
+
+def _detect_lan_host() -> str:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("8.8.8.8", 80))
+        return str(sock.getsockname()[0] or "").strip()
+    except Exception:
+        return ""
+    finally:
+        sock.close()
+
+
+def _detect_tailscale_host() -> str:
+    try:
+        result = subprocess.run(
+            ["tailscale", "ip", "-4"],
+            capture_output=True,
+            text=True,
+            timeout=1,
+            shell=False,
+            check=False,
+        )
+        lines = [str(line).strip() for line in str(result.stdout or "").splitlines() if str(line).strip()]
+        return lines[0] if lines else ""
+    except Exception:
+        return ""
+
+
+def _resolved_runtime_hosts() -> list[str]:
+    persisted = _load_persisted_runtime_hosts()
+    lan_host = str(os.getenv("ARCHMIND_LAN_HOST", "") or "").strip()
+    tailscale_host = str(os.getenv("ARCHMIND_TAILSCALE_HOST", "") or "").strip()
+
+    if not lan_host:
+        lan_host = str(persisted.get("lan_host") or "").strip()
+    if not tailscale_host:
+        tailscale_host = str(persisted.get("tailscale_host") or "").strip()
+
+    if not lan_host:
+        lan_host = _detect_lan_host()
+    if not tailscale_host:
+        tailscale_host = _detect_tailscale_host()
+
+    _save_persisted_runtime_hosts(lan_host, tailscale_host)
+
+    out: list[str] = []
+    for host in (lan_host, tailscale_host):
+        value = str(host or "").strip()
+        if not value or value in out:
+            continue
+        out.append(value)
     return out
 
 
