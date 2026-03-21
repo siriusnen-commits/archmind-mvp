@@ -1,64 +1,78 @@
-# ArchMind v0.9.0
+# ArchMind v1.0.0
 
-ArchMind is a spec-driven AI development workflow engine with multi-service local runtime orchestration and primitive-based project evolution.
+ArchMind is a practical:
+- spec-driven AI development engine
+- runtime orchestration tool
+- multi-provider reasoning system
+- lightweight web dashboard
 
-It now supports a practical loop from idea to runnable and evolvable fullstack project:
+It supports a working loop from idea to runnable and evolvable project:
 `idea -> generation -> validation -> run -> inspect -> evolve`
 
-## Major Milestone in v0.9.0
+## v1.0.0 Highlights
 
-ArchMind now supports:
+- Multi-provider reasoning with `local` / `cloud` / `auto` modes and fallback-oriented operation.
+- Provider control in Telegram flows with visibility in inspection/status surfaces.
+- Web dashboard MVP for projects, runtime/spec/provider state, and recent evolution.
+- Next.js same-origin proxy UI architecture (`/api/ui/*`) so browsers only access the frontend origin.
+- Spec progression and recent evolution tracking retained across iterative changes.
 
-- primitive-based project evolution with `/add_entity`, `/add_field`, `/add_api`, `/add_page`
-- progression-aware `/inspect`, `/next`, and `/improve`
-- Recent evolution visibility in `/inspect`
-- multi-service local runtime orchestration retained and stabilized
-- backend + frontend local execution
-- `/run all`, `/restart`, `/stop`, `/stop all`
-- `/running`, `/logs backend`, `/logs frontend`
-- cleaned project operations and deletion handling
+## Major Capabilities
 
-## v0.9.0 Key Changes
+- Project generation and iteration from an idea.
+- Progression-aware loop with `/inspect`, `/next`, `/improve`.
+- Primitive evolution commands:
+  - `/add_entity <name>`
+  - `/add_field <Entity> <field:type>`
+  - `/add_api <METHOD> <path>`
+  - `/add_page <path>`
+- Runtime orchestration for local backend/frontend lifecycle:
+  - `/run backend`, `/run all`, `/running`, `/restart`, `/stop`, `/stop all`, `/logs`
+- Provider control:
+  - `/provider` based mode control (`local` / `cloud` / `auto`)
+- Dashboard MVP:
+  - project list/detail
+  - runtime/spec/provider/evolution views
+  - provider mode update from UI
+  - current project visibility
 
-### Spec-driven evolution
-- `/add_entity <name>`
-- `/add_field <Entity> <field:type>`
-- `/add_api <METHOD> <path>`
-- `/add_page <path>`
-- spec progression model (entity -> field -> api -> page)
-- `/inspect`, `/next`, `/improve` aligned around progression stages
+## Dashboard Architecture (MVP)
 
-### Inspection and guidance
-- Spec Summary in `/inspect`
-- stage-based recommendations in `/next`
-- actionable improvements in `/improve`
-- Recent evolution section in `/inspect`
+- Frontend: Next.js App Router (`frontend/`)
+- Browser-facing API path: `/api/ui/*` on the Next.js server
+- Proxy target (server-side only): `ARCHMIND_UI_API_BASE` or `http://127.0.0.1:8010/ui`
+- Backend UI API routes:
+  - `/ui/projects`
+  - `/ui/projects/{project}`
+  - `/ui/projects/{project}/provider` (GET/POST)
 
-### Runtime orchestration retained
-- backend + frontend service lifecycle management
-- `/run all`, `/restart`, `/stop`, `/stop all`
-- `/running`, `/logs backend`, `/logs frontend`
-- `runtime.services`-based runtime state model
-- consistent `RUNNING` / `STOPPED` / `FAIL` reporting
+This same-origin proxy layout avoids requiring end-user browsers to connect directly to backend port `8010`.
 
-### Project operations
-- GitHub repo creation/deletion state handling
-- idempotent repo delete behavior for already-removed repositories
-- cleaner `/projects` output and stale runtime/url suppression
-- current selection cleanup after local project deletion
+## Practical Access Modes
+
+- Local/LAN dashboard access:
+  - Example: `http://192.168.0.197:3000/dashboard`
+- Optional remote access:
+  - Tailscale-based access to the same dashboard endpoint on the host network
+
+## Current Limitations (Intentional for v1.0.0)
+
+- Dashboard is MVP and read-mostly plus targeted provider control updates.
+- Authentication/authorization is not implemented yet.
+- Realtime streaming/live push updates are not implemented yet.
 
 ## Core Workflow
 
-- idea -> project generation
-- structure validation
-- runtime detection
-- backend/frontend execution
-- inspect project state (runtime + spec)
-- evolve spec with entities / fields / APIs / pages
-- review next steps and improvements
+- Generate from idea (`/idea` or `/idea_local`)
+- Validate and run services
+- Inspect status/spec progress (`/inspect`)
+- Get next actions (`/next`) and corrections (`/improve`)
+- Evolve spec primitives (`/add_entity`, `/add_field`, `/add_api`, `/add_page`)
+- Re-run and iterate
 
 ## Key Commands
 
+- `/idea <idea>`
 - `/idea_local <idea>`
 - `/inspect`
 - `/next`
@@ -67,26 +81,16 @@ ArchMind now supports:
 - `/add_field <Entity> <field:type>`
 - `/add_api <METHOD> <path>`
 - `/add_page <path>`
+- `/provider`
 - `/run backend`
 - `/run all`
 - `/running`
 - `/restart`
 - `/stop`
 - `/stop all`
-- `/logs backend`
-- `/logs frontend`
-
-## What v0.9.0 Means
-
-ArchMind can now evolve a project through spec primitives while keeping runtime orchestration and inspection consistent.
+- `/logs`
 
 ## Offline Install
 
-For offline environments, ArchMind supports installation using a bundled dependency archive such as `wheelhouse.zip`.
+For offline environments, ArchMind supports installation using bundled dependencies (for example `wheelhouse.zip` workflows).
 You can verify offline installation with `scripts/offline_install_verify.sh`.
-
-## Next
-
-- local/cloud/hybrid provider layer
-- basic web UI dashboard
-- stronger provider-agnostic workflow
