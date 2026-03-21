@@ -4658,7 +4658,8 @@ def _build_improvement_report(project_path: Path) -> str:
             }
         )
 
-    suggestions = runtime_suggestions + structure_suggestions + evolution_suggestions
+    # Keep spec progression gaps as highest-priority improvements.
+    suggestions = evolution_suggestions + runtime_suggestions + structure_suggestions
     if not suggestions:
         suggestions.append(
             {

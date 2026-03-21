@@ -71,6 +71,34 @@ def _entity_name_list(entities: list[dict[str, Any]]) -> list[str]:
     return [str(entity.get("name") or "").strip() for entity in entities if str(entity.get("name") or "").strip()]
 
 
+def _has_minimum_api_coverage(entity_names: list[str], api_endpoints: set[str]) -> bool:
+    if not entity_names:
+        return False
+    for name in entity_names:
+        slug = _entity_slug(name)
+        if not slug:
+            return False
+        plural = f"{slug}s"
+        required = {f"GET /{plural}", f"POST /{plural}"}
+        if not required.issubset(api_endpoints):
+            return False
+    return True
+
+
+def _has_minimum_page_coverage(entity_names: list[str], frontend_pages: set[str]) -> bool:
+    if not entity_names:
+        return False
+    for name in entity_names:
+        slug = _entity_slug(name)
+        if not slug:
+            return False
+        plural = f"{slug}s"
+        required = {f"{plural}/list", f"{plural}/detail"}
+        if not required.issubset(frontend_pages):
+            return False
+    return True
+
+
 def analyze_spec_progression(spec: dict[str, Any]) -> dict[str, Any]:
     entities = _normalized_entities(spec)
     api_endpoints = _normalized_api_endpoints(spec.get("api_endpoints"))
@@ -84,15 +112,21 @@ def analyze_spec_progression(spec: dict[str, Any]) -> dict[str, Any]:
             first_entity_without_fields = str(entity.get("name") or "").strip()
             break
 
+    total_field_count = sum(
+        len(entity.get("fields") if isinstance(entity.get("fields"), list) else [])
+        for entity in entities
+    )
     frontend_expected = str(spec.get("shape") or "").strip().lower() == "fullstack" or bool(frontend_pages)
+    api_coverage_ok = _has_minimum_api_coverage(entity_names, api_endpoints)
+    page_coverage_ok = _has_minimum_page_coverage(entity_names, frontend_pages)
 
-    if not entities and not api_endpoints and not frontend_pages:
+    if not entities:
         stage = 0
-    elif entities and first_entity_without_fields:
+    elif first_entity_without_fields or total_field_count == 0:
         stage = 1
-    elif entities and not api_endpoints:
+    elif not api_coverage_ok:
         stage = 2
-    elif entities and api_endpoints and not frontend_pages and frontend_expected:
+    elif frontend_expected and not page_coverage_ok:
         stage = 3
     else:
         stage = 4
@@ -109,6 +143,8 @@ def analyze_spec_progression(spec: dict[str, Any]) -> dict[str, Any]:
         "first_entity_without_fields": first_entity_without_fields,
         "api_endpoints": api_endpoints,
         "frontend_pages": frontend_pages,
+        "api_coverage_ok": api_coverage_ok,
+        "page_coverage_ok": page_coverage_ok,
         "shape": str(spec.get("shape") or "").strip().lower(),
         "modules": [str(x).strip().lower() for x in (spec.get("modules") or []) if str(x).strip()],
     }
