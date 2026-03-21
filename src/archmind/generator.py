@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 from dataclasses import dataclass
@@ -645,6 +646,69 @@ def _write_if_missing(path: Path, content: str, generated: list[str], project_di
     generated.append(str(path.relative_to(project_dir)).replace("\\", "/"))
 
 
+def _render_frontend_api_base_helper() -> str:
+    return (
+        '"use client";\n\n'
+        'import { useEffect, useState } from "react";\n\n'
+        "const ENV_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL;\n"
+        'const ENV_BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "8000";\n'
+        'const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);\n\n'
+        "function isLoopbackHost(hostname: string) {\n"
+        '  return LOOPBACK_HOSTS.has((hostname || "").trim().toLowerCase());\n'
+        "}\n\n"
+        "function normalizeApiBase(raw: string): string {\n"
+        '  return String(raw || "").trim().replace(/\\/$/, "");\n'
+        "}\n\n"
+        "export function resolveRuntimeApiBaseUrl(): string {\n"
+        '  const fallbackPort = String(ENV_BACKEND_PORT || "8000").trim() || "8000";\n'
+        '  const loopbackFallback = `http://127.0.0.1:${fallbackPort}`;\n'
+        '  const hasWindow = typeof window !== "undefined";\n'
+        '  const browserHost = hasWindow ? (window.location.hostname || "").trim() : "";\n'
+        '  const browserProtocol = hasWindow && window.location.protocol === "https:" ? "https" : "http";\n'
+        "  if (ENV_API_BASE && ENV_API_BASE.trim()) {\n"
+        "    const rawEnvBase = ENV_API_BASE.trim();\n"
+        "    try {\n"
+        "      const parsed = new URL(rawEnvBase);\n"
+        "      if (!isLoopbackHost(parsed.hostname)) {\n"
+        "        return normalizeApiBase(parsed.toString());\n"
+        "      }\n"
+        "      if (!browserHost || isLoopbackHost(browserHost)) {\n"
+        "        return normalizeApiBase(parsed.toString());\n"
+        "      }\n"
+        "      parsed.hostname = browserHost;\n"
+        "      return normalizeApiBase(parsed.toString());\n"
+        "    } catch {\n"
+        "      return normalizeApiBase(rawEnvBase);\n"
+        "    }\n"
+        "  }\n"
+        "  if (browserHost) {\n"
+        "    return `${browserProtocol}://${browserHost}:${fallbackPort}`;\n"
+        "  }\n"
+        "  return loopbackFallback;\n"
+        "}\n\n"
+        "export function useResolvedApiBaseUrl(): string {\n"
+        "  const [apiBaseUrl, setApiBaseUrl] = useState<string>(() => resolveRuntimeApiBaseUrl());\n\n"
+        "  useEffect(() => {\n"
+        "    setApiBaseUrl(resolveRuntimeApiBaseUrl());\n"
+        "  }, []);\n\n"
+        "  return apiBaseUrl;\n"
+        "}\n"
+    )
+
+
+def _api_base_helper_import_for_page(app_root: Path, page_file: Path) -> str:
+    helper_target = app_root / "_lib" / "apiBase"
+    rel = os.path.relpath(helper_target, page_file.parent).replace("\\", "/")
+    if not rel.startswith("."):
+        rel = f"./{rel}"
+    return rel
+
+
+def _ensure_frontend_api_base_helper(app_root: Path, generated: list[str], project_dir: Path) -> None:
+    helper_path = app_root / "_lib" / "apiBase.ts"
+    _write_if_missing(helper_path, _render_frontend_api_base_helper(), generated, project_dir)
+
+
 def _render_entity_router_content(slug: str, plural: str) -> str:
     return (
         "from fastapi import APIRouter\n\n"
@@ -807,16 +871,29 @@ def apply_frontend_page_scaffold(project_dir: Path, entity_name: str) -> list[st
     list_page = app_root / plural / "page.tsx"
     detail_page = app_root / plural / "[id]" / "page.tsx"
     generated: list[str] = []
+    _ensure_frontend_api_base_helper(app_root, generated, project_dir)
+    list_helper_import = _api_base_helper_import_for_page(app_root, list_page)
+    detail_helper_import = _api_base_helper_import_for_page(app_root, detail_page)
 
     _write_if_missing(
         list_page,
-        _render_frontend_entity_list_page(component_name=f"{plural_title}Page", title=plural_title, entity_path=plural),
+        _render_frontend_entity_list_page(
+            component_name=f"{plural_title}Page",
+            title=plural_title,
+            entity_path=plural,
+            api_helper_import=list_helper_import,
+        ),
         generated,
         project_dir,
     )
     _write_if_missing(
         detail_page,
-        _render_frontend_entity_detail_page(component_name=f"{class_name}DetailPage", title=class_name, entity_path=plural),
+        _render_frontend_entity_detail_page(
+            component_name=f"{class_name}DetailPage",
+            title=class_name,
+            entity_path=plural,
+            api_helper_import=detail_helper_import,
+        ),
         generated,
         project_dir,
     )
@@ -842,8 +919,10 @@ def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
     comp_name = "".join(seg.replace("-", " ").replace("_", " ").title().replace(" ", "") for seg in segments) + "Page"
 
     generated: list[str] = []
+    _ensure_frontend_api_base_helper(app_root, generated, project_dir)
     leaf = segments[-1].lower()
     entity_path = "/".join(segments[:-1]).strip("/")
+    helper_import = _api_base_helper_import_for_page(app_root, target)
     if entity_path and leaf == "list":
         _write_if_missing(
             target,
@@ -853,6 +932,7 @@ def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
                 entity_path=entity_path,
                 detail_link_mode="query",
                 detail_href_base=f"/{entity_path}/detail",
+                api_helper_import=helper_import,
             ),
             generated,
             project_dir,
@@ -866,6 +946,7 @@ def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
                 title=title,
                 entity_path=entity_path,
                 id_mode="query",
+                api_helper_import=helper_import,
             ),
             generated,
             project_dir,
@@ -901,6 +982,7 @@ def _render_frontend_entity_list_page(
     entity_path: str,
     detail_link_mode: str = "path",
     detail_href_base: str | None = None,
+    api_helper_import: str = "../_lib/apiBase",
 ) -> str:
     api_path = f"/{str(entity_path or '').strip('/')}"
     detail_base = detail_href_base or api_path
@@ -912,45 +994,14 @@ def _render_frontend_entity_list_page(
     return (
         '"use client";\n\n'
         'import Link from "next/link";\n'
-        'import { useEffect, useMemo, useState } from "react";\n\n'
+        'import { useEffect, useState } from "react";\n'
+        f'import {{ useResolvedApiBaseUrl }} from "{api_helper_import}";\n\n'
         "type EntityItem = Record<string, unknown> & { id?: number | string };\n\n"
-        "const ENV_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL;\n"
-        'const ENV_BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "8000";\n\n'
-        'const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);\n\n'
-        "function isLoopbackHost(hostname: string) {\n"
-        '  return LOOPBACK_HOSTS.has((hostname || "").trim().toLowerCase());\n'
-        "}\n\n"
-        "function resolveApiBaseUrl() {\n"
-        '  const fallbackPort = String(ENV_BACKEND_PORT || "8000").trim() || "8000";\n'
-        '  const loopbackFallback = `http://127.0.0.1:${fallbackPort}`;\n'
-        '  if (typeof window === "undefined") {\n'
-        "    if (ENV_API_BASE && ENV_API_BASE.trim()) {\n"
-        "      return ENV_API_BASE.trim();\n"
-        "    }\n"
-        "    return loopbackFallback;\n"
-        "  }\n"
-        '  const browserProtocol = window.location.protocol === "https:" ? "https" : "http";\n'
-        '  const browserHost = (window.location.hostname || "127.0.0.1").trim();\n'
-        "  if (ENV_API_BASE && ENV_API_BASE.trim()) {\n"
-        "    const rawEnvBase = ENV_API_BASE.trim();\n"
-        "    try {\n"
-        "      const parsed = new URL(rawEnvBase);\n"
-        "      if (!isLoopbackHost(parsed.hostname) || isLoopbackHost(browserHost)) {\n"
-        '        return parsed.toString().replace(/\\/$/, "");\n'
-        "      }\n"
-        "      parsed.hostname = browserHost;\n"
-        '      return parsed.toString().replace(/\\/$/, "");\n'
-        "    } catch {\n"
-        "      return rawEnvBase;\n"
-        "    }\n"
-        "  }\n"
-        "  return `${browserProtocol}://${browserHost}:${fallbackPort}`;\n"
-        "}\n\n"
         f"export default function {component_name}() {{\n"
         "  const [items, setItems] = useState<EntityItem[]>([]);\n"
         "  const [loading, setLoading] = useState(true);\n"
         "  const [error, setError] = useState(\"\");\n"
-        "  const apiBaseUrl = useMemo(() => resolveApiBaseUrl(), []);\n\n"
+        "  const apiBaseUrl = useResolvedApiBaseUrl();\n\n"
         "  useEffect(() => {\n"
         "    let mounted = true;\n"
         "    (async () => {\n"
@@ -1019,6 +1070,7 @@ def _render_frontend_entity_detail_page(
     title: str,
     entity_path: str,
     id_mode: str = "path",
+    api_helper_import: str = "../../_lib/apiBase",
 ) -> str:
     api_path = f"/{str(entity_path or '').strip('/')}"
     id_source = (
@@ -1034,41 +1086,10 @@ def _render_frontend_entity_detail_page(
     hook = "const searchParams = useSearchParams();" if id_mode == "query" else "const params = useParams();"
     return (
         '"use client";\n\n'
-        "import { useEffect, useMemo, useState } from \"react\";\n"
+        "import { useEffect, useState } from \"react\";\n"
+        f'import {{ useResolvedApiBaseUrl }} from "{api_helper_import}";\n'
         f"{imports}\n"
         "type EntityItem = Record<string, unknown>;\n\n"
-        "const ENV_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL;\n"
-        'const ENV_BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "8000";\n\n'
-        'const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);\n\n'
-        "function isLoopbackHost(hostname: string) {\n"
-        '  return LOOPBACK_HOSTS.has((hostname || "").trim().toLowerCase());\n'
-        "}\n\n"
-        "function resolveApiBaseUrl() {\n"
-        '  const fallbackPort = String(ENV_BACKEND_PORT || "8000").trim() || "8000";\n'
-        '  const loopbackFallback = `http://127.0.0.1:${fallbackPort}`;\n'
-        '  if (typeof window === "undefined") {\n'
-        "    if (ENV_API_BASE && ENV_API_BASE.trim()) {\n"
-        "      return ENV_API_BASE.trim();\n"
-        "    }\n"
-        "    return loopbackFallback;\n"
-        "  }\n"
-        '  const browserProtocol = window.location.protocol === "https:" ? "https" : "http";\n'
-        '  const browserHost = (window.location.hostname || "127.0.0.1").trim();\n'
-        "  if (ENV_API_BASE && ENV_API_BASE.trim()) {\n"
-        "    const rawEnvBase = ENV_API_BASE.trim();\n"
-        "    try {\n"
-        "      const parsed = new URL(rawEnvBase);\n"
-        "      if (!isLoopbackHost(parsed.hostname) || isLoopbackHost(browserHost)) {\n"
-        '        return parsed.toString().replace(/\\/$/, "");\n'
-        "      }\n"
-        "      parsed.hostname = browserHost;\n"
-        '      return parsed.toString().replace(/\\/$/, "");\n'
-        "    } catch {\n"
-        "      return rawEnvBase;\n"
-        "    }\n"
-        "  }\n"
-        "  return `${browserProtocol}://${browserHost}:${fallbackPort}`;\n"
-        "}\n\n"
         f"export default function {component_name}() {{\n"
         f"  {hook}\n"
         f"  {id_source}\n"
@@ -1076,7 +1097,7 @@ def _render_frontend_entity_detail_page(
         "  const [loading, setLoading] = useState(true);\n"
         "  const [notFound, setNotFound] = useState(false);\n"
         "  const [error, setError] = useState(\"\");\n"
-        "  const apiBaseUrl = useMemo(() => resolveApiBaseUrl(), []);\n\n"
+        "  const apiBaseUrl = useResolvedApiBaseUrl();\n\n"
         "  useEffect(() => {\n"
         "    if (!id) {\n"
         "      setLoading(false);\n"

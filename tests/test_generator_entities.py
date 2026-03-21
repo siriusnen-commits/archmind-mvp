@@ -109,23 +109,26 @@ def test_apply_frontend_page_scaffold_creates_pages_for_frontend_structure(tmp_p
     (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
 
     generated = apply_frontend_page_scaffold(project_dir, "Task")
+    assert "frontend/app/_lib/apiBase.ts" in generated
     assert "frontend/app/tasks/page.tsx" in generated
     assert "frontend/app/tasks/[id]/page.tsx" in generated
+    helper_text = (project_dir / "frontend" / "app" / "_lib" / "apiBase.ts").read_text(encoding="utf-8")
     list_text = (project_dir / "frontend" / "app" / "tasks" / "page.tsx").read_text(encoding="utf-8")
     detail_text = (project_dir / "frontend" / "app" / "tasks" / "[id]" / "page.tsx").read_text(encoding="utf-8")
     assert "Loading..." in list_text
     assert "No items found." in list_text
     assert "fetch(`${apiBaseUrl}/tasks`" in list_text
-    assert "LOOPBACK_HOSTS" in list_text
-    assert "isLoopbackHost(parsed.hostname)" in list_text
-    assert "parsed.hostname = browserHost" in list_text
+    assert 'from "../_lib/apiBase"' in list_text
+    assert "useResolvedApiBaseUrl()" in list_text
+    assert "resolveRuntimeApiBaseUrl" in helper_text
+    assert "parsed.hostname = browserHost" in helper_text
+    assert "if (browserHost)" in helper_text
     assert "placeholder" not in list_text.lower()
     assert "Missing item id." in detail_text
     assert "Item not found." in detail_text
     assert "fetch(`${apiBaseUrl}/tasks/${id}`" in detail_text
-    assert "LOOPBACK_HOSTS" in detail_text
-    assert "isLoopbackHost(parsed.hostname)" in detail_text
-    assert "parsed.hostname = browserHost" in detail_text
+    assert 'from "../../_lib/apiBase"' in detail_text
+    assert "useResolvedApiBaseUrl()" in detail_text
     assert "placeholder" not in detail_text.lower()
 
 
@@ -171,12 +174,14 @@ def test_apply_page_scaffold_creates_explicit_page_and_is_idempotent(tmp_path: P
 
     first = apply_page_scaffold(project_dir, "reports/list")
     second = apply_page_scaffold(project_dir, "reports/list")
+    assert "frontend/app/_lib/apiBase.ts" in first
     assert "frontend/app/reports/list/page.tsx" in first
     assert second == []
     page_text = (project_dir / "frontend" / "app" / "reports" / "list" / "page.tsx").read_text(encoding="utf-8")
     assert "Loading..." in page_text
     assert "No items found." in page_text
     assert "fetch(`${apiBaseUrl}/reports`" in page_text
+    assert 'from "../../_lib/apiBase"' in page_text
     assert "placeholder" not in page_text.lower()
 
 
@@ -186,9 +191,11 @@ def test_apply_page_scaffold_detail_generates_non_placeholder_page(tmp_path: Pat
     (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
 
     generated = apply_page_scaffold(project_dir, "notes/detail")
+    assert "frontend/app/_lib/apiBase.ts" in generated
     assert "frontend/app/notes/detail/page.tsx" in generated
     page_text = (project_dir / "frontend" / "app" / "notes" / "detail" / "page.tsx").read_text(encoding="utf-8")
     assert "Missing item id." in page_text
     assert "Item not found." in page_text
     assert "fetch(`${apiBaseUrl}/notes/${id}`" in page_text
+    assert 'from "../../_lib/apiBase"' in page_text
     assert "placeholder" not in page_text.lower()
