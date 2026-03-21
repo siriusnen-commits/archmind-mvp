@@ -490,8 +490,8 @@ def test_defects_query_and_sorting():
     # Frontend (Next.js App Router)
     # -------------------------
     files["frontend/.env.example"] = (
-        "NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000\n"
-        "NEXT_PUBLIC_RUNTIME_BACKEND_URL=http://127.0.0.1:8000\n"
+        "NEXT_PUBLIC_API_BASE_URL=\n"
+        "NEXT_PUBLIC_RUNTIME_BACKEND_URL=\n"
         "NEXT_PUBLIC_FRONTEND_PORT=3000\n"
     )
 
@@ -703,8 +703,8 @@ function normalizeApiBase(raw: string): string {
 
 export function resolveRuntimeApiBaseUrl(): string {
   const runtimeCandidate = String(ENV_API_BASE || ENV_RUNTIME_BACKEND_URL || "").trim();
-  const fallbackPort = String(ENV_BACKEND_PORT || "").trim();
-  const defaultPort = fallbackPort || "8000";
+  const explicitPort = String(ENV_BACKEND_PORT || "").trim();
+  const fallbackPort = explicitPort || "8000";
   const browserHost = (window.location.hostname || "").trim();
   const browserProtocol = window.location.protocol === "https:" ? "https" : "http";
   if (runtimeCandidate) {
@@ -724,9 +724,9 @@ export function resolveRuntimeApiBaseUrl(): string {
     }
   }
   if (browserHost) {
-    return `${browserProtocol}://${browserHost}:${defaultPort}`;
+    return `${browserProtocol}://${browserHost}:${fallbackPort}`;
   }
-  return `http://127.0.0.1:${defaultPort}`;
+  return `http://127.0.0.1:${fallbackPort}`;
 }
 
 export function useApiBaseUrl(): { apiBaseUrl: string; apiBaseLoading: boolean } {
