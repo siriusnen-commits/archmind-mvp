@@ -19,6 +19,8 @@ from archmind.telegram_bot import (
     _resolve_project_type,
     get_current_project,
     load_last_project_path,
+    save_last_project_path,
+    set_current_project,
     summarize_recent_evolution,
 )
 from archmind.deploy import delete_project, restart_local_services, run_backend_local_with_health, stop_local_services
@@ -455,3 +457,33 @@ def delete_project_repo(project_dir: Path) -> dict[str, Any]:
 def delete_project_all(project_dir: Path) -> dict[str, Any]:
     result = delete_project(project_dir, mode="all")
     return result if isinstance(result, dict) else {}
+
+
+def select_current_project(project_dir: Path) -> dict[str, Any]:
+    target = project_dir.expanduser().resolve()
+    if not target.exists() or not target.is_dir():
+        return {
+            "ok": False,
+            "project_name": project_dir.name,
+            "is_current": False,
+            "detail": "Project not found",
+            "error": "Project not found",
+        }
+    try:
+        set_current_project(target)
+        save_last_project_path(target)
+        return {
+            "ok": True,
+            "project_name": target.name,
+            "is_current": _is_current_project(target),
+            "detail": "Current project updated",
+            "error": "",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "project_name": target.name,
+            "is_current": False,
+            "detail": "Failed to set current project",
+            "error": str(exc),
+        }

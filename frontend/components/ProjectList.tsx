@@ -1,4 +1,8 @@
+"use client";
+
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
 
 export type ProjectListItem = {
   name?: string;
@@ -23,6 +27,40 @@ type Props = {
 };
 
 export default function ProjectList({ projects, selectedName }: Props) {
+  const router = useRouter();
+  const [selectingName, setSelectingName] = useState("");
+  const [selectionError, setSelectionError] = useState("");
+
+  async function handleSelect(projectName: string) {
+    const target = String(projectName || "").trim();
+    if (!target) {
+      return;
+    }
+    setSelectingName(target);
+    setSelectionError("");
+    try {
+      const response = await fetch(`/api/ui/projects/${encodeURIComponent(target)}/select`, {
+        method: "POST",
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        detail?: string;
+        error?: string;
+      };
+      if (!response.ok || !Boolean(payload.ok)) {
+        const detail = String(payload.error || payload.detail || "").trim();
+        setSelectionError(detail ? `Failed to set current project: ${detail}` : "Failed to set current project");
+        return;
+      }
+      router.push(`/projects/${encodeURIComponent(target)}`);
+      router.refresh();
+    } catch {
+      setSelectionError("Failed to set current project");
+    } finally {
+      setSelectingName("");
+    }
+  }
+
   if (!projects.length) {
     return (
       <div className="rounded-md border border-slate-700 bg-slate-900 p-4 text-sm text-slate-300">
@@ -52,7 +90,17 @@ export default function ProjectList({ projects, selectedName }: Props) {
                 ].join(" ")}
               >
                 <div className="flex items-center gap-2">
-                  <Link href={name ? `/projects/${encodeURIComponent(name)}` : "/dashboard"} className="break-all text-sm font-medium text-slate-100 underline-offset-2 hover:underline">
+                  <Link
+                    href={name ? `/projects/${encodeURIComponent(name)}` : "/dashboard"}
+                    onClick={(event) => {
+                      if (!name) {
+                        return;
+                      }
+                      event.preventDefault();
+                      void handleSelect(name);
+                    }}
+                    className="break-all text-sm font-medium text-slate-100 underline-offset-2 hover:underline"
+                  >
                     {displayName}
                   </Link>
                   {isCurrent ? (
@@ -63,6 +111,7 @@ export default function ProjectList({ projects, selectedName }: Props) {
                 </div>
                 <p className="mt-1 break-all text-xs text-slate-300">ID: {name || "(unknown)"}</p>
                 <p className="text-xs text-slate-300">Status: {String(project.status || "unknown")}</p>
+                {selectingName === name ? <p className="text-xs text-cyan-300">Setting current project...</p> : null}
                 <div className="mt-1 text-xs text-slate-300">
                   Repository:{" "}
                   {repositoryUrl ? (
@@ -83,6 +132,7 @@ export default function ProjectList({ projects, selectedName }: Props) {
           );
         })}
       </ul>
+      {selectionError ? <p className="mt-2 break-words text-xs text-rose-300">{selectionError}</p> : null}
     </aside>
   );
 }

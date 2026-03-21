@@ -71,6 +71,14 @@ class ProviderModeResponse(BaseModel):
     mode: ProviderMode
 
 
+class CurrentProjectResponse(BaseModel):
+    ok: bool = False
+    project_name: str = ""
+    is_current: bool = False
+    detail: str = ""
+    error: str = ""
+
+
 class RuntimeActionResponse(BaseModel):
     ok: bool = False
     action: str = ""

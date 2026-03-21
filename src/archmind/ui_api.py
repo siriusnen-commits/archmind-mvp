@@ -17,11 +17,13 @@ from archmind.project_query import (
     restart_project_runtime,
     run_project_all,
     run_project_backend,
+    select_current_project,
     stop_project_runtime,
     update_project_provider_mode,
 )
 from archmind.deploy import get_local_runtime_status
 from archmind.ui_models import (
+    CurrentProjectResponse,
     DeleteActionResponse,
     ProjectListItem,
     ProjectDetailResponse,
@@ -139,6 +141,37 @@ def set_ui_project_provider(project_name: str, body: ProviderUpdateRequest) -> P
                 "project_name": project_name,
                 "safe": True,
             },
+        )
+
+
+@router.post("/projects/{project_name}/select", response_model=CurrentProjectResponse)
+def post_ui_project_select(project_name: str) -> CurrentProjectResponse:
+    try:
+        project_dir = find_project_by_name(project_name)
+        if project_dir is None:
+            return CurrentProjectResponse(
+                ok=False,
+                project_name=project_name,
+                is_current=False,
+                detail="Project not found",
+                error="Project not found",
+            )
+        result = select_current_project(project_dir)
+        return CurrentProjectResponse(
+            ok=bool(result.get("ok")),
+            project_name=str(result.get("project_name") or project_name),
+            is_current=bool(result.get("is_current")),
+            detail=str(result.get("detail") or ""),
+            error=str(result.get("error") or ""),
+        )
+    except Exception as exc:
+        logger.exception("Failed to select current project: %s", project_name)
+        return CurrentProjectResponse(
+            ok=False,
+            project_name=project_name,
+            is_current=False,
+            detail="Failed to set current project",
+            error=str(exc),
         )
 
 
