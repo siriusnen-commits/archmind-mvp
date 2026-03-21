@@ -123,14 +123,20 @@ def test_apply_frontend_page_scaffold_creates_pages_for_frontend_structure(tmp_p
     assert "useApiBaseUrl" in helper_text
     assert "setApiBaseUrl(resolveApiBaseInBrowser())" in helper_text
     assert "ENV_RUNTIME_BACKEND_URL" in helper_text
-    assert "ENV_API_BASE || ENV_RUNTIME_BACKEND_URL" in helper_text
+    assert "const explicitApiBase = String(ENV_API_BASE || \"\").trim();" in helper_text
+    assert "const runtimeBackendBase = String(ENV_RUNTIME_BACKEND_URL || \"\").trim();" in helper_text
     assert 'const ENV_BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "";' in helper_text
-    assert 'const fallbackPort = explicitPort || "8000";' in helper_text
+    assert 'const fallbackPort = explicitPort || "8000";' not in helper_text
+    assert "rewriteLoopbackToBrowserHost" in helper_text
+    assert "if (explicitApiBase)" in helper_text
+    assert "if (runtimeBackendBase)" in helper_text
+    assert "if (explicitPort)" in helper_text
+    assert "return `${browserProtocol}://${browserHost}:8000`;" in helper_text
     assert "parsed.hostname = browserHost" in helper_text
     assert "parsed.port" not in helper_text
     assert "return normalizeApiBase(parsed.toString());" in helper_text
     assert "if (browserHost)" in helper_text
-    assert "http://127.0.0.1:8000" not in helper_text
+    assert 'return "http://127.0.0.1:8000";' in helper_text
     assert "placeholder" not in list_text.lower()
     assert "Missing item id." in detail_text
     assert "Item not found." in detail_text
@@ -207,3 +213,17 @@ def test_apply_page_scaffold_detail_generates_non_placeholder_page(tmp_path: Pat
     assert "fetch(`${apiBaseUrl}/notes/${id}`" in page_text
     assert 'from "../../_lib/apiBase"' in page_text
     assert "placeholder" not in page_text.lower()
+
+
+def test_apply_page_scaffold_generic_page_uses_shared_api_base_helper(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_demo"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    generated = apply_page_scaffold(project_dir, "admin/home")
+    assert "frontend/app/_lib/apiBase.ts" in generated
+    assert "frontend/app/admin/home/page.tsx" in generated
+    page_text = (project_dir / "frontend" / "app" / "admin" / "home" / "page.tsx").read_text(encoding="utf-8")
+    assert 'from "../../_lib/apiBase"' in page_text
+    assert "useApiBaseUrl()" in page_text
+    assert 'API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}' in page_text

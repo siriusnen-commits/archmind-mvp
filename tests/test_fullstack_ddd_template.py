@@ -145,13 +145,19 @@ def test_fullstack_runtime_env_template_uses_api_base_url_and_settings(tmp_path:
     assert "setApiBaseUrl(resolveRuntimeApiBaseUrl())" in frontend_api_helper
     assert 'typeof window === "undefined"' in frontend_api_helper
     assert "ENV_RUNTIME_BACKEND_URL" in frontend_api_helper
-    assert "ENV_API_BASE || ENV_RUNTIME_BACKEND_URL" in frontend_api_helper
+    assert "const explicitApiBase = String(ENV_API_BASE || \"\").trim();" in frontend_api_helper
+    assert "const runtimeBackendBase = String(ENV_RUNTIME_BACKEND_URL || \"\").trim();" in frontend_api_helper
+    assert "rewriteLoopbackToBrowserHost" in frontend_api_helper
     assert "window.location.hostname" in frontend_api_helper
     assert "LOOPBACK_HOSTS" in frontend_api_helper
     assert "parsed.hostname = browserHost" in frontend_api_helper
+    assert 'return "http://127.0.0.1:8000";' in frontend_api_helper
     assert "NEXT_PUBLIC_BACKEND_URL" not in frontend_page
     assert "Backend: {backendUrl}" not in frontend_page
     assert 'Backend: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}' in frontend_page
+    assert 'from "./_lib/apiBase"' in root_page
+    assert "useApiBaseUrl()" in root_page
+    assert 'API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}' in root_page
     assert 'router.replace("/notes")' in root_page
     assert "DefectsPage" not in root_page
     assert "Defect Ledger" not in layout_page

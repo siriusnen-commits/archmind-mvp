@@ -660,32 +660,43 @@ def _render_frontend_api_base_helper() -> str:
         "function normalizeApiBase(raw: string): string {\n"
         '  return String(raw || "").trim().replace(/\\/$/, "");\n'
         "}\n\n"
+        "function rewriteLoopbackToBrowserHost(rawUrl: string, browserHost: string): string {\n"
+        "  try {\n"
+        "    const parsed = new URL(rawUrl);\n"
+        "    if (!isLoopbackHost(parsed.hostname)) {\n"
+        "      return normalizeApiBase(parsed.toString());\n"
+        "    }\n"
+        "    if (!browserHost || isLoopbackHost(browserHost)) {\n"
+        "      return normalizeApiBase(parsed.toString());\n"
+        "    }\n"
+        "    parsed.hostname = browserHost;\n"
+        "    return normalizeApiBase(parsed.toString());\n"
+        "  } catch {\n"
+        "    return normalizeApiBase(rawUrl);\n"
+        "  }\n"
+        "}\n\n"
         "function resolveApiBaseInBrowser(): string {\n"
-        "  const runtimeCandidate = String(ENV_API_BASE || ENV_RUNTIME_BACKEND_URL || \"\").trim();\n"
+        "  const explicitApiBase = String(ENV_API_BASE || \"\").trim();\n"
+        "  const runtimeBackendBase = String(ENV_RUNTIME_BACKEND_URL || \"\").trim();\n"
         '  const explicitPort = String(ENV_BACKEND_PORT || "").trim();\n'
-        '  const fallbackPort = explicitPort || "8000";\n'
         '  const browserHost = (window.location.hostname || "").trim();\n'
         '  const browserProtocol = window.location.protocol === "https:" ? "https" : "http";\n'
-        "  if (runtimeCandidate) {\n"
-        "    const rawEnvBase = runtimeCandidate;\n"
-        "    try {\n"
-        "      const parsed = new URL(rawEnvBase);\n"
-        "      if (!isLoopbackHost(parsed.hostname)) {\n"
-        "        return normalizeApiBase(parsed.toString());\n"
-        "      }\n"
-        "      if (!browserHost || isLoopbackHost(browserHost)) {\n"
-        "        return normalizeApiBase(parsed.toString());\n"
-        "      }\n"
-        "      parsed.hostname = browserHost;\n"
-        "      return normalizeApiBase(parsed.toString());\n"
-        "    } catch {\n"
-        "      return normalizeApiBase(rawEnvBase);\n"
+        "  if (explicitApiBase) {\n"
+        "    return rewriteLoopbackToBrowserHost(explicitApiBase, browserHost);\n"
+        "  }\n"
+        "  if (runtimeBackendBase) {\n"
+        "    return rewriteLoopbackToBrowserHost(runtimeBackendBase, browserHost);\n"
+        "  }\n"
+        "  if (explicitPort) {\n"
+        "    if (browserHost) {\n"
+        "      return `${browserProtocol}://${browserHost}:${explicitPort}`;\n"
         "    }\n"
+        '    return `http://127.0.0.1:${explicitPort}`;\n'
         "  }\n"
         "  if (browserHost) {\n"
-        "    return `${browserProtocol}://${browserHost}:${fallbackPort}`;\n"
+        '    return `${browserProtocol}://${browserHost}:8000`;\n'
         "  }\n"
-        '  return `http://127.0.0.1:${fallbackPort}`;\n'
+        '  return "http://127.0.0.1:8000";\n'
         "}\n\n"
         "export function useApiBaseUrl(): { apiBaseUrl: string; apiBaseLoading: boolean } {\n"
         '  const [apiBaseUrl, setApiBaseUrl] = useState("");\n'
@@ -961,18 +972,22 @@ def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
 
     _write_if_missing(
         target,
+        '"use client";\n\n'
+        f'import {{ useApiBaseUrl }} from "{helper_import}";\n\n'
         "export default function "
         + comp_name
         + "() {\n"
+        "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n"
         "  return (\n"
-        "    <div>\n"
+        '    <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">\n'
         "      <h1>"
         + title
         + "</h1>\n"
+        '      <p className="text-xs text-slate-400">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>\n'
         "      <p>Page placeholder for "
         + rel
         + "</p>\n"
-        "    </div>\n"
+        "    </section>\n"
         "  );\n"
         "}\n",
         generated,
