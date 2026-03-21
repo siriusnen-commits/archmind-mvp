@@ -18,6 +18,7 @@ def _make_project(
     provider_mode: str = "local",
     with_evolution: bool = True,
     display_name: str = "",
+    repository: dict[str, str] | None = None,
 ) -> Path:
     project_dir = base / name
     archmind_dir = project_dir / ".archmind"
@@ -36,7 +37,7 @@ def _make_project(
                     "frontend": {"status": "STOPPED", "url": "http://127.0.0.1:3000"},
                 }
             },
-            "repository": {"status": "CREATED", "url": f"https://github.com/example/{name}"},
+            "repository": repository if isinstance(repository, dict) else {"status": "CREATED", "url": f"https://github.com/example/{name}"},
         },
     )
     spec = {
@@ -76,6 +77,7 @@ def test_ui_projects_response_shape(monkeypatch, tmp_path: Path) -> None:
         "template",
         "backend_url",
         "frontend_url",
+        "repository",
         "is_current",
         "warning",
     ):
@@ -84,6 +86,8 @@ def test_ui_projects_response_shape(monkeypatch, tmp_path: Path) -> None:
     assert item["status"] in {"RUNNING", "STOPPED", "FAIL"}
     assert item["backend_url"] == ""
     assert item["frontend_url"] == ""
+    assert item["repository"]["status"] == "CREATED"
+    assert item["repository"]["url"] == "https://github.com/example/alpha"
 
 
 def test_ui_projects_marks_current_project(monkeypatch, tmp_path: Path) -> None:
@@ -148,11 +152,44 @@ def test_ui_project_detail_response_shape(monkeypatch, tmp_path: Path) -> None:
     assert "runtime" in payload
     assert "recent_evolution" in payload
     assert "repository" in payload
+    assert payload["repository"]["status"] == "CREATED"
+    assert payload["repository"]["url"] == "https://github.com/example/beta"
     assert "warning" in payload
     assert "safe" in payload
     assert "backend_urls" in payload["runtime"]
     assert "frontend_urls" in payload["runtime"]
     assert payload["spec_summary"]["stage"].startswith("Stage")
+
+
+def test_ui_projects_response_includes_safe_repository_when_missing(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "no-repo", repository={"status": "SKIPPED", "url": ""})
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.get("/ui/projects")
+    assert response.status_code == 200
+    item = response.json()["projects"][0]
+    assert "repository" in item
+    assert item["repository"]["status"] == "SKIPPED"
+    assert item["repository"]["url"] == ""
+
+
+def test_ui_projects_response_tolerates_malformed_repository_metadata(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "broken-repo")
+    state_payload = json.loads((project_dir / ".archmind" / "state.json").read_text(encoding="utf-8"))
+    state_payload["repository"] = "not-a-dict"
+    state_payload["github_repo_url"] = 12345
+    write_state(project_dir, state_payload)
+
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects")
+    assert response.status_code == 200
+    item = response.json()["projects"][0]
+    assert item["repository"]["status"] == "CREATED"
+    assert item["repository"]["url"] == "12345"
 
 
 def test_ui_provider_get(monkeypatch, tmp_path: Path) -> None:

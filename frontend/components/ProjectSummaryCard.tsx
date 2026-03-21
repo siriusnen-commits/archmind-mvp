@@ -13,6 +13,10 @@ type ProjectSummary = {
   shape?: string;
   template?: string;
   spec_summary?: SpecSummary;
+  repository?: {
+    status?: string;
+    url?: string;
+  };
 };
 
 type Props = {
@@ -23,6 +27,8 @@ export default function ProjectSummaryCard({ project }: Props) {
   const name = String(project.name || "");
   const displayName = String(project.display_name || name || "(unknown)");
   const spec = project.spec_summary || {};
+  const repositoryStatus = String(project.repository?.status || "SKIPPED").trim() || "SKIPPED";
+  const repositoryUrl = String(project.repository?.url || "").trim();
 
   return (
     <section className="rounded-md border border-slate-700 bg-slate-900 p-4">
@@ -66,6 +72,19 @@ export default function ProjectSummaryCard({ project }: Props) {
         <div>
           <dt className="text-slate-300">History</dt>
           <dd className="text-slate-100">{Number(spec.history_count || 0)}</dd>
+        </div>
+        <div className="col-span-2">
+          <dt className="text-slate-300">Repository</dt>
+          <dd className="break-all text-slate-100">
+            {repositoryUrl ? (
+              <a href={repositoryUrl} target="_blank" rel="noreferrer" className="text-cyan-300 underline underline-offset-2 hover:text-cyan-200">
+                Open Repo
+              </a>
+            ) : (
+              "No repository"
+            )}
+            <span className="ml-2 text-xs text-slate-300">({repositoryStatus})</span>
+          </dd>
         </div>
       </dl>
     </section>
