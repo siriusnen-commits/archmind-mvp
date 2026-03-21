@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi.testclient import TestClient
 
@@ -189,3 +190,72 @@ def test_ui_display_name_falls_back_to_identifier(monkeypatch, tmp_path: Path) -
     payload = response.json()
     assert payload["projects"][0]["name"] == "safe-id"
     assert payload["projects"][0]["display_name"] == "safe-id"
+
+
+def test_ui_korean_project_identifier_route_works(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_name = "프로젝트-한글"
+    _make_project(projects_root, project_name, display_name="표시 전용 이름")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.get(f"/ui/projects/{quote(project_name)}")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["name"] == project_name
+    assert payload["display_name"] == "표시 전용 이름"
+
+
+def test_ui_project_detail_uses_stable_name_not_display_name(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "stable-id", display_name="한글 표시명")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.get(f"/ui/projects/{quote('한글 표시명')}")
+    assert response.status_code == 404
+
+    response = client.get("/ui/projects/stable-id")
+    assert response.status_code == 200
+    assert response.json()["display_name"] == "한글 표시명"
+
+
+def test_ui_runtime_action_endpoints(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "runtime-project")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    monkeypatch.setattr(
+        "archmind.ui_api.get_local_runtime_status",
+        lambda _project_dir: {
+            "backend": {"status": "RUNNING", "url": "http://127.0.0.1:8000"},
+            "frontend": {"status": "RUNNING", "url": "http://127.0.0.1:3000"},
+        },
+    )
+    monkeypatch.setattr(
+        "archmind.ui_api.run_project_backend",
+        lambda _project_dir: {"ok": True, "status": "SUCCESS", "detail": "backend started"},
+    )
+    monkeypatch.setattr(
+        "archmind.ui_api.run_project_all",
+        lambda _project_dir: {"ok": True, "status": "SUCCESS", "detail": "all started"},
+    )
+    monkeypatch.setattr(
+        "archmind.ui_api.restart_project_runtime",
+        lambda _project_dir: {"ok": True, "status": "SUCCESS", "detail": "restarted"},
+    )
+    monkeypatch.setattr(
+        "archmind.ui_api.stop_project_runtime",
+        lambda _project_dir: {"ok": True, "status": "SUCCESS", "detail": "stopped"},
+    )
+
+    client = TestClient(create_ui_app())
+    for action in ("run-backend", "run-all", "restart", "stop"):
+        response = client.post(f"/ui/projects/runtime-project/{action}")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["ok"] is True
+        assert payload["backend_status"] == "RUNNING"
+        assert payload["frontend_status"] == "RUNNING"
+        assert payload["backend_url"] == "http://127.0.0.1:8000"
+        assert payload["frontend_url"] == "http://127.0.0.1:3000"

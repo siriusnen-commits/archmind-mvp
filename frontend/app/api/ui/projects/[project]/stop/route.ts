@@ -6,11 +6,12 @@ type Params = {
   params: Promise<{ project: string }>;
 };
 
-export async function GET(_request: Request, { params }: Params) {
+export async function POST(_request: Request, { params }: Params) {
   const resolved = await params;
   const project = decodeURIComponent(String(resolved?.project || ""));
   try {
-    const response = await fetch(`${BACKEND_UI_BASE}/projects/${encodeURIComponent(project)}`, {
+    const response = await fetch(`${BACKEND_UI_BASE}/projects/${encodeURIComponent(project)}/stop`, {
+      method: "POST",
       cache: "no-store",
     });
     const body = await response.text();
