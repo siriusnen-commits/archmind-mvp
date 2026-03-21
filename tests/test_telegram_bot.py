@@ -2816,10 +2816,10 @@ def test_inspect_recent_evolution_reflects_primitive_execution_and_limit(tmp_pat
     inspect_msg = DummyMessage()
     asyncio.run(command_inspect(DummyUpdate(message=inspect_msg, effective_chat=DummyChat()), DummyContext()))
     out = inspect_msg.sent[-1]
-    assert "History count: 6" in out
+    assert "History count: 10" in out
     assert "Recent evolution:" in out
     # recent list is capped to latest 5 entries in inspect
-    assert "- add_entity Note" not in out
+    assert "- auto_add_page notes/detail" not in out
     assert "- add_field Note title:string" in out
     assert "- add_field Note content:string" in out
     assert "- add_api GET /reports" in out
@@ -3853,7 +3853,12 @@ def test_add_entity_updates_spec_and_evolution_history(tmp_path: Path, monkeypat
 
     payload = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
     assert payload.get("entities") == [{"name": "Task", "fields": []}]
-    assert payload.get("evolution", {}).get("history", [])[-1] == {"action": "add_entity", "entity": "Task"}
+    history = payload.get("evolution", {}).get("history", [])
+    assert history[0] == {"action": "add_entity", "entity": "Task"}
+    assert {"action": "auto_add_api", "method": "GET", "path": "/tasks"} in history
+    assert {"action": "auto_add_api", "method": "POST", "path": "/tasks"} in history
+    assert {"action": "auto_add_page", "page": "tasks/list"} in history
+    assert {"action": "auto_add_page", "page": "tasks/detail"} in history
 
 
 def test_add_entity_prevents_duplicate_case_insensitive(tmp_path: Path, monkeypatch) -> None:
@@ -3886,6 +3891,47 @@ def test_add_entity_prevents_duplicate_case_insensitive(tmp_path: Path, monkeypa
 
     payload = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
     assert payload.get("entities") == [{"name": "Task", "fields": []}]
+    assert payload.get("evolution", {}).get("history", []) == []
+
+
+def test_add_entity_auto_generated_evolution_visible_in_inspect(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "note_fullstack"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "frontend").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "pages").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text(json.dumps({"name": "demo", "scripts": {"dev": "next dev"}}), encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    add_msg = DummyMessage()
+    asyncio.run(command_add_entity(DummyUpdate(message=add_msg, effective_chat=DummyChat()), DummyContext(args=["Note"])))
+
+    inspect_msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=inspect_msg, effective_chat=DummyChat()), DummyContext()))
+    out = inspect_msg.sent[-1]
+    assert "Recent evolution:" in out
+    assert "- add_entity Note" in out
+    assert "- auto_add_api GET /notes" in out
+    assert "- auto_add_api POST /notes" in out
+    assert "- auto_add_page notes/list" in out
+    assert "- auto_add_page notes/detail" in out
 
 
 def test_add_entity_already_exists_preserves_existing_fields(tmp_path: Path, monkeypatch) -> None:
