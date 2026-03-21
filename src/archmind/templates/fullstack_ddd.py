@@ -683,9 +683,65 @@ export default function DefectsRoutePage() {
 }
 """
 
+    files["frontend/app/_lib/apiBase.ts"] = """"use client";
+
+import { useEffect, useState } from "react";
+
+const ENV_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL;
+const ENV_BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "8000";
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+function isLoopbackHost(hostname: string) {
+  return LOOPBACK_HOSTS.has((hostname || "").trim().toLowerCase());
+}
+
+function normalizeApiBase(raw: string): string {
+  return String(raw || "").trim().replace(/\\/$/, "");
+}
+
+export function resolveRuntimeApiBaseUrl(): string {
+  const fallbackPort = String(ENV_BACKEND_PORT || "8000").trim() || "8000";
+  const loopbackFallback = `http://127.0.0.1:${fallbackPort}`;
+  const hasWindow = typeof window !== "undefined";
+  const browserHost = hasWindow ? (window.location.hostname || "").trim() : "";
+  const browserProtocol = hasWindow && window.location.protocol === "https:" ? "https" : "http";
+  if (ENV_API_BASE && ENV_API_BASE.trim()) {
+    const rawEnvBase = ENV_API_BASE.trim();
+    try {
+      const parsed = new URL(rawEnvBase);
+      if (!isLoopbackHost(parsed.hostname)) {
+        return normalizeApiBase(parsed.toString());
+      }
+      if (!browserHost || isLoopbackHost(browserHost)) {
+        return normalizeApiBase(parsed.toString());
+      }
+      parsed.hostname = browserHost;
+      return normalizeApiBase(parsed.toString());
+    } catch {
+      return normalizeApiBase(rawEnvBase);
+    }
+  }
+  if (browserHost) {
+    return `${browserProtocol}://${browserHost}:${fallbackPort}`;
+  }
+  return loopbackFallback;
+}
+
+export function useResolvedApiBaseUrl(): string {
+  const [apiBaseUrl, setApiBaseUrl] = useState<string>(() => resolveRuntimeApiBaseUrl());
+
+  useEffect(() => {
+    setApiBaseUrl(resolveRuntimeApiBaseUrl());
+  }, []);
+
+  return apiBaseUrl;
+}
+"""
+
     files["frontend/app/ui/DefectsPage.tsx"] = """"use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useResolvedApiBaseUrl } from "../_lib/apiBase";
 
 type Defect = {
   id: number;
@@ -701,43 +757,8 @@ type DefectListResponse = {
   page_size: number;
 };
 
-const ENV_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL;
-const ENV_BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "8000";
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
-
-function isLoopbackHost(hostname: string) {
-  return LOOPBACK_HOSTS.has((hostname || "").trim().toLowerCase());
-}
-
-function resolveApiBaseUrl() {
-  const fallbackPort = String(ENV_BACKEND_PORT || "8000").trim() || "8000";
-  const loopbackFallback = `http://127.0.0.1:${fallbackPort}`;
-  if (typeof window === "undefined") {
-    if (ENV_API_BASE && ENV_API_BASE.trim()) {
-      return ENV_API_BASE.trim();
-    }
-    return loopbackFallback;
-  }
-  const browserProtocol = window.location.protocol === "https:" ? "https" : "http";
-  const browserHost = (window.location.hostname || "127.0.0.1").trim();
-  if (ENV_API_BASE && ENV_API_BASE.trim()) {
-    const rawEnvBase = ENV_API_BASE.trim();
-    try {
-      const parsed = new URL(rawEnvBase);
-      if (!isLoopbackHost(parsed.hostname) || isLoopbackHost(browserHost)) {
-        return parsed.toString().replace(/\\/$/, "");
-      }
-      parsed.hostname = browserHost;
-      return parsed.toString().replace(/\\/$/, "");
-    } catch {
-      return rawEnvBase;
-    }
-  }
-  return `${browserProtocol}://${browserHost}:${fallbackPort}`;
-}
-
 export default function DefectsPage() {
-  const apiBaseUrl = useMemo(() => resolveApiBaseUrl(), []);
+  const apiBaseUrl = useResolvedApiBaseUrl();
   const [items, setItems] = useState<Defect[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
