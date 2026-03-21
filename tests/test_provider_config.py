@@ -46,7 +46,9 @@ def test_resolve_provider_mode_uses_env_fallback(monkeypatch) -> None:
 
 def test_provider_command_updates_state_and_reads_current_mode(tmp_path: Path) -> None:
     project_dir = tmp_path / "provider_project"
-    project_dir.mkdir(parents=True, exist_ok=True)
+    archmind_dir = project_dir / ".archmind"
+    archmind_dir.mkdir(parents=True, exist_ok=True)
+    (archmind_dir / "state.json").write_text("{}", encoding="utf-8")
     set_current_project(project_dir)
 
     msg_set = DummyMessage()
@@ -91,7 +93,9 @@ def test_generate_reasoning_text_uses_state_provider_mode(monkeypatch, tmp_path:
 
 def test_provider_command_invalid_mode_returns_error(tmp_path: Path) -> None:
     project_dir = tmp_path / "provider_invalid_project"
-    project_dir.mkdir(parents=True, exist_ok=True)
+    archmind_dir = project_dir / ".archmind"
+    archmind_dir.mkdir(parents=True, exist_ok=True)
+    (archmind_dir / "state.json").write_text("{}", encoding="utf-8")
     set_current_project(project_dir)
     msg = DummyMessage()
     asyncio.run(command_provider(DummyUpdate(message=msg), DummyContext(args=["invalid"])))

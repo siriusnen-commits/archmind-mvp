@@ -212,8 +212,9 @@ def get_current_project() -> Optional[Path]:
     if _CURRENT_PROJECT is None:
         return None
     project_dir = _CURRENT_PROJECT.expanduser().resolve()
-    if project_dir.exists() and project_dir.is_dir():
+    if is_valid_archmind_project_dir(project_dir):
         return project_dir
+    clear_current_project()
     return None
 
 
@@ -223,19 +224,16 @@ def _clear_project_selection_if_deleted(project_dir: Path) -> None:
     if current is not None and current.resolve() == target:
         clear_current_project()
     last = load_last_project_path()
-    if last is not None and last.resolve() == target and LAST_PROJECT_PATH_FILE.expanduser().exists():
-        try:
-            LAST_PROJECT_PATH_FILE.expanduser().unlink()
-        except Exception:
-            pass
+    if last is not None and last.resolve() == target:
+        clear_last_project_path()
 
 
 def _resolve_target_project() -> Optional[Path]:
     current = get_current_project()
     if current is not None:
         return current
-    last = load_last_project_path()
-    if last is not None and last.exists() and last.is_dir():
+    last = load_valid_last_project_path()
+    if last is not None:
         return last
     return None
 
@@ -329,6 +327,21 @@ def save_last_project_path(project_dir: Path, file_path: Path = LAST_PROJECT_PAT
     file_path.expanduser().write_text(str(project_dir.expanduser().resolve()), encoding="utf-8")
 
 
+def is_valid_archmind_project_dir(project_dir: Path) -> bool:
+    path = project_dir.expanduser().resolve()
+    return path.exists() and path.is_dir()
+
+
+def clear_last_project_path(file_path: Path = LAST_PROJECT_PATH_FILE) -> None:
+    target = file_path.expanduser()
+    if not target.exists():
+        return
+    try:
+        target.unlink()
+    except Exception:
+        return
+
+
 def load_last_project_path(file_path: Path = LAST_PROJECT_PATH_FILE) -> Optional[Path]:
     target = file_path.expanduser()
     if not target.exists():
@@ -337,6 +350,21 @@ def load_last_project_path(file_path: Path = LAST_PROJECT_PATH_FILE) -> Optional
     if not value:
         return None
     return Path(value).expanduser().resolve()
+
+
+def load_valid_last_project_path(file_path: Path = LAST_PROJECT_PATH_FILE) -> Optional[Path]:
+    # Keep compatibility with tests and monkeypatches that replace
+    # load_last_project_path with a zero-argument callable.
+    try:
+        project_dir = load_last_project_path(file_path)
+    except TypeError:
+        project_dir = load_last_project_path()
+    if project_dir is None:
+        return None
+    if is_valid_archmind_project_dir(project_dir):
+        return project_dir
+    clear_last_project_path(file_path=file_path)
+    return None
 
 
 def planned_project_dir(base_dir: Path, idea: str, ts: Optional[str] = None) -> Path:
@@ -1951,7 +1979,7 @@ def list_recent_projects(projects_dir: Optional[Path] = None, limit: int = 10) -
     root = (projects_dir or resolve_projects_dir()).expanduser().resolve()
     if not root.exists() or not root.is_dir():
         return []
-    projects = [path for path in root.iterdir() if path.is_dir()]
+    projects = [path for path in root.iterdir() if path.is_dir() and is_valid_archmind_project_dir(path)]
     projects.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return projects[: max(0, int(limit))]
 

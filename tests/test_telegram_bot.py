@@ -53,6 +53,7 @@ from archmind.telegram_bot import (
     command_state,
     extract_idea,
     load_last_project_path,
+    load_valid_last_project_path,
     make_project_name,
     planned_project_dir,
     read_recent_backend_logs,
@@ -104,6 +105,17 @@ def test_last_project_path_save_and_load(tmp_path: Path) -> None:
     save_last_project_path(project_path, file_path=path_file)
     loaded = load_last_project_path(file_path=path_file)
     assert loaded == project_path.resolve()
+
+
+def test_load_valid_last_project_path_rejects_stale_target_and_clears_file(tmp_path: Path) -> None:
+    path_file = tmp_path / "last_project"
+    stale_project = tmp_path / "beta"
+    # stale target intentionally does not exist
+    save_last_project_path(stale_project, file_path=path_file)
+
+    loaded = load_valid_last_project_path(file_path=path_file)
+    assert loaded is None
+    assert not path_file.exists()
 
 
 def test_build_pipeline_command() -> None:
@@ -730,6 +742,9 @@ def test_fix_without_last_project_shows_help(monkeypatch) -> None:
 def test_fix_command_sets_fixing_state(monkeypatch, tmp_path: Path) -> None:
     project_dir = tmp_path / "proj_fix"
     project_dir.mkdir(parents=True, exist_ok=True)
+    archmind_dir = project_dir / ".archmind"
+    archmind_dir.mkdir(parents=True, exist_ok=True)
+    (archmind_dir / "state.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project_dir)
     captured_states: list[str] = []
 
@@ -974,6 +989,7 @@ def test_logs_local_backend_only(tmp_path: Path) -> None:
 def test_logs_local_no_logs_available(tmp_path: Path) -> None:
     project_dir = tmp_path / "local_logs_empty"
     project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
     set_current_project(project_dir)
 
     msg = DummyMessage()
@@ -1744,6 +1760,19 @@ def test_current_uses_persisted_selection_when_in_memory_current_is_missing(monk
     out = msg.sent[-1]
     assert "Current project" in out
     assert "Project: persisted_current_proj" in out
+
+
+def test_current_returns_no_selection_when_persisted_project_is_stale(monkeypatch, tmp_path: Path) -> None:
+    stale_project = tmp_path / "beta"
+    stale_project.mkdir(parents=True, exist_ok=True)
+    clear_current_project()
+    monkeypatch.setattr("archmind.telegram_bot.load_valid_last_project_path", lambda: None)
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_current(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "No current project selected" in out
 
 
 def test_current_shows_frontend_url_when_frontend_running(monkeypatch, tmp_path: Path) -> None:
