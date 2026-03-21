@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from .reasoning import try_generate_reasoning_json
@@ -38,7 +39,12 @@ def _entity_slug_and_plural(entity_name: str) -> tuple[str, str]:
     return slug, f"{slug}s"
 
 
-def suggest_project_spec(idea: str, reasoning: dict[str, Any]) -> dict[str, Any]:
+def suggest_project_spec(
+    idea: str,
+    reasoning: dict[str, Any],
+    *,
+    provider_project_dir: Path | None = None,
+) -> dict[str, Any]:
     text = str(idea or "").strip().lower()
     domains = [str(x).strip().lower() for x in (reasoning.get("domains") or []) if str(x).strip()]
     selected_entities: list[str] = []
@@ -106,7 +112,12 @@ def suggest_project_spec(idea: str, reasoning: dict[str, Any]) -> dict[str, Any]
         f"Reasoning: {reasoning}\n"
         f"Fallback: {fallback_spec}"
     )
-    provider_spec = try_generate_reasoning_json(provider_prompt, timeout_s=90, temperature=0.1)
+    provider_spec = try_generate_reasoning_json(
+        provider_prompt,
+        timeout_s=90,
+        temperature=0.1,
+        project_dir=provider_project_dir,
+    )
     if not isinstance(provider_spec, dict):
         return fallback_spec
 
