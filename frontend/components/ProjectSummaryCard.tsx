@@ -1,56 +1,73 @@
-"use client";
+type SpecSummary = {
+  stage?: string;
+  entities?: number;
+  apis?: number;
+  pages?: number;
+  history_count?: number;
+};
+
+type ProjectSummary = {
+  name?: string;
+  display_name?: string;
+  is_current?: boolean;
+  shape?: string;
+  template?: string;
+  spec_summary?: SpecSummary;
+};
 
 type Props = {
-  project: {
-    name: string;
-    display_name: string;
-    is_current: boolean;
-    shape: string;
-    template: string;
-    spec_summary: {
-      stage: string;
-      entities: number;
-      apis: number;
-      pages: number;
-      history_count: number;
-    };
-  };
+  project: ProjectSummary;
 };
 
 export default function ProjectSummaryCard({ project }: Props) {
+  const name = String(project.name || "");
+  const displayName = String(project.display_name || name || "(unknown)");
+  const spec = project.spec_summary || {};
+
   return (
-    <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 12 }}>
-      <h3 style={{ marginTop: 0 }}>Project Summary</h3>
-      <div style={{ marginBottom: 8 }}>
-        <div style={{ fontSize: 12, color: "#666" }}>Name</div>
-        <div style={{ fontSize: 18, fontWeight: 700, overflowWrap: "anywhere" }}>{project.display_name || project.name}</div>
-        <div style={{ fontSize: 12, color: "#666", overflowWrap: "anywhere" }}>ID: {project.name}</div>
+    <section className="rounded-md border border-zinc-200 bg-white p-4">
+      <h3 className="text-sm font-semibold text-zinc-900">Project Summary</h3>
+
+      <div className="mt-3 space-y-1">
+        <p className="break-all text-lg font-semibold text-zinc-900">{displayName}</p>
+        <p className="break-all text-xs text-zinc-500">ID: {name || "(unknown)"}</p>
         {project.is_current ? (
-          <div style={{ marginTop: 4 }}>
-            <span
-              style={{
-                fontSize: 11,
-                lineHeight: "16px",
-                border: "1px solid #0a7",
-                color: "#075",
-                borderRadius: 999,
-                padding: "0 8px",
-                background: "#edfdf8",
-              }}
-            >
-              current project
-            </span>
-          </div>
+          <span className="inline-flex rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+            current project
+          </span>
         ) : null}
       </div>
-      <div>Shape: {project.shape}</div>
-      <div>Template: {project.template}</div>
-      <hr />
-      <div>Stage: {project.spec_summary.stage}</div>
-      <div>Entities: {project.spec_summary.entities}</div>
-      <div>APIs: {project.spec_summary.apis}</div>
-      <div>Pages: {project.spec_summary.pages}</div>
-      <div>History: {project.spec_summary.history_count}</div>
-    </div>
+
+      <dl className="mt-4 grid grid-cols-2 gap-2 text-sm">
+        <div>
+          <dt className="text-zinc-500">Shape</dt>
+          <dd className="break-all text-zinc-900">{String(project.shape || "unknown")}</dd>
+        </div>
+        <div>
+          <dt className="text-zinc-500">Template</dt>
+          <dd className="break-all text-zinc-900">{String(project.template || "unknown")}</dd>
+        </div>
+        <div>
+          <dt className="text-zinc-500">Stage</dt>
+          <dd className="text-zinc-900">{String(spec.stage || "Stage 0")}</dd>
+        </div>
+        <div>
+          <dt className="text-zinc-500">Entities</dt>
+          <dd className="text-zinc-900">{Number(spec.entities || 0)}</dd>
+        </div>
+        <div>
+          <dt className="text-zinc-500">APIs</dt>
+          <dd className="text-zinc-900">{Number(spec.apis || 0)}</dd>
+        </div>
+        <div>
+          <dt className="text-zinc-500">Pages</dt>
+          <dd className="text-zinc-900">{Number(spec.pages || 0)}</dd>
+        </div>
+        <div>
+          <dt className="text-zinc-500">History</dt>
+          <dd className="text-zinc-900">{Number(spec.history_count || 0)}</dd>
+        </div>
+      </dl>
+    </section>
   );
 }
