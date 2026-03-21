@@ -271,6 +271,7 @@ def test_ui_runtime_url_expansion_with_lan_and_tailscale(monkeypatch, tmp_path: 
     projects_root = tmp_path / "projects"
     _make_project(projects_root, "runtime-url-project")
     monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setenv("ARCHMIND_UI_RUNTIME_HOSTS_PATH", str(tmp_path / "ui_runtime_hosts.json"))
     monkeypatch.setenv("ARCHMIND_LAN_HOST", "192.168.0.197")
     monkeypatch.setenv("ARCHMIND_TAILSCALE_HOST", "100.117.128.20")
     monkeypatch.setattr(
@@ -295,6 +296,116 @@ def test_ui_runtime_url_expansion_with_lan_and_tailscale(monkeypatch, tmp_path: 
         "http://127.0.0.1:3123",
         "http://192.168.0.197:3123",
         "http://100.117.128.20:3123",
+    ]
+
+
+def test_ui_runtime_url_expansion_auto_detects_lan_without_env(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "runtime-auto-lan")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setenv("ARCHMIND_UI_RUNTIME_HOSTS_PATH", str(tmp_path / "ui_runtime_hosts.json"))
+    monkeypatch.delenv("ARCHMIND_LAN_HOST", raising=False)
+    monkeypatch.delenv("ARCHMIND_TAILSCALE_HOST", raising=False)
+    monkeypatch.setattr("archmind.project_query._detect_lan_host", lambda: "192.168.0.201")
+    monkeypatch.setattr("archmind.project_query._detect_tailscale_host", lambda: "")
+    monkeypatch.setattr(
+        "archmind.project_query.get_local_runtime_status",
+        lambda _project_dir: {
+            "backend": {"status": "RUNNING", "url": "http://127.0.0.1:8222"},
+            "frontend": {"status": "RUNNING", "url": "http://127.0.0.1:3222"},
+        },
+    )
+
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/runtime-auto-lan")
+    assert response.status_code == 200
+    runtime = response.json()["runtime"]
+    assert runtime["backend_urls"] == ["http://127.0.0.1:8222", "http://192.168.0.201:8222"]
+    assert runtime["frontend_urls"] == ["http://127.0.0.1:3222", "http://192.168.0.201:3222"]
+
+
+def test_ui_runtime_url_expansion_auto_detects_tailscale_without_env(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "runtime-auto-ts")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setenv("ARCHMIND_UI_RUNTIME_HOSTS_PATH", str(tmp_path / "ui_runtime_hosts.json"))
+    monkeypatch.delenv("ARCHMIND_LAN_HOST", raising=False)
+    monkeypatch.delenv("ARCHMIND_TAILSCALE_HOST", raising=False)
+    monkeypatch.setattr("archmind.project_query._detect_lan_host", lambda: "")
+    monkeypatch.setattr("archmind.project_query._detect_tailscale_host", lambda: "100.117.128.20")
+    monkeypatch.setattr(
+        "archmind.project_query.get_local_runtime_status",
+        lambda _project_dir: {
+            "backend": {"status": "RUNNING", "url": "http://127.0.0.1:8333"},
+            "frontend": {"status": "RUNNING", "url": "http://127.0.0.1:3333"},
+        },
+    )
+
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/runtime-auto-ts")
+    assert response.status_code == 200
+    runtime = response.json()["runtime"]
+    assert runtime["backend_urls"] == ["http://127.0.0.1:8333", "http://100.117.128.20:8333"]
+    assert runtime["frontend_urls"] == ["http://127.0.0.1:3333", "http://100.117.128.20:3333"]
+
+
+def test_ui_runtime_url_expansion_loopback_only_when_no_detection(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "runtime-loopback-only")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setenv("ARCHMIND_UI_RUNTIME_HOSTS_PATH", str(tmp_path / "ui_runtime_hosts.json"))
+    monkeypatch.delenv("ARCHMIND_LAN_HOST", raising=False)
+    monkeypatch.delenv("ARCHMIND_TAILSCALE_HOST", raising=False)
+    monkeypatch.setattr("archmind.project_query._detect_lan_host", lambda: "")
+    monkeypatch.setattr("archmind.project_query._detect_tailscale_host", lambda: "")
+    monkeypatch.setattr(
+        "archmind.project_query.get_local_runtime_status",
+        lambda _project_dir: {
+            "backend": {"status": "RUNNING", "url": "http://127.0.0.1:8444"},
+            "frontend": {"status": "RUNNING", "url": "http://127.0.0.1:3444"},
+        },
+    )
+
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/runtime-loopback-only")
+    assert response.status_code == 200
+    runtime = response.json()["runtime"]
+    assert runtime["backend_urls"] == ["http://127.0.0.1:8444"]
+    assert runtime["frontend_urls"] == ["http://127.0.0.1:3444"]
+
+
+def test_ui_runtime_url_expansion_uses_persisted_hosts_when_env_missing(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "runtime-persisted-hosts")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    hosts_path = tmp_path / "ui_runtime_hosts.json"
+    hosts_path.write_text('{"lan_host":"192.168.0.250","tailscale_host":"100.64.0.8"}', encoding="utf-8")
+    monkeypatch.setenv("ARCHMIND_UI_RUNTIME_HOSTS_PATH", str(hosts_path))
+    monkeypatch.delenv("ARCHMIND_LAN_HOST", raising=False)
+    monkeypatch.delenv("ARCHMIND_TAILSCALE_HOST", raising=False)
+    monkeypatch.setattr("archmind.project_query._detect_lan_host", lambda: "")
+    monkeypatch.setattr("archmind.project_query._detect_tailscale_host", lambda: "")
+    monkeypatch.setattr(
+        "archmind.project_query.get_local_runtime_status",
+        lambda _project_dir: {
+            "backend": {"status": "RUNNING", "url": "http://127.0.0.1:8555"},
+            "frontend": {"status": "RUNNING", "url": "http://127.0.0.1:3555"},
+        },
+    )
+
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/runtime-persisted-hosts")
+    assert response.status_code == 200
+    runtime = response.json()["runtime"]
+    assert runtime["backend_urls"] == [
+        "http://127.0.0.1:8555",
+        "http://192.168.0.250:8555",
+        "http://100.64.0.8:8555",
+    ]
+    assert runtime["frontend_urls"] == [
+        "http://127.0.0.1:3555",
+        "http://192.168.0.250:3555",
+        "http://100.64.0.8:3555",
     ]
 
 
