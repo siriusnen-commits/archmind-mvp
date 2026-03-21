@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 import EvolutionCard from "@/components/EvolutionCard";
 import ProjectSummaryCard from "@/components/ProjectSummaryCard";
 import ProviderCard from "@/components/ProviderCard";
+import RuntimeActionsCard from "@/components/RuntimeActionsCard";
 import RuntimeCard from "@/components/RuntimeCard";
 
 type SpecSummary = {
@@ -71,7 +72,7 @@ type PageProps = {
 
 export default async function ProjectDetailPage({ params }: PageProps) {
   const resolved = await params;
-  const projectName = String(resolved?.project || "");
+  const projectName = decodeURIComponent(String(resolved?.project || ""));
   const apiBaseUrl = await resolveApiBaseUrl();
   const result = await fetchProjectDetail(apiBaseUrl, projectName);
   const detail = result.detail;
@@ -96,6 +97,7 @@ export default async function ProjectDetailPage({ params }: PageProps) {
         <section className="space-y-3">
           <ProjectSummaryCard project={detail} />
           <RuntimeCard runtime={detail.runtime} />
+          <RuntimeActionsCard projectName={detail.name} />
           <ProviderCard projectName={detail.name} mode={detail.provider_mode} />
           <EvolutionCard items={Array.isArray(detail.recent_evolution) ? detail.recent_evolution : []} />
         </section>

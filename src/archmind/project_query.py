@@ -6,7 +6,8 @@ from typing import Any
 
 from archmind.deploy import get_local_runtime_status
 from archmind.next_suggester import analyze_spec_progression
-from archmind.state import load_provider_mode, load_state, set_provider_mode, write_state
+from archmind.runtime_orchestrator import run_all_local_services
+from archmind.state import load_provider_mode, load_state, set_provider_mode, update_runtime_state, write_state
 from archmind.telegram_bot import (
     _load_json,
     _project_runtime_status,
@@ -16,6 +17,7 @@ from archmind.telegram_bot import (
     load_last_project_path,
     summarize_recent_evolution,
 )
+from archmind.deploy import restart_local_services, run_backend_local_with_health, stop_local_services
 from archmind.ui_models import ProjectDetailResponse, ProjectListItem, RepositorySummary, RuntimeSummary, SpecSummary
 
 
@@ -193,3 +195,27 @@ def update_project_provider_mode(project_dir: Path, mode: str) -> str:
     set_provider_mode(payload, mode)
     write_state(project_dir, payload)
     return load_provider_mode(payload, default="local")
+
+
+def run_project_backend(project_dir: Path) -> dict[str, Any]:
+    result = run_backend_local_with_health(project_dir)
+    update_runtime_state(project_dir, result, action="ui run-backend")
+    return result if isinstance(result, dict) else {}
+
+
+def run_project_all(project_dir: Path) -> dict[str, Any]:
+    result = run_all_local_services(project_dir)
+    update_runtime_state(project_dir, result, action="ui run-all")
+    return result if isinstance(result, dict) else {}
+
+
+def restart_project_runtime(project_dir: Path) -> dict[str, Any]:
+    result = restart_local_services(project_dir)
+    deploy_payload = result.get("deploy") if isinstance(result.get("deploy"), dict) else result
+    update_runtime_state(project_dir, deploy_payload if isinstance(deploy_payload, dict) else {}, action="ui restart")
+    return result if isinstance(result, dict) else {}
+
+
+def stop_project_runtime(project_dir: Path) -> dict[str, Any]:
+    result = stop_local_services(project_dir)
+    return result if isinstance(result, dict) else {}

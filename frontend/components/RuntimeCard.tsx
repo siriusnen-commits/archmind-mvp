@@ -23,12 +23,24 @@ export default function RuntimeCard({ runtime }: Props) {
         <div>
           <dt className="text-zinc-500">Backend</dt>
           <dd className="text-zinc-900">{backendStatus}</dd>
-          {backendUrl ? <dd className="break-all text-xs text-zinc-600">{backendUrl}</dd> : null}
+          {backendUrl ? (
+            <dd className="break-all text-xs text-zinc-600">
+              <a href={backendUrl} target="_blank" rel="noreferrer" className="text-blue-700 underline">
+                {backendUrl}
+              </a>
+            </dd>
+          ) : null}
         </div>
         <div>
           <dt className="text-zinc-500">Frontend</dt>
           <dd className="text-zinc-900">{frontendStatus}</dd>
-          {frontendUrl ? <dd className="break-all text-xs text-zinc-600">{frontendUrl}</dd> : null}
+          {frontendUrl ? (
+            <dd className="break-all text-xs text-zinc-600">
+              <a href={frontendUrl} target="_blank" rel="noreferrer" className="text-blue-700 underline">
+                {frontendUrl}
+              </a>
+            </dd>
+          ) : null}
         </div>
       </dl>
     </section>

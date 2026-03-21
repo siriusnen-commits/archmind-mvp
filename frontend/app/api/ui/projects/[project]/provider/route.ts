@@ -8,7 +8,7 @@ type Params = {
 
 export async function GET(_request: Request, { params }: Params) {
   const resolved = await params;
-  const project = String(resolved?.project || "");
+  const project = decodeURIComponent(String(resolved?.project || ""));
   try {
     const response = await fetch(`${BACKEND_UI_BASE}/projects/${encodeURIComponent(project)}/provider`, {
       cache: "no-store",
@@ -27,7 +27,7 @@ export async function GET(_request: Request, { params }: Params) {
 
 export async function POST(request: Request, { params }: Params) {
   const resolved = await params;
-  const project = String(resolved?.project || "");
+  const project = decodeURIComponent(String(resolved?.project || ""));
   const contentType = request.headers.get("content-type") || "application/json";
   const body = await request.text();
 

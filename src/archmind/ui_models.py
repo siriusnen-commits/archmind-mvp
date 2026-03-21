@@ -63,3 +63,14 @@ class ProjectDetailResponse(BaseModel):
 
 class ProviderModeResponse(BaseModel):
     mode: ProviderMode
+
+
+class RuntimeActionResponse(BaseModel):
+    ok: bool = False
+    action: str = ""
+    status: str = "UNKNOWN"
+    detail: str = ""
+    backend_status: str = "STOPPED"
+    frontend_status: str = "STOPPED"
+    backend_url: str = ""
+    frontend_url: str = ""
