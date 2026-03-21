@@ -28,16 +28,16 @@ type Props = {
 
 export default function ProjectList({ projects, selectedName }: Props) {
   const router = useRouter();
-  const [selectingName, setSelectingName] = useState("");
-  const [selectionError, setSelectionError] = useState("");
+  const [settingCurrentName, setSettingCurrentName] = useState("");
+  const [setCurrentError, setSetCurrentError] = useState("");
 
-  async function handleSelect(projectName: string) {
+  async function handleSetCurrent(projectName: string) {
     const target = String(projectName || "").trim();
     if (!target) {
       return;
     }
-    setSelectingName(target);
-    setSelectionError("");
+    setSettingCurrentName(target);
+    setSetCurrentError("");
     try {
       const response = await fetch(`/api/ui/projects/${encodeURIComponent(target)}/select`, {
         method: "POST",
@@ -49,15 +49,14 @@ export default function ProjectList({ projects, selectedName }: Props) {
       };
       if (!response.ok || !Boolean(payload.ok)) {
         const detail = String(payload.error || payload.detail || "").trim();
-        setSelectionError(detail ? `Failed to set current project: ${detail}` : "Failed to set current project");
+        setSetCurrentError(detail ? `Failed to set current project: ${detail}` : "Failed to set current project");
         return;
       }
-      router.push(`/projects/${encodeURIComponent(target)}`);
       router.refresh();
     } catch {
-      setSelectionError("Failed to set current project");
+      setSetCurrentError("Failed to set current project");
     } finally {
-      setSelectingName("");
+      setSettingCurrentName("");
     }
   }
 
@@ -91,14 +90,7 @@ export default function ProjectList({ projects, selectedName }: Props) {
               >
                 <div className="flex items-center gap-2">
                   <Link
-                    href={name ? `/projects/${encodeURIComponent(name)}` : "/dashboard"}
-                    onClick={(event) => {
-                      if (!name) {
-                        return;
-                      }
-                      event.preventDefault();
-                      void handleSelect(name);
-                    }}
+                    href={name ? `/dashboard?selected=${encodeURIComponent(name)}` : "/dashboard"}
                     className="break-all text-sm font-medium text-slate-100 underline-offset-2 hover:underline"
                   >
                     {displayName}
@@ -111,7 +103,20 @@ export default function ProjectList({ projects, selectedName }: Props) {
                 </div>
                 <p className="mt-1 break-all text-xs text-slate-300">ID: {name || "(unknown)"}</p>
                 <p className="text-xs text-slate-300">Status: {String(project.status || "unknown")}</p>
-                {selectingName === name ? <p className="text-xs text-cyan-300">Setting current project...</p> : null}
+                <div className="mt-2">
+                  {isCurrent ? (
+                    <p className="text-xs text-emerald-300">Current project</p>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => void handleSetCurrent(name)}
+                      className="rounded-md border border-cyan-600 px-2 py-1 text-xs text-cyan-200 hover:bg-cyan-900/30"
+                    >
+                      Set current
+                    </button>
+                  )}
+                </div>
+                {settingCurrentName === name ? <p className="text-xs text-cyan-300">Setting current project...</p> : null}
                 <div className="mt-1 text-xs text-slate-300">
                   Repository:{" "}
                   {repositoryUrl ? (
@@ -132,7 +137,7 @@ export default function ProjectList({ projects, selectedName }: Props) {
           );
         })}
       </ul>
-      {selectionError ? <p className="mt-2 break-words text-xs text-rose-300">{selectionError}</p> : null}
+      {setCurrentError ? <p className="mt-2 break-words text-xs text-rose-300">{setCurrentError}</p> : null}
     </aside>
   );
 }

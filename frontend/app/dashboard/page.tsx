@@ -45,6 +45,10 @@ type ProjectDetail = {
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+type DashboardPageProps = {
+  searchParams: Promise<{ selected?: string | string[] }>;
+};
+
 async function resolveApiBaseUrl(): Promise<string> {
   const reqHeaders = await headers();
   const host = reqHeaders.get("x-forwarded-host") || reqHeaders.get("host") || "127.0.0.1:3000";
@@ -84,12 +88,21 @@ async function fetchProjectDetail(apiBaseUrl: string, name: string): Promise<{ d
   }
 }
 
-export default async function DashboardPage() {
+export default async function DashboardPage({ searchParams }: DashboardPageProps) {
   const apiBaseUrl = await resolveApiBaseUrl();
   const projectsResult = await fetchProjects(apiBaseUrl);
   const projects = projectsResult.projects;
-  const selected = projects.find((item) => item.is_current) || null;
-  const selectedName = String(selected?.name || "");
+  const resolvedSearchParams = await searchParams;
+  const selectedFromQueryRaw = resolvedSearchParams?.selected;
+  const selectedFromQuery = Array.isArray(selectedFromQueryRaw) ? selectedFromQueryRaw[0] : selectedFromQueryRaw;
+  const selectedFromQueryName = String(selectedFromQuery || "").trim();
+
+  const currentProject = projects.find((item) => item.is_current) || null;
+  const hasSelectedFromQuery = projects.some((item) => String(item.name || "") === selectedFromQueryName);
+  const selectedName = hasSelectedFromQuery
+    ? selectedFromQueryName
+    : String(currentProject?.name || "");
+
   const detailResult = await fetchProjectDetail(apiBaseUrl, selectedName);
   const detail = detailResult.detail;
 
