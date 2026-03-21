@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .reasoning import try_generate_reasoning_json
+
 ENTITY_DEFAULT_FIELDS: dict[str, list[dict[str, str]]] = {
     "Defect": [
         {"name": "title", "type": "string"},
@@ -146,7 +148,7 @@ def build_architecture_design(idea: str, reasoning: dict[str, Any], suggestion: 
         seen_entities.add(key)
         normalized_entities.append({"name": entity_name, "fields": ENTITY_DEFAULT_FIELDS.get(entity_name, [])})
 
-    return {
+    fallback_design = {
         "overview": str(idea or "").strip(),
         "shape": shape,
         "template": template,
@@ -158,3 +160,63 @@ def build_architecture_design(idea: str, reasoning: dict[str, Any], suggestion: 
         "frontend_pages": frontend_pages[:10],
         "reasoning": str(reasoning.get("reason_summary") or "").strip(),
     }
+    provider_prompt = (
+        "Produce architecture design JSON.\n"
+        "Return JSON object with keys: overview, shape, template, modules, domains, entities, relationships, api_endpoints, frontend_pages, reasoning.\n"
+        f"Idea: {idea}\n"
+        f"Reasoning: {reasoning}\n"
+        f"Suggestion: {suggestion}\n"
+        f"Fallback: {fallback_design}"
+    )
+    provider_design = try_generate_reasoning_json(provider_prompt, timeout_s=120, temperature=0.1)
+    if not isinstance(provider_design, dict):
+        return fallback_design
+
+    out = dict(fallback_design)
+    for key in ("overview", "shape", "template", "reasoning"):
+        if key in provider_design:
+            value = str(provider_design.get(key) or "").strip()
+            if value:
+                out[key] = value
+
+    for key in ("modules", "domains", "relationships", "api_endpoints", "frontend_pages"):
+        raw = provider_design.get(key)
+        if isinstance(raw, list):
+            values = [str(x).strip() for x in raw if str(x).strip()]
+            if key == "frontend_pages":
+                values = [x.strip("/") for x in values]
+            unique = _unique(values)
+            if unique:
+                out[key] = unique[:10]
+
+    raw_entities = provider_design.get("entities")
+    if isinstance(raw_entities, list):
+        normalized_entities: list[dict[str, Any]] = []
+        seen_entities: set[str] = set()
+        for raw_entity in raw_entities:
+            if not isinstance(raw_entity, dict):
+                continue
+            name = str(raw_entity.get("name") or "").strip()
+            key = name.lower()
+            if not name or key in seen_entities:
+                continue
+            seen_entities.add(key)
+            normalized_fields: list[dict[str, str]] = []
+            raw_fields = raw_entity.get("fields")
+            if isinstance(raw_fields, list):
+                seen_fields: set[str] = set()
+                for raw_field in raw_fields:
+                    if not isinstance(raw_field, dict):
+                        continue
+                    field_name = str(raw_field.get("name") or "").strip()
+                    field_type = str(raw_field.get("type") or "").strip().lower()
+                    field_key = field_name.lower()
+                    if not field_name or not field_type or field_key in seen_fields:
+                        continue
+                    seen_fields.add(field_key)
+                    normalized_fields.append({"name": field_name, "type": field_type})
+            normalized_entities.append({"name": name, "fields": normalized_fields})
+        if normalized_entities:
+            out["entities"] = normalized_entities[:10]
+
+    return out

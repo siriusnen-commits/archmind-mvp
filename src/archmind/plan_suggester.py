@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .reasoning import try_generate_reasoning_json
 
 def _entity_slug(name: str) -> str:
     value = str(name or "").strip()
@@ -30,8 +31,6 @@ def _limit_steps(phases: list[dict[str, Any]], max_steps: int = 15) -> list[dict
 
 
 def build_plan_from_suggestion(idea: str, reasoning: dict[str, Any], suggestion: dict[str, Any]) -> dict[str, Any]:
-    del idea
-    del reasoning
     entities = suggestion.get("entities") if isinstance(suggestion.get("entities"), list) else []
     apis = [str(x).strip() for x in (suggestion.get("api_endpoints") or []) if str(x).strip()]
     pages = [str(x).strip().strip("/") for x in (suggestion.get("frontend_pages") or []) if str(x).strip()]
@@ -63,7 +62,28 @@ def build_plan_from_suggestion(idea: str, reasoning: dict[str, Any], suggestion:
         {"title": "APIs", "steps": api_steps},
         {"title": "Frontend", "steps": page_steps},
     ]
-    return {"phases": _limit_steps(phases, max_steps=15)}
+    fallback_plan = {"phases": _limit_steps(phases, max_steps=15)}
+
+    provider_prompt = (
+        "Build an implementation plan JSON from the idea and suggestion.\n"
+        "Return JSON object with key phases.\n"
+        "phases: list of {title, steps:[slash commands]}.\n"
+        f"Idea: {idea}\n"
+        f"Reasoning: {reasoning}\n"
+        f"Suggestion: {suggestion}\n"
+        f"Fallback: {fallback_plan}"
+    )
+    provider_plan = try_generate_reasoning_json(provider_prompt, timeout_s=90, temperature=0.1)
+    raw_phases = provider_plan.get("phases") if isinstance(provider_plan, dict) else None
+    if not isinstance(raw_phases, list):
+        return fallback_plan
+    normalized = _limit_steps(
+        [phase for phase in raw_phases if isinstance(phase, dict)],
+        max_steps=15,
+    )
+    if not normalized:
+        return fallback_plan
+    return {"phases": normalized}
 
 
 def build_plan_from_project_spec(spec: dict[str, Any]) -> dict[str, Any]:
@@ -121,5 +141,22 @@ def build_plan_from_project_spec(spec: dict[str, Any]) -> dict[str, Any]:
         {"title": "APIs", "steps": phase3},
         {"title": "Frontend", "steps": phase4},
     ]
-    return {"phases": _limit_steps(phases, max_steps=15)}
-
+    fallback_plan = {"phases": _limit_steps(phases, max_steps=15)}
+    provider_prompt = (
+        "Build an implementation plan JSON from this project spec.\n"
+        "Return JSON object with key phases.\n"
+        "phases: list of {title, steps:[slash commands]}.\n"
+        f"Spec: {spec}\n"
+        f"Fallback: {fallback_plan}"
+    )
+    provider_plan = try_generate_reasoning_json(provider_prompt, timeout_s=90, temperature=0.1)
+    raw_phases = provider_plan.get("phases") if isinstance(provider_plan, dict) else None
+    if not isinstance(raw_phases, list):
+        return fallback_plan
+    normalized = _limit_steps(
+        [phase for phase in raw_phases if isinstance(phase, dict)],
+        max_steps=15,
+    )
+    if not normalized:
+        return fallback_plan
+    return {"phases": normalized}
