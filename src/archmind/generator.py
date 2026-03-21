@@ -662,8 +662,8 @@ def _render_frontend_api_base_helper() -> str:
         "}\n\n"
         "function resolveApiBaseInBrowser(): string {\n"
         "  const runtimeCandidate = String(ENV_API_BASE || ENV_RUNTIME_BACKEND_URL || \"\").trim();\n"
-        '  const fallbackPort = String(ENV_BACKEND_PORT || "").trim();\n'
-        '  const defaultPort = fallbackPort || "8000";\n'
+        '  const explicitPort = String(ENV_BACKEND_PORT || "").trim();\n'
+        '  const fallbackPort = explicitPort || "8000";\n'
         '  const browserHost = (window.location.hostname || "").trim();\n'
         '  const browserProtocol = window.location.protocol === "https:" ? "https" : "http";\n'
         "  if (runtimeCandidate) {\n"
@@ -683,9 +683,9 @@ def _render_frontend_api_base_helper() -> str:
         "    }\n"
         "  }\n"
         "  if (browserHost) {\n"
-        "    return `${browserProtocol}://${browserHost}:${defaultPort}`;\n"
+        "    return `${browserProtocol}://${browserHost}:${fallbackPort}`;\n"
         "  }\n"
-        '  return `http://127.0.0.1:${defaultPort}`;\n'
+        '  return `http://127.0.0.1:${fallbackPort}`;\n'
         "}\n\n"
         "export function useApiBaseUrl(): { apiBaseUrl: string; apiBaseLoading: boolean } {\n"
         '  const [apiBaseUrl, setApiBaseUrl] = useState("");\n'

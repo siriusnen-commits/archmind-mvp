@@ -826,10 +826,10 @@ def test_ensure_runtime_env_defaults_writes_actual_runtime_backend_port(monkeypa
     (tmp_path / "backend").mkdir(parents=True, exist_ok=True)
     (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr("archmind.deploy._detect_lan_ip", lambda: "")
-    result = ensure_runtime_env_defaults(tmp_path, backend_port=61080, frontend_port=5173)
+    result = ensure_runtime_env_defaults(tmp_path, backend_port=61326, frontend_port=5173)
     assert result["ok"] is True
     frontend_env = (tmp_path / "frontend" / ".env.local").read_text(encoding="utf-8")
-    assert "NEXT_PUBLIC_RUNTIME_BACKEND_URL=http://127.0.0.1:61080" in frontend_env
+    assert "NEXT_PUBLIC_RUNTIME_BACKEND_URL=http://127.0.0.1:61326" in frontend_env
     assert "NEXT_PUBLIC_FRONTEND_PORT=5173" in frontend_env
 
 
