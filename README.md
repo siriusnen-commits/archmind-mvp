@@ -79,6 +79,13 @@ For generated fullstack projects:
 - Remote browser access is supported with loopback-safe host rewrite logic.
 - Generated FastAPI backend includes CORS middleware for development connectivity.
 
+## Offline Install / Bundle
+
+- ArchMind supports offline dependency installation using packaged bundles such as `wheelhouse.zip`.
+- The `wheelhouse.zip` bundle is intended for environments without external network/package index access.
+- Build/verify offline install assets with `scripts/make_wheelhouse.sh` and `scripts/offline_install_verify.sh`.
+- Use the project offline install scripts/workflow to install from the bundled wheels.
+
 ## Current Limitations
 
 - Dashboard is still evolving; it is internal-tool oriented, not a polished enterprise admin suite.
