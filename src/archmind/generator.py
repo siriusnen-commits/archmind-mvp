@@ -659,12 +659,11 @@ def _render_frontend_api_base_helper() -> str:
         "function normalizeApiBase(raw: string): string {\n"
         '  return String(raw || "").trim().replace(/\\/$/, "");\n'
         "}\n\n"
-        "export function resolveRuntimeApiBaseUrl(): string {\n"
+        "function resolveApiBaseInBrowser(): string {\n"
         '  const fallbackPort = String(ENV_BACKEND_PORT || "8000").trim() || "8000";\n'
         '  const loopbackFallback = `http://127.0.0.1:${fallbackPort}`;\n'
-        '  const hasWindow = typeof window !== "undefined";\n'
-        '  const browserHost = hasWindow ? (window.location.hostname || "").trim() : "";\n'
-        '  const browserProtocol = hasWindow && window.location.protocol === "https:" ? "https" : "http";\n'
+        '  const browserHost = (window.location.hostname || "").trim();\n'
+        '  const browserProtocol = window.location.protocol === "https:" ? "https" : "http";\n'
         "  if (ENV_API_BASE && ENV_API_BASE.trim()) {\n"
         "    const rawEnvBase = ENV_API_BASE.trim();\n"
         "    try {\n"
@@ -686,12 +685,17 @@ def _render_frontend_api_base_helper() -> str:
         "  }\n"
         "  return loopbackFallback;\n"
         "}\n\n"
-        "export function useResolvedApiBaseUrl(): string {\n"
-        "  const [apiBaseUrl, setApiBaseUrl] = useState<string>(() => resolveRuntimeApiBaseUrl());\n\n"
+        "export function useApiBaseUrl(): { apiBaseUrl: string; apiBaseLoading: boolean } {\n"
+        '  const [apiBaseUrl, setApiBaseUrl] = useState("");\n'
+        "  const [apiBaseLoading, setApiBaseLoading] = useState(true);\n\n"
         "  useEffect(() => {\n"
-        "    setApiBaseUrl(resolveRuntimeApiBaseUrl());\n"
+        "    if (typeof window === \"undefined\") {\n"
+        "      return;\n"
+        "    }\n"
+        "    setApiBaseUrl(resolveApiBaseInBrowser());\n"
+        "    setApiBaseLoading(false);\n"
         "  }, []);\n\n"
-        "  return apiBaseUrl;\n"
+        "  return { apiBaseUrl, apiBaseLoading };\n"
         "}\n"
     )
 
@@ -995,14 +999,18 @@ def _render_frontend_entity_list_page(
         '"use client";\n\n'
         'import Link from "next/link";\n'
         'import { useEffect, useState } from "react";\n'
-        f'import {{ useResolvedApiBaseUrl }} from "{api_helper_import}";\n\n'
+        f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n\n'
         "type EntityItem = Record<string, unknown> & { id?: number | string };\n\n"
         f"export default function {component_name}() {{\n"
         "  const [items, setItems] = useState<EntityItem[]>([]);\n"
         "  const [loading, setLoading] = useState(true);\n"
         "  const [error, setError] = useState(\"\");\n"
-        "  const apiBaseUrl = useResolvedApiBaseUrl();\n\n"
+        "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
         "  useEffect(() => {\n"
+        "    if (apiBaseLoading || !apiBaseUrl) {\n"
+        "      setLoading(true);\n"
+        "      return;\n"
+        "    }\n"
         "    let mounted = true;\n"
         "    (async () => {\n"
         "      setLoading(true);\n"
@@ -1035,12 +1043,12 @@ def _render_frontend_entity_list_page(
         "    return () => {\n"
         "      mounted = false;\n"
         "    };\n"
-        "  }, [apiBaseUrl]);\n\n"
+        "  }, [apiBaseLoading, apiBaseUrl]);\n\n"
         "  return (\n"
         '    <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">\n'
         f'      <h1 className="text-lg font-semibold">{title}</h1>\n'
-        '      <p className="text-xs text-slate-400">API: {apiBaseUrl}</p>\n'
-        "      {loading ? <p className=\"text-sm text-slate-300\">Loading...</p> : null}\n"
+        '      <p className="text-xs text-slate-400">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>\n'
+        "      {loading ? <p className=\"text-sm text-slate-300\">{apiBaseLoading ? \"Resolving API base...\" : \"Loading...\"}</p> : null}\n"
         "      {!loading && error ? <p className=\"text-sm text-rose-300\">Failed to load: {error}</p> : null}\n"
         "      {!loading && !error && items.length === 0 ? <p className=\"text-sm text-slate-300\">No items found.</p> : null}\n"
         "      {!loading && !error && items.length > 0 ? (\n"
@@ -1087,7 +1095,7 @@ def _render_frontend_entity_detail_page(
     return (
         '"use client";\n\n'
         "import { useEffect, useState } from \"react\";\n"
-        f'import {{ useResolvedApiBaseUrl }} from "{api_helper_import}";\n'
+        f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n'
         f"{imports}\n"
         "type EntityItem = Record<string, unknown>;\n\n"
         f"export default function {component_name}() {{\n"
@@ -1097,11 +1105,15 @@ def _render_frontend_entity_detail_page(
         "  const [loading, setLoading] = useState(true);\n"
         "  const [notFound, setNotFound] = useState(false);\n"
         "  const [error, setError] = useState(\"\");\n"
-        "  const apiBaseUrl = useResolvedApiBaseUrl();\n\n"
+        "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
         "  useEffect(() => {\n"
         "    if (!id) {\n"
         "      setLoading(false);\n"
         "      setNotFound(true);\n"
+        "      return;\n"
+        "    }\n"
+        "    if (apiBaseLoading || !apiBaseUrl) {\n"
+        "      setLoading(true);\n"
         "      return;\n"
         "    }\n"
         "    let mounted = true;\n"
@@ -1130,12 +1142,12 @@ def _render_frontend_entity_detail_page(
         "    return () => {\n"
         "      mounted = false;\n"
         "    };\n"
-        "  }, [apiBaseUrl, id]);\n\n"
+        "  }, [apiBaseLoading, apiBaseUrl, id]);\n\n"
         "  return (\n"
         '    <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">\n'
         f'      <h1 className="text-lg font-semibold">{title} Detail</h1>\n'
         "      {!id ? <p className=\"text-sm text-slate-300\">Missing item id.</p> : null}\n"
-        "      {loading ? <p className=\"text-sm text-slate-300\">Loading...</p> : null}\n"
+        "      {loading ? <p className=\"text-sm text-slate-300\">{apiBaseLoading ? \"Resolving API base...\" : \"Loading...\"}</p> : null}\n"
         "      {!loading && notFound ? <p className=\"text-sm text-slate-300\">Item not found.</p> : null}\n"
         "      {!loading && error ? <p className=\"text-sm text-rose-300\">Failed to load: {error}</p> : null}\n"
         "      {!loading && !notFound && !error && item ? (\n"

@@ -702,9 +702,8 @@ function normalizeApiBase(raw: string): string {
 export function resolveRuntimeApiBaseUrl(): string {
   const fallbackPort = String(ENV_BACKEND_PORT || "8000").trim() || "8000";
   const loopbackFallback = `http://127.0.0.1:${fallbackPort}`;
-  const hasWindow = typeof window !== "undefined";
-  const browserHost = hasWindow ? (window.location.hostname || "").trim() : "";
-  const browserProtocol = hasWindow && window.location.protocol === "https:" ? "https" : "http";
+  const browserHost = (window.location.hostname || "").trim();
+  const browserProtocol = window.location.protocol === "https:" ? "https" : "http";
   if (ENV_API_BASE && ENV_API_BASE.trim()) {
     const rawEnvBase = ENV_API_BASE.trim();
     try {
@@ -727,21 +726,26 @@ export function resolveRuntimeApiBaseUrl(): string {
   return loopbackFallback;
 }
 
-export function useResolvedApiBaseUrl(): string {
-  const [apiBaseUrl, setApiBaseUrl] = useState<string>(() => resolveRuntimeApiBaseUrl());
+export function useApiBaseUrl(): { apiBaseUrl: string; apiBaseLoading: boolean } {
+  const [apiBaseUrl, setApiBaseUrl] = useState("");
+  const [apiBaseLoading, setApiBaseLoading] = useState(true);
 
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
     setApiBaseUrl(resolveRuntimeApiBaseUrl());
+    setApiBaseLoading(false);
   }, []);
 
-  return apiBaseUrl;
+  return { apiBaseUrl, apiBaseLoading };
 }
 """
 
     files["frontend/app/ui/DefectsPage.tsx"] = """"use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useResolvedApiBaseUrl } from "../_lib/apiBase";
+import { useApiBaseUrl } from "../_lib/apiBase";
 
 type Defect = {
   id: number;
@@ -758,7 +762,7 @@ type DefectListResponse = {
 };
 
 export default function DefectsPage() {
-  const apiBaseUrl = useResolvedApiBaseUrl();
+  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();
   const [items, setItems] = useState<Defect[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -801,11 +805,13 @@ export default function DefectsPage() {
         if (params.page) qs.set("page", String(params.page));
         if (params.page_size) qs.set("page_size", String(params.page_size));
 
+        if (!apiBaseUrl) throw new Error("API base URL is not ready yet.");
         const r = await fetch(`${apiBaseUrl}/defects?${qs.toString()}`, { cache: "no-store" });
         if (!r.ok) throw new Error(`GET /defects failed: ${r.status}`);
         return (await r.json()) as DefectListResponse;
       },
       async create(payload: { defect_type: string; note: string }) {
+        if (!apiBaseUrl) throw new Error("API base URL is not ready yet.");
         const r = await fetch(`${apiBaseUrl}/defects`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -815,6 +821,7 @@ export default function DefectsPage() {
         return (await r.json()) as Defect;
       },
       async update(id: number, payload: { defect_type?: string; note?: string }) {
+        if (!apiBaseUrl) throw new Error("API base URL is not ready yet.");
         const r = await fetch(`${apiBaseUrl}/defects/${id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -824,6 +831,7 @@ export default function DefectsPage() {
         return (await r.json()) as Defect;
       },
       async remove(id: number) {
+        if (!apiBaseUrl) throw new Error("API base URL is not ready yet.");
         const r = await fetch(`${apiBaseUrl}/defects/${id}`, { method: "DELETE" });
         if (!r.ok) throw new Error(`DELETE /defects/${id} failed: ${r.status}`);
         return (await r.json()) as { status: string };
@@ -856,8 +864,9 @@ export default function DefectsPage() {
   }
 
   useEffect(() => {
+    if (apiBaseLoading || !apiBaseUrl) return;
     refresh(1).catch(console.error);
-  }, []);
+  }, [apiBaseLoading, apiBaseUrl]);
 
   useEffect(() => {
     refresh(1).catch(console.error);
@@ -921,10 +930,11 @@ export default function DefectsPage() {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-semibold">Defect intake</h2>
-            <p className="text-xs text-slate-400">Backend: {apiBaseUrl}</p>
+            <p className="text-xs text-slate-400">Backend: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>
           </div>
           <div className="text-xs text-slate-500">Total {total}</div>
         </div>
+        {apiBaseLoading && <p className="mb-3 text-xs text-slate-400">Resolving API base...</p>}
 
         <form onSubmit={onSubmit} className="grid gap-3 md:grid-cols-6">
           <div className="md:col-span-2">
@@ -949,7 +959,7 @@ export default function DefectsPage() {
             <button
               type="submit"
               className="w-full rounded-lg bg-emerald-400 px-3 py-2 text-sm font-semibold text-emerald-950"
-              disabled={loading}
+              disabled={loading || apiBaseLoading || !apiBaseUrl}
             >
               {editing ? "Update" : "Add"}
             </button>
