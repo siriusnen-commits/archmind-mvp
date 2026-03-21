@@ -119,8 +119,9 @@ def test_apply_frontend_page_scaffold_creates_pages_for_frontend_structure(tmp_p
     assert "No items found." in list_text
     assert "fetch(`${apiBaseUrl}/tasks`" in list_text
     assert 'from "../_lib/apiBase"' in list_text
-    assert "useResolvedApiBaseUrl()" in list_text
-    assert "resolveRuntimeApiBaseUrl" in helper_text
+    assert "useApiBaseUrl()" in list_text
+    assert "useApiBaseUrl" in helper_text
+    assert "setApiBaseUrl(resolveApiBaseInBrowser())" in helper_text
     assert "parsed.hostname = browserHost" in helper_text
     assert "if (browserHost)" in helper_text
     assert "placeholder" not in list_text.lower()
@@ -128,7 +129,7 @@ def test_apply_frontend_page_scaffold_creates_pages_for_frontend_structure(tmp_p
     assert "Item not found." in detail_text
     assert "fetch(`${apiBaseUrl}/tasks/${id}`" in detail_text
     assert 'from "../../_lib/apiBase"' in detail_text
-    assert "useResolvedApiBaseUrl()" in detail_text
+    assert "useApiBaseUrl()" in detail_text
     assert "placeholder" not in detail_text.lower()
 
 

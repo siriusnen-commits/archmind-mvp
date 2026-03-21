@@ -136,15 +136,17 @@ def test_fullstack_runtime_env_template_uses_api_base_url_and_settings(tmp_path:
     assert "cors_allow_origins" in settings_text
     assert "NEXT_PUBLIC_API_BASE_URL=" in frontend_env_example
     assert "NEXT_PUBLIC_FRONTEND_PORT=" in frontend_env_example
-    assert 'useResolvedApiBaseUrl' in frontend_page
+    assert 'useApiBaseUrl' in frontend_page
     assert 'from "../_lib/apiBase"' in frontend_page
-    assert "resolveRuntimeApiBaseUrl" in frontend_api_helper
+    assert "useApiBaseUrl" in frontend_api_helper
+    assert "setApiBaseUrl(resolveRuntimeApiBaseUrl())" in frontend_api_helper
+    assert 'typeof window === "undefined"' in frontend_api_helper
     assert "window.location.hostname" in frontend_api_helper
     assert "LOOPBACK_HOSTS" in frontend_api_helper
     assert "parsed.hostname = browserHost" in frontend_api_helper
     assert "NEXT_PUBLIC_BACKEND_URL" not in frontend_page
     assert "Backend: {backendUrl}" not in frontend_page
-    assert "Backend: {apiBaseUrl}" in frontend_page
+    assert 'Backend: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}' in frontend_page
     assert 'router.replace("/notes")' in root_page
     assert "DefectsPage" not in root_page
     assert "Defect Ledger" not in layout_page
