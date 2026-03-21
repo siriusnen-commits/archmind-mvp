@@ -111,8 +111,16 @@ def test_apply_frontend_page_scaffold_creates_pages_for_frontend_structure(tmp_p
     generated = apply_frontend_page_scaffold(project_dir, "Task")
     assert "frontend/app/tasks/page.tsx" in generated
     assert "frontend/app/tasks/[id]/page.tsx" in generated
-    assert (project_dir / "frontend" / "app" / "tasks" / "page.tsx").exists()
-    assert (project_dir / "frontend" / "app" / "tasks" / "[id]" / "page.tsx").exists()
+    list_text = (project_dir / "frontend" / "app" / "tasks" / "page.tsx").read_text(encoding="utf-8")
+    detail_text = (project_dir / "frontend" / "app" / "tasks" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+    assert "Loading..." in list_text
+    assert "No items found." in list_text
+    assert "fetch(`${apiBaseUrl}/tasks`" in list_text
+    assert "placeholder" not in list_text.lower()
+    assert "Missing item id." in detail_text
+    assert "Item not found." in detail_text
+    assert "fetch(`${apiBaseUrl}/tasks/${id}`" in detail_text
+    assert "placeholder" not in detail_text.lower()
 
 
 def test_apply_frontend_page_scaffold_is_idempotent_and_skips_backend_only(tmp_path: Path) -> None:
@@ -160,4 +168,21 @@ def test_apply_page_scaffold_creates_explicit_page_and_is_idempotent(tmp_path: P
     assert "frontend/app/reports/list/page.tsx" in first
     assert second == []
     page_text = (project_dir / "frontend" / "app" / "reports" / "list" / "page.tsx").read_text(encoding="utf-8")
-    assert "Page placeholder for reports/list" in page_text
+    assert "Loading..." in page_text
+    assert "No items found." in page_text
+    assert "fetch(`${apiBaseUrl}/reports`" in page_text
+    assert "placeholder" not in page_text.lower()
+
+
+def test_apply_page_scaffold_detail_generates_non_placeholder_page(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_demo"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    generated = apply_page_scaffold(project_dir, "notes/detail")
+    assert "frontend/app/notes/detail/page.tsx" in generated
+    page_text = (project_dir / "frontend" / "app" / "notes" / "detail" / "page.tsx").read_text(encoding="utf-8")
+    assert "Missing item id." in page_text
+    assert "Item not found." in page_text
+    assert "fetch(`${apiBaseUrl}/notes/${id}`" in page_text
+    assert "placeholder" not in page_text.lower()
