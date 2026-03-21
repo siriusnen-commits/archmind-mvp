@@ -85,7 +85,7 @@ export default async function DashboardPage() {
   const apiBaseUrl = await resolveApiBaseUrl();
   const projectsResult = await fetchProjects(apiBaseUrl);
   const projects = projectsResult.projects;
-  const selected = projects.find((item) => item.is_current) || projects[0] || null;
+  const selected = projects.find((item) => item.is_current) || null;
   const selectedName = String(selected?.name || "");
   const detailResult = await fetchProjectDetail(apiBaseUrl, selectedName);
   const detail = detailResult.detail;
@@ -115,7 +115,7 @@ export default async function DashboardPage() {
               <EvolutionCard items={Array.isArray(detail.recent_evolution) ? detail.recent_evolution : []} />
             </>
           ) : projects.length ? (
-            <p className="rounded-md border border-slate-700 bg-slate-900 p-4 text-sm text-slate-300">Project not found</p>
+            <p className="rounded-md border border-slate-700 bg-slate-900 p-4 text-sm text-slate-300">No current project selected</p>
           ) : null}
         </section>
       </div>

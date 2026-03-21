@@ -67,6 +67,7 @@ from archmind.telegram_bot import (
     sanitize_log_excerpt,
     save_last_project_path,
     set_current_project,
+    clear_current_project,
     get_template_suggestions,
     get_current_project,
     start_pipeline_process,
@@ -1717,6 +1718,32 @@ def test_current_shows_selected_project(monkeypatch, tmp_path: Path) -> None:
     assert "Frontend URL:" not in out
     assert "/inspect" in out
     assert "/next" in out
+
+
+def test_current_uses_persisted_selection_when_in_memory_current_is_missing(monkeypatch, tmp_path: Path) -> None:
+    project = tmp_path / "persisted_current_proj"
+    archmind = project / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "state.json").write_text(
+        json.dumps({"last_status": "DONE", "project_type": "frontend-web", "effective_template": "nextjs"}),
+        encoding="utf-8",
+    )
+    clear_current_project()
+    monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project)
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "STOPPED", "pid": None, "url": ""},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_current(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "Current project" in out
+    assert "Project: persisted_current_proj" in out
 
 
 def test_current_shows_frontend_url_when_frontend_running(monkeypatch, tmp_path: Path) -> None:
