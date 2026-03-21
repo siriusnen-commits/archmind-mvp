@@ -116,10 +116,16 @@ def test_apply_frontend_page_scaffold_creates_pages_for_frontend_structure(tmp_p
     assert "Loading..." in list_text
     assert "No items found." in list_text
     assert "fetch(`${apiBaseUrl}/tasks`" in list_text
+    assert "LOOPBACK_HOSTS" in list_text
+    assert "isLoopbackHost(parsed.hostname)" in list_text
+    assert "parsed.hostname = browserHost" in list_text
     assert "placeholder" not in list_text.lower()
     assert "Missing item id." in detail_text
     assert "Item not found." in detail_text
     assert "fetch(`${apiBaseUrl}/tasks/${id}`" in detail_text
+    assert "LOOPBACK_HOSTS" in detail_text
+    assert "isLoopbackHost(parsed.hostname)" in detail_text
+    assert "parsed.hostname = browserHost" in detail_text
     assert "placeholder" not in detail_text.lower()
 
 

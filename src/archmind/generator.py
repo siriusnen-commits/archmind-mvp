@@ -916,15 +916,35 @@ def _render_frontend_entity_list_page(
         "type EntityItem = Record<string, unknown> & { id?: number | string };\n\n"
         "const ENV_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL;\n"
         'const ENV_BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "8000";\n\n'
+        'const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);\n\n'
+        "function isLoopbackHost(hostname: string) {\n"
+        '  return LOOPBACK_HOSTS.has((hostname || "").trim().toLowerCase());\n'
+        "}\n\n"
         "function resolveApiBaseUrl() {\n"
-        "  if (ENV_API_BASE && ENV_API_BASE.trim()) {\n"
-        "    return ENV_API_BASE.trim();\n"
-        "  }\n"
         '  const fallbackPort = String(ENV_BACKEND_PORT || "8000").trim() || "8000";\n'
-        '  if (typeof window === "undefined") return `http://127.0.0.1:${fallbackPort}`;\n'
-        '  const protocol = window.location.protocol === "https:" ? "https" : "http";\n'
-        '  const host = window.location.hostname || "127.0.0.1";\n'
-        "  return `${protocol}://${host}:${fallbackPort}`;\n"
+        '  const loopbackFallback = `http://127.0.0.1:${fallbackPort}`;\n'
+        '  if (typeof window === "undefined") {\n'
+        "    if (ENV_API_BASE && ENV_API_BASE.trim()) {\n"
+        "      return ENV_API_BASE.trim();\n"
+        "    }\n"
+        "    return loopbackFallback;\n"
+        "  }\n"
+        '  const browserProtocol = window.location.protocol === "https:" ? "https" : "http";\n'
+        '  const browserHost = (window.location.hostname || "127.0.0.1").trim();\n'
+        "  if (ENV_API_BASE && ENV_API_BASE.trim()) {\n"
+        "    const rawEnvBase = ENV_API_BASE.trim();\n"
+        "    try {\n"
+        "      const parsed = new URL(rawEnvBase);\n"
+        "      if (!isLoopbackHost(parsed.hostname) || isLoopbackHost(browserHost)) {\n"
+        '        return parsed.toString().replace(/\\/$/, "");\n'
+        "      }\n"
+        "      parsed.hostname = browserHost;\n"
+        '      return parsed.toString().replace(/\\/$/, "");\n'
+        "    } catch {\n"
+        "      return rawEnvBase;\n"
+        "    }\n"
+        "  }\n"
+        "  return `${browserProtocol}://${browserHost}:${fallbackPort}`;\n"
         "}\n\n"
         f"export default function {component_name}() {{\n"
         "  const [items, setItems] = useState<EntityItem[]>([]);\n"
@@ -1019,15 +1039,35 @@ def _render_frontend_entity_detail_page(
         "type EntityItem = Record<string, unknown>;\n\n"
         "const ENV_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL;\n"
         'const ENV_BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "8000";\n\n'
+        'const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);\n\n'
+        "function isLoopbackHost(hostname: string) {\n"
+        '  return LOOPBACK_HOSTS.has((hostname || "").trim().toLowerCase());\n'
+        "}\n\n"
         "function resolveApiBaseUrl() {\n"
-        "  if (ENV_API_BASE && ENV_API_BASE.trim()) {\n"
-        "    return ENV_API_BASE.trim();\n"
-        "  }\n"
         '  const fallbackPort = String(ENV_BACKEND_PORT || "8000").trim() || "8000";\n'
-        '  if (typeof window === "undefined") return `http://127.0.0.1:${fallbackPort}`;\n'
-        '  const protocol = window.location.protocol === "https:" ? "https" : "http";\n'
-        '  const host = window.location.hostname || "127.0.0.1";\n'
-        "  return `${protocol}://${host}:${fallbackPort}`;\n"
+        '  const loopbackFallback = `http://127.0.0.1:${fallbackPort}`;\n'
+        '  if (typeof window === "undefined") {\n'
+        "    if (ENV_API_BASE && ENV_API_BASE.trim()) {\n"
+        "      return ENV_API_BASE.trim();\n"
+        "    }\n"
+        "    return loopbackFallback;\n"
+        "  }\n"
+        '  const browserProtocol = window.location.protocol === "https:" ? "https" : "http";\n'
+        '  const browserHost = (window.location.hostname || "127.0.0.1").trim();\n'
+        "  if (ENV_API_BASE && ENV_API_BASE.trim()) {\n"
+        "    const rawEnvBase = ENV_API_BASE.trim();\n"
+        "    try {\n"
+        "      const parsed = new URL(rawEnvBase);\n"
+        "      if (!isLoopbackHost(parsed.hostname) || isLoopbackHost(browserHost)) {\n"
+        '        return parsed.toString().replace(/\\/$/, "");\n'
+        "      }\n"
+        "      parsed.hostname = browserHost;\n"
+        '      return parsed.toString().replace(/\\/$/, "");\n'
+        "    } catch {\n"
+        "      return rawEnvBase;\n"
+        "    }\n"
+        "  }\n"
+        "  return `${browserProtocol}://${browserHost}:${fallbackPort}`;\n"
         "}\n\n"
         f"export default function {component_name}() {{\n"
         f"  {hook}\n"
