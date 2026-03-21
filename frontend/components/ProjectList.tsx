@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
@@ -30,12 +31,11 @@ export default function ProjectList({ projects, selectedName }: Props) {
   const [settingCurrentName, setSettingCurrentName] = useState("");
   const [setCurrentError, setSetCurrentError] = useState("");
 
-  async function handleSelectProject(projectName: string) {
+  async function handleSetCurrent(projectName: string) {
     const target = String(projectName || "").trim();
     if (!target) {
       return;
     }
-    router.push(`/dashboard?selected=${encodeURIComponent(target)}`);
     setSettingCurrentName(target);
     setSetCurrentError("");
     try {
@@ -89,13 +89,12 @@ export default function ProjectList({ projects, selectedName }: Props) {
                 ].join(" ")}
               >
                 <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void handleSelectProject(name)}
+                  <Link
+                    href={name ? `/projects/${encodeURIComponent(name)}` : "/dashboard"}
                     className="break-all text-sm font-medium text-slate-100 underline-offset-2 hover:underline"
                   >
                     {displayName}
-                  </button>
+                  </Link>
                   {isCurrent ? (
                     <span className="rounded-full border border-emerald-400 bg-emerald-900/50 px-2 py-0.5 text-[11px] font-medium text-emerald-200">
                       current
@@ -110,7 +109,7 @@ export default function ProjectList({ projects, selectedName }: Props) {
                   ) : (
                     <button
                       type="button"
-                      onClick={() => void handleSelectProject(name)}
+                      onClick={() => void handleSetCurrent(name)}
                       className="rounded-md border border-cyan-600 px-2 py-1 text-xs text-cyan-200 hover:bg-cyan-900/30"
                     >
                       Set current
