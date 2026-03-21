@@ -1,22 +1,36 @@
-"use client";
+type RuntimeInfo = {
+  backend_status?: string;
+  frontend_status?: string;
+  backend_url?: string;
+  frontend_url?: string;
+};
 
 type Props = {
-  runtime: {
-    backend_status: string;
-    frontend_status: string;
-    backend_url: string;
-    frontend_url: string;
-  };
+  runtime?: RuntimeInfo;
 };
 
 export default function RuntimeCard({ runtime }: Props) {
+  const data = runtime || {};
+  const backendStatus = String(data.backend_status || "STOPPED");
+  const frontendStatus = String(data.frontend_status || "STOPPED");
+  const backendUrl = String(data.backend_url || "");
+  const frontendUrl = String(data.frontend_url || "");
+
   return (
-    <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 12 }}>
-      <h3 style={{ marginTop: 0 }}>Runtime</h3>
-      <div>Backend: {runtime.backend_status}</div>
-      {runtime.backend_url ? <div style={{ overflowWrap: "anywhere" }}>Backend URL: {runtime.backend_url}</div> : null}
-      <div>Frontend: {runtime.frontend_status}</div>
-      {runtime.frontend_url ? <div style={{ overflowWrap: "anywhere" }}>Frontend URL: {runtime.frontend_url}</div> : null}
-    </div>
+    <section className="rounded-md border border-zinc-200 bg-white p-4">
+      <h3 className="text-sm font-semibold text-zinc-900">Runtime</h3>
+      <dl className="mt-3 space-y-2 text-sm">
+        <div>
+          <dt className="text-zinc-500">Backend</dt>
+          <dd className="text-zinc-900">{backendStatus}</dd>
+          {backendUrl ? <dd className="break-all text-xs text-zinc-600">{backendUrl}</dd> : null}
+        </div>
+        <div>
+          <dt className="text-zinc-500">Frontend</dt>
+          <dd className="text-zinc-900">{frontendStatus}</dd>
+          {frontendUrl ? <dd className="break-all text-xs text-zinc-600">{frontendUrl}</dd> : null}
+        </div>
+      </dl>
+    </section>
   );
 }

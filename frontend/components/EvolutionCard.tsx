@@ -1,24 +1,24 @@
-"use client";
-
 type Props = {
-  items: string[];
+  items?: string[];
 };
 
 export default function EvolutionCard({ items }: Props) {
+  const list = Array.isArray(items) ? items.filter((item) => String(item || "").trim().length > 0) : [];
+
   return (
-    <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 12 }}>
-      <h3 style={{ marginTop: 0 }}>Recent Evolution</h3>
-      {items.length === 0 ? (
-        <div style={{ color: "#666" }}>(none)</div>
+    <section className="rounded-md border border-zinc-200 bg-white p-4">
+      <h3 className="text-sm font-semibold text-zinc-900">Recent Evolution</h3>
+      {list.length === 0 ? (
+        <p className="mt-3 text-sm text-zinc-600">(none)</p>
       ) : (
-        <ul style={{ margin: 0, paddingLeft: 18 }}>
-          {items.map((item, index) => (
-            <li key={index} style={{ overflowWrap: "anywhere" }}>
+        <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-zinc-800">
+          {list.map((item, index) => (
+            <li key={`${index}-${item.slice(0, 16)}`} className="break-words">
               {item}
             </li>
           ))}
         </ul>
       )}
-    </div>
+    </section>
   );
 }
