@@ -13,6 +13,7 @@ from archmind.telegram_bot import (
     _repository_summary_from_state,
     _resolve_project_type,
     get_current_project,
+    load_last_project_path,
     summarize_recent_evolution,
 )
 from archmind.ui_models import ProjectDetailResponse, ProjectListItem, RepositorySummary, RuntimeSummary, SpecSummary
@@ -64,9 +65,42 @@ def _runtime_urls_for_display(status: str, runtime_payload: dict[str, Any], stat
     return backend_url, frontend_url
 
 
+def _resolve_current_project_dir() -> Path | None:
+    current = get_current_project()
+    if current is not None and current.exists() and current.is_dir():
+        return current.resolve()
+    last = load_last_project_path()
+    if last is not None and last.exists() and last.is_dir():
+        return last.resolve()
+    return None
+
+
+def _is_current_project(project_dir: Path) -> bool:
+    current = _resolve_current_project_dir()
+    return bool(current is not None and current == project_dir.resolve())
+
+
+def _display_name_from_payloads(project_dir: Path, state_payload: dict[str, Any], spec_payload: dict[str, Any]) -> str:
+    candidates = [
+        state_payload.get("project_name"),
+        state_payload.get("name"),
+        state_payload.get("idea"),
+        spec_payload.get("project_name"),
+        spec_payload.get("name"),
+        spec_payload.get("title"),
+        project_dir.name,
+    ]
+    for item in candidates:
+        value = str(item or "").strip()
+        if value:
+            return value
+    return project_dir.name
+
+
 def build_project_list_item(project_dir: Path) -> ProjectListItem:
     archmind_dir = project_dir / ".archmind"
     state_payload = load_state(project_dir) or {}
+    spec_payload = _load_json(archmind_dir / "project_spec.json") or {}
     result_payload = _load_json(archmind_dir / "result.json") or {}
     runtime_payload = get_local_runtime_status(project_dir)
     status = _project_runtime_status(project_dir, state_payload, result_payload, runtime_payload)
@@ -87,10 +121,9 @@ def build_project_list_item(project_dir: Path) -> ProjectListItem:
     else:
         runtime = "STOPPED"
 
-    current = get_current_project()
-    is_current = bool(current is not None and current.resolve() == project_dir.resolve())
     return ProjectListItem(
         name=project_dir.name,
+        display_name=_display_name_from_payloads(project_dir, state_payload, spec_payload),
         path=str(project_dir),
         status=status,
         runtime=runtime,
@@ -98,7 +131,7 @@ def build_project_list_item(project_dir: Path) -> ProjectListItem:
         template=str(state_payload.get("effective_template") or "unknown").strip() or "unknown",
         backend_url=backend_url,
         frontend_url=frontend_url,
-        is_current=is_current,
+        is_current=_is_current_project(project_dir),
     )
 
 
@@ -129,6 +162,8 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
     repository_info = _repository_summary_from_state(state_payload)
     return ProjectDetailResponse(
         name=project_dir.name,
+        display_name=_display_name_from_payloads(project_dir, state_payload, spec if isinstance(spec, dict) else {}),
+        is_current=_is_current_project(project_dir),
         shape=str(spec.get("shape") or state_payload.get("architecture_app_shape") or "unknown").strip() or "unknown",
         template=str(spec.get("template") or state_payload.get("effective_template") or "unknown").strip() or "unknown",
         provider_mode=load_provider_mode(state_payload, default="local"),  # type: ignore[arg-type]

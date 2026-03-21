@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type ProviderMode = "local" | "cloud" | "auto";
 
@@ -8,14 +8,20 @@ type Props = {
   projectName: string;
   mode: ProviderMode;
   apiBaseUrl: string;
-  onUpdated?: (mode: ProviderMode) => void;
+  onUpdated?: (mode: ProviderMode) => void | Promise<void>;
 };
 
 export default function ProviderCard({ projectName, mode, apiBaseUrl, onUpdated }: Props) {
   const [currentMode, setCurrentMode] = useState<ProviderMode>(mode);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string>("");
+
+  useEffect(() => {
+    setCurrentMode(mode);
+  }, [mode]);
 
   const updateMode = async (nextMode: ProviderMode) => {
+    setError("");
     setLoading(true);
     try {
       const endpoint =
@@ -28,8 +34,12 @@ export default function ProviderCard({ projectName, mode, apiBaseUrl, onUpdated 
       if (response.ok) {
         const payload = (await response.json()) as { mode: ProviderMode };
         setCurrentMode(payload.mode);
-        onUpdated?.(payload.mode);
+        await onUpdated?.(payload.mode);
+      } else {
+        setError("Failed to update provider");
       }
+    } catch {
+      setError("Failed to update provider");
     } finally {
       setLoading(false);
     }
@@ -58,6 +68,7 @@ export default function ProviderCard({ projectName, mode, apiBaseUrl, onUpdated 
           </button>
         ))}
       </div>
+      {error ? <div style={{ marginTop: 8, color: "#b42318", fontSize: 13 }}>{error}</div> : null}
     </div>
   );
 }

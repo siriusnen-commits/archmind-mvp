@@ -9,6 +9,8 @@ import RuntimeCard from "../../../components/RuntimeCard";
 
 type ProjectDetail = {
   name: string;
+  display_name: string;
+  is_current: boolean;
   shape: string;
   template: string;
   provider_mode: "local" | "cloud" | "auto";
@@ -39,9 +41,11 @@ type Props = {
 export default function ProjectDetailPage({ params }: Props) {
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string>("");
 
   const load = async () => {
     setLoading(true);
+    setError("");
     try {
       const response = await fetch(apiBase + "/ui/projects/" + encodeURIComponent(params.project), {
         cache: "no-store",
@@ -49,9 +53,16 @@ export default function ProjectDetailPage({ params }: Props) {
       if (response.ok) {
         const payload = (await response.json()) as ProjectDetail;
         setDetail(payload);
+      } else if (response.status === 404) {
+        setDetail(null);
+        setError("Project not found");
       } else {
         setDetail(null);
+        setError("Failed to load project data");
       }
+    } catch {
+      setDetail(null);
+      setError("Failed to load project data");
     } finally {
       setLoading(false);
     }
@@ -71,6 +82,7 @@ export default function ProjectDetailPage({ params }: Props) {
       </div>
 
       {loading ? <div>Loading...</div> : null}
+      {error ? <div style={{ color: "#b42318", marginBottom: 12 }}>{error}</div> : null}
       {detail ? (
         <div style={{ display: "grid", gap: 12 }}>
           <ProjectSummaryCard project={detail} />
@@ -79,12 +91,15 @@ export default function ProjectDetailPage({ params }: Props) {
             projectName={detail.name}
             mode={detail.provider_mode}
             apiBaseUrl={apiBase}
-            onUpdated={(mode) => setDetail({ ...detail, provider_mode: mode })}
+            onUpdated={async (mode) => {
+              setDetail((prev) => (prev ? { ...prev, provider_mode: mode } : prev));
+              await load();
+            }}
           />
           <EvolutionCard items={detail.recent_evolution} />
         </div>
       ) : (
-        <div>Project not found.</div>
+        <div style={{ color: "#555" }}>{error || "Project not found"}</div>
       )}
     </main>
   );
