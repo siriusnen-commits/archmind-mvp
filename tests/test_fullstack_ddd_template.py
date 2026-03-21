@@ -128,11 +128,20 @@ def test_fullstack_runtime_env_template_uses_api_base_url_and_settings(tmp_path:
     settings_text = (project_dir / "backend" / "app" / "core" / "settings.py").read_text(encoding="utf-8")
     frontend_env_example = (project_dir / "frontend" / ".env.example").read_text(encoding="utf-8")
     frontend_page = (project_dir / "frontend" / "app" / "ui" / "DefectsPage.tsx").read_text(encoding="utf-8")
+    root_page = (project_dir / "frontend" / "app" / "page.tsx").read_text(encoding="utf-8")
+    layout_page = (project_dir / "frontend" / "app" / "layout.tsx").read_text(encoding="utf-8")
+    defects_route = (project_dir / "frontend" / "app" / "ui" / "defects" / "page.tsx").read_text(encoding="utf-8")
 
     assert "cors_allow_origins" in settings_text
     assert "NEXT_PUBLIC_API_BASE_URL=" in frontend_env_example
     assert "NEXT_PUBLIC_FRONTEND_PORT=" in frontend_env_example
     assert "NEXT_PUBLIC_API_BASE_URL" in frontend_page
+    assert "window.location.hostname" in frontend_page
     assert "NEXT_PUBLIC_BACKEND_URL" not in frontend_page
     assert "Backend: {backendUrl}" not in frontend_page
     assert "Backend: {apiBaseUrl}" in frontend_page
+    assert 'router.replace("/notes")' in root_page
+    assert "DefectsPage" not in root_page
+    assert "Defect Ledger" not in layout_page
+    assert "FastAPI + Next.js workspace" in layout_page
+    assert "DefectsPage" in defects_route

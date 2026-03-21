@@ -810,39 +810,13 @@ def apply_frontend_page_scaffold(project_dir: Path, entity_name: str) -> list[st
 
     _write_if_missing(
         list_page,
-        "export default function "
-        + plural_title
-        + "Page() {\n"
-        "  return (\n"
-        "    <div>\n"
-        "      <h1>"
-        + plural_title
-        + "</h1>\n"
-        "      <p>List page placeholder for "
-        + class_name
-        + "</p>\n"
-        "    </div>\n"
-        "  );\n"
-        "}\n",
+        _render_frontend_entity_list_page(component_name=f"{plural_title}Page", title=plural_title, entity_path=plural),
         generated,
         project_dir,
     )
     _write_if_missing(
         detail_page,
-        "export default function "
-        + class_name
-        + "DetailPage() {\n"
-        "  return (\n"
-        "    <div>\n"
-        "      <h1>"
-        + class_name
-        + " Detail</h1>\n"
-        "      <p>Detail page placeholder for "
-        + class_name
-        + "</p>\n"
-        "    </div>\n"
-        "  );\n"
-        "}\n",
+        _render_frontend_entity_detail_page(component_name=f"{class_name}DetailPage", title=class_name, entity_path=plural),
         generated,
         project_dir,
     )
@@ -868,6 +842,36 @@ def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
     comp_name = "".join(seg.replace("-", " ").replace("_", " ").title().replace(" ", "") for seg in segments) + "Page"
 
     generated: list[str] = []
+    leaf = segments[-1].lower()
+    entity_path = "/".join(segments[:-1]).strip("/")
+    if entity_path and leaf == "list":
+        _write_if_missing(
+            target,
+            _render_frontend_entity_list_page(
+                component_name=comp_name,
+                title=title,
+                entity_path=entity_path,
+                detail_link_mode="query",
+                detail_href_base=f"/{entity_path}/detail",
+            ),
+            generated,
+            project_dir,
+        )
+        return generated
+    if entity_path and leaf == "detail":
+        _write_if_missing(
+            target,
+            _render_frontend_entity_detail_page(
+                component_name=comp_name,
+                title=title,
+                entity_path=entity_path,
+                id_mode="query",
+            ),
+            generated,
+            project_dir,
+        )
+        return generated
+
     _write_if_missing(
         target,
         "export default function "
@@ -888,6 +892,198 @@ def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
         project_dir,
     )
     return generated
+
+
+def _render_frontend_entity_list_page(
+    *,
+    component_name: str,
+    title: str,
+    entity_path: str,
+    detail_link_mode: str = "path",
+    detail_href_base: str | None = None,
+) -> str:
+    api_path = f"/{str(entity_path or '').strip('/')}"
+    detail_base = detail_href_base or api_path
+    link_expression = (
+        f"`{detail_base}/${{String(item.id)}}`"
+        if detail_link_mode != "query"
+        else f"`{detail_base}?id=${{String(item.id)}}`"
+    )
+    return (
+        '"use client";\n\n'
+        'import Link from "next/link";\n'
+        'import { useEffect, useMemo, useState } from "react";\n\n'
+        "type EntityItem = Record<string, unknown> & { id?: number | string };\n\n"
+        "const ENV_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL;\n"
+        'const ENV_BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "8000";\n\n'
+        "function resolveApiBaseUrl() {\n"
+        "  if (ENV_API_BASE && ENV_API_BASE.trim()) {\n"
+        "    return ENV_API_BASE.trim();\n"
+        "  }\n"
+        '  const fallbackPort = String(ENV_BACKEND_PORT || "8000").trim() || "8000";\n'
+        '  if (typeof window === "undefined") return `http://127.0.0.1:${fallbackPort}`;\n'
+        '  const protocol = window.location.protocol === "https:" ? "https" : "http";\n'
+        '  const host = window.location.hostname || "127.0.0.1";\n'
+        "  return `${protocol}://${host}:${fallbackPort}`;\n"
+        "}\n\n"
+        f"export default function {component_name}() {{\n"
+        "  const [items, setItems] = useState<EntityItem[]>([]);\n"
+        "  const [loading, setLoading] = useState(true);\n"
+        "  const [error, setError] = useState(\"\");\n"
+        "  const apiBaseUrl = useMemo(() => resolveApiBaseUrl(), []);\n\n"
+        "  useEffect(() => {\n"
+        "    let mounted = true;\n"
+        "    (async () => {\n"
+        "      setLoading(true);\n"
+        "      setError(\"\");\n"
+        "      try {\n"
+        f'        const response = await fetch(`${{apiBaseUrl}}{api_path}`, {{ cache: "no-store" }});\n'
+        "        if (!response.ok) {\n"
+        "          throw new Error(`HTTP ${response.status}`);\n"
+        "        }\n"
+        "        const payload = (await response.json()) as unknown;\n"
+        "        const rows = Array.isArray(payload)\n"
+        "          ? payload\n"
+        "          : Array.isArray((payload as { items?: unknown[] }).items)\n"
+        "            ? (payload as { items: unknown[] }).items\n"
+        "            : [];\n"
+        "        if (mounted) {\n"
+        "          setItems(rows as EntityItem[]);\n"
+        "        }\n"
+        "      } catch (e) {\n"
+        "        const message = e instanceof Error ? e.message : String(e || \"unknown error\");\n"
+        "        if (mounted) {\n"
+        "          setError(message);\n"
+        "        }\n"
+        "      } finally {\n"
+        "        if (mounted) {\n"
+        "          setLoading(false);\n"
+        "        }\n"
+        "      }\n"
+        "    })();\n"
+        "    return () => {\n"
+        "      mounted = false;\n"
+        "    };\n"
+        "  }, [apiBaseUrl]);\n\n"
+        "  return (\n"
+        '    <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">\n'
+        f'      <h1 className="text-lg font-semibold">{title}</h1>\n'
+        '      <p className="text-xs text-slate-400">API: {apiBaseUrl}</p>\n'
+        "      {loading ? <p className=\"text-sm text-slate-300\">Loading...</p> : null}\n"
+        "      {!loading && error ? <p className=\"text-sm text-rose-300\">Failed to load: {error}</p> : null}\n"
+        "      {!loading && !error && items.length === 0 ? <p className=\"text-sm text-slate-300\">No items found.</p> : null}\n"
+        "      {!loading && !error && items.length > 0 ? (\n"
+        '        <ul className="space-y-2 text-sm">\n'
+        "          {items.map((item, index) => (\n"
+        '            <li key={String(item.id ?? index)} className="rounded-md border border-slate-700 p-2">\n'
+        "              <div className=\"font-medium\">#{String(item.id ?? index)}</div>\n"
+        "              <pre className=\"mt-1 overflow-x-auto text-xs text-slate-300\">{JSON.stringify(item, null, 2)}</pre>\n"
+        "              {item.id !== undefined ? (\n"
+        f"                <Link href={{{link_expression}}} className=\"mt-2 inline-block text-xs text-cyan-300 underline\">\n"
+        "                  Open detail\n"
+        "                </Link>\n"
+        "              ) : null}\n"
+        "            </li>\n"
+        "          ))}\n"
+        "        </ul>\n"
+        "      ) : null}\n"
+        "    </section>\n"
+        "  );\n"
+        "}\n"
+    )
+
+
+def _render_frontend_entity_detail_page(
+    *,
+    component_name: str,
+    title: str,
+    entity_path: str,
+    id_mode: str = "path",
+) -> str:
+    api_path = f"/{str(entity_path or '').strip('/')}"
+    id_source = (
+        'const id = String(searchParams.get("id") || "").trim();'
+        if id_mode == "query"
+        else 'const id = String(params.id || "").trim();'
+    )
+    imports = (
+        'import { useSearchParams } from "next/navigation";\n'
+        if id_mode == "query"
+        else 'import { useParams } from "next/navigation";\n'
+    )
+    hook = "const searchParams = useSearchParams();" if id_mode == "query" else "const params = useParams();"
+    return (
+        '"use client";\n\n'
+        "import { useEffect, useMemo, useState } from \"react\";\n"
+        f"{imports}\n"
+        "type EntityItem = Record<string, unknown>;\n\n"
+        "const ENV_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL;\n"
+        'const ENV_BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "8000";\n\n'
+        "function resolveApiBaseUrl() {\n"
+        "  if (ENV_API_BASE && ENV_API_BASE.trim()) {\n"
+        "    return ENV_API_BASE.trim();\n"
+        "  }\n"
+        '  const fallbackPort = String(ENV_BACKEND_PORT || "8000").trim() || "8000";\n'
+        '  if (typeof window === "undefined") return `http://127.0.0.1:${fallbackPort}`;\n'
+        '  const protocol = window.location.protocol === "https:" ? "https" : "http";\n'
+        '  const host = window.location.hostname || "127.0.0.1";\n'
+        "  return `${protocol}://${host}:${fallbackPort}`;\n"
+        "}\n\n"
+        f"export default function {component_name}() {{\n"
+        f"  {hook}\n"
+        f"  {id_source}\n"
+        "  const [item, setItem] = useState<EntityItem | null>(null);\n"
+        "  const [loading, setLoading] = useState(true);\n"
+        "  const [notFound, setNotFound] = useState(false);\n"
+        "  const [error, setError] = useState(\"\");\n"
+        "  const apiBaseUrl = useMemo(() => resolveApiBaseUrl(), []);\n\n"
+        "  useEffect(() => {\n"
+        "    if (!id) {\n"
+        "      setLoading(false);\n"
+        "      setNotFound(true);\n"
+        "      return;\n"
+        "    }\n"
+        "    let mounted = true;\n"
+        "    (async () => {\n"
+        "      setLoading(true);\n"
+        "      setNotFound(false);\n"
+        "      setError(\"\");\n"
+        "      try {\n"
+        f'        const response = await fetch(`${{apiBaseUrl}}{api_path}/${{id}}`, {{ cache: "no-store" }});\n'
+        "        if (response.status === 404) {\n"
+        "          if (mounted) setNotFound(true);\n"
+        "          return;\n"
+        "        }\n"
+        "        if (!response.ok) {\n"
+        "          throw new Error(`HTTP ${response.status}`);\n"
+        "        }\n"
+        "        const payload = (await response.json()) as EntityItem;\n"
+        "        if (mounted) setItem(payload);\n"
+        "      } catch (e) {\n"
+        "        const message = e instanceof Error ? e.message : String(e || \"unknown error\");\n"
+        "        if (mounted) setError(message);\n"
+        "      } finally {\n"
+        "        if (mounted) setLoading(false);\n"
+        "      }\n"
+        "    })();\n"
+        "    return () => {\n"
+        "      mounted = false;\n"
+        "    };\n"
+        "  }, [apiBaseUrl, id]);\n\n"
+        "  return (\n"
+        '    <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">\n'
+        f'      <h1 className="text-lg font-semibold">{title} Detail</h1>\n'
+        "      {!id ? <p className=\"text-sm text-slate-300\">Missing item id.</p> : null}\n"
+        "      {loading ? <p className=\"text-sm text-slate-300\">Loading...</p> : null}\n"
+        "      {!loading && notFound ? <p className=\"text-sm text-slate-300\">Item not found.</p> : null}\n"
+        "      {!loading && error ? <p className=\"text-sm text-rose-300\">Failed to load: {error}</p> : null}\n"
+        "      {!loading && !notFound && !error && item ? (\n"
+        "        <pre className=\"overflow-x-auto text-xs text-slate-300\">{JSON.stringify(item, null, 2)}</pre>\n"
+        "      ) : null}\n"
+        "    </section>\n"
+        "  );\n"
+        "}\n"
+    )
 
 
 def _normalize_field_entries(fields: list[dict[str, Any]]) -> list[tuple[str, str]]:

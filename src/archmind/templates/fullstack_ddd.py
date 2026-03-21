@@ -592,39 +592,93 @@ body {
 }
 """
 
-    files["frontend/app/layout.tsx"] = """import "./globals.css";
+    files["frontend/app/layout.tsx"] = (
+        'import "./globals.css";\n\n'
+        "export const metadata = {\n"
+        f'  title: "{project_name}",\n'
+        "};\n\n"
+        "export default function RootLayout({ children }: { children: React.ReactNode }) {\n"
+        "  return (\n"
+        '    <html lang="en">\n'
+        "      <body>\n"
+        '        <div className="min-h-screen bg-slate-950 text-slate-100">\n'
+        '          <header className="border-b border-slate-800 bg-slate-900/80">\n'
+        '            <div className="mx-auto max-w-5xl px-4 py-5">\n'
+        '              <div className="flex items-center justify-between">\n'
+        "                <div>\n"
+        f'                  <div className="text-lg font-semibold tracking-wide">{project_name}</div>\n'
+        '                  <div className="text-xs text-slate-400">FastAPI + Next.js workspace</div>\n'
+        "                </div>\n"
+        '                <div className="text-xs text-slate-400">/ · /notes · /ui/defects</div>\n'
+        "              </div>\n"
+        "            </div>\n"
+        "          </header>\n"
+        '          <main className="mx-auto max-w-5xl px-4 py-8">{children}</main>\n'
+        "        </div>\n"
+        "      </body>\n"
+        "    </html>\n"
+        "  );\n"
+        "}\n"
+    )
 
-export const metadata = {
-  title: "Defect Tracker",
-};
+    files["frontend/app/page.tsx"] = """"use client";
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+import Link from "next/link";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+
+export default function Page() {
+  const router = useRouter();
+  const [checkingNotes, setCheckingNotes] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const response = await fetch("/notes", { cache: "no-store" });
+        if (!active) return;
+        if (response.ok) {
+          router.replace("/notes");
+          return;
+        }
+      } catch {
+        // Ignore and show default landing.
+      }
+      if (active) {
+        setCheckingNotes(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [router]);
+
+  if (checkingNotes) {
+    return <p className="text-sm text-slate-300">Loading workspace...</p>;
+  }
+
   return (
-    <html lang="en">
-      <body>
-        <div className="min-h-screen bg-slate-950 text-slate-100">
-          <header className="border-b border-slate-800 bg-slate-900/80">
-            <div className="mx-auto max-w-5xl px-4 py-5">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-lg font-semibold tracking-wide">Defect Ledger</div>
-                  <div className="text-xs text-slate-400">FastAPI + Next.js demo</div>
-                </div>
-                <div className="text-xs text-slate-400">/health · /defects</div>
-              </div>
-            </div>
-          </header>
-          <main className="mx-auto max-w-5xl px-4 py-8">{children}</main>
-        </div>
-      </body>
-    </html>
+    <section className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
+      <h1 className="text-lg font-semibold">Project Home</h1>
+      <p className="text-sm text-slate-300">
+        Open the generated domain pages. If Note pages exist, this page will auto-open <code>/notes</code>.
+      </p>
+      <div className="flex flex-wrap gap-2 text-sm">
+        <Link href="/notes" className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">
+          Notes
+        </Link>
+        <Link href="/ui/defects" className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">
+          Defects
+        </Link>
+      </div>
+    </section>
   );
 }
 """
 
-    files["frontend/app/page.tsx"] = """import DefectsPage from "./ui/DefectsPage";
+    files["frontend/app/ui/defects/page.tsx"] = """import DefectsPage from "../../ui/DefectsPage";
 
-export default function Page() {
+export default function DefectsRoutePage() {
   return <DefectsPage />;
 }
 """
@@ -648,16 +702,23 @@ type DefectListResponse = {
 };
 
 const ENV_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL;
+const ENV_BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "8000";
 
-function getApiBaseUrl() {
-  if (typeof window === "undefined") return ENV_API_BASE ?? "http://127.0.0.1:8000";
-  if (ENV_API_BASE && ENV_API_BASE.trim()) return ENV_API_BASE;
-  const host = window.location.hostname;
-  // Fallback only when runtime .env.local is missing.
-  return `http://${host}:8000`;
+function resolveApiBaseUrl() {
+  if (ENV_API_BASE && ENV_API_BASE.trim()) {
+    return ENV_API_BASE.trim();
+  }
+  if (typeof window !== "undefined") {
+    const protocol = window.location.protocol === "https:" ? "https" : "http";
+    const host = window.location.hostname || "127.0.0.1";
+    const port = String(ENV_BACKEND_PORT || "8000").trim() || "8000";
+    return `${protocol}://${host}:${port}`;
+  }
+  return `http://127.0.0.1:${String(ENV_BACKEND_PORT || "8000").trim() || "8000"}`;
 }
 
 export default function DefectsPage() {
+  const apiBaseUrl = useMemo(() => resolveApiBaseUrl(), []);
   const [items, setItems] = useState<Defect[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -673,8 +734,6 @@ export default function DefectsPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [total, setTotal] = useState(0);
-
-  const apiBaseUrl = useMemo(() => getApiBaseUrl(), []);
 
   function humanizeError(err: unknown) {
     if (err instanceof TypeError) {
