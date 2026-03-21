@@ -7,7 +7,7 @@ from urllib.parse import quote
 from fastapi.testclient import TestClient
 
 from archmind.state import write_state
-from archmind.telegram_bot import clear_current_project, set_current_project
+from archmind.telegram_bot import clear_current_project, get_validated_current_project, set_current_project
 from archmind.ui_api import create_ui_app
 
 
@@ -332,6 +332,26 @@ def test_ui_select_project_marks_it_current_and_unsets_previous(monkeypatch, tmp
         clear_current_project()
 
 
+def test_ui_select_project_updates_shared_backend_current_state(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    alpha = _make_project(projects_root, "alpha")
+    beta = _make_project(projects_root, "beta")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    set_current_project(alpha)
+    client = TestClient(create_ui_app())
+    try:
+        response = client.post("/ui/projects/beta/select")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["ok"] is True
+        assert payload["project_name"] == "beta"
+        current = get_validated_current_project()
+        assert current is not None
+        assert current.resolve() == beta.resolve()
+    finally:
+        clear_current_project()
+
+
 def test_ui_projects_reflect_backend_current_change_from_telegram_use(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     alpha = _make_project(projects_root, "alpha")
@@ -372,6 +392,29 @@ def test_ui_select_project_invalid_name_returns_safe_error(monkeypatch, tmp_path
     assert payload["project_name"] == "not-exists"
     assert payload["is_current"] is False
     assert "not found" in str(payload["detail"]).lower()
+
+
+def test_ui_select_project_failure_does_not_change_current_project(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    alpha = _make_project(projects_root, "alpha")
+    _make_project(projects_root, "beta")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    set_current_project(alpha)
+    client = TestClient(create_ui_app())
+    try:
+        response = client.post("/ui/projects/not-exists/select")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["ok"] is False
+        current = get_validated_current_project()
+        assert current is not None
+        assert current.resolve() == alpha.resolve()
+
+        rows = {item["name"]: item for item in client.get("/ui/projects").json()["projects"]}
+        assert rows["alpha"]["is_current"] is True
+        assert rows["beta"]["is_current"] is False
+    finally:
+        clear_current_project()
 
 
 def test_ui_select_project_reuses_telegram_selection_helpers(monkeypatch, tmp_path: Path) -> None:
