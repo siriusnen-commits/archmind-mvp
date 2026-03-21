@@ -275,6 +275,49 @@ def test_ui_project_not_found_returns_404(monkeypatch, tmp_path: Path) -> None:
     assert response.status_code == 404
 
 
+def test_ui_select_project_marks_it_current_and_unsets_previous(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    alpha = _make_project(projects_root, "alpha")
+    _make_project(projects_root, "beta")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    set_current_project(alpha)
+    client = TestClient(create_ui_app())
+    try:
+        response = client.post("/ui/projects/beta/select")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["ok"] is True
+        assert payload["project_name"] == "beta"
+        assert payload["is_current"] is True
+
+        list_response = client.get("/ui/projects")
+        assert list_response.status_code == 200
+        rows = {item["name"]: item for item in list_response.json()["projects"]}
+        assert rows["beta"]["is_current"] is True
+        assert rows["alpha"]["is_current"] is False
+
+        detail_response = client.get("/ui/projects/beta")
+        assert detail_response.status_code == 200
+        assert detail_response.json()["is_current"] is True
+    finally:
+        clear_current_project()
+
+
+def test_ui_select_project_invalid_name_returns_safe_error(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "valid-project")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.post("/ui/projects/not-exists/select")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["project_name"] == "not-exists"
+    assert payload["is_current"] is False
+    assert "not found" in str(payload["detail"]).lower()
+
+
 def test_ui_display_name_falls_back_to_identifier(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     project_dir = projects_root / "safe-id"
