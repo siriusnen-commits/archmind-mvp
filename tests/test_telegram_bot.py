@@ -2701,6 +2701,132 @@ def test_inspect_command_truncates_entity_api_and_page_lists(tmp_path: Path, mon
     assert "History count: 3" in out
 
 
+def test_inspect_command_shows_recent_evolution_entries(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect_recent_evolution"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": ["GET /notes"],
+                "frontend_pages": ["notes/list"],
+                "evolution": {
+                    "version": 1,
+                    "added_modules": [],
+                    "history": [
+                        {"action": "add_entity", "entity": "Note"},
+                        {"action": "add_field", "entity": "Note", "field": "title", "type": "string"},
+                        {"action": "add_api", "method": "GET", "path": "/notes"},
+                        {"action": "add_page", "page": "notes/list"},
+                    ],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Evolution:" in out
+    assert "History count: 4" in out
+    assert "Recent evolution:" in out
+    assert "- add_entity Note" in out
+    assert "- add_field Note title:string" in out
+    assert "- add_api GET /notes" in out
+    assert "- add_page notes/list" in out
+
+
+def test_inspect_command_shows_recent_evolution_none_when_history_empty(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect_recent_evolution_none"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "template": "fastapi",
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Recent evolution:" in out
+    assert "(none)" in out
+
+
+def test_inspect_recent_evolution_reflects_primitive_execution_and_limit(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect_evolution_from_primitives"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "frontend").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "pages").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text(json.dumps({"name": "demo", "scripts": {"dev": "next dev"}}), encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": [],
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg1 = DummyMessage()
+    asyncio.run(command_add_entity(DummyUpdate(message=msg1, effective_chat=DummyChat()), DummyContext(args=["Note"])))
+    msg2 = DummyMessage()
+    asyncio.run(command_add_field(DummyUpdate(message=msg2, effective_chat=DummyChat()), DummyContext(args=["Note", "title:string"])))
+    msg3 = DummyMessage()
+    asyncio.run(command_add_field(DummyUpdate(message=msg3, effective_chat=DummyChat()), DummyContext(args=["Note", "content:string"])))
+    msg4 = DummyMessage()
+    asyncio.run(command_add_api(DummyUpdate(message=msg4, effective_chat=DummyChat()), DummyContext(args=["GET", "/reports"])))
+    msg5 = DummyMessage()
+    asyncio.run(command_add_page(DummyUpdate(message=msg5, effective_chat=DummyChat()), DummyContext(args=["reports/list"])))
+    msg6 = DummyMessage()
+    asyncio.run(command_add_page(DummyUpdate(message=msg6, effective_chat=DummyChat()), DummyContext(args=["reports/detail"])))
+
+    inspect_msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=inspect_msg, effective_chat=DummyChat()), DummyContext()))
+    out = inspect_msg.sent[-1]
+    assert "History count: 6" in out
+    assert "Recent evolution:" in out
+    # recent list is capped to latest 5 entries in inspect
+    assert "- add_entity Note" not in out
+    assert "- add_field Note title:string" in out
+    assert "- add_field Note content:string" in out
+    assert "- add_api GET /reports" in out
+    assert "- add_page reports/list" in out
+    assert "- add_page reports/detail" in out
+
+
 def test_inspect_command_shows_api_base_url_from_frontend_env(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "inspect_api_base"
     archmind = project_dir / ".archmind"

@@ -7,6 +7,7 @@ from archmind.telegram_bot import (
     _normalize_api_endpoint_text,
     _normalize_entities,
     _normalize_frontend_page_path,
+    summarize_recent_evolution,
 )
 
 
@@ -133,3 +134,37 @@ def test_analyze_spec_progression_stage_1_even_with_api_and_pages() -> None:
         }
     )
     assert p["stage"] == 1
+
+
+def test_summarize_recent_evolution_formats_primitive_actions() -> None:
+    history = [
+        {"action": "add_entity", "entity": "Note"},
+        {"action": "add_field", "entity": "Note", "field": "title", "type": "string"},
+        {"action": "add_api", "method": "GET", "path": "/notes"},
+        {"action": "add_page", "page": "notes/list"},
+    ]
+    lines = summarize_recent_evolution({"evolution": {"history": history}}, limit=5)
+    assert lines == [
+        "add_entity Note",
+        "add_field Note title:string",
+        "add_api GET /notes",
+        "add_page notes/list",
+    ]
+
+
+def test_summarize_recent_evolution_applies_limit_to_latest_entries() -> None:
+    history = [
+        {"action": "add_entity", "entity": "Task"},
+        {"action": "add_field", "entity": "Task", "field": "title", "type": "string"},
+        {"action": "add_api", "method": "GET", "path": "/tasks"},
+        {"action": "add_page", "page": "tasks/list"},
+    ]
+    lines = summarize_recent_evolution({"evolution": {"history": history}}, limit=2)
+    assert lines == [
+        "add_api GET /tasks",
+        "add_page tasks/list",
+    ]
+
+
+def test_summarize_recent_evolution_returns_empty_for_missing_history() -> None:
+    assert summarize_recent_evolution({"evolution": {"history": []}}, limit=5) == []
