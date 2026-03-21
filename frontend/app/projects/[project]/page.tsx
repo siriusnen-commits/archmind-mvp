@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 
 import EvolutionCard from "@/components/EvolutionCard";
 import AddEntityCard from "@/components/AddEntityCard";
+import AddFieldCard from "@/components/AddFieldCard";
 import DangerZoneCard from "@/components/DangerZoneCard";
 import ProjectSummaryCard from "@/components/ProjectSummaryCard";
 import ProviderCard from "@/components/ProviderCard";
@@ -40,6 +41,7 @@ type ProjectDetail = {
   template?: string;
   provider_mode?: "local" | "cloud" | "auto" | string;
   spec_summary?: SpecSummary;
+  entities?: string[];
   runtime?: RuntimeInfo;
   recent_evolution?: string[];
   repository?: RepositoryInfo;
@@ -108,6 +110,7 @@ export default async function ProjectDetailPage({ params }: PageProps) {
           <RuntimeCard runtime={detail.runtime} />
           <RuntimeActionsCard projectName={detail.name} />
           <AddEntityCard projectName={detail.name} />
+          <AddFieldCard projectName={detail.name} entities={detail.entities} />
           <ProviderCard projectName={detail.name} mode={detail.provider_mode} />
           <EvolutionCard items={Array.isArray(detail.recent_evolution) ? detail.recent_evolution : []} />
           <DangerZoneCard projectName={detail.name} repositoryUrl={detail.repository?.url} />

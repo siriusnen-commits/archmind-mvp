@@ -5151,6 +5151,251 @@ def add_entity_to_project(
         }
 
 
+def add_field_to_project(
+    project_path: Path,
+    entity_name_raw: str,
+    field_name_raw: str,
+    field_type_raw: str,
+    *,
+    auto_restart_backend: bool = False,
+) -> dict[str, Any]:
+    target = project_path.expanduser().resolve()
+    if not target.exists() or not target.is_dir():
+        return {
+            "ok": False,
+            "status": "not_found",
+            "project_name": project_path.name,
+            "entity_name": "",
+            "field_name": "",
+            "field_type": "",
+            "detail": "Project not found",
+            "error": "Project not found",
+            "spec_summary": {},
+            "recent_evolution": [],
+            "message_text": "Project not found",
+        }
+
+    entity_name = _normalize_entity_name(entity_name_raw)
+    field_name = str(field_name_raw or "").strip()
+    field_type = str(field_type_raw or "").strip().lower()
+    if not entity_name or not field_name or not field_type:
+        return {
+            "ok": False,
+            "status": "invalid",
+            "project_name": target.name,
+            "entity_name": entity_name,
+            "field_name": field_name,
+            "field_type": field_type,
+            "detail": "Invalid field input",
+            "error": "entity_name, field_name, and field_type are required",
+            "spec_summary": {},
+            "recent_evolution": [],
+            "message_text": "Usage: /add_field <Entity> <field_name>:<field_type>",
+        }
+
+    if not re.match(r"^[A-Za-z][A-Za-z0-9_]*$", field_name):
+        return {
+            "ok": False,
+            "status": "invalid",
+            "project_name": target.name,
+            "entity_name": entity_name,
+            "field_name": field_name,
+            "field_type": field_type,
+            "detail": "Invalid field name",
+            "error": "field name must match ^[A-Za-z][A-Za-z0-9_]*$",
+            "spec_summary": {},
+            "recent_evolution": [],
+            "message_text": "Invalid field name. Use letters, numbers, and underscore; start with a letter.",
+        }
+
+    if field_type not in set(SUPPORTED_FIELD_TYPES):
+        return {
+            "ok": False,
+            "status": "invalid_type",
+            "project_name": target.name,
+            "entity_name": entity_name,
+            "field_name": field_name,
+            "field_type": field_type,
+            "detail": "Unknown field type",
+            "error": f"Unknown field type: {field_type}",
+            "spec_summary": {},
+            "recent_evolution": [],
+            "message_text": (
+                "Unknown field type: "
+                + field_type
+                + "\n\nAvailable types:\n"
+                + ", ".join(SUPPORTED_FIELD_TYPES)
+            ),
+        }
+
+    try:
+        spec, spec_path = _read_or_init_project_spec(target)
+        entities = _normalize_entities(spec.get("entities"))
+        target_entity = _find_entity_in_spec(entities, entity_name)
+        if target_entity is None and _entity_exists_in_files(target, entity_name):
+            entities.append({"name": entity_name, "fields": []})
+            entities = _normalize_entities(entities)
+            target_entity = _find_entity_in_spec(entities, entity_name)
+
+        if target_entity is None:
+            return {
+                "ok": False,
+                "status": "entity_not_found",
+                "project_name": target.name,
+                "entity_name": entity_name,
+                "field_name": field_name,
+                "field_type": field_type,
+                "detail": f"Entity not found: {entity_name}",
+                "error": "Entity not found",
+                "spec_summary": {},
+                "recent_evolution": [],
+                "message_text": (
+                    f"Entity not found: {entity_name}\n\n"
+                    "Use:\n"
+                    f" /add_entity {entity_name}"
+                ),
+            }
+
+        existing_fields = target_entity.get("fields") if isinstance(target_entity.get("fields"), list) else []
+        existing_names = {str(item.get("name") or "").strip().lower() for item in existing_fields if isinstance(item, dict)}
+        if field_name.lower() in existing_names:
+            _rebuild_api_endpoints(spec)
+            _rebuild_frontend_pages(spec)
+            spec_path.parent.mkdir(parents=True, exist_ok=True)
+            spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+            progression = analyze_spec_progression(spec)
+            recent = summarize_recent_evolution(spec, limit=5)
+            pairs = []
+            for item in existing_fields:
+                if not isinstance(item, dict):
+                    continue
+                n = str(item.get("name") or "").strip()
+                t = str(item.get("type") or "").strip().lower()
+                if n and t:
+                    pairs.append(f"{n}:{t}")
+            return {
+                "ok": False,
+                "status": "exists",
+                "project_name": target.name,
+                "entity_name": entity_name,
+                "field_name": field_name,
+                "field_type": field_type,
+                "detail": "Field already exists",
+                "error": "Field already exists",
+                "spec_summary": {
+                    "stage": str(progression.get("stage_label") or "Stage 0"),
+                    "entities": int(progression.get("entities_count") or 0),
+                    "apis": int(progression.get("apis_count") or 0),
+                    "pages": int(progression.get("pages_count") or 0),
+                    "history_count": len(
+                        (spec.get("evolution") or {}).get("history")
+                        if isinstance((spec.get("evolution") or {}).get("history"), list)
+                        else []
+                    ),
+                },
+                "recent_evolution": recent,
+                "message_text": (
+                    "Field already exists\n\n"
+                    "Project:\n"
+                    f"{target.name}\n\n"
+                    "Entity:\n"
+                    f"{entity_name}\n\n"
+                    "Field:\n"
+                    f"{field_name}:{field_type}\n\n"
+                    "Fields:\n"
+                    f"{', '.join(pairs)}"
+                ),
+            }
+
+        existing_fields.append({"name": field_name, "type": field_type})
+        target_entity["fields"] = existing_fields
+        spec["entities"] = _normalize_entities(entities)
+        _rebuild_api_endpoints(spec)
+        _rebuild_frontend_pages(spec)
+        _append_evolution_event(spec, {"action": "add_field", "entity": entity_name, "field": field_name, "type": field_type})
+
+        apply_entity_scaffold(target, entity_name)
+        apply_entity_fields_to_scaffold(
+            target,
+            entity_name,
+            target_entity.get("fields") if isinstance(target_entity.get("fields"), list) else [],
+        )
+
+        spec_path.parent.mkdir(parents=True, exist_ok=True)
+        spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        fields_after = []
+        for item in target_entity.get("fields") if isinstance(target_entity.get("fields"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            n = str(item.get("name") or "").strip()
+            t = str(item.get("type") or "").strip().lower()
+            if n and t:
+                fields_after.append(f"{n}:{t}")
+
+        auto_restart_lines = ["Auto restart:", "SKIPPED"]
+        restart_failed = False
+        if auto_restart_backend:
+            auto_restart_lines, restart_failed = _auto_restart_backend_lines(target)
+
+        next_lines = ["Next:", "- /inspect", "- /restart"]
+        if restart_failed:
+            next_lines.append("- /logs")
+
+        progression = analyze_spec_progression(spec)
+        recent = summarize_recent_evolution(spec, limit=5)
+        return {
+            "ok": True,
+            "status": "added",
+            "project_name": target.name,
+            "entity_name": entity_name,
+            "field_name": field_name,
+            "field_type": field_type,
+            "detail": "Field added",
+            "error": "",
+            "spec_summary": {
+                "stage": str(progression.get("stage_label") or "Stage 0"),
+                "entities": int(progression.get("entities_count") or 0),
+                "apis": int(progression.get("apis_count") or 0),
+                "pages": int(progression.get("pages_count") or 0),
+                "history_count": len(
+                    (spec.get("evolution") or {}).get("history")
+                    if isinstance((spec.get("evolution") or {}).get("history"), list)
+                    else []
+                ),
+            },
+            "recent_evolution": recent,
+            "message_text": (
+                "Field added\n\n"
+                "Project:\n"
+                f"{target.name}\n\n"
+                "Entity:\n"
+                f"{entity_name}\n\n"
+                "Field:\n"
+                f"{field_name}:{field_type}\n\n"
+                "Fields:\n"
+                f"{', '.join(fields_after)}\n\n"
+                + "\n".join(auto_restart_lines)
+                + "\n\n"
+                + "\n".join(next_lines)
+            ),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status": "error",
+            "project_name": target.name,
+            "entity_name": entity_name,
+            "field_name": field_name,
+            "field_type": field_type,
+            "detail": "Failed to add field",
+            "error": str(exc),
+            "spec_summary": {},
+            "recent_evolution": [],
+            "message_text": f"Failed to add field: {exc}",
+        }
+
+
 async def command_add_entity(update: Any, context: Any) -> None:
     project_path = _resolve_target_project()
     if project_path is None:
@@ -5181,112 +5426,14 @@ async def command_add_field(update: Any, context: Any) -> None:
         await update.message.reply_text("Usage: /add_field <Entity> <field_name>:<field_type>")
         return
 
-    entity_name = _normalize_entity_name(args[0])
+    entity_name = str(args[0]).strip()
     field_name, field_type = [part.strip() for part in args[1].split(":", 1)]
-    field_type = field_type.lower()
     if not entity_name or not field_name or not field_type:
         await update.message.reply_text("Usage: /add_field <Entity> <field_name>:<field_type>")
         return
 
-    if field_type not in set(SUPPORTED_FIELD_TYPES):
-        await update.message.reply_text(
-            "Unknown field type: "
-            + field_type
-            + "\n\nAvailable types:\n"
-            + ", ".join(SUPPORTED_FIELD_TYPES)
-        )
-        return
-
-    spec, spec_path = _read_or_init_project_spec(project_path)
-    entities = _normalize_entities(spec.get("entities"))
-    target_entity = _find_entity_in_spec(entities, entity_name)
-    if target_entity is None and _entity_exists_in_files(project_path, entity_name):
-        entities.append({"name": entity_name, "fields": []})
-        entities = _normalize_entities(entities)
-        target_entity = _find_entity_in_spec(entities, entity_name)
-
-    if target_entity is None:
-        await update.message.reply_text(
-            f"Entity not found: {entity_name}\n\n"
-            "Use:\n"
-            f" /add_entity {entity_name}"
-        )
-        return
-
-    existing_fields = target_entity.get("fields") if isinstance(target_entity.get("fields"), list) else []
-    existing_names = {str(item.get("name") or "").strip().lower() for item in existing_fields if isinstance(item, dict)}
-    if field_name.lower() in existing_names:
-        _rebuild_api_endpoints(spec)
-        _rebuild_frontend_pages(spec)
-        spec_path.parent.mkdir(parents=True, exist_ok=True)
-        spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
-        pairs = []
-        for item in existing_fields:
-            if not isinstance(item, dict):
-                continue
-            n = str(item.get("name") or "").strip()
-            t = str(item.get("type") or "").strip().lower()
-            if n and t:
-                pairs.append(f"{n}:{t}")
-        await update.message.reply_text(
-            "Field already exists\n\n"
-            "Project:\n"
-            f"{project_path.name}\n\n"
-            "Entity:\n"
-            f"{entity_name}\n\n"
-            "Field:\n"
-            f"{field_name}:{field_type}\n\n"
-            "Fields:\n"
-            f"{', '.join(pairs)}"
-        )
-        return
-
-    existing_fields.append({"name": field_name, "type": field_type})
-    target_entity["fields"] = existing_fields
-    spec["entities"] = _normalize_entities(entities)
-    _rebuild_api_endpoints(spec)
-    _rebuild_frontend_pages(spec)
-    _append_evolution_event(spec, {"action": "add_field", "entity": entity_name, "field": field_name, "type": field_type})
-
-    apply_entity_scaffold(project_path, entity_name)
-    apply_entity_fields_to_scaffold(
-        project_path,
-        entity_name,
-        target_entity.get("fields") if isinstance(target_entity.get("fields"), list) else [],
-    )
-
-    spec_path.parent.mkdir(parents=True, exist_ok=True)
-    spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    fields_after = []
-    for item in target_entity.get("fields") if isinstance(target_entity.get("fields"), list) else []:
-        if not isinstance(item, dict):
-            continue
-        n = str(item.get("name") or "").strip()
-        t = str(item.get("type") or "").strip().lower()
-        if n and t:
-            fields_after.append(f"{n}:{t}")
-
-    auto_restart_lines, restart_failed = _auto_restart_backend_lines(project_path)
-    next_lines = ["- /inspect", "- /restart"]
-    if restart_failed:
-        next_lines.append("- /logs")
-
-    await update.message.reply_text(
-        "Field added\n\n"
-        "Project:\n"
-        f"{project_path.name}\n\n"
-        "Entity:\n"
-        f"{entity_name}\n\n"
-        "Field:\n"
-        f"{field_name}:{field_type}\n\n"
-        "Fields:\n"
-        f"{', '.join(fields_after)}\n\n"
-        + "\n".join(auto_restart_lines)
-        + "\n\n"
-        "Next:\n"
-        + "\n".join(next_lines)
-    )
+    result = add_field_to_project(project_path, entity_name, field_name, field_type, auto_restart_backend=True)
+    await update.message.reply_text(str(result.get("message_text") or result.get("detail") or "Failed to add field"))
 
 
 async def command_add_api(update: Any, context: Any) -> None:

@@ -17,6 +17,7 @@ from archmind.telegram_bot import (
     _project_runtime_status,
     _repository_summary_from_state,
     _resolve_project_type,
+    add_field_to_project,
     add_entity_to_project,
     save_last_project_path,
     summarize_recent_evolution,
@@ -244,6 +245,26 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
+def _extract_entity_names(spec_payload: dict[str, Any]) -> list[str]:
+    entities = spec_payload.get("entities")
+    if not isinstance(entities, list):
+        return []
+    names: list[str] = []
+    seen: set[str] = set()
+    for item in entities:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+    return names
+
+
 def _empty_project_detail(project_dir: Path, warning: str = "") -> ProjectDetailResponse:
     return ProjectDetailResponse(
         name=project_dir.name,
@@ -253,6 +274,7 @@ def _empty_project_detail(project_dir: Path, warning: str = "") -> ProjectDetail
         template="unknown",
         provider_mode="local",
         spec_summary=SpecSummary(),
+        entities=[],
         runtime=RuntimeSummary(),
         recent_evolution=[],
         repository=RepositorySummary(),
@@ -392,6 +414,7 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
                 pages=_safe_int(progression.get("pages_count"), 0),
                 history_count=len(history),
             ),
+            entities=_extract_entity_names(spec if isinstance(spec, dict) else {}),
             runtime=RuntimeSummary(
                 backend_status=str(backend_runtime.get("status") or "STOPPED").strip().upper() or "STOPPED",
                 frontend_status=str(frontend_runtime.get("status") or "STOPPED").strip().upper() or "STOPPED",
@@ -487,4 +510,15 @@ def select_current_project(project_dir: Path) -> dict[str, Any]:
 
 def add_project_entity(project_dir: Path, entity_name: str) -> dict[str, Any]:
     result = add_entity_to_project(project_dir, entity_name, auto_restart_backend=False)
+    return result if isinstance(result, dict) else {}
+
+
+def add_project_field(project_dir: Path, entity_name: str, field_name: str, field_type: str) -> dict[str, Any]:
+    result = add_field_to_project(
+        project_dir,
+        entity_name,
+        field_name,
+        field_type,
+        auto_restart_backend=False,
+    )
     return result if isinstance(result, dict) else {}
