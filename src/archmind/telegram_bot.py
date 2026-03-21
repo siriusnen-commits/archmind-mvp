@@ -3922,10 +3922,12 @@ async def command_status(update: Any, context: Any) -> None:
 
 async def command_current(update: Any, context: Any) -> None:
     del context
-    project_path = get_current_project()
+    project_path = _resolve_target_project()
     if project_path is None:
         await update.message.reply_text("No current project selected. Use /projects then /use <n>.")
         return
+    if get_current_project() is None:
+        set_current_project(project_path)
 
     state_payload = _load_json(project_path / ".archmind" / "state.json") or {}
     result_payload = _load_json(project_path / ".archmind" / "result.json") or {}
