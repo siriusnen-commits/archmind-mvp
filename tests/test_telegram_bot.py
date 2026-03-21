@@ -3077,7 +3077,7 @@ def test_improve_command_without_project_shows_guidance(monkeypatch) -> None:
     assert "/idea_local <idea>" in out
 
 
-def test_improve_command_reports_webapp_mismatch_and_env_missing(tmp_path: Path, monkeypatch) -> None:
+def test_improve_command_prioritizes_spec_progression_over_webapp_and_env_noise(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "blog_backend_only"
     archmind = project_dir / ".archmind"
     archmind.mkdir(parents=True, exist_ok=True)
@@ -3127,10 +3127,10 @@ def test_improve_command_reports_webapp_mismatch_and_env_missing(tmp_path: Path,
     assert "1. " in out
     assert "reason:" in out
     assert "command:" in out
-    assert "Align intent with fullstack template" in out
-    assert "Repair runtime env injection" in out
-    assert "/idea_local 개인용 블로그형식의 다이어리 webapp" in out
-    assert "/deploy local" in out
+    assert "Define your first entity" in out
+    assert "/add_entity Note" in out
+    assert "Align intent with fullstack template" not in out
+    assert "Repair runtime env injection" not in out
     assert "Next:" in out
     assert "- /inspect" in out
     assert "- /next" in out
@@ -3263,7 +3263,7 @@ def test_improve_command_does_not_mix_deploy_success_with_runtime_health(tmp_pat
     assert "Investigate deploy failure classification" not in out
 
 
-def test_improve_command_keeps_structure_or_domain_expansion_suggestions_when_runtime_consistent(tmp_path: Path, monkeypatch) -> None:
+def test_improve_command_prioritizes_progression_gaps_over_generic_expansion(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "runtime_ok_expand"
     archmind = project_dir / ".archmind"
     archmind.mkdir(parents=True, exist_ok=True)
@@ -3301,7 +3301,9 @@ def test_improve_command_keeps_structure_or_domain_expansion_suggestions_when_ru
     asyncio.run(command_improve(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     out = msg.sent[-1]
     assert "Resolve runtime failure classification" not in out
-    assert ("Expand features incrementally" in out) or ("Expand domain model" in out)
+    assert "Define your first entity" in out
+    assert "Expand features incrementally" not in out
+    assert "Expand domain model" not in out
 
 
 def test_improve_command_suppresses_env_repair_when_runtime_env_keys_present(tmp_path: Path, monkeypatch) -> None:
@@ -4730,7 +4732,7 @@ def test_next_command_prioritizes_missing_api_before_pages_for_entity(tmp_path: 
     reply_markup = msg.sent_kwargs[-1].get("reply_markup")
     assert reply_markup is not None
     buttons = [btn for row in getattr(reply_markup, "inline_keyboard", []) for btn in row]
-    assert any(str(getattr(btn, "callback_data", "")).startswith("suggest|") for btn in buttons)
+    assert any(str(getattr(btn, "callback_data", "")).startswith("cmd|") for btn in buttons)
 
 
 def test_next_command_recommends_add_api_when_entity_exists_without_apis(tmp_path: Path, monkeypatch) -> None:
@@ -4991,6 +4993,93 @@ def test_spec_progression_stage1_next_and_improve(tmp_path: Path, monkeypatch) -
     improve_msg = DummyMessage()
     asyncio.run(command_improve(DummyUpdate(message=improve_msg, effective_chat=DummyChat()), DummyContext()))
     assert "Add fields to Note" in improve_msg.sent[-1]
+
+
+def test_next_suggestion_button_dispatches_add_entity_command(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "next_button_dispatch_add_entity"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {"shape": "backend", "template": "fastapi", "entities": [], "api_endpoints": [], "frontend_pages": []}
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    next_msg = DummyMessage()
+    asyncio.run(command_next(DummyUpdate(message=next_msg, effective_chat=DummyChat()), DummyContext()))
+    reply_markup = next_msg.sent_kwargs[-1].get("reply_markup")
+    assert reply_markup is not None
+    buttons = [btn for row in getattr(reply_markup, "inline_keyboard", []) for btn in row]
+    callback_data = next(
+        str(getattr(btn, "callback_data", ""))
+        for btn in buttons
+        if "/add_entity Note" in str(getattr(btn, "callback_data", ""))
+    )
+    assert callback_data.startswith("cmd|")
+
+    callback_msg = DummyMessage()
+    callback_query = DummyCallbackQuery(data=callback_data, message=callback_msg)
+    callback_update = DummyUpdate(message=callback_msg, effective_chat=DummyChat())
+    callback_update.callback_query = callback_query  # type: ignore[attr-defined]
+    asyncio.run(command_suggestion_callback(callback_update, DummyContext()))
+
+    updated = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
+    entity_names = [str(item.get("name")) for item in (updated.get("entities") or []) if isinstance(item, dict)]
+    assert "Note" in entity_names
+    assert "Unsupported command action" not in "\n".join(callback_msg.sent)
+
+
+def test_improve_suggestion_button_dispatches_add_field_command(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "improve_button_dispatch_add_field"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "template": "fastapi",
+                "entities": [{"name": "Note", "fields": []}],
+                "api_endpoints": [],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (archmind / "state.json").write_text(json.dumps({"runtime": {"backend_status": "RUNNING", "failure_class": ""}}), encoding="utf-8")
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+
+    improve_msg = DummyMessage()
+    asyncio.run(command_improve(DummyUpdate(message=improve_msg, effective_chat=DummyChat()), DummyContext()))
+    reply_markup = improve_msg.sent_kwargs[-1].get("reply_markup")
+    assert reply_markup is not None
+    buttons = [btn for row in getattr(reply_markup, "inline_keyboard", []) for btn in row]
+    callback_data = next(
+        str(getattr(btn, "callback_data", ""))
+        for btn in buttons
+        if "/add_field Note title:string" in str(getattr(btn, "callback_data", ""))
+    )
+    assert callback_data.startswith("cmd|")
+
+    callback_msg = DummyMessage()
+    callback_query = DummyCallbackQuery(data=callback_data, message=callback_msg)
+    callback_update = DummyUpdate(message=callback_msg, effective_chat=DummyChat())
+    callback_update.callback_query = callback_query  # type: ignore[attr-defined]
+    asyncio.run(command_suggestion_callback(callback_update, DummyContext()))
+
+    updated = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
+    note = next((item for item in (updated.get("entities") or []) if isinstance(item, dict) and str(item.get("name")) == "Note"), None)
+    fields = note.get("fields") if isinstance(note, dict) and isinstance(note.get("fields"), list) else []
+    assert any(isinstance(field, dict) and field.get("name") == "title" and field.get("type") == "string" for field in fields)
+    assert "Unsupported command action" not in "\n".join(callback_msg.sent)
 
 
 def test_spec_progression_keeps_stage0_priority_even_when_api_and_pages_exist(tmp_path: Path, monkeypatch) -> None:
