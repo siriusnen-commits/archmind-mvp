@@ -274,6 +274,7 @@ def _fallback_list_item(project_dir: Path, warning: str = "") -> ProjectListItem
         template="unknown",
         backend_url="",
         frontend_url="",
+        repository=RepositorySummary(),
         is_current=_is_current_project(project_dir),
         warning=str(warning or "").strip(),
     )
@@ -303,6 +304,7 @@ def build_project_list_item(project_dir: Path) -> ProjectListItem:
             runtime = "FAIL"
         else:
             runtime = "STOPPED"
+        repository_info = _repository_summary_from_state(state_payload)
 
         return ProjectListItem(
             name=project_dir.name,
@@ -314,6 +316,10 @@ def build_project_list_item(project_dir: Path) -> ProjectListItem:
             template=str(state_payload.get("effective_template") or "unknown").strip() or "unknown",
             backend_url=backend_url,
             frontend_url=frontend_url,
+            repository=RepositorySummary(
+                status=str(repository_info.get("status") or "SKIPPED"),
+                url=str(repository_info.get("url") or ""),
+            ),
             is_current=_is_current_project(project_dir),
             warning="",
         )

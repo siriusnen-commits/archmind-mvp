@@ -43,6 +43,7 @@ class ProjectListItem(BaseModel):
     template: str = "unknown"
     backend_url: str = ""
     frontend_url: str = ""
+    repository: RepositorySummary = Field(default_factory=RepositorySummary)
     is_current: bool = False
     warning: str = ""
 
