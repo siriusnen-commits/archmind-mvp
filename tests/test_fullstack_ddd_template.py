@@ -137,6 +137,9 @@ def test_fullstack_runtime_env_template_uses_api_base_url_and_settings(tmp_path:
     assert "NEXT_PUBLIC_FRONTEND_PORT=" in frontend_env_example
     assert "NEXT_PUBLIC_API_BASE_URL" in frontend_page
     assert "window.location.hostname" in frontend_page
+    assert "LOOPBACK_HOSTS" in frontend_page
+    assert "isLoopbackHost(parsed.hostname)" in frontend_page
+    assert "parsed.hostname = browserHost" in frontend_page
     assert "NEXT_PUBLIC_BACKEND_URL" not in frontend_page
     assert "Backend: {backendUrl}" not in frontend_page
     assert "Backend: {apiBaseUrl}" in frontend_page

@@ -703,18 +703,37 @@ type DefectListResponse = {
 
 const ENV_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL;
 const ENV_BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "8000";
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+function isLoopbackHost(hostname: string) {
+  return LOOPBACK_HOSTS.has((hostname || "").trim().toLowerCase());
+}
 
 function resolveApiBaseUrl() {
+  const fallbackPort = String(ENV_BACKEND_PORT || "8000").trim() || "8000";
+  const loopbackFallback = `http://127.0.0.1:${fallbackPort}`;
+  if (typeof window === "undefined") {
+    if (ENV_API_BASE && ENV_API_BASE.trim()) {
+      return ENV_API_BASE.trim();
+    }
+    return loopbackFallback;
+  }
+  const browserProtocol = window.location.protocol === "https:" ? "https" : "http";
+  const browserHost = (window.location.hostname || "127.0.0.1").trim();
   if (ENV_API_BASE && ENV_API_BASE.trim()) {
-    return ENV_API_BASE.trim();
+    const rawEnvBase = ENV_API_BASE.trim();
+    try {
+      const parsed = new URL(rawEnvBase);
+      if (!isLoopbackHost(parsed.hostname) || isLoopbackHost(browserHost)) {
+        return parsed.toString().replace(/\\/$/, "");
+      }
+      parsed.hostname = browserHost;
+      return parsed.toString().replace(/\\/$/, "");
+    } catch {
+      return rawEnvBase;
+    }
   }
-  if (typeof window !== "undefined") {
-    const protocol = window.location.protocol === "https:" ? "https" : "http";
-    const host = window.location.hostname || "127.0.0.1";
-    const port = String(ENV_BACKEND_PORT || "8000").trim() || "8000";
-    return `${protocol}://${host}:${port}`;
-  }
-  return `http://127.0.0.1:${String(ENV_BACKEND_PORT || "8000").trim() || "8000"}`;
+  return `${browserProtocol}://${browserHost}:${fallbackPort}`;
 }
 
 export default function DefectsPage() {
