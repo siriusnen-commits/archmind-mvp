@@ -44,6 +44,7 @@ class ProjectListItem(BaseModel):
     backend_url: str = ""
     frontend_url: str = ""
     is_current: bool = False
+    warning: str = ""
 
 
 class ProjectListResponse(BaseModel):
@@ -61,6 +62,8 @@ class ProjectDetailResponse(BaseModel):
     runtime: RuntimeSummary
     recent_evolution: list[str] = Field(default_factory=list)
     repository: RepositorySummary
+    warning: str = ""
+    safe: bool = True
 
 
 class ProviderModeResponse(BaseModel):

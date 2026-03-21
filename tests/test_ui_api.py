@@ -77,6 +77,7 @@ def test_ui_projects_response_shape(monkeypatch, tmp_path: Path) -> None:
         "backend_url",
         "frontend_url",
         "is_current",
+        "warning",
     ):
         assert key in item
     assert item["display_name"] == "alpha"
@@ -120,6 +121,8 @@ def test_ui_project_detail_response_shape(monkeypatch, tmp_path: Path) -> None:
     assert "runtime" in payload
     assert "recent_evolution" in payload
     assert "repository" in payload
+    assert "warning" in payload
+    assert "safe" in payload
     assert "backend_urls" in payload["runtime"]
     assert "frontend_urls" in payload["runtime"]
     assert payload["spec_summary"]["stage"].startswith("Stage")
@@ -323,3 +326,88 @@ def test_ui_runtime_action_failure_detail_propagation(monkeypatch, tmp_path: Pat
     assert payload["ok"] is False
     assert payload["detail"] == "backend start failed"
     assert payload["error"] == "port already in use"
+
+
+def test_ui_projects_list_tolerates_broken_project_metadata(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "good")
+    _make_project(projects_root, "broken")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    def fake_runtime(project_dir: Path):  # type: ignore[no-untyped-def]
+        if project_dir.name == "broken":
+            raise RuntimeError("runtime state corrupted")
+        return {
+            "backend": {"status": "STOPPED", "url": ""},
+            "frontend": {"status": "STOPPED", "url": ""},
+        }
+
+    monkeypatch.setattr("archmind.project_query.get_local_runtime_status", fake_runtime)
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects")
+    assert response.status_code == 200
+    payload = response.json()
+    rows = {item["name"]: item for item in payload["projects"]}
+    assert "good" in rows
+    assert "broken" in rows
+    assert rows["good"]["warning"] == ""
+    assert "Failed to inspect project metadata" in rows["broken"]["warning"]
+
+
+def test_ui_project_detail_returns_safe_fallback_when_runtime_breaks(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "broken")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    monkeypatch.setattr("archmind.project_query.get_local_runtime_status", lambda _project_dir: (_ for _ in ()).throw(RuntimeError("bad runtime block")))
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/broken")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["name"] == "broken"
+    assert payload["safe"] is True
+    assert "Failed to load full project detail" in payload["warning"]
+    assert payload["runtime"]["backend_status"] == "STOPPED"
+
+
+def test_ui_provider_route_returns_structured_error_on_unexpected_exception(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "alpha")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setattr("archmind.ui_api.build_project_detail", lambda _project_dir: (_ for _ in ()).throw(RuntimeError("detail explode")))
+
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/alpha/provider")
+    assert response.status_code == 500
+    payload = response.json()
+    assert payload["detail"] == "Failed to load provider data"
+    assert "detail explode" in payload["error"]
+    assert payload["project_name"] == "alpha"
+    assert payload["safe"] is True
+
+
+def test_ui_projects_route_returns_structured_error_when_listing_fails(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.ui_api.list_project_dirs", lambda: (_ for _ in ()).throw(RuntimeError("cannot scan projects")))
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects")
+    assert response.status_code == 500
+    payload = response.json()
+    assert payload["detail"] == "Failed to load projects"
+    assert "cannot scan projects" in payload["error"]
+    assert payload["safe"] is True
+
+
+def test_ui_runtime_action_route_handles_unexpected_exception(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "runtime-broken")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setattr("archmind.ui_api.run_project_backend", lambda _project_dir: (_ for _ in ()).throw(RuntimeError("start exploded")))
+
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/runtime-broken/run-backend")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["status"] == "FAIL"
+    assert payload["detail"] == "Failed to run action"
+    assert "start exploded" in payload["error"]

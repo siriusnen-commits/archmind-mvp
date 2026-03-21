@@ -145,42 +145,86 @@ def _display_name_from_payloads(project_dir: Path, state_payload: dict[str, Any]
     return project_dir.name
 
 
-def build_project_list_item(project_dir: Path) -> ProjectListItem:
-    archmind_dir = project_dir / ".archmind"
-    state_payload = load_state(project_dir) or {}
-    spec_payload = _load_json(archmind_dir / "project_spec.json") or {}
-    result_payload = _load_json(archmind_dir / "result.json") or {}
-    runtime_payload = get_local_runtime_status(project_dir)
-    status = _project_runtime_status(project_dir, state_payload, result_payload, runtime_payload)
-    backend_url, frontend_url, _, _ = _runtime_urls_for_display(status, runtime_payload, state_payload)
-    backend_runtime = runtime_payload.get("backend") if isinstance(runtime_payload.get("backend"), dict) else {}
-    frontend_runtime = runtime_payload.get("frontend") if isinstance(runtime_payload.get("frontend"), dict) else {}
-    if status == "RUNNING":
-        if str(backend_runtime.get("status") or "").strip().upper() == "RUNNING" and str(frontend_runtime.get("status") or "").strip().upper() == "RUNNING":
-            runtime = "RUNNING (backend+frontend)"
-        elif str(backend_runtime.get("status") or "").strip().upper() == "RUNNING":
-            runtime = "RUNNING (backend)"
-        elif str(frontend_runtime.get("status") or "").strip().upper() == "RUNNING":
-            runtime = "RUNNING (frontend)"
-        else:
-            runtime = "RUNNING"
-    elif status == "FAIL":
-        runtime = "FAIL"
-    else:
-        runtime = "STOPPED"
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
 
+
+def _empty_project_detail(project_dir: Path, warning: str = "") -> ProjectDetailResponse:
+    return ProjectDetailResponse(
+        name=project_dir.name,
+        display_name=project_dir.name,
+        is_current=_is_current_project(project_dir),
+        shape="unknown",
+        template="unknown",
+        provider_mode="local",
+        spec_summary=SpecSummary(),
+        runtime=RuntimeSummary(),
+        recent_evolution=[],
+        repository=RepositorySummary(),
+        warning=str(warning or "").strip(),
+        safe=True,
+    )
+
+
+def _fallback_list_item(project_dir: Path, warning: str = "") -> ProjectListItem:
     return ProjectListItem(
         name=project_dir.name,
-        display_name=_display_name_from_payloads(project_dir, state_payload, spec_payload),
+        display_name=project_dir.name,
         path=str(project_dir),
-        status=status,
-        runtime=runtime,
-        type=_resolve_project_type(state_payload, project_dir),
-        template=str(state_payload.get("effective_template") or "unknown").strip() or "unknown",
-        backend_url=backend_url,
-        frontend_url=frontend_url,
+        status="STOPPED",
+        runtime="STOPPED",
+        type="unknown",
+        template="unknown",
+        backend_url="",
+        frontend_url="",
         is_current=_is_current_project(project_dir),
+        warning=str(warning or "").strip(),
     )
+
+
+def build_project_list_item(project_dir: Path) -> ProjectListItem:
+    try:
+        archmind_dir = project_dir / ".archmind"
+        state_payload = load_state(project_dir) or {}
+        spec_payload = _load_json(archmind_dir / "project_spec.json") or {}
+        result_payload = _load_json(archmind_dir / "result.json") or {}
+        runtime_payload = get_local_runtime_status(project_dir)
+        status = _project_runtime_status(project_dir, state_payload, result_payload, runtime_payload)
+        backend_url, frontend_url, _, _ = _runtime_urls_for_display(status, runtime_payload, state_payload)
+        backend_runtime = runtime_payload.get("backend") if isinstance(runtime_payload.get("backend"), dict) else {}
+        frontend_runtime = runtime_payload.get("frontend") if isinstance(runtime_payload.get("frontend"), dict) else {}
+        if status == "RUNNING":
+            if str(backend_runtime.get("status") or "").strip().upper() == "RUNNING" and str(frontend_runtime.get("status") or "").strip().upper() == "RUNNING":
+                runtime = "RUNNING (backend+frontend)"
+            elif str(backend_runtime.get("status") or "").strip().upper() == "RUNNING":
+                runtime = "RUNNING (backend)"
+            elif str(frontend_runtime.get("status") or "").strip().upper() == "RUNNING":
+                runtime = "RUNNING (frontend)"
+            else:
+                runtime = "RUNNING"
+        elif status == "FAIL":
+            runtime = "FAIL"
+        else:
+            runtime = "STOPPED"
+
+        return ProjectListItem(
+            name=project_dir.name,
+            display_name=_display_name_from_payloads(project_dir, state_payload, spec_payload),
+            path=str(project_dir),
+            status=status,
+            runtime=runtime,
+            type=_resolve_project_type(state_payload, project_dir),
+            template=str(state_payload.get("effective_template") or "unknown").strip() or "unknown",
+            backend_url=backend_url,
+            frontend_url=frontend_url,
+            is_current=_is_current_project(project_dir),
+            warning="",
+        )
+    except Exception as exc:
+        return _fallback_list_item(project_dir, warning=f"Failed to inspect project metadata: {exc}")
 
 
 def find_project_by_name(name: str, projects_dir: Path | None = None) -> Path | None:
@@ -194,48 +238,52 @@ def find_project_by_name(name: str, projects_dir: Path | None = None) -> Path | 
 
 
 def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
-    archmind_dir = project_dir / ".archmind"
-    state_payload = load_state(project_dir) or {}
-    spec = _load_json(archmind_dir / "project_spec.json") or {}
-    result_payload = _load_json(archmind_dir / "result.json") or {}
-    runtime_payload = get_local_runtime_status(project_dir)
-    status = _project_runtime_status(project_dir, state_payload, result_payload, runtime_payload)
-    backend_url, frontend_url, backend_urls, frontend_urls = _runtime_urls_for_display(status, runtime_payload, state_payload)
-    backend_runtime = runtime_payload.get("backend") if isinstance(runtime_payload.get("backend"), dict) else {}
-    frontend_runtime = runtime_payload.get("frontend") if isinstance(runtime_payload.get("frontend"), dict) else {}
-    progression = analyze_spec_progression(spec if isinstance(spec, dict) else {})
-    evolution = spec.get("evolution") if isinstance(spec.get("evolution"), dict) else {}
-    history = evolution.get("history") if isinstance(evolution.get("history"), list) else []
-
-    repository_info = _repository_summary_from_state(state_payload)
-    return ProjectDetailResponse(
-        name=project_dir.name,
-        display_name=_display_name_from_payloads(project_dir, state_payload, spec if isinstance(spec, dict) else {}),
-        is_current=_is_current_project(project_dir),
-        shape=str(spec.get("shape") or state_payload.get("architecture_app_shape") or "unknown").strip() or "unknown",
-        template=str(spec.get("template") or state_payload.get("effective_template") or "unknown").strip() or "unknown",
-        provider_mode=load_provider_mode(state_payload, default="local"),  # type: ignore[arg-type]
-        spec_summary=SpecSummary(
-            stage=str(progression.get("stage_label") or "Stage 0"),
-            entities=int(progression.get("entities_count") or 0),
-            apis=int(progression.get("apis_count") or 0),
-            pages=int(progression.get("pages_count") or 0),
-            history_count=len(history),
-        ),
-        runtime=RuntimeSummary(
-            backend_status=str(backend_runtime.get("status") or "STOPPED").strip().upper() or "STOPPED",
-            frontend_status=str(frontend_runtime.get("status") or "STOPPED").strip().upper() or "STOPPED",
-            backend_url=backend_url,
-            frontend_url=frontend_url,
-            backend_urls=backend_urls,
-            frontend_urls=frontend_urls,
-        ),
-        recent_evolution=summarize_recent_evolution(spec, limit=5),
-        repository=RepositorySummary(
-            status=str(repository_info.get("status") or "SKIPPED"),
-            url=str(repository_info.get("url") or ""),
-        ),
-    )
+    try:
+        archmind_dir = project_dir / ".archmind"
+        state_payload = load_state(project_dir) or {}
+        spec = _load_json(archmind_dir / "project_spec.json") or {}
+        result_payload = _load_json(archmind_dir / "result.json") or {}
+        runtime_payload = get_local_runtime_status(project_dir)
+        status = _project_runtime_status(project_dir, state_payload, result_payload, runtime_payload)
+        backend_url, frontend_url, backend_urls, frontend_urls = _runtime_urls_for_display(status, runtime_payload, state_payload)
+        backend_runtime = runtime_payload.get("backend") if isinstance(runtime_payload.get("backend"), dict) else {}
+        frontend_runtime = runtime_payload.get("frontend") if isinstance(runtime_payload.get("frontend"), dict) else {}
+        progression = analyze_spec_progression(spec if isinstance(spec, dict) else {})
+        evolution = spec.get("evolution") if isinstance(spec.get("evolution"), dict) else {}
+        history = evolution.get("history") if isinstance(evolution.get("history"), list) else []
+        repository_info = _repository_summary_from_state(state_payload)
+        return ProjectDetailResponse(
+            name=project_dir.name,
+            display_name=_display_name_from_payloads(project_dir, state_payload, spec if isinstance(spec, dict) else {}),
+            is_current=_is_current_project(project_dir),
+            shape=str(spec.get("shape") or state_payload.get("architecture_app_shape") or "unknown").strip() or "unknown",
+            template=str(spec.get("template") or state_payload.get("effective_template") or "unknown").strip() or "unknown",
+            provider_mode=load_provider_mode(state_payload, default="local"),  # type: ignore[arg-type]
+            spec_summary=SpecSummary(
+                stage=str(progression.get("stage_label") or "Stage 0"),
+                entities=_safe_int(progression.get("entities_count"), 0),
+                apis=_safe_int(progression.get("apis_count"), 0),
+                pages=_safe_int(progression.get("pages_count"), 0),
+                history_count=len(history),
+            ),
+            runtime=RuntimeSummary(
+                backend_status=str(backend_runtime.get("status") or "STOPPED").strip().upper() or "STOPPED",
+                frontend_status=str(frontend_runtime.get("status") or "STOPPED").strip().upper() or "STOPPED",
+                backend_url=backend_url,
+                frontend_url=frontend_url,
+                backend_urls=backend_urls,
+                frontend_urls=frontend_urls,
+            ),
+            recent_evolution=summarize_recent_evolution(spec, limit=5),
+            repository=RepositorySummary(
+                status=str(repository_info.get("status") or "SKIPPED"),
+                url=str(repository_info.get("url") or ""),
+            ),
+            warning="",
+            safe=True,
+        )
+    except Exception as exc:
+        return _empty_project_detail(project_dir, warning=f"Failed to load full project detail: {exc}")
 
 
 def update_project_provider_mode(project_dir: Path, mode: str) -> str:

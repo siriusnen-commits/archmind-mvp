@@ -55,14 +55,17 @@ async function fetchProjectDetail(apiBaseUrl: string, name: string): Promise<{ d
   }
   try {
     const response = await fetch(`${apiBaseUrl}/projects/${encodeURIComponent(name)}`, { cache: "no-store" });
+    const payload = await readJsonSafely(response);
     if (response.status === 404) {
       return { detail: null, error: "Project not found" };
     }
     if (!response.ok) {
+      return { detail: null, error: extractErrorMessage(payload, "Failed to load project data") };
+    }
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
       return { detail: null, error: "Failed to load project data" };
     }
-    const payload = (await response.json()) as ProjectDetail;
-    return { detail: payload, error: "" };
+    return { detail: payload as ProjectDetail, error: "" };
   } catch {
     return { detail: null, error: "Failed to load project data" };
   }
@@ -108,4 +111,29 @@ export default async function ProjectDetailPage({ params }: PageProps) {
       )}
     </main>
   );
+}
+
+async function readJsonSafely(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (!text) {
+    return null;
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { detail: text };
+  }
+}
+
+function extractErrorMessage(payload: unknown, fallback: string): string {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return fallback;
+  }
+  const row = payload as { detail?: unknown; error?: unknown };
+  const detail = String(row.detail || "").trim();
+  const error = String(row.error || "").trim();
+  if (detail && error && detail !== error) {
+    return `${detail}: ${error}`;
+  }
+  return detail || error || fallback;
 }
