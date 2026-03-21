@@ -113,8 +113,7 @@ def test_ui_projects_reflects_persisted_current_project_when_in_memory_is_missin
     _make_project(projects_root, "alpha")
     beta = _make_project(projects_root, "beta")
     monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
-    monkeypatch.setattr("archmind.project_query.get_current_project", lambda: None)
-    monkeypatch.setattr("archmind.project_query.load_valid_last_project_path", lambda: beta)
+    monkeypatch.setattr("archmind.project_query.get_validated_current_project", lambda: beta)
 
     client = TestClient(create_ui_app())
     response = client.get("/ui/projects")
@@ -129,8 +128,7 @@ def test_ui_projects_rejects_stale_persisted_current_project(monkeypatch, tmp_pa
     _make_project(projects_root, "alpha")
     _make_project(projects_root, "gamma")
     monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
-    monkeypatch.setattr("archmind.project_query.get_current_project", lambda: None)
-    monkeypatch.setattr("archmind.project_query.load_valid_last_project_path", lambda: None)
+    monkeypatch.setattr("archmind.project_query.get_validated_current_project", lambda: None)
 
     client = TestClient(create_ui_app())
     response = client.get("/ui/projects")

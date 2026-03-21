@@ -12,6 +12,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+from archmind.current_project import (
+    CURRENT_PROJECT_PATH_FILE,
+    clear_current_project as clear_backend_current_project,
+    clear_last_project_path as clear_backend_last_project_path,
+    get_current_project as get_backend_current_project,
+    get_validated_current_project as get_backend_validated_current_project,
+    is_valid_archmind_project_dir as is_valid_backend_project_dir,
+    load_last_project_path as load_backend_last_project_path,
+    load_valid_last_project_path as load_backend_valid_last_project_path,
+    save_last_project_path as save_backend_last_project_path,
+    set_current_project as set_backend_current_project,
+)
 from archmind.brain import reason_architecture_from_idea
 from archmind.backend_runtime import detect_backend_runtime_entry
 from archmind.decision import decide_next_action, next_action_suggestions
@@ -45,7 +57,7 @@ from archmind.state import (
 )
 from archmind.template_selector import is_supported_template, select_template_for_project_type
 
-LAST_PROJECT_PATH_FILE = Path.home() / ".archmind_telegram_last_project"
+LAST_PROJECT_PATH_FILE = CURRENT_PROJECT_PATH_FILE
 DEFAULT_BASE_DIR = Path.home() / "archmind-telegram-projects"
 DEFAULT_PROJECTS_DIR = Path.home() / "archmind-telegram-projects"
 DEFAULT_TEMPLATE = "fullstack-ddd"
@@ -144,7 +156,6 @@ class _PendingDelete:
 
 _RUNNING_JOB: Optional[_RunningJob] = None
 _RUNNING_JOB_SEQ = 0
-_CURRENT_PROJECT: Optional[Path] = None
 _PENDING_DELETE: Optional[_PendingDelete] = None
 _CALLBACK_PAYLOADS: dict[str, str] = {}
 
@@ -199,28 +210,24 @@ def _clear_pending_delete() -> None:
 
 
 def set_current_project(project_dir: Path) -> None:
-    global _CURRENT_PROJECT
-    _CURRENT_PROJECT = project_dir.expanduser().resolve()
+    set_backend_current_project(project_dir)
 
 
 def clear_current_project() -> None:
-    global _CURRENT_PROJECT
-    _CURRENT_PROJECT = None
+    clear_backend_current_project()
 
 
 def get_current_project() -> Optional[Path]:
-    if _CURRENT_PROJECT is None:
-        return None
-    project_dir = _CURRENT_PROJECT.expanduser().resolve()
-    if is_valid_archmind_project_dir(project_dir):
-        return project_dir
-    clear_current_project()
-    return None
+    return get_backend_current_project()
+
+
+def get_validated_current_project() -> Optional[Path]:
+    return get_backend_validated_current_project(file_path=LAST_PROJECT_PATH_FILE)
 
 
 def _clear_project_selection_if_deleted(project_dir: Path) -> None:
     target = project_dir.expanduser().resolve()
-    current = get_current_project()
+    current = get_validated_current_project()
     if current is not None and current.resolve() == target:
         clear_current_project()
     last = load_last_project_path()
@@ -324,32 +331,19 @@ def resolve_template_for_idea(idea: str) -> str:
 
 
 def save_last_project_path(project_dir: Path, file_path: Path = LAST_PROJECT_PATH_FILE) -> None:
-    file_path.expanduser().write_text(str(project_dir.expanduser().resolve()), encoding="utf-8")
+    save_backend_last_project_path(project_dir, file_path=file_path)
 
 
 def is_valid_archmind_project_dir(project_dir: Path) -> bool:
-    path = project_dir.expanduser().resolve()
-    return path.exists() and path.is_dir()
+    return is_valid_backend_project_dir(project_dir)
 
 
 def clear_last_project_path(file_path: Path = LAST_PROJECT_PATH_FILE) -> None:
-    target = file_path.expanduser()
-    if not target.exists():
-        return
-    try:
-        target.unlink()
-    except Exception:
-        return
+    clear_backend_last_project_path(file_path=file_path)
 
 
 def load_last_project_path(file_path: Path = LAST_PROJECT_PATH_FILE) -> Optional[Path]:
-    target = file_path.expanduser()
-    if not target.exists():
-        return None
-    value = target.read_text(encoding="utf-8", errors="replace").strip()
-    if not value:
-        return None
-    return Path(value).expanduser().resolve()
+    return load_backend_last_project_path(file_path=file_path)
 
 
 def load_valid_last_project_path(file_path: Path = LAST_PROJECT_PATH_FILE) -> Optional[Path]:
@@ -3950,12 +3944,10 @@ async def command_status(update: Any, context: Any) -> None:
 
 async def command_current(update: Any, context: Any) -> None:
     del context
-    project_path = _resolve_target_project()
+    project_path = get_validated_current_project()
     if project_path is None:
         await update.message.reply_text("No current project selected. Use /projects then /use <n>.")
         return
-    if get_current_project() is None:
-        set_current_project(project_path)
 
     state_payload = _load_json(project_path / ".archmind" / "state.json") or {}
     result_payload = _load_json(project_path / ".archmind" / "result.json") or {}
