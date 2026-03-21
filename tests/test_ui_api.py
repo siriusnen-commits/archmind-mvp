@@ -113,8 +113,7 @@ def test_ui_projects_reflects_persisted_current_project_when_in_memory_is_missin
     _make_project(projects_root, "alpha")
     beta = _make_project(projects_root, "beta")
     monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
-    monkeypatch.setattr("archmind.project_query.get_current_project", lambda: None)
-    monkeypatch.setattr("archmind.project_query.load_valid_last_project_path", lambda: beta)
+    monkeypatch.setattr("archmind.project_query.get_validated_current_project", lambda: beta)
 
     client = TestClient(create_ui_app())
     response = client.get("/ui/projects")
@@ -129,8 +128,7 @@ def test_ui_projects_rejects_stale_persisted_current_project(monkeypatch, tmp_pa
     _make_project(projects_root, "alpha")
     _make_project(projects_root, "gamma")
     monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
-    monkeypatch.setattr("archmind.project_query.get_current_project", lambda: None)
-    monkeypatch.setattr("archmind.project_query.load_valid_last_project_path", lambda: None)
+    monkeypatch.setattr("archmind.project_query.get_validated_current_project", lambda: None)
 
     client = TestClient(create_ui_app())
     response = client.get("/ui/projects")
@@ -330,6 +328,33 @@ def test_ui_select_project_marks_it_current_and_unsets_previous(monkeypatch, tmp
         detail_response = client.get("/ui/projects/beta")
         assert detail_response.status_code == 200
         assert detail_response.json()["is_current"] is True
+    finally:
+        clear_current_project()
+
+
+def test_ui_projects_reflect_backend_current_change_from_telegram_use(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    alpha = _make_project(projects_root, "alpha")
+    beta = _make_project(projects_root, "beta")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+    try:
+        set_current_project(alpha)
+        first_rows = {item["name"]: item for item in client.get("/ui/projects").json()["projects"]}
+        assert first_rows["alpha"]["is_current"] is True
+        assert first_rows["beta"]["is_current"] is False
+
+        # Telegram /use updates backend current project selection.
+        set_current_project(beta)
+
+        second_rows = {item["name"]: item for item in client.get("/ui/projects").json()["projects"]}
+        assert second_rows["beta"]["is_current"] is True
+        assert second_rows["alpha"]["is_current"] is False
+
+        alpha_detail = client.get("/ui/projects/alpha").json()
+        beta_detail = client.get("/ui/projects/beta").json()
+        assert alpha_detail["is_current"] is False
+        assert beta_detail["is_current"] is True
     finally:
         clear_current_project()
 

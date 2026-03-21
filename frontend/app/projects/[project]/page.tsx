@@ -5,6 +5,7 @@ import EvolutionCard from "@/components/EvolutionCard";
 import DangerZoneCard from "@/components/DangerZoneCard";
 import ProjectSummaryCard from "@/components/ProjectSummaryCard";
 import ProviderCard from "@/components/ProviderCard";
+import RefreshButton from "@/components/RefreshButton";
 import RuntimeActionsCard from "@/components/RuntimeActionsCard";
 import RuntimeCard from "@/components/RuntimeCard";
 
@@ -42,6 +43,9 @@ type ProjectDetail = {
   recent_evolution?: string[];
   repository?: RepositoryInfo;
 };
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 async function resolveApiBaseUrl(): Promise<string> {
   const reqHeaders = await headers();
@@ -91,9 +95,7 @@ export default async function ProjectDetailPage({ params }: PageProps) {
           <Link href="/dashboard" className="rounded-md border border-slate-500 px-3 py-1.5 text-sm text-slate-100 hover:bg-slate-800">
             Back
           </Link>
-          <Link href={`/projects/${encodeURIComponent(projectName)}`} className="rounded-md border border-slate-500 px-3 py-1.5 text-sm text-slate-100 hover:bg-slate-800">
-            Refresh
-          </Link>
+          <RefreshButton className="rounded-md border border-slate-500 px-3 py-1.5 text-sm text-slate-100 hover:bg-slate-800" />
         </div>
       </header>
 

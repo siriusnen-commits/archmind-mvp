@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 
 const BACKEND_UI_BASE = process.env.ARCHMIND_UI_API_BASE || "http://127.0.0.1:8010/ui";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export async function GET() {
   try {
@@ -10,6 +12,7 @@ export async function GET() {
       status: response.status,
       headers: {
         "content-type": response.headers.get("content-type") || "application/json; charset=utf-8",
+        "cache-control": "no-store",
       },
     });
   } catch {
