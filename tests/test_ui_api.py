@@ -120,6 +120,8 @@ def test_ui_project_detail_response_shape(monkeypatch, tmp_path: Path) -> None:
     assert "runtime" in payload
     assert "recent_evolution" in payload
     assert "repository" in payload
+    assert "backend_urls" in payload["runtime"]
+    assert "frontend_urls" in payload["runtime"]
     assert payload["spec_summary"]["stage"].startswith("Stage")
 
 
@@ -259,3 +261,65 @@ def test_ui_runtime_action_endpoints(monkeypatch, tmp_path: Path) -> None:
         assert payload["frontend_status"] == "RUNNING"
         assert payload["backend_url"] == "http://127.0.0.1:8000"
         assert payload["frontend_url"] == "http://127.0.0.1:3000"
+        assert payload["error"] == ""
+
+
+def test_ui_runtime_url_expansion_with_lan_and_tailscale(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "runtime-url-project")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setenv("ARCHMIND_LAN_HOST", "192.168.0.197")
+    monkeypatch.setenv("ARCHMIND_TAILSCALE_HOST", "100.117.128.20")
+    monkeypatch.setattr(
+        "archmind.project_query.get_local_runtime_status",
+        lambda _project_dir: {
+            "backend": {"status": "RUNNING", "url": "http://127.0.0.1:8123"},
+            "frontend": {"status": "RUNNING", "url": "http://127.0.0.1:3123"},
+        },
+    )
+
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/runtime-url-project")
+    assert response.status_code == 200
+    payload = response.json()
+    runtime = payload["runtime"]
+    assert runtime["backend_urls"] == [
+        "http://127.0.0.1:8123",
+        "http://192.168.0.197:8123",
+        "http://100.117.128.20:8123",
+    ]
+    assert runtime["frontend_urls"] == [
+        "http://127.0.0.1:3123",
+        "http://192.168.0.197:3123",
+        "http://100.117.128.20:3123",
+    ]
+
+
+def test_ui_runtime_action_failure_detail_propagation(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "runtime-fail")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setattr(
+        "archmind.ui_api.get_local_runtime_status",
+        lambda _project_dir: {
+            "backend": {"status": "FAIL", "url": ""},
+            "frontend": {"status": "STOPPED", "url": ""},
+        },
+    )
+    monkeypatch.setattr(
+        "archmind.ui_api.run_project_backend",
+        lambda _project_dir: {
+            "ok": False,
+            "status": "FAIL",
+            "detail": "backend start failed",
+            "error": "port already in use",
+        },
+    )
+
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/runtime-fail/run-backend")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["detail"] == "backend start failed"
+    assert payload["error"] == "port already in use"

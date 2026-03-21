@@ -16,6 +16,8 @@ class RuntimeSummary(BaseModel):
     frontend_status: str = "STOPPED"
     backend_url: str = ""
     frontend_url: str = ""
+    backend_urls: list[str] = Field(default_factory=list)
+    frontend_urls: list[str] = Field(default_factory=list)
 
 
 class SpecSummary(BaseModel):
@@ -70,6 +72,7 @@ class RuntimeActionResponse(BaseModel):
     action: str = ""
     status: str = "UNKNOWN"
     detail: str = ""
+    error: str = ""
     backend_status: str = "STOPPED"
     frontend_status: str = "STOPPED"
     backend_url: str = ""

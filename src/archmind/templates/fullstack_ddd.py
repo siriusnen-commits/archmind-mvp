@@ -822,7 +822,7 @@ export default function DefectsPage() {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-semibold">Defect intake</h2>
-            <p className="text-xs text-slate-400">Backend: {backendUrl}</p>
+            <p className="text-xs text-slate-400">Backend: {apiBaseUrl}</p>
           </div>
           <div className="text-xs text-slate-500">Total {total}</div>
         </div>

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 from archmind.deploy import get_local_runtime_status
 from archmind.next_suggester import analyze_spec_progression
@@ -47,7 +48,52 @@ def list_project_dirs(projects_dir: Path | None = None) -> list[Path]:
     return sorted(rows, key=lambda p: p.name.lower())
 
 
-def _runtime_urls_for_display(status: str, runtime_payload: dict[str, Any], state_payload: dict[str, Any]) -> tuple[str, str]:
+def _replace_url_host(url: str, host: str) -> str:
+    parsed = urlparse(str(url or "").strip())
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    hostname = parsed.hostname
+    if not hostname:
+        return ""
+    target_host = str(host or "").strip()
+    if not target_host:
+        return ""
+    if ":" in target_host:
+        return ""
+    port = parsed.port
+    userinfo = ""
+    if parsed.username:
+        userinfo = parsed.username
+        if parsed.password:
+            userinfo = f"{userinfo}:{parsed.password}"
+        userinfo = f"{userinfo}@"
+    netloc = f"{userinfo}{target_host}"
+    if port is not None:
+        netloc = f"{netloc}:{int(port)}"
+    return urlunparse(parsed._replace(netloc=netloc))
+
+
+def _expand_runtime_urls(primary_url: str) -> list[str]:
+    base = str(primary_url or "").strip()
+    if not base:
+        return []
+    out: list[str] = [base]
+    seen: set[str] = {base}
+    for env_key in ("ARCHMIND_LAN_HOST", "ARCHMIND_TAILSCALE_HOST"):
+        host = str(os.getenv(env_key, "") or "").strip()
+        if not host:
+            continue
+        alt = _replace_url_host(base, host)
+        if not alt or alt in seen:
+            continue
+        seen.add(alt)
+        out.append(alt)
+    return out
+
+
+def _runtime_urls_for_display(
+    status: str, runtime_payload: dict[str, Any], state_payload: dict[str, Any]
+) -> tuple[str, str, list[str], list[str]]:
     backend = runtime_payload.get("backend") if isinstance(runtime_payload.get("backend"), dict) else {}
     frontend = runtime_payload.get("frontend") if isinstance(runtime_payload.get("frontend"), dict) else {}
     backend_running = str(backend.get("status") or "").strip().upper() == "RUNNING"
@@ -55,7 +101,7 @@ def _runtime_urls_for_display(status: str, runtime_payload: dict[str, Any], stat
     backend_url = str(backend.get("url") or "").strip()
     frontend_url = str(frontend.get("url") or "").strip()
     if status != "RUNNING":
-        return "", ""
+        return "", "", [], []
     if not backend_running:
         backend_url = ""
     if not frontend_running:
@@ -64,7 +110,7 @@ def _runtime_urls_for_display(status: str, runtime_payload: dict[str, Any], stat
         backend_url = str(state_payload.get("backend_deploy_url") or "").strip()
     if not frontend_url and frontend_running:
         frontend_url = str(state_payload.get("frontend_deploy_url") or "").strip()
-    return backend_url, frontend_url
+    return backend_url, frontend_url, _expand_runtime_urls(backend_url), _expand_runtime_urls(frontend_url)
 
 
 def _resolve_current_project_dir() -> Path | None:
@@ -106,7 +152,7 @@ def build_project_list_item(project_dir: Path) -> ProjectListItem:
     result_payload = _load_json(archmind_dir / "result.json") or {}
     runtime_payload = get_local_runtime_status(project_dir)
     status = _project_runtime_status(project_dir, state_payload, result_payload, runtime_payload)
-    backend_url, frontend_url = _runtime_urls_for_display(status, runtime_payload, state_payload)
+    backend_url, frontend_url, _, _ = _runtime_urls_for_display(status, runtime_payload, state_payload)
     backend_runtime = runtime_payload.get("backend") if isinstance(runtime_payload.get("backend"), dict) else {}
     frontend_runtime = runtime_payload.get("frontend") if isinstance(runtime_payload.get("frontend"), dict) else {}
     if status == "RUNNING":
@@ -154,7 +200,7 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
     result_payload = _load_json(archmind_dir / "result.json") or {}
     runtime_payload = get_local_runtime_status(project_dir)
     status = _project_runtime_status(project_dir, state_payload, result_payload, runtime_payload)
-    backend_url, frontend_url = _runtime_urls_for_display(status, runtime_payload, state_payload)
+    backend_url, frontend_url, backend_urls, frontend_urls = _runtime_urls_for_display(status, runtime_payload, state_payload)
     backend_runtime = runtime_payload.get("backend") if isinstance(runtime_payload.get("backend"), dict) else {}
     frontend_runtime = runtime_payload.get("frontend") if isinstance(runtime_payload.get("frontend"), dict) else {}
     progression = analyze_spec_progression(spec if isinstance(spec, dict) else {})
@@ -181,6 +227,8 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
             frontend_status=str(frontend_runtime.get("status") or "STOPPED").strip().upper() or "STOPPED",
             backend_url=backend_url,
             frontend_url=frontend_url,
+            backend_urls=backend_urls,
+            frontend_urls=frontend_urls,
         ),
         recent_evolution=summarize_recent_evolution(spec, limit=5),
         repository=RepositorySummary(

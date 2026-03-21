@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, FastAPI, HTTPException
 
 from archmind.project_query import (
@@ -61,16 +63,49 @@ def _runtime_action_response(project_dir, action: str, result: dict) -> RuntimeA
     runtime = get_local_runtime_status(project_dir)
     backend = runtime.get("backend") if isinstance(runtime.get("backend"), dict) else {}
     frontend = runtime.get("frontend") if isinstance(runtime.get("frontend"), dict) else {}
+    ok = bool(result.get("ok"))
+    detail = str(result.get("detail") or "").strip()
+    error = "" if ok else _extract_runtime_action_error(result)
+    if not detail and not ok and error:
+        detail = error
     return RuntimeActionResponse(
-        ok=bool(result.get("ok")),
+        ok=ok,
         action=action,
-        status=str(result.get("status") or ("SUCCESS" if result.get("ok") else "FAIL")),
-        detail=str(result.get("detail") or ""),
+        status=str(result.get("status") or ("SUCCESS" if ok else "FAIL")),
+        detail=detail,
+        error=error,
         backend_status=str(backend.get("status") or "STOPPED").strip().upper() or "STOPPED",
         frontend_status=str(frontend.get("status") or "STOPPED").strip().upper() or "STOPPED",
         backend_url=str(backend.get("url") or ""),
         frontend_url=str(frontend.get("url") or ""),
     )
+
+
+def _extract_runtime_action_error(result: dict[str, Any]) -> str:
+    candidates: list[Any] = [
+        result.get("error"),
+        result.get("failure_class"),
+        result.get("detail"),
+    ]
+    backend = result.get("backend")
+    if isinstance(backend, dict):
+        candidates.extend([backend.get("error"), backend.get("detail")])
+    frontend = result.get("frontend")
+    if isinstance(frontend, dict):
+        candidates.extend([frontend.get("error"), frontend.get("detail")])
+    services = result.get("services")
+    if isinstance(services, dict):
+        backend_service = services.get("backend")
+        if isinstance(backend_service, dict):
+            candidates.extend([backend_service.get("error"), backend_service.get("detail")])
+        frontend_service = services.get("frontend")
+        if isinstance(frontend_service, dict):
+            candidates.extend([frontend_service.get("error"), frontend_service.get("detail")])
+    for item in candidates:
+        text = str(item or "").strip()
+        if text:
+            return text
+    return ""
 
 
 @router.post("/projects/{project_name}/run-backend", response_model=RuntimeActionResponse)
