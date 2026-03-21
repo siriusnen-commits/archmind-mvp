@@ -129,11 +129,18 @@ def test_fullstack_runtime_env_template_uses_api_base_url_and_settings(tmp_path:
     frontend_env_example = (project_dir / "frontend" / ".env.example").read_text(encoding="utf-8")
     frontend_page = (project_dir / "frontend" / "app" / "ui" / "DefectsPage.tsx").read_text(encoding="utf-8")
     frontend_api_helper = (project_dir / "frontend" / "app" / "_lib" / "apiBase.ts").read_text(encoding="utf-8")
+    backend_main = (project_dir / "backend" / "app" / "main.py").read_text(encoding="utf-8")
     root_page = (project_dir / "frontend" / "app" / "page.tsx").read_text(encoding="utf-8")
     layout_page = (project_dir / "frontend" / "app" / "layout.tsx").read_text(encoding="utf-8")
     defects_route = (project_dir / "frontend" / "app" / "ui" / "defects" / "page.tsx").read_text(encoding="utf-8")
 
     assert "cors_allow_origins" in settings_text
+    assert "from fastapi.middleware.cors import CORSMiddleware" in backend_main
+    assert "app.add_middleware(" in backend_main
+    assert 'allow_origins=["*"]' in backend_main
+    assert "allow_credentials=True" in backend_main
+    assert 'allow_methods=["*"]' in backend_main
+    assert 'allow_headers=["*"]' in backend_main
     assert "NEXT_PUBLIC_API_BASE_URL=" in frontend_env_example
     assert "NEXT_PUBLIC_RUNTIME_BACKEND_URL=" in frontend_env_example
     assert "NEXT_PUBLIC_FRONTEND_PORT=" in frontend_env_example

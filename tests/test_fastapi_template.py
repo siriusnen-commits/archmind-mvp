@@ -30,6 +30,13 @@ def test_fastapi_template_generates_pytest_ready_scaffold(tmp_path: Path, monkey
     assert "uvicorn[standard]==0.30.6" in requirements
     assert "pytest==9.0.2" in requirements
     assert "httpx==0.27.0" in requirements
+    app_main = (project_dir / "app" / "main.py").read_text(encoding="utf-8")
+    assert "from fastapi.middleware.cors import CORSMiddleware" in app_main
+    assert "app.add_middleware(" in app_main
+    assert 'allow_origins=["*"]' in app_main
+    assert "allow_credentials=True" in app_main
+    assert 'allow_methods=["*"]' in app_main
+    assert 'allow_headers=["*"]' in app_main
 
 
 def test_generated_fastapi_project_backend_run_is_not_skipped(tmp_path: Path, monkeypatch) -> None:
