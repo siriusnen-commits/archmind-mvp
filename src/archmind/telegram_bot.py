@@ -1240,6 +1240,69 @@ def _ensure_evolution_block(spec: dict[str, Any]) -> dict[str, Any]:
     return evolution
 
 
+def _append_evolution_event(spec: dict[str, Any], event: dict[str, Any]) -> None:
+    evolution = _ensure_evolution_block(spec)
+    history = evolution.get("history") if isinstance(evolution.get("history"), list) else []
+    history.append(dict(event))
+    evolution["history"] = history
+    evolution["history"] = history
+
+
+def _format_evolution_event(event: Any) -> str:
+    if not isinstance(event, dict):
+        return ""
+    action = str(event.get("action") or "").strip()
+    if not action:
+        return ""
+
+    if action == "add_entity":
+        entity = str(event.get("entity") or "").strip()
+        return f"add_entity {entity}".strip()
+    if action == "add_field":
+        entity = str(event.get("entity") or "").strip()
+        field = str(event.get("field") or "").strip()
+        field_type = str(event.get("type") or "").strip()
+        suffix = f"{field}:{field_type}" if field and field_type else field
+        return f"add_field {entity} {suffix}".strip()
+    if action == "add_api":
+        method = str(event.get("method") or "").strip().upper()
+        path = str(event.get("path") or "").strip()
+        return f"add_api {method} {path}".strip()
+    if action == "add_page":
+        page = str(event.get("page") or "").strip()
+        return f"add_page {page}".strip()
+    if action == "add_module":
+        module = str(event.get("module") or "").strip()
+        return f"add_module {module}".strip()
+
+    details: list[str] = []
+    for key in ("entity", "field", "type", "method", "path", "page", "module"):
+        value = str(event.get(key) or "").strip()
+        if value:
+            details.append(value)
+    return f"{action} {' '.join(details)}".strip()
+
+
+def summarize_recent_evolution(spec_or_history: Any, limit: int = 5) -> list[str]:
+    history: list[Any]
+    if isinstance(spec_or_history, dict):
+        evolution = spec_or_history.get("evolution") if isinstance(spec_or_history.get("evolution"), dict) else {}
+        raw_history = evolution.get("history")
+        history = raw_history if isinstance(raw_history, list) else []
+    elif isinstance(spec_or_history, list):
+        history = spec_or_history
+    else:
+        history = []
+
+    clipped = history[-max(1, int(limit)) :] if history else []
+    lines: list[str] = []
+    for item in clipped:
+        text = _format_evolution_event(item)
+        if text:
+            lines.append(text)
+    return lines
+
+
 def _read_or_init_project_spec(project_path: Path) -> tuple[dict[str, Any], Path]:
     spec_path = project_path / ".archmind" / "project_spec.json"
     spec = _load_json(spec_path) or {}
@@ -3870,6 +3933,7 @@ async def command_inspect(update: Any, context: Any) -> None:
     evolution_version = int(evolution.get("version") or 1) if evolution else 1
     evolution_added = _ordered_modules([str(x) for x in (evolution.get("added_modules") or [])]) if evolution else []
     evolution_history_count = len(evolution.get("history") or []) if isinstance(evolution.get("history"), list) else 0
+    recent_evolution = summarize_recent_evolution(spec, limit=5)
     progression_spec = raw_spec if isinstance(raw_spec, dict) and raw_spec else spec
     progression = analyze_spec_progression(progression_spec if isinstance(progression_spec, dict) else {})
 
@@ -4072,6 +4136,13 @@ async def command_inspect(update: Any, context: Any) -> None:
         if evolution_added:
             lines.append(f"Added modules: {', '.join(evolution_added)}")
         lines.append(f"History count: {evolution_history_count}")
+        lines.append("")
+        lines.append("Recent evolution:")
+        if recent_evolution:
+            for item in recent_evolution:
+                lines.append(f"- {item}")
+        else:
+            lines.append("(none)")
     lines += [
         "",
         "Try next:",
@@ -4735,9 +4806,7 @@ async def command_add_module(update: Any, context: Any) -> None:
         evolution = _ensure_evolution_block(spec)
         added_modules = _ordered_modules([str(x) for x in (evolution.get("added_modules") or [])] + [module_name])
         evolution["added_modules"] = added_modules
-        history = evolution.get("history") if isinstance(evolution.get("history"), list) else []
-        history.append({"action": "add_module", "module": module_name})
-        evolution["history"] = history
+        _append_evolution_event(spec, {"action": "add_module", "module": module_name})
 
         template_name = str(spec.get("template") or "").strip().lower()
         if not template_name:
@@ -4814,10 +4883,7 @@ async def command_add_entity(update: Any, context: Any) -> None:
     spec["entities"] = _normalize_entities(entities)
     _rebuild_api_endpoints(spec)
     _rebuild_frontend_pages(spec)
-    evolution = _ensure_evolution_block(spec)
-    history = evolution.get("history") if isinstance(evolution.get("history"), list) else []
-    history.append({"action": "add_entity", "entity": entity_name})
-    evolution["history"] = history
+    _append_evolution_event(spec, {"action": "add_entity", "entity": entity_name})
 
     generated_files = apply_entity_scaffold(project_path, entity_name)
     frontend_generated = apply_frontend_page_scaffold(project_path, entity_name)
@@ -4934,10 +5000,7 @@ async def command_add_field(update: Any, context: Any) -> None:
     spec["entities"] = _normalize_entities(entities)
     _rebuild_api_endpoints(spec)
     _rebuild_frontend_pages(spec)
-    evolution = _ensure_evolution_block(spec)
-    history = evolution.get("history") if isinstance(evolution.get("history"), list) else []
-    history.append({"action": "add_field", "entity": entity_name, "field": field_name, "type": field_type})
-    evolution["history"] = history
+    _append_evolution_event(spec, {"action": "add_field", "entity": entity_name, "field": field_name, "type": field_type})
 
     apply_entity_scaffold(project_path, entity_name)
     apply_entity_fields_to_scaffold(
@@ -5017,10 +5080,7 @@ async def command_add_api(update: Any, context: Any) -> None:
 
     spec["api_endpoints"] = current + [endpoint]
     _rebuild_api_endpoints(spec)
-    evolution = _ensure_evolution_block(spec)
-    history = evolution.get("history") if isinstance(evolution.get("history"), list) else []
-    history.append({"action": "add_api", "method": method, "path": path})
-    evolution["history"] = history
+    _append_evolution_event(spec, {"action": "add_api", "method": method, "path": path})
 
     apply_api_scaffold(project_path, method, path)
     spec_path.parent.mkdir(parents=True, exist_ok=True)
@@ -5078,10 +5138,7 @@ async def command_add_page(update: Any, context: Any) -> None:
 
     spec["frontend_pages"] = current + [page_path]
     _rebuild_frontend_pages(spec)
-    evolution = _ensure_evolution_block(spec)
-    history = evolution.get("history") if isinstance(evolution.get("history"), list) else []
-    history.append({"action": "add_page", "page": page_path})
-    evolution["history"] = history
+    _append_evolution_event(spec, {"action": "add_page", "page": page_path})
 
     generated = apply_page_scaffold(project_path, page_path)
     frontend_exists = has_frontend_structure(project_path)
@@ -5153,17 +5210,15 @@ async def command_apply_suggestion(update: Any, context: Any) -> None:
     if mode in {"all", "entities"}:
         merged_entities, applied_entities = _merge_entities(spec.get("entities"), suggestion_payload.get("entities"))
         spec["entities"] = merged_entities
-        history.append({"action": "apply_suggestion", "type": "entities", "count": applied_entities})
+        _append_evolution_event(spec, {"action": "apply_suggestion", "type": "entities", "count": applied_entities})
     if mode in {"all", "api"}:
         merged_api, applied_api = _merge_string_list(spec.get("api_endpoints"), suggestion_payload.get("api_endpoints"))
         spec["api_endpoints"] = merged_api
-        history.append({"action": "apply_suggestion", "type": "api", "count": applied_api})
+        _append_evolution_event(spec, {"action": "apply_suggestion", "type": "api", "count": applied_api})
     if mode in {"all", "pages"}:
         merged_pages, applied_pages = _merge_string_list(spec.get("frontend_pages"), suggestion_payload.get("frontend_pages"))
         spec["frontend_pages"] = merged_pages
-        history.append({"action": "apply_suggestion", "type": "pages", "count": applied_pages})
-
-    evolution["history"] = history
+        _append_evolution_event(spec, {"action": "apply_suggestion", "type": "pages", "count": applied_pages})
     _rebuild_api_endpoints(spec)
     _rebuild_frontend_pages(spec)
     spec_path.parent.mkdir(parents=True, exist_ok=True)
