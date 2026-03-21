@@ -18,7 +18,7 @@ from archmind.telegram_bot import (
     _repository_summary_from_state,
     _resolve_project_type,
     get_current_project,
-    load_last_project_path,
+    load_valid_last_project_path,
     save_last_project_path,
     set_current_project,
     summarize_recent_evolution,
@@ -211,10 +211,10 @@ def _runtime_urls_for_display(
 
 def _resolve_current_project_dir() -> Path | None:
     current = get_current_project()
-    if current is not None and current.exists() and current.is_dir():
+    if current is not None:
         return current.resolve()
-    last = load_last_project_path()
-    if last is not None and last.exists() and last.is_dir():
+    last = load_valid_last_project_path()
+    if last is not None:
         return last.resolve()
     return None
 

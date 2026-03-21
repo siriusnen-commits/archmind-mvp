@@ -114,7 +114,7 @@ def test_ui_projects_reflects_persisted_current_project_when_in_memory_is_missin
     beta = _make_project(projects_root, "beta")
     monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
     monkeypatch.setattr("archmind.project_query.get_current_project", lambda: None)
-    monkeypatch.setattr("archmind.project_query.load_last_project_path", lambda: beta)
+    monkeypatch.setattr("archmind.project_query.load_valid_last_project_path", lambda: beta)
 
     client = TestClient(create_ui_app())
     response = client.get("/ui/projects")
@@ -122,6 +122,21 @@ def test_ui_projects_reflects_persisted_current_project_when_in_memory_is_missin
     rows = {item["name"]: item for item in response.json()["projects"]}
     assert rows["beta"]["is_current"] is True
     assert rows["alpha"]["is_current"] is False
+
+
+def test_ui_projects_rejects_stale_persisted_current_project(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "alpha")
+    _make_project(projects_root, "gamma")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setattr("archmind.project_query.get_current_project", lambda: None)
+    monkeypatch.setattr("archmind.project_query.load_valid_last_project_path", lambda: None)
+
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects")
+    assert response.status_code == 200
+    rows = response.json()["projects"]
+    assert all(bool(item["is_current"]) is False for item in rows)
 
 
 def test_ui_projects_show_distinct_runtime_frontend_urls_per_project(monkeypatch, tmp_path: Path) -> None:
