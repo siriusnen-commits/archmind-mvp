@@ -1,10 +1,10 @@
-import Link from "next/link";
 import { headers } from "next/headers";
 
 import EvolutionCard from "@/components/EvolutionCard";
 import ProjectList, { ProjectListItem } from "@/components/ProjectList";
 import ProjectSummaryCard from "@/components/ProjectSummaryCard";
 import ProviderCard from "@/components/ProviderCard";
+import RefreshButton from "@/components/RefreshButton";
 import RuntimeCard from "@/components/RuntimeCard";
 
 type SpecSummary = {
@@ -41,6 +41,9 @@ type ProjectDetail = {
   recent_evolution?: string[];
   repository?: RepositoryInfo;
 };
+
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 async function resolveApiBaseUrl(): Promise<string> {
   const reqHeaders = await headers();
@@ -94,9 +97,9 @@ export default async function DashboardPage() {
     <main className="mx-auto w-full max-w-6xl p-6">
       <header className="mb-5 flex items-center justify-between gap-3">
         <h1 className="text-xl font-semibold text-slate-100">ArchMind Dashboard</h1>
-        <Link href="/dashboard" className="rounded-md border border-slate-500 px-3 py-1.5 text-sm text-slate-100 hover:bg-slate-800">
-          Refresh
-        </Link>
+        <RefreshButton
+          className="rounded-md border border-slate-500 px-3 py-1.5 text-sm text-slate-100 hover:bg-slate-800"
+        />
       </header>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">

@@ -334,6 +334,33 @@ def test_ui_select_project_marks_it_current_and_unsets_previous(monkeypatch, tmp
         clear_current_project()
 
 
+def test_ui_projects_reflect_backend_current_change_from_telegram_use(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    alpha = _make_project(projects_root, "alpha")
+    beta = _make_project(projects_root, "beta")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+    try:
+        set_current_project(alpha)
+        first_rows = {item["name"]: item for item in client.get("/ui/projects").json()["projects"]}
+        assert first_rows["alpha"]["is_current"] is True
+        assert first_rows["beta"]["is_current"] is False
+
+        # Telegram /use updates backend current project selection.
+        set_current_project(beta)
+
+        second_rows = {item["name"]: item for item in client.get("/ui/projects").json()["projects"]}
+        assert second_rows["beta"]["is_current"] is True
+        assert second_rows["alpha"]["is_current"] is False
+
+        alpha_detail = client.get("/ui/projects/alpha").json()
+        beta_detail = client.get("/ui/projects/beta").json()
+        assert alpha_detail["is_current"] is False
+        assert beta_detail["is_current"] is True
+    finally:
+        clear_current_project()
+
+
 def test_ui_select_project_invalid_name_returns_safe_error(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     _make_project(projects_root, "valid-project")
