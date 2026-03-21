@@ -152,6 +152,24 @@ def test_summarize_recent_evolution_formats_primitive_actions() -> None:
     ]
 
 
+def test_summarize_recent_evolution_formats_auto_generated_actions() -> None:
+    history = [
+        {"action": "add_entity", "entity": "Note"},
+        {"action": "auto_add_api", "method": "GET", "path": "/notes"},
+        {"action": "auto_add_api", "method": "POST", "path": "/notes"},
+        {"action": "auto_add_page", "page": "notes/list"},
+        {"action": "auto_add_page", "page": "notes/detail"},
+    ]
+    lines = summarize_recent_evolution({"evolution": {"history": history}}, limit=5)
+    assert lines == [
+        "add_entity Note",
+        "auto_add_api GET /notes",
+        "auto_add_api POST /notes",
+        "auto_add_page notes/list",
+        "auto_add_page notes/detail",
+    ]
+
+
 def test_summarize_recent_evolution_applies_limit_to_latest_entries() -> None:
     history = [
         {"action": "add_entity", "entity": "Task"},

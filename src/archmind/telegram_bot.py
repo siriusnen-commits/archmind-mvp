@@ -1268,9 +1268,16 @@ def _format_evolution_event(event: Any) -> str:
         method = str(event.get("method") or "").strip().upper()
         path = str(event.get("path") or "").strip()
         return f"add_api {method} {path}".strip()
+    if action == "auto_add_api":
+        method = str(event.get("method") or "").strip().upper()
+        path = str(event.get("path") or "").strip()
+        return f"auto_add_api {method} {path}".strip()
     if action == "add_page":
         page = str(event.get("page") or "").strip()
         return f"add_page {page}".strip()
+    if action == "auto_add_page":
+        page = str(event.get("page") or "").strip()
+        return f"auto_add_page {page}".strip()
     if action == "add_module":
         module = str(event.get("module") or "").strip()
         return f"add_module {module}".strip()
@@ -4879,11 +4886,45 @@ async def command_add_entity(update: Any, context: Any) -> None:
         )
         return
 
+    prev_api = [
+        endpoint
+        for endpoint in (_normalize_api_endpoint_text(str(x)) for x in (spec.get("api_endpoints") or []))
+        if endpoint
+    ]
+    prev_pages = [
+        page
+        for page in (_normalize_frontend_page_path(str(x)) for x in (spec.get("frontend_pages") or []))
+        if page
+    ]
+
     entities.append({"name": entity_name, "fields": []})
     spec["entities"] = _normalize_entities(entities)
-    _rebuild_api_endpoints(spec)
-    _rebuild_frontend_pages(spec)
+    rebuilt_api = _rebuild_api_endpoints(spec)
+    rebuilt_pages = _rebuild_frontend_pages(spec)
     _append_evolution_event(spec, {"action": "add_entity", "entity": entity_name})
+
+    prev_api_set = {endpoint.upper() for endpoint in prev_api}
+    auto_api_candidates = {endpoint.upper() for endpoint in _entity_endpoint_set(entity_name)[:2]}
+    for endpoint in rebuilt_api:
+        upper = str(endpoint).upper()
+        if upper in prev_api_set:
+            continue
+        if upper not in auto_api_candidates:
+            continue
+        parts = str(endpoint).split(maxsplit=1)
+        if len(parts) != 2:
+            continue
+        _append_evolution_event(spec, {"action": "auto_add_api", "method": parts[0], "path": parts[1]})
+
+    prev_pages_set = {page.lower() for page in prev_pages}
+    auto_page_candidates = {page.lower() for page in _entity_frontend_pages(entity_name)}
+    for page in rebuilt_pages:
+        key = str(page).lower()
+        if key in prev_pages_set:
+            continue
+        if key not in auto_page_candidates:
+            continue
+        _append_evolution_event(spec, {"action": "auto_add_page", "page": str(page)})
 
     generated_files = apply_entity_scaffold(project_path, entity_name)
     frontend_generated = apply_frontend_page_scaffold(project_path, entity_name)
