@@ -9,6 +9,9 @@ from fastapi.responses import JSONResponse
 from archmind.project_query import (
     build_project_detail,
     build_project_list_item,
+    delete_project_all,
+    delete_project_local,
+    delete_project_repo,
     find_project_by_name,
     list_project_dirs,
     restart_project_runtime,
@@ -19,6 +22,7 @@ from archmind.project_query import (
 )
 from archmind.deploy import get_local_runtime_status
 from archmind.ui_models import (
+    DeleteActionResponse,
     ProjectListItem,
     ProjectDetailResponse,
     ProjectListResponse,
@@ -185,6 +189,59 @@ def _extract_runtime_action_error(result: dict[str, Any]) -> str:
     return ""
 
 
+def _is_runtime_stopped(stop_payload: Any) -> bool:
+    if not isinstance(stop_payload, dict):
+        return False
+    backend = stop_payload.get("backend") if isinstance(stop_payload.get("backend"), dict) else {}
+    frontend = stop_payload.get("frontend") if isinstance(stop_payload.get("frontend"), dict) else {}
+    backend_status = str(backend.get("status") or "").strip().upper()
+    frontend_status = str(frontend.get("status") or "").strip().upper()
+    stopped_states = {"STOPPED", "NOT RUNNING", "ABSENT"}
+    return (not backend_status or backend_status in stopped_states) and (not frontend_status or frontend_status in stopped_states)
+
+
+def _delete_action_response(project_name: str, action: str, result: dict[str, Any]) -> DeleteActionResponse:
+    local_status = str(result.get("local_status") or "").strip().upper()
+    repo_status = str(result.get("repo_status") or "").strip().upper()
+    stop_payload = result.get("stop")
+    local_deleted = local_status == "DELETED"
+    github_deleted = repo_status in {"DELETED", "ALREADY_DELETED"}
+    ok = bool(result.get("ok"))
+    detail_candidates = [
+        result.get("detail"),
+        result.get("local_detail"),
+        result.get("repo_detail"),
+    ]
+    detail = ""
+    for item in detail_candidates:
+        text = str(item or "").strip()
+        if text:
+            detail = text
+            break
+    if not detail:
+        detail = "Delete action completed" if ok else "Delete action failed"
+
+    error = ""
+    if not ok:
+        local_detail = str(result.get("local_detail") or "").strip()
+        repo_detail = str(result.get("repo_detail") or "").strip()
+        if local_detail and repo_detail and local_detail != repo_detail:
+            error = f"{local_detail}; {repo_detail}"
+        else:
+            error = local_detail or repo_detail or str(result.get("error") or "").strip() or "delete failed"
+
+    return DeleteActionResponse(
+        ok=ok,
+        action=action,
+        project_name=project_name,
+        local_deleted=local_deleted,
+        github_deleted=github_deleted,
+        runtime_stopped=_is_runtime_stopped(stop_payload),
+        detail=detail,
+        error=error,
+    )
+
+
 @router.post("/projects/{project_name}/run-backend", response_model=RuntimeActionResponse)
 def post_ui_project_run_backend(project_name: str) -> RuntimeActionResponse:
     try:
@@ -282,6 +339,78 @@ def post_ui_project_stop(project_name: str) -> RuntimeActionResponse:
             frontend_status="STOPPED",
             backend_url="",
             frontend_url="",
+        )
+
+
+@router.post("/projects/{project_name}/delete-local", response_model=DeleteActionResponse)
+def post_ui_project_delete_local(project_name: str) -> DeleteActionResponse:
+    try:
+        project_dir = find_project_by_name(project_name)
+        if project_dir is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        result = delete_project_local(project_dir)
+        return _delete_action_response(project_name, "delete-local", result)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Delete action failed: delete-local (%s)", project_name)
+        return DeleteActionResponse(
+            ok=False,
+            action="delete-local",
+            project_name=project_name,
+            local_deleted=False,
+            github_deleted=False,
+            runtime_stopped=False,
+            detail="Failed to delete local project",
+            error=str(exc),
+        )
+
+
+@router.post("/projects/{project_name}/delete-repo", response_model=DeleteActionResponse)
+def post_ui_project_delete_repo(project_name: str) -> DeleteActionResponse:
+    try:
+        project_dir = find_project_by_name(project_name)
+        if project_dir is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        result = delete_project_repo(project_dir)
+        return _delete_action_response(project_name, "delete-repo", result)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Delete action failed: delete-repo (%s)", project_name)
+        return DeleteActionResponse(
+            ok=False,
+            action="delete-repo",
+            project_name=project_name,
+            local_deleted=False,
+            github_deleted=False,
+            runtime_stopped=False,
+            detail="Failed to delete GitHub repo",
+            error=str(exc),
+        )
+
+
+@router.post("/projects/{project_name}/delete-all", response_model=DeleteActionResponse)
+def post_ui_project_delete_all(project_name: str) -> DeleteActionResponse:
+    try:
+        project_dir = find_project_by_name(project_name)
+        if project_dir is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        result = delete_project_all(project_dir)
+        return _delete_action_response(project_name, "delete-all", result)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Delete action failed: delete-all (%s)", project_name)
+        return DeleteActionResponse(
+            ok=False,
+            action="delete-all",
+            project_name=project_name,
+            local_deleted=False,
+            github_deleted=False,
+            runtime_stopped=False,
+            detail="Failed to delete project and GitHub repo",
+            error=str(exc),
         )
 
 

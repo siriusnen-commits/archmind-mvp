@@ -2,6 +2,7 @@ import Link from "next/link";
 import { headers } from "next/headers";
 
 import EvolutionCard from "@/components/EvolutionCard";
+import DangerZoneCard from "@/components/DangerZoneCard";
 import ProjectSummaryCard from "@/components/ProjectSummaryCard";
 import ProviderCard from "@/components/ProviderCard";
 import RuntimeActionsCard from "@/components/RuntimeActionsCard";
@@ -105,6 +106,7 @@ export default async function ProjectDetailPage({ params }: PageProps) {
           <RuntimeActionsCard projectName={detail.name} />
           <ProviderCard projectName={detail.name} mode={detail.provider_mode} />
           <EvolutionCard items={Array.isArray(detail.recent_evolution) ? detail.recent_evolution : []} />
+          <DangerZoneCard projectName={detail.name} repositoryUrl={detail.repository?.url} />
         </section>
       ) : (
         <p className="rounded-md border border-slate-700 bg-slate-900 p-4 text-sm text-slate-300">Project not found</p>
