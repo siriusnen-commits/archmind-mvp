@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { headers } from "next/headers";
 
 import EvolutionCard from "@/components/EvolutionCard";
 import ProjectSummaryCard from "@/components/ProjectSummaryCard";
@@ -38,16 +39,19 @@ type ProjectDetail = {
   repository?: RepositoryInfo;
 };
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_ARCHMIND_UI_API_BASE ||
-  "http://127.0.0.1:8010/ui";
+async function resolveApiBaseUrl(): Promise<string> {
+  const reqHeaders = await headers();
+  const host = reqHeaders.get("x-forwarded-host") || reqHeaders.get("host") || "127.0.0.1:3000";
+  const proto = reqHeaders.get("x-forwarded-proto") || "http";
+  return `${proto}://${host}/api/ui`;
+}
 
-async function fetchProjectDetail(name: string): Promise<{ detail: ProjectDetail | null; error: string }> {
+async function fetchProjectDetail(apiBaseUrl: string, name: string): Promise<{ detail: ProjectDetail | null; error: string }> {
   if (!name) {
     return { detail: null, error: "Project not found" };
   }
   try {
-    const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(name)}`, { cache: "no-store" });
+    const response = await fetch(`${apiBaseUrl}/projects/${encodeURIComponent(name)}`, { cache: "no-store" });
     if (response.status === 404) {
       return { detail: null, error: "Project not found" };
     }
@@ -68,7 +72,8 @@ type PageProps = {
 export default async function ProjectDetailPage({ params }: PageProps) {
   const resolved = await params;
   const projectName = String(resolved?.project || "");
-  const result = await fetchProjectDetail(projectName);
+  const apiBaseUrl = await resolveApiBaseUrl();
+  const result = await fetchProjectDetail(apiBaseUrl, projectName);
   const detail = result.detail;
 
   return (
