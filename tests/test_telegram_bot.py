@@ -4701,7 +4701,7 @@ def test_next_command_recommends_add_field_for_entity_without_fields(tmp_path: P
     assert "/add_field Note title:string" in out
 
 
-def test_next_command_recommends_api_and_pages_for_entity(tmp_path: Path, monkeypatch) -> None:
+def test_next_command_prioritizes_missing_api_before_pages_for_entity(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "task_tracker"
     archmind = project_dir / ".archmind"
     archmind.mkdir(parents=True, exist_ok=True)
@@ -4724,9 +4724,8 @@ def test_next_command_recommends_api_and_pages_for_entity(tmp_path: Path, monkey
     msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     out = msg.sent[-1]
-    expected_candidates = ["/add_page tasks/list", "/add_page tasks/detail"]
-    assert any("/add_page " in cmd for cmd in out.splitlines())
-    assert any(candidate in out for candidate in expected_candidates)
+    assert "/add_api POST /tasks" in out
+    assert "/add_page tasks/list" not in out
     assert msg.sent_kwargs
     reply_markup = msg.sent_kwargs[-1].get("reply_markup")
     assert reply_markup is not None
@@ -4771,7 +4770,7 @@ def test_next_command_recommends_add_page_when_api_exists_without_pages(tmp_path
                 "template": "fullstack-ddd",
                 "modules": [],
                 "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}]}],
-                "api_endpoints": ["GET /notes"],
+                "api_endpoints": ["GET /notes", "POST /notes"],
                 "frontend_pages": [],
             }
         ),
@@ -4994,6 +4993,90 @@ def test_spec_progression_stage1_next_and_improve(tmp_path: Path, monkeypatch) -
     assert "Add fields to Note" in improve_msg.sent[-1]
 
 
+def test_spec_progression_keeps_stage0_priority_even_when_api_and_pages_exist(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "progress_stage0_api_pages"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "entities": [],
+                "api_endpoints": ["GET /notes", "POST /notes"],
+                "frontend_pages": ["notes/list", "notes/detail"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (archmind / "state.json").write_text(json.dumps({"runtime": {"backend_status": "RUNNING", "failure_class": ""}}), encoding="utf-8")
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+
+    inspect_msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=inspect_msg, effective_chat=DummyChat()), DummyContext()))
+    assert "- Stage: Stage 0" in inspect_msg.sent[-1]
+
+    next_msg = DummyMessage()
+    asyncio.run(command_next(DummyUpdate(message=next_msg, effective_chat=DummyChat()), DummyContext()))
+    next_out = next_msg.sent[-1]
+    assert "/add_entity Note" in next_out
+    assert "No immediate suggestions." not in next_out
+
+    improve_msg = DummyMessage()
+    asyncio.run(command_improve(DummyUpdate(message=improve_msg, effective_chat=DummyChat()), DummyContext()))
+    improve_out = improve_msg.sent[-1]
+    assert "Define your first entity" in improve_out
+    assert "/add_entity Note" in improve_out
+
+
+def test_spec_progression_keeps_stage1_priority_even_when_api_and_pages_exist(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "progress_stage1_api_pages"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "entities": [{"name": "Note", "fields": []}],
+                "api_endpoints": ["GET /notes", "POST /notes"],
+                "frontend_pages": ["notes/list", "notes/detail"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (archmind / "state.json").write_text(json.dumps({"runtime": {"backend_status": "RUNNING", "failure_class": ""}}), encoding="utf-8")
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+
+    inspect_msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=inspect_msg, effective_chat=DummyChat()), DummyContext()))
+    assert "- Stage: Stage 1" in inspect_msg.sent[-1]
+
+    next_msg = DummyMessage()
+    asyncio.run(command_next(DummyUpdate(message=next_msg, effective_chat=DummyChat()), DummyContext()))
+    assert "/add_field Note title:string" in next_msg.sent[-1]
+
+    improve_msg = DummyMessage()
+    asyncio.run(command_improve(DummyUpdate(message=improve_msg, effective_chat=DummyChat()), DummyContext()))
+    improve_out = improve_msg.sent[-1]
+    assert "Add fields to Note" in improve_out
+    assert "/add_field Note title:string" in improve_out
+
+
 def test_spec_progression_stage2_next_and_improve(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "progress_stage2"
     archmind = project_dir / ".archmind"
@@ -5041,7 +5124,7 @@ def test_spec_progression_stage3_next_and_improve(tmp_path: Path, monkeypatch) -
                 "shape": "fullstack",
                 "template": "fullstack-ddd",
                 "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}]}],
-                "api_endpoints": ["GET /notes"],
+                "api_endpoints": ["GET /notes", "POST /notes"],
                 "frontend_pages": [],
             }
         ),

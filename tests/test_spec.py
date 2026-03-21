@@ -92,7 +92,7 @@ def test_analyze_spec_progression_stage_3() -> None:
         {
             "shape": "fullstack",
             "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}]}],
-            "api_endpoints": ["GET /notes"],
+            "api_endpoints": ["GET /notes", "POST /notes"],
             "frontend_pages": [],
         }
     )
@@ -102,9 +102,34 @@ def test_analyze_spec_progression_stage_3() -> None:
 def test_analyze_spec_progression_stage_4() -> None:
     p = analyze_spec_progression(
         {
+            "shape": "fullstack",
             "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}]}],
-            "api_endpoints": ["GET /notes"],
-            "frontend_pages": ["notes/list"],
+            "api_endpoints": ["GET /notes", "POST /notes"],
+            "frontend_pages": ["notes/list", "notes/detail"],
         }
     )
     assert p["stage"] == 4
+
+
+def test_analyze_spec_progression_stage_0_even_with_api_and_pages() -> None:
+    p = analyze_spec_progression(
+        {
+            "shape": "fullstack",
+            "entities": [],
+            "api_endpoints": ["GET /notes", "POST /notes"],
+            "frontend_pages": ["notes/list", "notes/detail"],
+        }
+    )
+    assert p["stage"] == 0
+
+
+def test_analyze_spec_progression_stage_1_even_with_api_and_pages() -> None:
+    p = analyze_spec_progression(
+        {
+            "shape": "fullstack",
+            "entities": [{"name": "Note", "fields": []}],
+            "api_endpoints": ["GET /notes", "POST /notes"],
+            "frontend_pages": ["notes/list", "notes/detail"],
+        }
+    )
+    assert p["stage"] == 1
