@@ -60,6 +60,7 @@ class ProjectDetailResponse(BaseModel):
     template: str = "unknown"
     provider_mode: ProviderMode = "local"
     spec_summary: SpecSummary
+    entities: list[str] = Field(default_factory=list)
     runtime: RuntimeSummary
     recent_evolution: list[str] = Field(default_factory=list)
     repository: RepositorySummary = Field(default_factory=RepositorySummary)
@@ -87,6 +88,24 @@ class AddEntityResponse(BaseModel):
     ok: bool = False
     project_name: str = ""
     entity_name: str = ""
+    detail: str = ""
+    error: str = ""
+    spec_summary: SpecSummary = Field(default_factory=SpecSummary)
+    recent_evolution: list[str] = Field(default_factory=list)
+
+
+class AddFieldRequest(BaseModel):
+    entity_name: str = ""
+    field_name: str = ""
+    field_type: str = ""
+
+
+class AddFieldResponse(BaseModel):
+    ok: bool = False
+    project_name: str = ""
+    entity_name: str = ""
+    field_name: str = ""
+    field_type: str = ""
     detail: str = ""
     error: str = ""
     spec_summary: SpecSummary = Field(default_factory=SpecSummary)

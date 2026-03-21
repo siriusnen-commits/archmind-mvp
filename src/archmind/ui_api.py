@@ -7,6 +7,7 @@ from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
 from archmind.project_query import (
+    add_project_field,
     add_project_entity,
     build_project_detail,
     build_project_list_item,
@@ -24,6 +25,8 @@ from archmind.project_query import (
 )
 from archmind.deploy import get_local_runtime_status
 from archmind.ui_models import (
+    AddFieldRequest,
+    AddFieldResponse,
     AddEntityRequest,
     AddEntityResponse,
     CurrentProjectResponse,
@@ -207,6 +210,50 @@ def post_ui_project_add_entity(project_name: str, body: AddEntityRequest) -> Add
             project_name=project_name,
             entity_name=str(body.entity_name or ""),
             detail="Failed to add entity",
+            error=str(exc),
+        )
+
+
+@router.post("/projects/{project_name}/fields", response_model=AddFieldResponse)
+def post_ui_project_add_field(project_name: str, body: AddFieldRequest) -> AddFieldResponse:
+    try:
+        project_dir = find_project_by_name(project_name)
+        if project_dir is None:
+            return AddFieldResponse(
+                ok=False,
+                project_name=project_name,
+                entity_name=str(body.entity_name or ""),
+                field_name=str(body.field_name or ""),
+                field_type=str(body.field_type or ""),
+                detail="Project not found",
+                error="Project not found",
+            )
+        result = add_project_field(
+            project_dir,
+            str(body.entity_name or ""),
+            str(body.field_name or ""),
+            str(body.field_type or ""),
+        )
+        return AddFieldResponse(
+            ok=bool(result.get("ok")),
+            project_name=str(result.get("project_name") or project_name),
+            entity_name=str(result.get("entity_name") or ""),
+            field_name=str(result.get("field_name") or ""),
+            field_type=str(result.get("field_type") or ""),
+            detail=str(result.get("detail") or ""),
+            error=str(result.get("error") or ""),
+            spec_summary=result.get("spec_summary") if isinstance(result.get("spec_summary"), dict) else {},
+            recent_evolution=[str(x) for x in (result.get("recent_evolution") or []) if str(x).strip()],
+        )
+    except Exception as exc:
+        logger.exception("Failed to add field: %s", project_name)
+        return AddFieldResponse(
+            ok=False,
+            project_name=project_name,
+            entity_name=str(body.entity_name or ""),
+            field_name=str(body.field_name or ""),
+            field_type=str(body.field_type or ""),
+            detail="Failed to add field",
             error=str(exc),
         )
 
