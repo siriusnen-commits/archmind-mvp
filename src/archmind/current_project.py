@@ -39,6 +39,15 @@ def clear_current_project() -> None:
 
 def get_current_project() -> Optional[Path]:
     global _CURRENT_PROJECT
+    persisted = load_last_project_path()
+    if persisted is not None:
+        target = _normalize_path(persisted)
+        if _is_existing_dir(target):
+            _CURRENT_PROJECT = target
+            return target
+        clear_last_project_path()
+        _CURRENT_PROJECT = None
+        return None
     if _CURRENT_PROJECT is None:
         return None
     target = _normalize_path(_CURRENT_PROJECT)
@@ -85,15 +94,9 @@ def load_valid_last_project_path(file_path: Path = CURRENT_PROJECT_PATH_FILE) ->
 
 def get_validated_current_project(file_path: Path = CURRENT_PROJECT_PATH_FILE) -> Optional[Path]:
     current = get_current_project()
-    if current is not None and is_valid_archmind_project_dir(current):
+    if current is None:
+        return None
+    if is_valid_archmind_project_dir(current):
         return current
-    if current is not None and not is_valid_archmind_project_dir(current):
-        # keep persisted state in sync when in-memory selection turns invalid
-        clear_current_project()
-        return None
-    persisted = load_valid_last_project_path(file_path=file_path)
-    if persisted is None:
-        return None
-    global _CURRENT_PROJECT
-    _CURRENT_PROJECT = persisted
-    return persisted
+    clear_current_project()
+    return None

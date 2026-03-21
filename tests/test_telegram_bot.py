@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
+import archmind.current_project as current_project_state
 import archmind.telegram_bot as telegram_bot
 from archmind.telegram_bot import (
     build_completion_message,
@@ -1785,6 +1786,19 @@ def test_current_uses_persisted_selection_when_in_memory_current_is_missing(monk
     out = msg.sent[-1]
     assert "Current project" in out
     assert "Project: persisted_current_proj" in out
+
+
+def test_get_current_project_reads_persisted_selection_over_stale_in_memory_cache(tmp_path: Path) -> None:
+    alpha = tmp_path / "alpha"
+    beta = tmp_path / "beta"
+    _mark_archmind_project(alpha)
+    _mark_archmind_project(beta)
+    current_project_state._CURRENT_PROJECT = alpha.resolve()
+    current_project_state.save_last_project_path(beta)
+    try:
+        assert get_current_project() == beta.resolve()
+    finally:
+        clear_current_project()
 
 
 def test_current_returns_no_selection_when_persisted_project_is_stale(monkeypatch, tmp_path: Path) -> None:

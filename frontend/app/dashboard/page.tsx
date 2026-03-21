@@ -98,12 +98,13 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const selectedFromQueryName = String(selectedFromQuery || "").trim();
 
   const currentProject = projects.find((item) => item.is_current) || null;
+  const currentProjectName = String(currentProject?.name || "");
   const hasSelectedFromQuery = projects.some((item) => String(item.name || "") === selectedFromQueryName);
-  const selectedName = hasSelectedFromQuery
+  const selectedProjectName = hasSelectedFromQuery
     ? selectedFromQueryName
-    : String(currentProject?.name || "");
+    : currentProjectName;
 
-  const detailResult = await fetchProjectDetail(apiBaseUrl, selectedName);
+  const detailResult = await fetchProjectDetail(apiBaseUrl, selectedProjectName);
   const detail = detailResult.detail;
 
   return (
@@ -116,7 +117,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       </header>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
-        <ProjectList projects={projects} selectedName={selectedName} />
+        <ProjectList projects={projects} selectedName={selectedProjectName} />
 
         <section className="space-y-3">
           {projectsResult.error ? <p className="rounded-md border border-rose-700 bg-rose-950/50 p-3 text-sm text-rose-200">{projectsResult.error}</p> : null}
