@@ -36,6 +36,8 @@ from archmind.spec_suggester import suggest_project_spec
 from archmind.state import (
     derive_task_label_from_failure_signature,
     load_state,
+    load_provider_mode,
+    set_provider_mode,
     set_agent_state,
     update_after_deploy,
     update_runtime_state,
@@ -105,6 +107,7 @@ CODE
 INSPECTION
 /inspect               show project summary
 /improve               analyze project mismatches and suggest corrections
+/provider              show or set provider mode
 
 CLEANUP
 /delete_project
@@ -774,6 +777,7 @@ def _extract_recommended_commands_from_text(text: str) -> list[str]:
 def _command_handler_map() -> dict[str, Any]:
     return {
         "/help": command_help,
+        "/provider": command_provider,
         "/inspect": command_inspect,
         "/next": command_next,
         "/improve": command_improve,
@@ -3495,8 +3499,8 @@ async def command_suggest(update: Any, context: Any) -> None:
     normalized = str(normalized_payload.get("normalized") or idea)
     reasoning = reason_architecture_from_idea(normalized)
     suggestions = get_template_suggestions(normalized, reasoning) or [str(reasoning.get("recommended_template") or "fastapi")]
-    spec_suggestion = suggest_project_spec(normalized, reasoning)
     target_project = _resolve_target_project()
+    spec_suggestion = suggest_project_spec(normalized, reasoning, provider_project_dir=target_project)
     if target_project is not None:
         suggestion_path = target_project / ".archmind" / "suggestion.json"
         suggestion_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3559,8 +3563,9 @@ async def command_design(update: Any, context: Any) -> None:
     normalized_payload = normalize_idea(idea)
     normalized = str(normalized_payload.get("normalized") or idea)
     reasoning = reason_architecture_from_idea(normalized)
-    suggestion = suggest_project_spec(normalized, reasoning)
-    design = build_architecture_design(idea, reasoning, suggestion)
+    target_project = _resolve_target_project()
+    suggestion = suggest_project_spec(normalized, reasoning, provider_project_dir=target_project)
+    design = build_architecture_design(idea, reasoning, suggestion, provider_project_dir=target_project)
 
     modules = [str(x) for x in (design.get("modules") or []) if str(x).strip()]
     domains = [str(x) for x in (design.get("domains") or []) if str(x).strip()]
@@ -3750,14 +3755,14 @@ async def _execute_plan_step(step: str) -> tuple[str, str]:
 
 async def command_plan(update: Any, context: Any) -> None:
     args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
+    target_project = _resolve_target_project()
     if args:
         idea = " ".join(args).strip()
         normalized_payload = normalize_idea(idea)
         normalized = str(normalized_payload.get("normalized") or idea)
         reasoning = reason_architecture_from_idea(normalized)
-        suggestion = suggest_project_spec(normalized, reasoning)
-        plan = build_plan_from_suggestion(normalized, reasoning, suggestion)
-        target_project = _resolve_target_project()
+        suggestion = suggest_project_spec(normalized, reasoning, provider_project_dir=target_project)
+        plan = build_plan_from_suggestion(normalized, reasoning, suggestion, provider_project_dir=target_project)
         if target_project is not None:
             _save_plan_execution(target_project, plan)
         InlineKeyboardButton, InlineKeyboardMarkup = _inline_keyboard_classes()
@@ -3767,7 +3772,7 @@ async def command_plan(update: Any, context: Any) -> None:
         await update.message.reply_text(_truncate_message(_format_plan_message(plan)), reply_markup=reply_markup)
         return
 
-    project_path = _resolve_target_project()
+    project_path = target_project
     if project_path is None:
         await update.message.reply_text(_no_active_project_guidance())
         return
@@ -3775,9 +3780,29 @@ async def command_plan(update: Any, context: Any) -> None:
     raw = _load_json(spec_path) or {}
     if not raw:
         raw, _ = _read_or_init_project_spec(project_path)
-    plan = build_plan_from_project_spec(raw)
+    plan = build_plan_from_project_spec(raw, provider_project_dir=project_path)
     _save_plan_execution(project_path, plan)
     await update.message.reply_text(_truncate_message(_format_plan_message(plan)))
+
+
+async def command_provider(update: Any, context: Any) -> None:
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text(_no_active_project_guidance())
+        return
+    args = [str(x).strip().lower() for x in getattr(context, "args", []) if str(x).strip()]
+    state_payload = load_state(project_path) or {}
+    if not args:
+        current_mode = load_provider_mode(state_payload, default="local")
+        await update.message.reply_text(f"Current provider: {current_mode}")
+        return
+    mode = args[0]
+    if mode not in {"local", "cloud", "auto"}:
+        await update.message.reply_text("Invalid provider mode. Use: /provider local|cloud|auto")
+        return
+    set_provider_mode(state_payload, mode)
+    write_state(project_path, state_payload)
+    await update.message.reply_text(f"Provider updated to: {mode}")
 
 
 async def command_apply_plan(update: Any, context: Any) -> None:
@@ -3995,6 +4020,7 @@ async def command_inspect(update: Any, context: Any) -> None:
     recent_evolution = summarize_recent_evolution(spec, limit=5)
     progression_spec = raw_spec if isinstance(raw_spec, dict) and raw_spec else spec
     progression = analyze_spec_progression(progression_spec if isinstance(progression_spec, dict) else {})
+    provider_mode = load_provider_mode(state, default="local")
 
     root_backend_main = project_path / "app" / "main.py"
     nested_backend_main = project_path / "backend" / "app" / "main.py"
@@ -4057,6 +4083,7 @@ async def command_inspect(update: Any, context: Any) -> None:
         f"- Pages: {int(progression.get('pages_count') or 0)}",
         f"- Evolution history: {evolution_history_count}",
     ]
+    lines += ["", "Provider:", f"- Mode: {provider_mode}"]
     _append_truncated_bullets(lines, "Entities:", entities, limit=10, suffix_label="entities")
     lines += ["", "Entity Fields:"] + entity_tree_lines
     _append_truncated_bullets(lines, "APIs:", api_endpoints, limit=10, suffix_label="endpoints")
@@ -6277,6 +6304,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("current", command_current))
     app.add_handler(CommandHandler("inspect", command_inspect))
     app.add_handler(CommandHandler("improve", command_improve))
+    app.add_handler(CommandHandler("provider", command_provider))
     app.add_handler(CommandHandler("logs", command_logs))
     app.add_handler(CommandHandler("running", command_running))
     app.add_handler(CommandHandler("tree", command_tree))

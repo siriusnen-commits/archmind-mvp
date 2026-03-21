@@ -38,6 +38,7 @@ HEALTHCHECK_STATUSES = ("SUCCESS", "FAIL", "SKIPPED")
 SERVICE_DEPLOY_STATUSES = ("SUCCESS", "FAIL", "SKIPPED")
 PREFLIGHT_STATUSES = ("OK", "FIXED", "FAILED")
 REPOSITORY_STATUSES = ("CREATED", "FAILED", "SKIPPED", "")
+PROVIDER_MODES = ("local", "cloud", "auto")
 
 
 def derive_task_label_from_failure_signature(signature: str) -> str:
@@ -104,6 +105,43 @@ def _safe_preflight_status(value: str) -> str:
 def _safe_repository_status(value: str) -> str:
     status = (value or "").upper()
     return status if status in REPOSITORY_STATUSES else ""
+
+
+def _safe_provider_mode(value: str, default: str = "local") -> str:
+    mode = str(value or "").strip().lower()
+    if mode in PROVIDER_MODES:
+        return mode
+    fallback = str(default or "local").strip().lower()
+    if fallback in PROVIDER_MODES:
+        return fallback
+    return "local"
+
+
+def load_provider_mode(state: dict[str, Any], default: str = "local") -> str:
+    provider = state.get("provider") if isinstance(state, dict) else None
+    if isinstance(provider, dict):
+        mode = str(provider.get("mode") or "").strip().lower()
+        if mode in PROVIDER_MODES:
+            return mode
+    return _safe_provider_mode(default, "local")
+
+
+def set_provider_mode(state: dict[str, Any], mode: str) -> dict[str, Any]:
+    normalized_mode = _safe_provider_mode(mode, "local")
+    provider = state.get("provider")
+    if not isinstance(provider, dict):
+        provider = {}
+    provider["mode"] = normalized_mode
+    state["provider"] = provider
+    return state
+
+
+def read_provider_mode(state: dict[str, Any]) -> str:
+    provider = state.get("provider") if isinstance(state, dict) else None
+    if not isinstance(provider, dict):
+        return ""
+    mode = str(provider.get("mode") or "").strip().lower()
+    return mode if mode in PROVIDER_MODES else ""
 
 
 def _safe_agent_state(value: str) -> str:
@@ -429,6 +467,9 @@ def _normalize_loaded_state(project_dir: Path, payload: dict[str, Any]) -> dict[
     repository_block = normalized.get("repository")
     if not isinstance(repository_block, dict):
         repository_block = {}
+    provider_block = normalized.get("provider")
+    if not isinstance(provider_block, dict):
+        provider_block = {}
 
     deploy_defaults = _default_deploy_state()
     deploy_defaults.update(deploy_block)
@@ -531,6 +572,7 @@ def _normalize_loaded_state(project_dir: Path, payload: dict[str, Any]) -> dict[
     repository_defaults["attempted"] = bool(repository_defaults.get("attempted"))
     normalized["repository"] = repository_defaults
     normalized["github_repo_url"] = repository_defaults["url"]
+    normalized["provider"] = {"mode": _safe_provider_mode(provider_block.get("mode"), "local")}
     normalized["iterations"] = _safe_int(normalized.get("iterations"), 0)
     fix_attempts_raw = normalized.get("fix_attempts")
     fix_attempts = _safe_int(fix_attempts_raw, -1)
@@ -607,6 +649,7 @@ def _default_state(project_dir: Path) -> dict[str, Any]:
         "next_action_reason": "",
         "github_repo_url": "",
         "repository": _default_repository_state(),
+        "provider": {"mode": "local"},
         "auto_deploy_enabled": False,
         "auto_deploy_target": "",
         "auto_deploy_status": "",
@@ -737,6 +780,10 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     repository["attempted"] = bool(repository.get("attempted"))
     payload["repository"] = repository
     payload["github_repo_url"] = repository["url"]
+    provider_block = payload.get("provider")
+    if not isinstance(provider_block, dict):
+        provider_block = {}
+    payload["provider"] = {"mode": _safe_provider_mode(provider_block.get("mode"), "local")}
     payload["auto_deploy_enabled"] = bool(payload.get("auto_deploy_enabled"))
     payload["auto_deploy_target"] = str(payload.get("auto_deploy_target") or "").strip()[:40]
     payload["auto_deploy_status"] = _safe_optional_status(str(payload.get("auto_deploy_status") or ""))

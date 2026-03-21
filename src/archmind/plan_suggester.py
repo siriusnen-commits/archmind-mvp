@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from .reasoning import try_generate_reasoning_json
@@ -30,7 +31,13 @@ def _limit_steps(phases: list[dict[str, Any]], max_steps: int = 15) -> list[dict
     return out
 
 
-def build_plan_from_suggestion(idea: str, reasoning: dict[str, Any], suggestion: dict[str, Any]) -> dict[str, Any]:
+def build_plan_from_suggestion(
+    idea: str,
+    reasoning: dict[str, Any],
+    suggestion: dict[str, Any],
+    *,
+    provider_project_dir: Path | None = None,
+) -> dict[str, Any]:
     entities = suggestion.get("entities") if isinstance(suggestion.get("entities"), list) else []
     apis = [str(x).strip() for x in (suggestion.get("api_endpoints") or []) if str(x).strip()]
     pages = [str(x).strip().strip("/") for x in (suggestion.get("frontend_pages") or []) if str(x).strip()]
@@ -73,7 +80,12 @@ def build_plan_from_suggestion(idea: str, reasoning: dict[str, Any], suggestion:
         f"Suggestion: {suggestion}\n"
         f"Fallback: {fallback_plan}"
     )
-    provider_plan = try_generate_reasoning_json(provider_prompt, timeout_s=90, temperature=0.1)
+    provider_plan = try_generate_reasoning_json(
+        provider_prompt,
+        timeout_s=90,
+        temperature=0.1,
+        project_dir=provider_project_dir,
+    )
     raw_phases = provider_plan.get("phases") if isinstance(provider_plan, dict) else None
     if not isinstance(raw_phases, list):
         return fallback_plan
@@ -86,7 +98,7 @@ def build_plan_from_suggestion(idea: str, reasoning: dict[str, Any], suggestion:
     return {"phases": normalized}
 
 
-def build_plan_from_project_spec(spec: dict[str, Any]) -> dict[str, Any]:
+def build_plan_from_project_spec(spec: dict[str, Any], *, provider_project_dir: Path | None = None) -> dict[str, Any]:
     modules = [str(x).strip().lower() for x in (spec.get("modules") or []) if str(x).strip()]
     entities = spec.get("entities") if isinstance(spec.get("entities"), list) else []
     api_endpoints = {str(x).strip() for x in (spec.get("api_endpoints") or []) if str(x).strip()}
@@ -149,7 +161,12 @@ def build_plan_from_project_spec(spec: dict[str, Any]) -> dict[str, Any]:
         f"Spec: {spec}\n"
         f"Fallback: {fallback_plan}"
     )
-    provider_plan = try_generate_reasoning_json(provider_prompt, timeout_s=90, temperature=0.1)
+    provider_plan = try_generate_reasoning_json(
+        provider_prompt,
+        timeout_s=90,
+        temperature=0.1,
+        project_dir=provider_project_dir,
+    )
     raw_phases = provider_plan.get("phases") if isinstance(provider_plan, dict) else None
     if not isinstance(raw_phases, list):
         return fallback_plan

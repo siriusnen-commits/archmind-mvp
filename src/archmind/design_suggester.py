@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from .reasoning import try_generate_reasoning_json
@@ -102,7 +103,13 @@ def _keyword_entities(idea: str) -> list[str]:
     return _unique(out)
 
 
-def build_architecture_design(idea: str, reasoning: dict[str, Any], suggestion: dict[str, Any]) -> dict[str, Any]:
+def build_architecture_design(
+    idea: str,
+    reasoning: dict[str, Any],
+    suggestion: dict[str, Any],
+    *,
+    provider_project_dir: Path | None = None,
+) -> dict[str, Any]:
     shape = str(reasoning.get("app_shape") or "unknown").strip() or "unknown"
     template = str(reasoning.get("recommended_template") or "unknown").strip() or "unknown"
     modules = [str(x).strip() for x in (reasoning.get("modules") or []) if str(x).strip()]
@@ -168,7 +175,12 @@ def build_architecture_design(idea: str, reasoning: dict[str, Any], suggestion: 
         f"Suggestion: {suggestion}\n"
         f"Fallback: {fallback_design}"
     )
-    provider_design = try_generate_reasoning_json(provider_prompt, timeout_s=120, temperature=0.1)
+    provider_design = try_generate_reasoning_json(
+        provider_prompt,
+        timeout_s=120,
+        temperature=0.1,
+        project_dir=provider_project_dir,
+    )
     if not isinstance(provider_design, dict):
         return fallback_design
 
