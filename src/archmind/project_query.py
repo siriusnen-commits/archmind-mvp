@@ -17,12 +17,10 @@ from archmind.telegram_bot import (
     _project_runtime_status,
     _repository_summary_from_state,
     _resolve_project_type,
-    get_current_project,
-    load_valid_last_project_path,
     save_last_project_path,
-    set_current_project,
     summarize_recent_evolution,
 )
+from archmind.current_project import get_validated_current_project, set_current_project
 from archmind.deploy import delete_project, restart_local_services, run_backend_local_with_health, stop_local_services
 from archmind.ui_models import ProjectDetailResponse, ProjectListItem, RepositorySummary, RuntimeSummary, SpecSummary
 
@@ -210,13 +208,10 @@ def _runtime_urls_for_display(
 
 
 def _resolve_current_project_dir() -> Path | None:
-    current = get_current_project()
-    if current is not None:
-        return current.resolve()
-    last = load_valid_last_project_path()
-    if last is not None:
-        return last.resolve()
-    return None
+    current = get_validated_current_project()
+    if current is None:
+        return None
+    return current.resolve()
 
 
 def _is_current_project(project_dir: Path) -> bool:
