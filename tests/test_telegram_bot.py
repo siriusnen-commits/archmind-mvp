@@ -7326,3 +7326,4 @@ def test_auto_run_backend_after_idea_local_injects_runtime_env_defaults(monkeypa
     assert "CORS_ALLOW_ORIGINS=http://localhost:3000,http://127.0.0.1:3000" in backend_env
     assert "NEXT_PUBLIC_API_BASE_URL=" not in frontend_env
     assert "NEXT_PUBLIC_FRONTEND_PORT=3000" in frontend_env
+    assert "NEXT_PUBLIC_RUNTIME_BACKEND_URL=http://127.0.0.1:8000" in frontend_env

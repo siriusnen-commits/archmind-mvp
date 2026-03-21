@@ -361,7 +361,7 @@ def _write_runtime_env_files(
     legacy_backend_env_path.write_text(backend_payload, encoding="utf-8")
 
     if frontend_env_path is not None:
-        _update_frontend_env_local(frontend_env_path, frontend_port=frontend_port)
+        _update_frontend_env_local(frontend_env_path, frontend_port=frontend_port, runtime_backend_url=resolved_backend_url)
 
     return {
         "backend_env": str(backend_env_path),
@@ -403,7 +403,12 @@ def _is_loopback_url(value: str) -> bool:
     return host in _LOOPBACK_HOSTS
 
 
-def _update_frontend_env_local(path: Path, *, frontend_port: int | None) -> dict[str, Any]:
+def _update_frontend_env_local(
+    path: Path,
+    *,
+    frontend_port: int | None,
+    runtime_backend_url: str | None = None,
+) -> dict[str, Any]:
     existing_text = ""
     if path.exists() and path.is_file():
         try:
@@ -414,10 +419,12 @@ def _update_frontend_env_local(path: Path, *, frontend_port: int | None) -> dict
 
     updated_lines: list[str] = []
     frontend_port_written = False
+    runtime_backend_written = False
     added_keys: list[str] = []
     updated_keys: list[str] = []
     removed_keys: list[str] = []
     target_frontend_port = str(int(frontend_port)) if frontend_port else ""
+    target_runtime_backend_url = str(runtime_backend_url or "").strip()
 
     for raw_line in lines:
         stripped = str(raw_line).strip()
@@ -448,11 +455,27 @@ def _update_frontend_env_local(path: Path, *, frontend_port: int | None) -> dict
                 removed_keys.append(env_key)
             continue
 
+        if env_key == "NEXT_PUBLIC_RUNTIME_BACKEND_URL":
+            if not target_runtime_backend_url:
+                updated_lines.append(f"{env_key}={env_value}")
+                continue
+            if not runtime_backend_written:
+                if env_value != target_runtime_backend_url:
+                    updated_keys.append(env_key)
+                updated_lines.append(f"{env_key}={target_runtime_backend_url}")
+                runtime_backend_written = True
+            else:
+                removed_keys.append(env_key)
+            continue
+
         updated_lines.append(raw_line)
 
     if target_frontend_port and not frontend_port_written:
         updated_lines.append(f"NEXT_PUBLIC_FRONTEND_PORT={target_frontend_port}")
         added_keys.append("NEXT_PUBLIC_FRONTEND_PORT")
+    if target_runtime_backend_url and not runtime_backend_written:
+        updated_lines.append(f"NEXT_PUBLIC_RUNTIME_BACKEND_URL={target_runtime_backend_url}")
+        added_keys.append("NEXT_PUBLIC_RUNTIME_BACKEND_URL")
 
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = "\n".join(updated_lines).strip()
@@ -532,7 +555,11 @@ def ensure_runtime_env_defaults(
         frontend_dir = root / "frontend"
     if frontend_dir is not None:
         frontend_env_path = frontend_dir / ".env.local"
-        frontend_result = _update_frontend_env_local(frontend_env_path, frontend_port=resolved_frontend_port)
+        frontend_result = _update_frontend_env_local(
+            frontend_env_path,
+            frontend_port=resolved_frontend_port,
+            runtime_backend_url=backend_base_url,
+        )
 
     ok = bool(backend_result.get("ok")) and bool(root_env_result.get("ok")) and bool(frontend_result.get("ok"))
     return {

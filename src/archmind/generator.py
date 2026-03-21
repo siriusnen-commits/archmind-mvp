@@ -651,7 +651,8 @@ def _render_frontend_api_base_helper() -> str:
         '"use client";\n\n'
         'import { useEffect, useState } from "react";\n\n'
         "const ENV_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL;\n"
-        'const ENV_BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "8000";\n'
+        "const ENV_RUNTIME_BACKEND_URL = process.env.NEXT_PUBLIC_RUNTIME_BACKEND_URL;\n"
+        'const ENV_BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "";\n'
         'const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);\n\n'
         "function isLoopbackHost(hostname: string) {\n"
         '  return LOOPBACK_HOSTS.has((hostname || "").trim().toLowerCase());\n'
@@ -660,12 +661,13 @@ def _render_frontend_api_base_helper() -> str:
         '  return String(raw || "").trim().replace(/\\/$/, "");\n'
         "}\n\n"
         "function resolveApiBaseInBrowser(): string {\n"
-        '  const fallbackPort = String(ENV_BACKEND_PORT || "8000").trim() || "8000";\n'
-        '  const loopbackFallback = `http://127.0.0.1:${fallbackPort}`;\n'
+        "  const runtimeCandidate = String(ENV_API_BASE || ENV_RUNTIME_BACKEND_URL || \"\").trim();\n"
+        '  const fallbackPort = String(ENV_BACKEND_PORT || "").trim();\n'
+        '  const defaultPort = fallbackPort || "8000";\n'
         '  const browserHost = (window.location.hostname || "").trim();\n'
         '  const browserProtocol = window.location.protocol === "https:" ? "https" : "http";\n'
-        "  if (ENV_API_BASE && ENV_API_BASE.trim()) {\n"
-        "    const rawEnvBase = ENV_API_BASE.trim();\n"
+        "  if (runtimeCandidate) {\n"
+        "    const rawEnvBase = runtimeCandidate;\n"
         "    try {\n"
         "      const parsed = new URL(rawEnvBase);\n"
         "      if (!isLoopbackHost(parsed.hostname)) {\n"
@@ -681,9 +683,9 @@ def _render_frontend_api_base_helper() -> str:
         "    }\n"
         "  }\n"
         "  if (browserHost) {\n"
-        "    return `${browserProtocol}://${browserHost}:${fallbackPort}`;\n"
+        "    return `${browserProtocol}://${browserHost}:${defaultPort}`;\n"
         "  }\n"
-        "  return loopbackFallback;\n"
+        '  return `http://127.0.0.1:${defaultPort}`;\n'
         "}\n\n"
         "export function useApiBaseUrl(): { apiBaseUrl: string; apiBaseLoading: boolean } {\n"
         '  const [apiBaseUrl, setApiBaseUrl] = useState("");\n'

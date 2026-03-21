@@ -491,6 +491,7 @@ def test_defects_query_and_sorting():
     # -------------------------
     files["frontend/.env.example"] = (
         "NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000\n"
+        "NEXT_PUBLIC_RUNTIME_BACKEND_URL=http://127.0.0.1:8000\n"
         "NEXT_PUBLIC_FRONTEND_PORT=3000\n"
     )
 
@@ -688,7 +689,8 @@ export default function DefectsRoutePage() {
 import { useEffect, useState } from "react";
 
 const ENV_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL;
-const ENV_BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "8000";
+const ENV_RUNTIME_BACKEND_URL = process.env.NEXT_PUBLIC_RUNTIME_BACKEND_URL;
+const ENV_BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "";
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
 
 function isLoopbackHost(hostname: string) {
@@ -700,12 +702,13 @@ function normalizeApiBase(raw: string): string {
 }
 
 export function resolveRuntimeApiBaseUrl(): string {
-  const fallbackPort = String(ENV_BACKEND_PORT || "8000").trim() || "8000";
-  const loopbackFallback = `http://127.0.0.1:${fallbackPort}`;
+  const runtimeCandidate = String(ENV_API_BASE || ENV_RUNTIME_BACKEND_URL || "").trim();
+  const fallbackPort = String(ENV_BACKEND_PORT || "").trim();
+  const defaultPort = fallbackPort || "8000";
   const browserHost = (window.location.hostname || "").trim();
   const browserProtocol = window.location.protocol === "https:" ? "https" : "http";
-  if (ENV_API_BASE && ENV_API_BASE.trim()) {
-    const rawEnvBase = ENV_API_BASE.trim();
+  if (runtimeCandidate) {
+    const rawEnvBase = runtimeCandidate;
     try {
       const parsed = new URL(rawEnvBase);
       if (!isLoopbackHost(parsed.hostname)) {
@@ -721,9 +724,9 @@ export function resolveRuntimeApiBaseUrl(): string {
     }
   }
   if (browserHost) {
-    return `${browserProtocol}://${browserHost}:${fallbackPort}`;
+    return `${browserProtocol}://${browserHost}:${defaultPort}`;
   }
-  return loopbackFallback;
+  return `http://127.0.0.1:${defaultPort}`;
 }
 
 export function useApiBaseUrl(): { apiBaseUrl: string; apiBaseLoading: boolean } {

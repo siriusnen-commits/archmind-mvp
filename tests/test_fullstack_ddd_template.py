@@ -135,12 +135,15 @@ def test_fullstack_runtime_env_template_uses_api_base_url_and_settings(tmp_path:
 
     assert "cors_allow_origins" in settings_text
     assert "NEXT_PUBLIC_API_BASE_URL=" in frontend_env_example
+    assert "NEXT_PUBLIC_RUNTIME_BACKEND_URL=" in frontend_env_example
     assert "NEXT_PUBLIC_FRONTEND_PORT=" in frontend_env_example
     assert 'useApiBaseUrl' in frontend_page
     assert 'from "../_lib/apiBase"' in frontend_page
     assert "useApiBaseUrl" in frontend_api_helper
     assert "setApiBaseUrl(resolveRuntimeApiBaseUrl())" in frontend_api_helper
     assert 'typeof window === "undefined"' in frontend_api_helper
+    assert "ENV_RUNTIME_BACKEND_URL" in frontend_api_helper
+    assert "ENV_API_BASE || ENV_RUNTIME_BACKEND_URL" in frontend_api_helper
     assert "window.location.hostname" in frontend_api_helper
     assert "LOOPBACK_HOSTS" in frontend_api_helper
     assert "parsed.hostname = browserHost" in frontend_api_helper
