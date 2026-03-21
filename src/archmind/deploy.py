@@ -2161,6 +2161,21 @@ def _resolve_github_repo_slug(project_dir: Path) -> str | None:
     return _github_repo_slug_from_git_remote(project_dir)
 
 
+def _clear_saved_github_repo_url(project_dir: Path) -> None:
+    payload = load_state(project_dir) or {}
+    if not payload:
+        return
+    payload["github_repo_url"] = ""
+    repository = payload.get("repository") if isinstance(payload.get("repository"), dict) else {}
+    if repository:
+        repository["url"] = ""
+        payload["repository"] = repository
+    try:
+        write_state(project_dir, payload)
+    except Exception:
+        pass
+
+
 def delete_local_project(project_dir: Path) -> dict[str, Any]:
     root = project_dir.expanduser().resolve()
     stop_result = stop_local_services(root)
@@ -2227,6 +2242,16 @@ def delete_github_repo(project_dir: Path) -> dict[str, Any]:
         }
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "").strip() or "github repo delete failed"
+        detail_lower = detail.lower()
+        if "404" in detail_lower or "not found" in detail_lower:
+            _clear_saved_github_repo_url(root)
+            return {
+                "ok": True,
+                "mode": "repo",
+                "repo_status": "ALREADY_DELETED",
+                "repo_detail": "github repository already deleted",
+                "repo_slug": slug,
+            }
         return {
             "ok": False,
             "mode": "repo",
@@ -2234,13 +2259,7 @@ def delete_github_repo(project_dir: Path) -> dict[str, Any]:
             "repo_detail": detail,
             "repo_slug": slug,
         }
-    payload = load_state(root) or {}
-    if payload:
-        payload["github_repo_url"] = ""
-        try:
-            write_state(root, payload)
-        except Exception:
-            pass
+    _clear_saved_github_repo_url(root)
     return {
         "ok": True,
         "mode": "repo",
