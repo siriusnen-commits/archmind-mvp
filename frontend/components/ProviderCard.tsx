@@ -11,8 +11,7 @@ type Props = {
 };
 
 const API_BASE =
-  process.env.NEXT_PUBLIC_ARCHMIND_UI_API_BASE ||
-  "http://127.0.0.1:8010/ui";
+  "/api/ui";
 
 export default function ProviderCard({ projectName, mode }: Props) {
   const router = useRouter();
