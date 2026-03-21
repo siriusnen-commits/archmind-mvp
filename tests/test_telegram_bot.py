@@ -4724,16 +4724,7 @@ def test_next_command_recommends_api_and_pages_for_entity(tmp_path: Path, monkey
     msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     out = msg.sent[-1]
-    expected_candidates = [
-        "/add_api GET /tasks/{id}",
-        "/add_api PUT /tasks/{id}",
-        "/add_api PATCH /tasks/{id}",
-        "/add_field Task created_at:datetime",
-        "/add_field Task updated_at:datetime",
-        "/add_page tasks/list",
-        "/add_page tasks/detail",
-    ]
-    assert any("/add_api " in cmd for cmd in out.splitlines())
+    expected_candidates = ["/add_page tasks/list", "/add_page tasks/detail"]
     assert any("/add_page " in cmd for cmd in out.splitlines())
     assert any(candidate in out for candidate in expected_candidates)
     assert msg.sent_kwargs
@@ -4901,9 +4892,9 @@ def test_next_command_no_suggestions_shows_guidance(tmp_path: Path, monkeypatch)
     (archmind / "project_spec.json").write_text(
         json.dumps(
             {
-                "shape": "backend",
+                "shape": "fullstack",
                 "domains": ["notes"],
-                "template": "fastapi",
+                "template": "fullstack-ddd",
                 "modules": [],
                 "entities": [
                     {
@@ -4921,9 +4912,9 @@ def test_next_command_no_suggestions_shows_guidance(tmp_path: Path, monkeypatch)
                     "POST /notes",
                     "GET /notes/{id}",
                     "DELETE /notes/{id}",
-                    "PATCH /notes/{id}",
+                    "PUT /notes/{id}",
                 ],
-                "frontend_pages": [],
+                "frontend_pages": ["notes/list", "notes/detail"],
                 "reason_summary": "demo",
             }
         ),
@@ -4937,6 +4928,205 @@ def test_next_command_no_suggestions_shows_guidance(tmp_path: Path, monkeypatch)
     assert "Next:" in out
     assert "- /inspect" in out
     assert "- continue evolving the project" in out
+
+
+def test_spec_progression_stage0_inspect_next_improve(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "progress_stage0"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps({"shape": "backend", "template": "fastapi", "entities": [], "api_endpoints": [], "frontend_pages": []}),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(json.dumps({"runtime": {"backend_status": "RUNNING", "failure_class": ""}}), encoding="utf-8")
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+
+    inspect_msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=inspect_msg, effective_chat=DummyChat()), DummyContext()))
+    inspect_out = inspect_msg.sent[-1]
+    assert "Spec Summary:" in inspect_out
+    assert "- Stage: Stage 0" in inspect_out
+
+    next_msg = DummyMessage()
+    asyncio.run(command_next(DummyUpdate(message=next_msg, effective_chat=DummyChat()), DummyContext()))
+    assert "/add_entity Note" in next_msg.sent[-1]
+
+    improve_msg = DummyMessage()
+    asyncio.run(command_improve(DummyUpdate(message=improve_msg, effective_chat=DummyChat()), DummyContext()))
+    improve_out = improve_msg.sent[-1]
+    assert "Define your first entity" in improve_out
+    assert "/add_entity Note" in improve_out
+
+
+def test_spec_progression_stage1_next_and_improve(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "progress_stage1"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {"shape": "backend", "template": "fastapi", "entities": [{"name": "Note", "fields": []}], "api_endpoints": [], "frontend_pages": []}
+        ),
+        encoding="utf-8",
+    )
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (archmind / "state.json").write_text(json.dumps({"runtime": {"backend_status": "RUNNING", "failure_class": ""}}), encoding="utf-8")
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+
+    next_msg = DummyMessage()
+    asyncio.run(command_next(DummyUpdate(message=next_msg, effective_chat=DummyChat()), DummyContext()))
+    assert "/add_field Note title:string" in next_msg.sent[-1]
+
+    improve_msg = DummyMessage()
+    asyncio.run(command_improve(DummyUpdate(message=improve_msg, effective_chat=DummyChat()), DummyContext()))
+    assert "Add fields to Note" in improve_msg.sent[-1]
+
+
+def test_spec_progression_stage2_next_and_improve(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "progress_stage2"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "template": "fastapi",
+                "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": [],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (archmind / "state.json").write_text(json.dumps({"runtime": {"backend_status": "RUNNING", "failure_class": ""}}), encoding="utf-8")
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+
+    next_msg = DummyMessage()
+    asyncio.run(command_next(DummyUpdate(message=next_msg, effective_chat=DummyChat()), DummyContext()))
+    assert "/add_api GET /notes" in next_msg.sent[-1]
+
+    improve_msg = DummyMessage()
+    asyncio.run(command_improve(DummyUpdate(message=improve_msg, effective_chat=DummyChat()), DummyContext()))
+    improve_out = improve_msg.sent[-1]
+    assert "Add an API for Note" in improve_out
+    assert "/add_api GET /notes" in improve_out
+
+
+def test_spec_progression_stage3_next_and_improve(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "progress_stage3"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": ["GET /notes"],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "frontend").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / ".env.local").write_text("NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000\n", encoding="utf-8")
+    (project_dir / ".env").write_text(
+        "APP_PORT=8000\nBACKEND_BASE_URL=http://127.0.0.1:8000\nCORS_ALLOW_ORIGINS=http://localhost:3000\n",
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(json.dumps({"runtime": {"backend_status": "RUNNING", "failure_class": ""}}), encoding="utf-8")
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+
+    next_msg = DummyMessage()
+    asyncio.run(command_next(DummyUpdate(message=next_msg, effective_chat=DummyChat()), DummyContext()))
+    assert "/add_page notes/list" in next_msg.sent[-1]
+
+    improve_msg = DummyMessage()
+    asyncio.run(command_improve(DummyUpdate(message=improve_msg, effective_chat=DummyChat()), DummyContext()))
+    improve_out = improve_msg.sent[-1]
+    assert "Add a page for Note" in improve_out
+    assert "/add_page notes/list" in improve_out
+
+
+def test_spec_progression_stage4_next_and_improve_not_overly_noisy(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "progress_stage4"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "entities": [
+                    {
+                        "name": "Note",
+                        "fields": [
+                            {"name": "title", "type": "string"},
+                            {"name": "description", "type": "string"},
+                            {"name": "created_at", "type": "datetime"},
+                            {"name": "updated_at", "type": "datetime"},
+                        ],
+                    }
+                ],
+                "api_endpoints": ["GET /notes", "POST /notes", "GET /notes/{id}", "DELETE /notes/{id}", "PUT /notes/{id}"],
+                "frontend_pages": ["notes/list", "notes/detail"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "frontend").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / ".env.local").write_text("NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000\n", encoding="utf-8")
+    (project_dir / ".env").write_text(
+        "APP_PORT=8000\nBACKEND_BASE_URL=http://127.0.0.1:8000\nCORS_ALLOW_ORIGINS=http://localhost:3000\n",
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(json.dumps({"runtime": {"backend_status": "RUNNING", "failure_class": ""}}), encoding="utf-8")
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+
+    next_msg = DummyMessage()
+    asyncio.run(command_next(DummyUpdate(message=next_msg, effective_chat=DummyChat()), DummyContext()))
+    assert "No immediate suggestions." in next_msg.sent[-1]
+
+    improve_msg = DummyMessage()
+    asyncio.run(command_improve(DummyUpdate(message=improve_msg, effective_chat=DummyChat()), DummyContext()))
+    improve_out = improve_msg.sent[-1]
+    assert "Define your first entity" not in improve_out
+    assert "Add fields to" not in improve_out
+    assert "Add an API for" not in improve_out
+    assert "Add a page for" not in improve_out
 
 
 def test_next_command_without_selected_project_shows_error(monkeypatch) -> None:
@@ -5049,10 +5239,8 @@ def test_improve_command_reports_missing_api_and_pages(tmp_path: Path, monkeypat
     msg = DummyMessage()
     asyncio.run(command_improve(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     out = msg.sent[-1]
-    assert "Add your first API endpoint" in out
+    assert "Add an API for Note" in out
     assert "/add_api GET /notes" in out
-    assert "Add your first frontend page" in out
-    assert "/add_page notes/list" in out
 
 
 def test_plan_command_from_idea_includes_phases() -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from archmind.next_suggester import analyze_spec_progression
 from archmind.telegram_bot import (
     _ensure_evolution_block,
     _normalize_api_endpoint,
@@ -59,3 +60,51 @@ def test_normalize_frontend_page_path_trims_and_cleans() -> None:
     assert _normalize_frontend_page_path("/notes//list/") == "notes/list"
     assert _normalize_frontend_page_path("notes\\detail") == "notes/detail"
     assert _normalize_frontend_page_path("  ") == ""
+
+
+def test_analyze_spec_progression_stage_0() -> None:
+    p = analyze_spec_progression({"entities": [], "api_endpoints": [], "frontend_pages": []})
+    assert p["stage"] == 0
+    assert p["entities_count"] == 0
+    assert p["apis_count"] == 0
+    assert p["pages_count"] == 0
+
+
+def test_analyze_spec_progression_stage_1() -> None:
+    p = analyze_spec_progression({"entities": [{"name": "Note", "fields": []}], "api_endpoints": [], "frontend_pages": []})
+    assert p["stage"] == 1
+    assert p["first_entity_without_fields"] == "Note"
+
+
+def test_analyze_spec_progression_stage_2() -> None:
+    p = analyze_spec_progression(
+        {
+            "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}]}],
+            "api_endpoints": [],
+            "frontend_pages": [],
+        }
+    )
+    assert p["stage"] == 2
+
+
+def test_analyze_spec_progression_stage_3() -> None:
+    p = analyze_spec_progression(
+        {
+            "shape": "fullstack",
+            "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}]}],
+            "api_endpoints": ["GET /notes"],
+            "frontend_pages": [],
+        }
+    )
+    assert p["stage"] == 3
+
+
+def test_analyze_spec_progression_stage_4() -> None:
+    p = analyze_spec_progression(
+        {
+            "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}]}],
+            "api_endpoints": ["GET /notes"],
+            "frontend_pages": ["notes/list"],
+        }
+    )
+    assert p["stage"] == 4
