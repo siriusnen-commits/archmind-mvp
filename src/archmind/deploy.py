@@ -23,6 +23,7 @@ from archmind.state import ensure_state, load_state, update_after_deploy, update
 
 MOCK_RAILWAY_URL = "https://example.up.railway.app"
 _RAILWAY_DOMAIN_RE = re.compile(r"https://[a-z0-9-]+\.up\.railway\.app")
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 def detect_deploy_target(project_dir: Path) -> str:
@@ -360,13 +361,7 @@ def _write_runtime_env_files(
     legacy_backend_env_path.write_text(backend_payload, encoding="utf-8")
 
     if frontend_env_path is not None:
-        frontend_lines = []
-        if resolved_backend_url:
-            frontend_lines.append(f"NEXT_PUBLIC_API_BASE_URL={resolved_backend_url}")
-        if frontend_port:
-            frontend_lines.append(f"NEXT_PUBLIC_FRONTEND_PORT={int(frontend_port)}")
-        frontend_env_path.parent.mkdir(parents=True, exist_ok=True)
-        frontend_env_path.write_text("\n".join(frontend_lines) + "\n", encoding="utf-8")
+        _update_frontend_env_local(frontend_env_path, frontend_port=frontend_port)
 
     return {
         "backend_env": str(backend_env_path),
@@ -394,6 +389,90 @@ def _read_env_key_values(path: Path) -> dict[str, str]:
             continue
         out[k] = value.strip()
     return out
+
+
+def _is_loopback_url(value: str) -> bool:
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    try:
+        parsed = parse.urlparse(raw)
+    except Exception:
+        return False
+    host = str(parsed.hostname or "").strip().lower()
+    return host in _LOOPBACK_HOSTS
+
+
+def _update_frontend_env_local(path: Path, *, frontend_port: int | None) -> dict[str, Any]:
+    existing_text = ""
+    if path.exists() and path.is_file():
+        try:
+            existing_text = path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            existing_text = ""
+    lines = existing_text.splitlines() if existing_text else []
+
+    updated_lines: list[str] = []
+    frontend_port_written = False
+    added_keys: list[str] = []
+    updated_keys: list[str] = []
+    removed_keys: list[str] = []
+    target_frontend_port = str(int(frontend_port)) if frontend_port else ""
+
+    for raw_line in lines:
+        stripped = str(raw_line).strip()
+        if not stripped or stripped.startswith("#") or "=" not in raw_line:
+            updated_lines.append(raw_line)
+            continue
+        key, value = raw_line.split("=", 1)
+        env_key = key.strip()
+        env_value = value.strip()
+
+        if env_key == "NEXT_PUBLIC_API_BASE_URL":
+            if _is_loopback_url(env_value):
+                removed_keys.append(env_key)
+                continue
+            updated_lines.append(f"{env_key}={env_value}")
+            continue
+
+        if env_key == "NEXT_PUBLIC_FRONTEND_PORT":
+            if not target_frontend_port:
+                updated_lines.append(f"{env_key}={env_value}")
+                continue
+            if not frontend_port_written:
+                if env_value != target_frontend_port:
+                    updated_keys.append(env_key)
+                updated_lines.append(f"{env_key}={target_frontend_port}")
+                frontend_port_written = True
+            else:
+                removed_keys.append(env_key)
+            continue
+
+        updated_lines.append(raw_line)
+
+    if target_frontend_port and not frontend_port_written:
+        updated_lines.append(f"NEXT_PUBLIC_FRONTEND_PORT={target_frontend_port}")
+        added_keys.append("NEXT_PUBLIC_FRONTEND_PORT")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = "\n".join(updated_lines).strip()
+    if payload:
+        payload += "\n"
+    try:
+        path.write_text(payload, encoding="utf-8")
+    except Exception:
+        return {
+            "ok": False,
+            "added_keys": added_keys,
+            "updated_keys": updated_keys,
+            "removed_keys": removed_keys,
+        }
+    return {
+        "ok": True,
+        "added_keys": added_keys,
+        "updated_keys": updated_keys,
+        "removed_keys": removed_keys,
+    }
 
 
 def _ensure_env_keys(path: Path, defaults: dict[str, str]) -> dict[str, Any]:
@@ -453,11 +532,7 @@ def ensure_runtime_env_defaults(
         frontend_dir = root / "frontend"
     if frontend_dir is not None:
         frontend_env_path = frontend_dir / ".env.local"
-        frontend_defaults = {
-            "NEXT_PUBLIC_API_BASE_URL": backend_base_url,
-            "NEXT_PUBLIC_FRONTEND_PORT": str(resolved_frontend_port),
-        }
-        frontend_result = _ensure_env_keys(frontend_env_path, frontend_defaults)
+        frontend_result = _update_frontend_env_local(frontend_env_path, frontend_port=resolved_frontend_port)
 
     ok = bool(backend_result.get("ok")) and bool(root_env_result.get("ok")) and bool(frontend_result.get("ok"))
     return {
