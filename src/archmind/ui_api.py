@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 
 from archmind.project_query import (
     build_project_detail,
@@ -17,6 +19,7 @@ from archmind.project_query import (
 )
 from archmind.deploy import get_local_runtime_status
 from archmind.ui_models import (
+    ProjectListItem,
     ProjectDetailResponse,
     ProjectListResponse,
     ProviderModeResponse,
@@ -25,38 +28,112 @@ from archmind.ui_models import (
 )
 
 router = APIRouter(prefix="/ui", tags=["ui"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/projects", response_model=ProjectListResponse)
 def get_ui_projects() -> ProjectListResponse:
-    items = [build_project_list_item(project_dir) for project_dir in list_project_dirs()]
-    return ProjectListResponse(projects=items)
+    try:
+        items = []
+        for project_dir in list_project_dirs():
+            try:
+                items.append(build_project_list_item(project_dir))
+            except Exception as exc:
+                logger.exception("Failed to build project list item for %s", project_dir)
+                items.append(
+                    ProjectListItem(
+                        name=project_dir.name,
+                        display_name=project_dir.name,
+                        path=str(project_dir),
+                        status="STOPPED",
+                        runtime="STOPPED",
+                        type="unknown",
+                        template="unknown",
+                        backend_url="",
+                        frontend_url="",
+                        is_current=False,
+                        warning=f"Failed to inspect project metadata: {exc}",
+                    )
+                )
+        return ProjectListResponse(projects=items)
+    except Exception as exc:
+        logger.exception("Failed to load UI projects list")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "Failed to load projects",
+                "error": str(exc),
+                "safe": True,
+            },
+        )
 
 
 @router.get("/projects/{project_name}", response_model=ProjectDetailResponse)
 def get_ui_project_detail(project_name: str) -> ProjectDetailResponse:
-    project_dir = find_project_by_name(project_name)
-    if project_dir is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-    return build_project_detail(project_dir)
+    try:
+        project_dir = find_project_by_name(project_name)
+        if project_dir is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        return build_project_detail(project_dir)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to load UI project detail: %s", project_name)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "Failed to load project detail",
+                "error": str(exc),
+                "project_name": project_name,
+                "safe": True,
+            },
+        )
 
 
 @router.get("/projects/{project_name}/provider", response_model=ProviderModeResponse)
 def get_ui_project_provider(project_name: str) -> ProviderModeResponse:
-    project_dir = find_project_by_name(project_name)
-    if project_dir is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-    detail = build_project_detail(project_dir)
-    return ProviderModeResponse(mode=detail.provider_mode)
+    try:
+        project_dir = find_project_by_name(project_name)
+        if project_dir is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        detail = build_project_detail(project_dir)
+        return ProviderModeResponse(mode=detail.provider_mode)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to load provider mode: %s", project_name)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "Failed to load provider data",
+                "error": str(exc),
+                "project_name": project_name,
+                "safe": True,
+            },
+        )
 
 
 @router.post("/projects/{project_name}/provider", response_model=ProviderModeResponse)
 def set_ui_project_provider(project_name: str, body: ProviderUpdateRequest) -> ProviderModeResponse:
-    project_dir = find_project_by_name(project_name)
-    if project_dir is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-    mode = update_project_provider_mode(project_dir, body.mode)
-    return ProviderModeResponse(mode=mode)  # type: ignore[arg-type]
+    try:
+        project_dir = find_project_by_name(project_name)
+        if project_dir is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        mode = update_project_provider_mode(project_dir, body.mode)
+        return ProviderModeResponse(mode=mode)  # type: ignore[arg-type]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to set provider mode: %s", project_name)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "Failed to update provider",
+                "error": str(exc),
+                "project_name": project_name,
+                "safe": True,
+            },
+        )
 
 
 def _runtime_action_response(project_dir, action: str, result: dict) -> RuntimeActionResponse:
@@ -110,38 +187,102 @@ def _extract_runtime_action_error(result: dict[str, Any]) -> str:
 
 @router.post("/projects/{project_name}/run-backend", response_model=RuntimeActionResponse)
 def post_ui_project_run_backend(project_name: str) -> RuntimeActionResponse:
-    project_dir = find_project_by_name(project_name)
-    if project_dir is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-    result = run_project_backend(project_dir)
-    return _runtime_action_response(project_dir, "run-backend", result)
+    try:
+        project_dir = find_project_by_name(project_name)
+        if project_dir is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        result = run_project_backend(project_dir)
+        return _runtime_action_response(project_dir, "run-backend", result)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Runtime action failed: run-backend (%s)", project_name)
+        return RuntimeActionResponse(
+            ok=False,
+            action="run-backend",
+            status="FAIL",
+            detail="Failed to run action",
+            error=str(exc),
+            backend_status="STOPPED",
+            frontend_status="STOPPED",
+            backend_url="",
+            frontend_url="",
+        )
 
 
 @router.post("/projects/{project_name}/run-all", response_model=RuntimeActionResponse)
 def post_ui_project_run_all(project_name: str) -> RuntimeActionResponse:
-    project_dir = find_project_by_name(project_name)
-    if project_dir is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-    result = run_project_all(project_dir)
-    return _runtime_action_response(project_dir, "run-all", result)
+    try:
+        project_dir = find_project_by_name(project_name)
+        if project_dir is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        result = run_project_all(project_dir)
+        return _runtime_action_response(project_dir, "run-all", result)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Runtime action failed: run-all (%s)", project_name)
+        return RuntimeActionResponse(
+            ok=False,
+            action="run-all",
+            status="FAIL",
+            detail="Failed to run action",
+            error=str(exc),
+            backend_status="STOPPED",
+            frontend_status="STOPPED",
+            backend_url="",
+            frontend_url="",
+        )
 
 
 @router.post("/projects/{project_name}/restart", response_model=RuntimeActionResponse)
 def post_ui_project_restart(project_name: str) -> RuntimeActionResponse:
-    project_dir = find_project_by_name(project_name)
-    if project_dir is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-    result = restart_project_runtime(project_dir)
-    return _runtime_action_response(project_dir, "restart", result)
+    try:
+        project_dir = find_project_by_name(project_name)
+        if project_dir is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        result = restart_project_runtime(project_dir)
+        return _runtime_action_response(project_dir, "restart", result)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Runtime action failed: restart (%s)", project_name)
+        return RuntimeActionResponse(
+            ok=False,
+            action="restart",
+            status="FAIL",
+            detail="Failed to run action",
+            error=str(exc),
+            backend_status="STOPPED",
+            frontend_status="STOPPED",
+            backend_url="",
+            frontend_url="",
+        )
 
 
 @router.post("/projects/{project_name}/stop", response_model=RuntimeActionResponse)
 def post_ui_project_stop(project_name: str) -> RuntimeActionResponse:
-    project_dir = find_project_by_name(project_name)
-    if project_dir is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-    result = stop_project_runtime(project_dir)
-    return _runtime_action_response(project_dir, "stop", result)
+    try:
+        project_dir = find_project_by_name(project_name)
+        if project_dir is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        result = stop_project_runtime(project_dir)
+        return _runtime_action_response(project_dir, "stop", result)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Runtime action failed: stop (%s)", project_name)
+        return RuntimeActionResponse(
+            ok=False,
+            action="stop",
+            status="FAIL",
+            detail="Failed to run action",
+            error=str(exc),
+            backend_status="STOPPED",
+            frontend_status="STOPPED",
+            backend_url="",
+            frontend_url="",
+        )
 
 
 def create_ui_app() -> FastAPI:
