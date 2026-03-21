@@ -1535,6 +1535,53 @@ def test_list_running_local_projects_excludes_dead_pids(monkeypatch, tmp_path: P
     assert rows == []
 
 
+def test_list_running_local_projects_keeps_frontend_runtime_distinct_per_project(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "projects"
+    project_a = root / "alpha"
+    project_b = root / "beta"
+    write_state(
+        project_a,
+        {
+            "deploy_target": "local",
+            "runtime": {
+                "frontend_pid": 11001,
+                "backend_pid": 12001,
+                "frontend_url": "http://127.0.0.1:5173",
+                "backend_url": "http://127.0.0.1:61080",
+                "services": {
+                    "frontend": {"pid": 11001, "url": "http://127.0.0.1:5173", "port": 5173, "status": "RUNNING"},
+                    "backend": {"pid": 12001, "url": "http://127.0.0.1:61080", "port": 61080, "status": "RUNNING"},
+                },
+            },
+        },
+    )
+    write_state(
+        project_b,
+        {
+            "deploy_target": "local",
+            "runtime": {
+                "frontend_pid": 11002,
+                "backend_pid": 12002,
+                "frontend_url": "http://127.0.0.1:5280",
+                "backend_url": "http://127.0.0.1:62080",
+                "services": {
+                    "frontend": {"pid": 11002, "url": "http://127.0.0.1:5280", "port": 5280, "status": "RUNNING"},
+                    "backend": {"pid": 12002, "url": "http://127.0.0.1:62080", "port": 62080, "status": "RUNNING"},
+                },
+            },
+        },
+    )
+
+    live_pids = {11001, 11002, 12001, 12002}
+    monkeypatch.setattr("archmind.deploy.is_pid_running", lambda pid: int(pid or 0) in live_pids)
+
+    rows = list_running_local_projects(root)
+    by_project = {item["project_name"]: item for item in rows}
+    assert set(by_project) == {"alpha", "beta"}
+    assert by_project["alpha"]["frontend"]["url"] == "http://127.0.0.1:5173"
+    assert by_project["beta"]["frontend"]["url"] == "http://127.0.0.1:5280"
+
+
 def test_get_local_runtime_status_uses_urls_and_pid_status(monkeypatch, tmp_path: Path) -> None:
     write_state(
         tmp_path,

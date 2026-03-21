@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 from datetime import datetime
+import socket
 
 from archmind.deploy import (
     deploy_frontend_local,
@@ -37,6 +38,54 @@ def _service_payload(
         "framework": str(framework or "").strip(),
         "last_checked_at": datetime.now().isoformat(timespec="seconds"),
     }
+
+
+def _safe_port(value: Any) -> int | None:
+    try:
+        port = int(value)
+    except Exception:
+        return None
+    return port if port > 0 else None
+
+
+def _is_port_available(port: int) -> bool:
+    if int(port) <= 0:
+        return False
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind(("127.0.0.1", int(port)))
+        except OSError:
+            return False
+    return True
+
+
+def _pick_frontend_port(
+    *,
+    frontend_entry: dict[str, Any],
+    before_frontend: dict[str, Any],
+    backend_port: int | None,
+) -> int:
+    candidates: list[int] = []
+    previous_port = _safe_port(before_frontend.get("port")) or frontend_runtime_port_hint(str(before_frontend.get("url") or ""))
+    detected_port = _safe_port(frontend_entry.get("frontend_port"))
+    if previous_port is not None:
+        candidates.append(previous_port)
+    if detected_port is not None and detected_port not in candidates:
+        candidates.append(detected_port)
+
+    disallowed = {int(backend_port)} if backend_port is not None else set()
+    for candidate in candidates:
+        if candidate in disallowed:
+            continue
+        if _is_port_available(candidate):
+            return candidate
+
+    attempts = 0
+    fallback = find_free_port()
+    while (fallback in disallowed or not _is_port_available(fallback)) and attempts < 20:
+        fallback = find_free_port()
+        attempts += 1
+    return int(fallback)
 
 
 def run_all_local_services(project_dir: Path) -> dict[str, Any]:
@@ -109,9 +158,11 @@ def run_all_local_services(project_dir: Path) -> dict[str, Any]:
                 if not failure_class:
                     failure_class = str(frontend_entry.get("failure_class") or "").strip() or "runtime-execution-error"
             else:
-                frontend_port = frontend_entry.get("frontend_port")
-                if frontend_port is None:
-                    frontend_port = find_free_port()
+                frontend_port = _pick_frontend_port(
+                    frontend_entry=frontend_entry,
+                    before_frontend=before_frontend,
+                    backend_port=_safe_port(backend_service.get("port")),
+                )
                 frontend_result = deploy_frontend_local(
                     root,
                     port=int(frontend_port),

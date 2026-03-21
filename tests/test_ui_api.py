@@ -104,6 +104,33 @@ def test_ui_projects_marks_current_project(monkeypatch, tmp_path: Path) -> None:
         clear_current_project()
 
 
+def test_ui_projects_show_distinct_runtime_frontend_urls_per_project(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "alpha")
+    _make_project(projects_root, "beta")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    def fake_runtime(project_dir: Path):  # type: ignore[no-untyped-def]
+        if project_dir.name == "alpha":
+            return {
+                "backend": {"status": "RUNNING", "url": "http://127.0.0.1:61080"},
+                "frontend": {"status": "RUNNING", "url": "http://127.0.0.1:5173"},
+            }
+        return {
+            "backend": {"status": "RUNNING", "url": "http://127.0.0.1:62080"},
+            "frontend": {"status": "RUNNING", "url": "http://127.0.0.1:5280"},
+        }
+
+    monkeypatch.setattr("archmind.project_query.get_local_runtime_status", fake_runtime)
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects")
+    assert response.status_code == 200
+    rows = {item["name"]: item for item in response.json()["projects"]}
+    assert rows["alpha"]["frontend_url"] == "http://127.0.0.1:5173"
+    assert rows["beta"]["frontend_url"] == "http://127.0.0.1:5280"
+    assert rows["alpha"]["frontend_url"] != rows["beta"]["frontend_url"]
+
+
 def test_ui_project_detail_response_shape(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     _make_project(projects_root, "beta", provider_mode="auto", display_name="베타 프로젝트")
