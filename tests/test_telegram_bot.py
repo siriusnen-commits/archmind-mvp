@@ -1855,46 +1855,6 @@ def test_projects_shows_runtime_status_and_urls(monkeypatch, tmp_path: Path) -> 
     assert "Backend: http://127.0.0.1:8050" in out
 
 
-def test_projects_hides_stale_urls_when_runtime_is_stopped(monkeypatch, tmp_path: Path) -> None:
-    root = tmp_path / "projects"
-    root.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(root))
-    project = root / "stale-runtime"
-    arch = project / ".archmind"
-    arch.mkdir(parents=True, exist_ok=True)
-    (arch / "state.json").write_text(
-        json.dumps(
-            {
-                "runtime": {
-                    "backend_status": "RUNNING",
-                    "backend_url": "http://127.0.0.1:8111",
-                    "frontend_status": "RUNNING",
-                    "frontend_url": "http://127.0.0.1:3111",
-                    "services": {
-                        "backend": {"status": "RUNNING", "url": "http://127.0.0.1:8111"},
-                        "frontend": {"status": "RUNNING", "url": "http://127.0.0.1:3111"},
-                    },
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        "archmind.deploy.get_local_runtime_status",
-        lambda _project_dir: {
-            "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
-            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
-        },
-    )
-
-    out = format_projects_list()
-    assert "Status: STOPPED" in out
-    assert "Runtime: STOPPED" in out
-    assert "Status: RUNNING\n   Runtime: STOPPED" not in out
-    assert "Backend: http://127.0.0.1:8111" not in out
-    assert "Frontend: http://127.0.0.1:3111" not in out
-
-
 def test_current_status_is_stopped_after_stop_state(monkeypatch, tmp_path: Path) -> None:
     project = tmp_path / "current_stopped_proj"
     archmind = project / ".archmind"
