@@ -627,10 +627,12 @@ body {
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useApiBaseUrl } from "./_lib/apiBase";
 
 export default function Page() {
   const router = useRouter();
   const [checkingNotes, setCheckingNotes] = useState(true);
+  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();
 
   useEffect(() => {
     let active = true;
@@ -661,6 +663,7 @@ export default function Page() {
   return (
     <section className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
       <h1 className="text-lg font-semibold">Project Home</h1>
+      <p className="text-xs text-slate-400">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>
       <p className="text-sm text-slate-300">
         Open the generated domain pages. If Note pages exist, this page will auto-open <code>/notes</code>.
       </p>
@@ -701,32 +704,44 @@ function normalizeApiBase(raw: string): string {
   return String(raw || "").trim().replace(/\\/$/, "");
 }
 
+function rewriteLoopbackToBrowserHost(rawUrl: string, browserHost: string): string {
+  try {
+    const parsed = new URL(rawUrl);
+    if (!isLoopbackHost(parsed.hostname)) {
+      return normalizeApiBase(parsed.toString());
+    }
+    if (!browserHost || isLoopbackHost(browserHost)) {
+      return normalizeApiBase(parsed.toString());
+    }
+    parsed.hostname = browserHost;
+    return normalizeApiBase(parsed.toString());
+  } catch {
+    return normalizeApiBase(rawUrl);
+  }
+}
+
 export function resolveRuntimeApiBaseUrl(): string {
-  const runtimeCandidate = String(ENV_API_BASE || ENV_RUNTIME_BACKEND_URL || "").trim();
+  const explicitApiBase = String(ENV_API_BASE || "").trim();
+  const runtimeBackendBase = String(ENV_RUNTIME_BACKEND_URL || "").trim();
   const explicitPort = String(ENV_BACKEND_PORT || "").trim();
-  const fallbackPort = explicitPort || "8000";
   const browserHost = (window.location.hostname || "").trim();
   const browserProtocol = window.location.protocol === "https:" ? "https" : "http";
-  if (runtimeCandidate) {
-    const rawEnvBase = runtimeCandidate;
-    try {
-      const parsed = new URL(rawEnvBase);
-      if (!isLoopbackHost(parsed.hostname)) {
-        return normalizeApiBase(parsed.toString());
-      }
-      if (!browserHost || isLoopbackHost(browserHost)) {
-        return normalizeApiBase(parsed.toString());
-      }
-      parsed.hostname = browserHost;
-      return normalizeApiBase(parsed.toString());
-    } catch {
-      return normalizeApiBase(rawEnvBase);
+  if (explicitApiBase) {
+    return rewriteLoopbackToBrowserHost(explicitApiBase, browserHost);
+  }
+  if (runtimeBackendBase) {
+    return rewriteLoopbackToBrowserHost(runtimeBackendBase, browserHost);
+  }
+  if (explicitPort) {
+    if (browserHost) {
+      return `${browserProtocol}://${browserHost}:${explicitPort}`;
     }
+    return `http://127.0.0.1:${explicitPort}`;
   }
   if (browserHost) {
-    return `${browserProtocol}://${browserHost}:${fallbackPort}`;
+    return `${browserProtocol}://${browserHost}:8000`;
   }
-  return `http://127.0.0.1:${fallbackPort}`;
+  return "http://127.0.0.1:8000";
 }
 
 export function useApiBaseUrl(): { apiBaseUrl: string; apiBaseLoading: boolean } {
