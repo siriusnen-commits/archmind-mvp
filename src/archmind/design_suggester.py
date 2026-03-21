@@ -103,6 +103,18 @@ def _keyword_entities(idea: str) -> list[str]:
     return _unique(out)
 
 
+def _ensure_keyword_entities(entities: list[dict[str, Any]], idea: str) -> list[dict[str, Any]]:
+    out = list(entities)
+    seen = _entity_name_set(out)
+    for entity_name in _keyword_entities(idea):
+        key = entity_name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"name": entity_name, "fields": ENTITY_DEFAULT_FIELDS.get(entity_name, [])})
+    return out
+
+
 def build_architecture_design(
     idea: str,
     reasoning: dict[str, Any],
@@ -148,12 +160,7 @@ def build_architecture_design(
                 fields.append({"name": field_name, "type": field_type})
         normalized_entities.append({"name": name, "fields": fields})
 
-    for entity_name in _keyword_entities(idea):
-        key = entity_name.lower()
-        if key in seen_entities:
-            continue
-        seen_entities.add(key)
-        normalized_entities.append({"name": entity_name, "fields": ENTITY_DEFAULT_FIELDS.get(entity_name, [])})
+    normalized_entities = _ensure_keyword_entities(normalized_entities, idea)
 
     fallback_design = {
         "overview": str(idea or "").strip(),
@@ -228,7 +235,14 @@ def build_architecture_design(
                     seen_fields.add(field_key)
                     normalized_fields.append({"name": field_name, "type": field_type})
             normalized_entities.append({"name": name, "fields": normalized_fields})
+        normalized_entities = _ensure_keyword_entities(normalized_entities, idea)
         if normalized_entities:
             out["entities"] = normalized_entities[:10]
+
+    inferred_relationships = _build_relationships(out.get("entities") if isinstance(out.get("entities"), list) else [])
+    existing_relationships = out.get("relationships") if isinstance(out.get("relationships"), list) else []
+    merged_relationships = _unique([str(x).strip() for x in existing_relationships if str(x).strip()] + inferred_relationships)
+    if merged_relationships:
+        out["relationships"] = merged_relationships[:10]
 
     return out
