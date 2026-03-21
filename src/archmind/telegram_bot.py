@@ -28,7 +28,7 @@ from archmind.generator import (
     has_frontend_structure,
 )
 from archmind.idea_normalizer import normalize_idea
-from archmind.next_suggester import suggest_next_commands
+from archmind.next_suggester import analyze_spec_progression, suggest_next_commands, suggest_spec_improvements
 from archmind.plan_suggester import build_plan_from_project_spec, build_plan_from_suggestion
 from archmind.project_type import detect_project_type, normalize_project_type
 from archmind.design_suggester import build_architecture_design
@@ -3848,6 +3848,7 @@ async def command_inspect(update: Any, context: Any) -> None:
         return
 
     archmind_dir = project_path / ".archmind"
+    raw_spec = _load_json(archmind_dir / "project_spec.json") or {}
     spec, _ = _read_or_init_project_spec(project_path)
     reasoning = _load_json(archmind_dir / "architecture_reasoning.json") or {}
     state = load_state(project_path) or {}
@@ -3865,6 +3866,8 @@ async def command_inspect(update: Any, context: Any) -> None:
     evolution_version = int(evolution.get("version") or 1) if evolution else 1
     evolution_added = _ordered_modules([str(x) for x in (evolution.get("added_modules") or [])]) if evolution else []
     evolution_history_count = len(evolution.get("history") or []) if isinstance(evolution.get("history"), list) else 0
+    progression_spec = raw_spec if isinstance(raw_spec, dict) and raw_spec else spec
+    progression = analyze_spec_progression(progression_spec if isinstance(progression_spec, dict) else {})
 
     root_backend_main = project_path / "app" / "main.py"
     nested_backend_main = project_path / "backend" / "app" / "main.py"
@@ -3917,6 +3920,15 @@ async def command_inspect(update: Any, context: Any) -> None:
         f"Template: {template}",
         f"Domains: {', '.join(domains) if domains else '(none)'}",
         f"Modules: {', '.join(modules) if modules else '(none)'}",
+    ]
+    lines += [
+        "",
+        "Spec Summary:",
+        f"- Stage: {progression.get('stage_label')}",
+        f"- Entities: {int(progression.get('entities_count') or 0)}",
+        f"- APIs: {int(progression.get('apis_count') or 0)}",
+        f"- Pages: {int(progression.get('pages_count') or 0)}",
+        f"- Evolution history: {evolution_history_count}",
     ]
     _append_truncated_bullets(lines, "Entities:", entities, limit=10, suffix_label="entities")
     lines += ["", "Entity Fields:"] + entity_tree_lines
@@ -4606,66 +4618,21 @@ def _build_improvement_report(project_path: Path) -> str:
         if page
     ]
 
-    # B-category: feature/model expansion suggestions
-    if not entities_for_spec:
-        evolution_suggestions.append(
-            {
-                "title": "Define your first entity",
-                "reason": "No entities defined yet in project spec.",
-                "command": "/add_entity Note",
-            }
-        )
-    else:
-        empty_entity = next(
-            (str(item.get("name") or "").strip() for item in entities_for_spec if not (item.get("fields") or [])),
-            "",
-        )
-        if empty_entity:
-            evolution_suggestions.append(
-                {
-                    "title": f"Add fields to {empty_entity}",
-                    "reason": f"Entity {empty_entity} has no fields yet.",
-                    "command": f"/add_field {empty_entity} title:string",
-                }
-            )
+    # B-category: feature/model progression suggestions
+    progression_spec = {
+        "shape": shape or "unknown",
+        "modules": spec.get("modules") if isinstance(spec.get("modules"), list) else [],
+        "entities": entities_for_spec,
+        "api_endpoints": explicit_api_endpoints if isinstance(raw_spec.get("api_endpoints"), list) else normalized_api_endpoints,
+        "frontend_pages": explicit_frontend_pages if isinstance(raw_spec.get("frontend_pages"), list) else normalized_frontend_pages,
+    }
+    evolution_suggestions.extend(suggest_spec_improvements(progression_spec, limit=2))
 
-    api_endpoints_for_gap = explicit_api_endpoints if isinstance(raw_spec.get("api_endpoints"), list) else normalized_api_endpoints
-    if entities_for_spec and not api_endpoints_for_gap:
-        first_entity = str(entities_for_spec[0].get("name") or "").strip()
-        default_endpoint = next((ep for ep in _entity_endpoint_set(first_entity) if ep.startswith("GET ")), "GET /notes")
-        evolution_suggestions.append(
-            {
-                "title": "Add your first API endpoint",
-                "reason": "No API endpoints defined yet.",
-                "command": f"/add_api {default_endpoint}",
-            }
-        )
-
-    frontend_expected = bool(has_frontend or fullstack_expected or fullstack_intent or shape == "fullstack")
-    pages_for_gap = explicit_frontend_pages if isinstance(raw_spec.get("frontend_pages"), list) else normalized_frontend_pages
-    if frontend_expected and entities_for_spec and not pages_for_gap:
-        first_entity = str(entities_for_spec[0].get("name") or "").strip()
-        default_page = (_entity_frontend_pages(first_entity) or ["notes/list"])[0]
-        evolution_suggestions.append(
-            {
-                "title": "Add your first frontend page",
-                "reason": "No frontend pages defined yet.",
-                "command": f"/add_page {default_page}",
-            }
-        )
-
-    next_commands = suggest_next_commands(
-        {
-            "shape": shape or "unknown",
-            "modules": spec.get("modules") if isinstance(spec.get("modules"), list) else [],
-            "entities": entities_for_spec,
-            "api_endpoints": spec.get("api_endpoints") if isinstance(spec.get("api_endpoints"), list) else [],
-            "frontend_pages": spec.get("frontend_pages") if isinstance(spec.get("frontend_pages"), list) else [],
-        },
-        limit=3,
-    )
-    if next_commands:
-        top = next_commands[0]
+    next_commands = suggest_next_commands(progression_spec, limit=3)
+    existing_cmds = {str(item.get("command") or "").strip() for item in evolution_suggestions}
+    deduped_next = [item for item in next_commands if str(item.get("command") or "").strip() not in existing_cmds]
+    if deduped_next:
+        top = deduped_next[0]
         cmd = str(top.get("command") or "").strip()
         reason = str(top.get("reason") or "").strip() or "기능 확장 관점의 다음 단계입니다."
         runtime_consistent = runtime_detect_ok and runtime_backend_status not in {"FAIL", "STOPPED"} and not runtime_failure_class
@@ -5223,7 +5190,7 @@ async def command_next(update: Any, context: Any) -> None:
         spec["frontend_pages"] = []
     spec["shape"] = str(spec.get("shape") or "unknown")
 
-    suggestions = suggest_next_commands(spec, limit=5)
+    suggestions = suggest_next_commands(spec, limit=3)
     if not suggestions:
         await update.message.reply_text(
             "Next development suggestions\n"
