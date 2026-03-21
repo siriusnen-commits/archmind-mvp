@@ -784,6 +784,10 @@ def _command_handler_map() -> dict[str, Any]:
         "/projects": command_projects,
         "/current": command_current,
         "/use": command_use,
+        "/add_entity": command_add_entity,
+        "/add_field": command_add_field,
+        "/add_api": command_add_api,
+        "/add_page": command_add_page,
     }
 
 
@@ -4536,7 +4540,39 @@ def _build_improvement_report(project_path: Path) -> str:
                 "command": "/idea_local <same idea>",
             }
         )
-    if env_missing_parts:
+    normalized_api_endpoints = [
+        endpoint
+        for endpoint in (_normalize_api_endpoint_text(str(x)) for x in (spec.get("api_endpoints") or []))
+        if endpoint
+    ]
+    normalized_frontend_pages = [
+        page
+        for page in (_normalize_frontend_page_path(str(x)) for x in (spec.get("frontend_pages") or []))
+        if page
+    ]
+    explicit_api_endpoints = [
+        endpoint
+        for endpoint in (_normalize_api_endpoint_text(str(x)) for x in (raw_spec.get("api_endpoints") or []))
+        if endpoint
+    ]
+    explicit_frontend_pages = [
+        page
+        for page in (_normalize_frontend_page_path(str(x)) for x in (raw_spec.get("frontend_pages") or []))
+        if page
+    ]
+
+    progression_spec = {
+        "shape": shape or "unknown",
+        "modules": spec.get("modules") if isinstance(spec.get("modules"), list) else [],
+        "entities": entities_for_spec,
+        "api_endpoints": explicit_api_endpoints if isinstance(raw_spec.get("api_endpoints"), list) else normalized_api_endpoints,
+        "frontend_pages": explicit_frontend_pages if isinstance(raw_spec.get("frontend_pages"), list) else normalized_frontend_pages,
+    }
+    progression = analyze_spec_progression(progression_spec)
+    stage = int(progression.get("stage") or 0)
+    progression_gap_open = stage < 4
+
+    if env_missing_parts and not progression_gap_open:
         missing_parts = list(dict.fromkeys(env_missing_parts))
         runtime_suggestions.append(
             {
@@ -4554,7 +4590,7 @@ def _build_improvement_report(project_path: Path) -> str:
                 "command": "/logs backend",
             }
         )
-    if deploy_status == "FAIL" and deploy_failure_class:
+    if deploy_status == "FAIL" and deploy_failure_class and not progression_gap_open:
         runtime_suggestions.append(
             {
                 "title": "Investigate deploy failure classification",
@@ -4597,69 +4633,46 @@ def _build_improvement_report(project_path: Path) -> str:
             }
         )
 
-    normalized_api_endpoints = [
-        endpoint
-        for endpoint in (_normalize_api_endpoint_text(str(x)) for x in (spec.get("api_endpoints") or []))
-        if endpoint
-    ]
-    normalized_frontend_pages = [
-        page
-        for page in (_normalize_frontend_page_path(str(x)) for x in (spec.get("frontend_pages") or []))
-        if page
-    ]
-    explicit_api_endpoints = [
-        endpoint
-        for endpoint in (_normalize_api_endpoint_text(str(x)) for x in (raw_spec.get("api_endpoints") or []))
-        if endpoint
-    ]
-    explicit_frontend_pages = [
-        page
-        for page in (_normalize_frontend_page_path(str(x)) for x in (raw_spec.get("frontend_pages") or []))
-        if page
-    ]
-
     # B-category: feature/model progression suggestions
-    progression_spec = {
-        "shape": shape or "unknown",
-        "modules": spec.get("modules") if isinstance(spec.get("modules"), list) else [],
-        "entities": entities_for_spec,
-        "api_endpoints": explicit_api_endpoints if isinstance(raw_spec.get("api_endpoints"), list) else normalized_api_endpoints,
-        "frontend_pages": explicit_frontend_pages if isinstance(raw_spec.get("frontend_pages"), list) else normalized_frontend_pages,
-    }
     evolution_suggestions.extend(suggest_spec_improvements(progression_spec, limit=2))
 
-    next_commands = suggest_next_commands(progression_spec, limit=3)
-    existing_cmds = {str(item.get("command") or "").strip() for item in evolution_suggestions}
-    deduped_next = [item for item in next_commands if str(item.get("command") or "").strip() not in existing_cmds]
-    if deduped_next:
-        top = deduped_next[0]
-        cmd = str(top.get("command") or "").strip()
-        reason = str(top.get("reason") or "").strip() or "기능 확장 관점의 다음 단계입니다."
-        runtime_consistent = runtime_detect_ok and runtime_backend_status not in {"FAIL", "STOPPED"} and not runtime_failure_class
-        if runtime_consistent:
-            reason = f"Runtime diagnostics look consistent; {reason}"
-        evolution_suggestions.append(
-            {
-                "title": "Expand features incrementally",
-                "reason": reason,
-                "command": cmd or "/next",
-            }
-        )
-    else:
-        runtime_consistent = runtime_detect_ok and runtime_backend_status not in {"FAIL", "STOPPED"} and not runtime_failure_class
-        reason = "기능 확장을 위해 엔티티/필드/페이지를 점진적으로 추가하세요."
-        if runtime_consistent:
-            reason = "Runtime diagnostics look consistent; expand model or pages next."
-        evolution_suggestions.append(
-            {
-                "title": "Expand domain model",
-                "reason": reason,
-                "command": "/add_entity <name>",
-            }
-        )
+    if not progression_gap_open:
+        next_commands = suggest_next_commands(progression_spec, limit=3)
+        existing_cmds = {str(item.get("command") or "").strip() for item in evolution_suggestions}
+        deduped_next = [item for item in next_commands if str(item.get("command") or "").strip() not in existing_cmds]
+        if deduped_next:
+            top = deduped_next[0]
+            cmd = str(top.get("command") or "").strip()
+            reason = str(top.get("reason") or "").strip() or "기능 확장 관점의 다음 단계입니다."
+            runtime_consistent = runtime_detect_ok and runtime_backend_status not in {"FAIL", "STOPPED"} and not runtime_failure_class
+            if runtime_consistent:
+                reason = f"Runtime diagnostics look consistent; {reason}"
+            evolution_suggestions.append(
+                {
+                    "title": "Expand features incrementally",
+                    "reason": reason,
+                    "command": cmd or "/next",
+                }
+            )
+        else:
+            runtime_consistent = runtime_detect_ok and runtime_backend_status not in {"FAIL", "STOPPED"} and not runtime_failure_class
+            reason = "기능 확장을 위해 엔티티/필드/페이지를 점진적으로 추가하세요."
+            if runtime_consistent:
+                reason = "Runtime diagnostics look consistent; expand model or pages next."
+            evolution_suggestions.append(
+                {
+                    "title": "Expand domain model",
+                    "reason": reason,
+                    "command": "/add_entity <name>",
+                }
+            )
 
     # Keep spec progression gaps as highest-priority improvements.
-    suggestions = evolution_suggestions + runtime_suggestions + structure_suggestions
+    if progression_gap_open:
+        suggestions = evolution_suggestions[:2] + runtime_suggestions[:1]
+    else:
+        suggestions = evolution_suggestions + runtime_suggestions + structure_suggestions
+    suggestions = suggestions[:3]
     if not suggestions:
         suggestions.append(
             {
@@ -5215,7 +5228,7 @@ async def command_next(update: Any, context: Any) -> None:
         if reason:
             lines.append(f"   reason: {reason}")
         lines.append("")
-        callback_rows.append([InlineKeyboardButton(text=command, callback_data=_encode_callback_data("suggest", command))])
+        callback_rows.append([InlineKeyboardButton(text=command, callback_data=_encode_callback_data("cmd", command))])
     lines += ["Next:", "- run suggested commands", "- /inspect"]
     if callback_rows:
         await update.message.reply_text(_truncate_message("\n".join(lines)), reply_markup=InlineKeyboardMarkup(callback_rows))
@@ -5256,19 +5269,12 @@ async def command_suggestion_callback(update: Any, context: Any) -> None:
         await command_next(callback_update, callback_context)
         return
     if action == "suggest":
-        cmd, args = _parse_command_string(payload)
-        callback_context.args = args
-        handlers: dict[str, Any] = {
-            "/add_entity": command_add_entity,
-            "/add_field": command_add_field,
-            "/add_api": command_add_api,
-            "/add_page": command_add_page,
-        }
-        handler = handlers.get(cmd)
-        if handler is None:
+        # Backward compatibility for older suggest| callbacks.
+        command_text = _normalize_recommended_command(str(payload or "")) or str(payload or "")
+        dispatched = await _dispatch_command_text(callback_update, callback_context, command_text)
+        if not dispatched:
             await message.reply_text(f"Unsupported suggestion command: {payload}")
             return
-        await handler(callback_update, callback_context)
         return
     if action == "help":
         topic = str(payload or "").strip().lower()
