@@ -678,6 +678,7 @@ def test_local_fullstack_deploy_writes_runtime_env_files(monkeypatch, tmp_path: 
     assert backend_env == root_env
     assert "NEXT_PUBLIC_API_BASE_URL=" not in frontend_env
     assert "NEXT_PUBLIC_FRONTEND_PORT=3011" in frontend_env
+    assert "NEXT_PUBLIC_RUNTIME_BACKEND_URL=http://127.0.0.1:8011" in frontend_env
 
 
 def test_local_backend_deploy_uses_runtime_frontend_port_for_cors(monkeypatch, tmp_path: Path) -> None:
@@ -761,6 +762,7 @@ def test_deploy_fullstack_local_repairs_loopback_frontend_api_base(monkeypatch, 
     assert "NEXT_PUBLIC_API_BASE_URL=" not in frontend_env
     assert "CUSTOM_FLAG=1" in frontend_env
     assert "NEXT_PUBLIC_FRONTEND_PORT=3011" in frontend_env
+    assert "NEXT_PUBLIC_RUNTIME_BACKEND_URL=http://127.0.0.1:8011" in frontend_env
 
 
 def test_ensure_runtime_env_defaults_adds_missing_keys(monkeypatch, tmp_path: Path) -> None:
@@ -776,6 +778,7 @@ def test_ensure_runtime_env_defaults_adds_missing_keys(monkeypatch, tmp_path: Pa
     assert "CORS_ALLOW_ORIGINS=http://localhost:3123,http://127.0.0.1:3123" in backend_env
     assert "NEXT_PUBLIC_API_BASE_URL=" not in frontend_env
     assert "NEXT_PUBLIC_FRONTEND_PORT=3123" in frontend_env
+    assert "NEXT_PUBLIC_RUNTIME_BACKEND_URL=http://127.0.0.1:8123" in frontend_env
 
 
 def test_ensure_runtime_env_defaults_keeps_existing_values(monkeypatch, tmp_path: Path) -> None:
@@ -799,6 +802,7 @@ def test_ensure_runtime_env_defaults_keeps_existing_values(monkeypatch, tmp_path
     assert "CORS_ALLOW_ORIGINS=http://localhost:3123,http://127.0.0.1:3123" in backend_env
     assert "NEXT_PUBLIC_API_BASE_URL=http://example.local:9999" in frontend_env
     assert "NEXT_PUBLIC_FRONTEND_PORT=3123" in frontend_env
+    assert "NEXT_PUBLIC_RUNTIME_BACKEND_URL=http://127.0.0.1:8123" in frontend_env
 
 
 def test_ensure_runtime_env_defaults_removes_loopback_frontend_api_base(monkeypatch, tmp_path: Path) -> None:
@@ -815,6 +819,18 @@ def test_ensure_runtime_env_defaults_removes_loopback_frontend_api_base(monkeypa
     assert "NEXT_PUBLIC_API_BASE_URL=" not in frontend_env
     assert "CUSTOM_FLAG=on" in frontend_env
     assert "NEXT_PUBLIC_FRONTEND_PORT=3123" in frontend_env
+    assert "NEXT_PUBLIC_RUNTIME_BACKEND_URL=http://127.0.0.1:8123" in frontend_env
+
+
+def test_ensure_runtime_env_defaults_writes_actual_runtime_backend_port(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "backend").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.deploy._detect_lan_ip", lambda: "")
+    result = ensure_runtime_env_defaults(tmp_path, backend_port=61080, frontend_port=5173)
+    assert result["ok"] is True
+    frontend_env = (tmp_path / "frontend" / ".env.local").read_text(encoding="utf-8")
+    assert "NEXT_PUBLIC_RUNTIME_BACKEND_URL=http://127.0.0.1:61080" in frontend_env
+    assert "NEXT_PUBLIC_FRONTEND_PORT=5173" in frontend_env
 
 
 def test_generate_deploy_slug_from_timestamped_name() -> None:
