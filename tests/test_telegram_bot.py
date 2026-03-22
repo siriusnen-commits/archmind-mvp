@@ -2594,6 +2594,42 @@ def test_suggest_command_outputs_suggestion_list(tmp_path: Path, monkeypatch) ->
     assert out.count("   Command:") == 2
 
 
+def test_suggest_command_canonicalizes_and_filters_malformed_commands(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.telegram_bot._build_project_analysis",
+        lambda _project: {
+            "suggestions": [
+                {
+                    "kind": "placeholder_page",
+                    "message": "Page task/lists is still placeholder-level. Implement a usable UI flow.",
+                    "command": "/add_page task/lists",
+                },
+                {
+                    "kind": "missing_crud_api",
+                    "message": "Task is missing list API coverage.",
+                    "command": "/add_api GET task",
+                },
+                {
+                    "kind": "bad",
+                    "message": "broken suggestion",
+                    "command": "/add_api INVALID /tasks",
+                },
+            ]
+        },
+    )
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_suggest(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "/add_page tasks/list" in out
+    assert "/add_page task/lists" not in out
+    assert "/add_api GET /tasks" in out
+    assert "INVALID" not in out
+
+
 def test_design_command_outputs_design_sections() -> None:
     msg = DummyMessage()
     update = DummyUpdate(message=msg, effective_chat=DummyChat())

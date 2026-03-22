@@ -12,6 +12,24 @@ def _normalize_entity_name(value: Any) -> str:
     return name[0].upper() + name[1:]
 
 
+def _pluralize_resource_name(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    if raw.endswith(("s", "x", "z", "ch", "sh")):
+        return raw if raw.endswith("s") else f"{raw}es"
+    if raw.endswith("y") and len(raw) > 1 and raw[-2] not in "aeiou":
+        return f"{raw[:-1]}ies"
+    return f"{raw}s"
+
+
+def _canonical_resource_segment(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
+    if not normalized:
+        return ""
+    return _pluralize_resource_name(normalized)
+
+
 def _entity_slug(entity_name: str) -> str:
     value = str(entity_name or "").strip()
     if not value:
@@ -23,17 +41,38 @@ def _entity_resource(entity_name: str) -> str:
     slug = _entity_slug(entity_name)
     if not slug:
         return ""
-    if slug.endswith("s"):
-        return slug
-    return f"{slug}s"
+    return _pluralize_resource_name(slug)
 
 
-def _normalize_page(value: Any) -> str:
+def _canonicalize_page_path(value: Any) -> str:
     page = str(value or "").strip().replace("\\", "/")
     page = re.sub(r"/{2,}", "/", page).strip("/")
     if not page or " " in page:
         return ""
-    return page.lower()
+    parts = [p for p in page.lower().split("/") if p]
+    if not parts:
+        return ""
+    resource = _canonical_resource_segment(parts[0])
+    if not resource:
+        return ""
+    if len(parts) == 1:
+        return f"{resource}/list"
+    action_map = {
+        "list": "list",
+        "lists": "list",
+        "index": "list",
+        "home": "list",
+        "detail": "detail",
+        "details": "detail",
+        "view": "detail",
+        "show": "detail",
+    }
+    action = action_map.get(parts[1], parts[1])
+    return f"{resource}/{action}"
+
+
+def _normalize_page(value: Any) -> str:
+    return _canonicalize_page_path(value)
 
 
 def _parse_api_endpoint(value: Any) -> tuple[str, str] | None:
@@ -49,7 +88,36 @@ def _parse_api_endpoint(value: Any) -> tuple[str, str] | None:
         return None
     if not path.startswith("/"):
         path = "/" + path
+    path = _canonicalize_api_path(path)
     return method, path
+
+
+def _canonicalize_api_path(value: str) -> str:
+    raw = str(value or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
+    if not raw.startswith("/"):
+        raw = "/" + raw
+    parts = [p for p in raw.split("/") if p]
+    if not parts:
+        return ""
+    canonical_parts: list[str] = []
+    for idx, part in enumerate(parts):
+        token = str(part).strip()
+        if not token:
+            continue
+        if token.startswith("{") and token.endswith("}"):
+            canonical_parts.append(token)
+            continue
+        normalized = re.sub(r"[^a-z0-9_]+", "_", token.lower()).strip("_")
+        if not normalized:
+            continue
+        if idx == 0:
+            normalized = _pluralize_resource_name(normalized)
+        canonical_parts.append(normalized)
+    if not canonical_parts:
+        return ""
+    return "/" + "/".join(canonical_parts)
 
 
 def _normalize_fields(item: Any) -> list[dict[str, str]]:
@@ -462,6 +530,75 @@ def _build_suggestions(
     return suggestions[:3], {"kind": str(next_action.get("kind") or "none"), "message": str(next_action.get("message") or ""), "command": str(next_action.get("command") or "")}
 
 
+def _canonicalize_suggestion_command(command: str) -> str:
+    text = str(command or "").strip()
+    if not text:
+        return ""
+    if not text.startswith("/"):
+        return ""
+    parts = text.split()
+    if len(parts) < 2:
+        return ""
+    cmd = parts[0]
+    if cmd == "/add_page":
+        page = _canonicalize_page_path(parts[1])
+        return f"/add_page {page}" if page else ""
+    if cmd == "/add_api" and len(parts) >= 3:
+        method = str(parts[1] or "").strip().upper()
+        if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+            return ""
+        path = _canonicalize_api_path(parts[2])
+        return f"/add_api {method} {path}" if path else ""
+    if cmd == "/add_entity":
+        entity = _normalize_entity_name(parts[1])
+        return f"/add_entity {entity}" if entity else ""
+    if cmd == "/add_field" and len(parts) >= 3:
+        entity = _normalize_entity_name(parts[1])
+        field_expr = str(parts[2] or "").strip()
+        if ":" in field_expr:
+            field_name, field_type = field_expr.split(":", 1)
+        else:
+            field_name, field_type = field_expr, "string"
+        field_name = re.sub(r"[^a-zA-Z0-9_]+", "_", field_name.strip()).strip("_")
+        field_type = re.sub(r"[^a-zA-Z0-9_]+", "", field_type.strip().lower())
+        if not entity or not field_name or not field_type:
+            return ""
+        return f"/add_field {entity} {field_name}:{field_type}"
+    return text
+
+
+def canonicalize_analysis_suggestions(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        kind = str(raw.get("kind") or "").strip() or "info"
+        message = str(raw.get("message") or "").strip()
+        command_raw = str(raw.get("command") or "").strip()
+        command = _canonicalize_suggestion_command(command_raw)
+        if command_raw and not command:
+            continue
+        if command.startswith("/add_page "):
+            page = command.split(maxsplit=1)[1]
+            message = re.sub(
+                r"^Page\s+\S+\s+is still placeholder-level\.",
+                f"Page {page} is still placeholder-level.",
+                message,
+                flags=re.IGNORECASE,
+            )
+        key = (kind, message, command)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"kind": kind, "message": message, "command": command})
+        if len(out) >= 3:
+            break
+    if not out:
+        return [{"kind": "none", "message": "No immediate suggestions.", "command": ""}]
+    return out
+
+
 def analyze_project(
     project_dir: Path,
     *,
@@ -479,6 +616,8 @@ def analyze_project(
     nav_visible_pages = _extract_nav_visible_pages(project_dir, pages)
     runtime_status = _normalize_runtime_status(runtime_payload if isinstance(runtime_payload, dict) else {})
     suggestions, next_action = _build_suggestions(entities, entity_crud_status, placeholder_pages)
+    suggestions = canonicalize_analysis_suggestions(suggestions)
+    next_action = suggestions[0] if suggestions else {"kind": "none", "message": "No immediate suggestions.", "command": ""}
 
     return {
         "project_name": str(project_name or project_dir.name),
