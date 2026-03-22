@@ -30,6 +30,8 @@ from archmind.ui_models import (
     AddApiResponse,
     AddPageRequest,
     AddPageResponse,
+    ImplementPageRequest,
+    ImplementPageResponse,
     AddFieldRequest,
     AddFieldResponse,
     AddEntityRequest,
@@ -273,7 +275,6 @@ def post_ui_project_add_field(project_name: str, body: AddFieldRequest) -> AddFi
                 detail="Invalid field input: entity_name, field_name, and field_type are required",
                 error="invalid field input",
             )
-
         command = f"/add_field {entity_name} {field_name}:{field_type}"
         result = execute_command(command, project_name)
         detail = str(result.get("detail") or result.get("message") or result.get("error") or "")
@@ -315,7 +316,6 @@ def post_ui_project_add_api(project_name: str, body: AddApiRequest) -> AddApiRes
                 detail="Invalid API input: method and path are required",
                 error="invalid api input",
             )
-
         command = f"/add_api {method} {path}"
         result = execute_command(command, project_name)
         detail = str(result.get("detail") or result.get("message") or result.get("error") or "")
@@ -353,7 +353,6 @@ def post_ui_project_add_page(project_name: str, body: AddPageRequest) -> AddPage
                 detail="Invalid page path",
                 error="invalid page path",
             )
-
         command = f"/add_page {page_path}"
         result = execute_command(command, project_name)
         detail = str(result.get("detail") or result.get("message") or result.get("error") or "")
@@ -373,6 +372,41 @@ def post_ui_project_add_page(project_name: str, body: AddPageRequest) -> AddPage
             project_name=project_name,
             page_path=str(body.page_path or ""),
             detail="Failed to add page",
+            error=str(exc),
+        )
+
+
+@router.post("/projects/{project_name}/implement-page", response_model=ImplementPageResponse)
+def post_ui_project_implement_page(project_name: str, body: ImplementPageRequest) -> ImplementPageResponse:
+    try:
+        page_path = str(body.page_path or "").strip()
+        if not page_path:
+            return ImplementPageResponse(
+                ok=False,
+                project_name=project_name,
+                page_path=page_path,
+                detail="Invalid page path",
+                error="invalid page path",
+            )
+        command = f"/implement_page {page_path}"
+        result = execute_command(command, project_name)
+        detail = str(result.get("detail") or result.get("message") or result.get("error") or "")
+        return ImplementPageResponse(
+            ok=bool(result.get("ok")),
+            project_name=str(result.get("project_name") or project_name),
+            page_path=str(result.get("page_path") or page_path),
+            detail=detail,
+            error=str(result.get("error") or ""),
+            spec_summary=result.get("spec_summary") if isinstance(result.get("spec_summary"), dict) else {},
+            recent_evolution=[str(x) for x in (result.get("recent_evolution") or []) if str(x).strip()],
+        )
+    except Exception as exc:
+        logger.exception("Failed to implement page: %s", project_name)
+        return ImplementPageResponse(
+            ok=False,
+            project_name=project_name,
+            page_path=str(body.page_path or ""),
+            detail="Failed to implement page",
             error=str(exc),
         )
 

@@ -8,6 +8,7 @@ from archmind.generator import (
     apply_entity_scaffold,
     apply_frontend_page_scaffold,
     apply_page_scaffold,
+    implement_page_scaffold,
 )
 
 
@@ -352,3 +353,93 @@ def test_apply_page_scaffold_generic_page_uses_shared_api_base_helper(tmp_path: 
     assert 'from "../../_lib/apiBase"' in page_text
     assert "useApiBaseUrl()" in page_text
     assert 'API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}' in page_text
+
+
+def test_implement_page_scaffold_upgrades_placeholder_list_page(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_demo"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    target = project_dir / "frontend" / "app" / "tasks" / "list" / "page.tsx"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        '"use client";\n'
+        "export default function TasksListPage(){\n"
+        "  return <p>Page placeholder for tasks/list</p>;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    result = implement_page_scaffold(project_dir, "tasks/list")
+    assert result["ok"] is True
+    assert result["status"] == "implemented"
+    assert result["page_path"] == "tasks/list"
+    assert "Implemented page: tasks/list" in str(result["detail"])
+
+    page_text = (project_dir / "frontend" / "app" / "tasks" / "list" / "page.tsx").read_text(encoding="utf-8")
+    assert "Page placeholder for tasks/list" not in page_text
+    assert "fetch(`${apiBaseUrl}/tasks`" in page_text
+    assert "No items found." in page_text
+
+
+def test_implement_page_scaffold_upgrades_placeholder_detail_page(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_demo"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    target = project_dir / "frontend" / "app" / "tasks" / "detail" / "page.tsx"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        '"use client";\n'
+        "export default function TasksDetailPage(){\n"
+        "  return <p>Page placeholder for tasks/detail</p>;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    result = implement_page_scaffold(project_dir, "tasks/detail")
+    assert result["ok"] is True
+    assert result["status"] == "implemented"
+    assert result["page_path"] == "tasks/detail"
+
+    page_text = (project_dir / "frontend" / "app" / "tasks" / "detail" / "page.tsx").read_text(encoding="utf-8")
+    assert "Page placeholder for tasks/detail" not in page_text
+    assert "Missing item id." in page_text
+    assert "Item not found." in page_text
+
+
+def test_implement_page_scaffold_upgrades_placeholder_custom_page(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_demo"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    apply_page_scaffold(project_dir, "songs/favorite")
+
+    result = implement_page_scaffold(project_dir, "songs/favorite")
+    assert result["ok"] is True
+    assert result["status"] == "implemented"
+    assert result["page_path"] == "songs/favorite"
+
+    page_text = (project_dir / "frontend" / "app" / "songs" / "favorite" / "page.tsx").read_text(encoding="utf-8")
+    assert "Page placeholder for songs/favorite" not in page_text
+    assert "This page is implemented and ready for project-specific content." in page_text
+
+
+def test_implement_page_scaffold_returns_safe_info_when_already_implemented(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_demo"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    apply_page_scaffold(project_dir, "tasks/list")
+
+    result = implement_page_scaffold(project_dir, "tasks/list")
+    assert result["ok"] is True
+    assert result["status"] == "already_implemented"
+    assert "Page already implemented: tasks/list" in str(result["detail"])
+
+
+def test_implement_page_scaffold_returns_not_found_for_missing_page(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_demo"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    result = implement_page_scaffold(project_dir, "tasks/list")
+    assert result["ok"] is False
+    assert result["status"] == "not_found"
+    assert "Page not found: tasks/list" in str(result["detail"])
