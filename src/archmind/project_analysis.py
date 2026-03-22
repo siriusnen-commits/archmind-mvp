@@ -4,6 +4,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+LOW_PRIORITY_MISSING_FIELDS = {"created_at", "updated_at"}
+
 
 def _normalize_entity_name(value: Any) -> str:
     name = str(value or "").strip()
@@ -253,8 +255,6 @@ def _compute_entity_crud_status(
         missing_important_fields: list[str] = []
         if not ({"title", "name"} & field_names):
             missing_important_fields.append("title")
-        if "created_at" not in field_names:
-            missing_important_fields.append("created_at")
 
         status[entity] = {
             "resource": resource,
@@ -440,8 +440,13 @@ def _build_suggestions(
                 f"/add_page {resource}/{page_kind}",
             )
 
-        if missing_fields and len(suggestions) < 3 and not added_field_suggestion:
-            field_name = str(missing_fields[0])
+        filtered_missing_fields = [
+            str(field).strip().lower()
+            for field in missing_fields
+            if str(field).strip().lower() not in LOW_PRIORITY_MISSING_FIELDS
+        ]
+        if filtered_missing_fields and len(suggestions) < 3 and not added_field_suggestion:
+            field_name = str(filtered_missing_fields[0])
             add(
                 "missing_field",
                 f"{entity} is missing an important field: {field_name}",

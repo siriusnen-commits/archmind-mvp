@@ -148,6 +148,37 @@ def test_project_analysis_limits_missing_field_suggestions_to_reduce_repetition(
     assert len(missing_field_rows) <= 1
 
 
+def test_project_analysis_does_not_suggest_created_at_as_important_field(tmp_path: Path) -> None:
+    project_dir = tmp_path / "created-at-low-priority"
+    spec = {
+        "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": ["GET /notes", "POST /notes"],
+        "frontend_pages": ["notes/list"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    missing_fields = out["entity_crud_status"]["Note"]["missing_important_fields"]
+    assert "created_at" not in missing_fields
+    assert not any(
+        "important field: created_at" in str(item.get("message") or "")
+        for item in out["suggestions"]
+    )
+
+
+def test_project_analysis_still_suggests_high_priority_missing_title(tmp_path: Path) -> None:
+    project_dir = tmp_path / "title-high-priority"
+    spec = {
+        "entities": [{"name": "Note", "fields": []}],
+        "api_endpoints": ["GET /notes", "POST /notes"],
+        "frontend_pages": ["notes/list"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert "title" in out["entity_crud_status"]["Note"]["missing_important_fields"]
+    assert any(
+        "important field: title" in str(item.get("message") or "")
+        for item in out["suggestions"]
+    )
+
+
 def test_project_analysis_safe_with_missing_or_malformed_data(tmp_path: Path) -> None:
     project_dir = tmp_path / "broken-app"
     spec = {
