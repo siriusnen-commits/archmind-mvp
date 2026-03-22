@@ -104,72 +104,112 @@ def _normalize_inferred_field_name(raw_name: str) -> str:
     return field
 
 
-def _infer_fields_from_python_model(path: Path) -> list[dict[str, str]]:
+def _normalize_class_entity_name(raw_name: str) -> str:
+    value = str(raw_name or "").strip()
+    if not value:
+        return ""
+    # Common generated class suffixes
+    for suffix in ("Model", "Schema", "Base", "Create", "Update", "Read", "Response", "Request", "InDB"):
+        if value.endswith(suffix) and len(value) > len(suffix):
+            value = value[: -len(suffix)]
+            break
+    return _normalize_entity_name(value)
+
+
+def _infer_fields_by_entity_from_python_model(path: Path) -> dict[str, list[dict[str, str]]]:
     try:
         content = path.read_text(encoding="utf-8")
     except Exception:
-        return []
-    out: list[dict[str, str]] = []
-    seen: set[str] = set()
+        return {}
+    out: dict[str, list[dict[str, str]]] = {}
+    seen_by_entity: dict[str, set[str]] = {}
+    current_entity = ""
+    current_indent = -1
     for raw_line in content.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
+        if not raw_line.strip():
             continue
-        match = re.match(r"^([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*([^=]+)", line)
-        if not match:
+        stripped = raw_line.strip()
+        if stripped.startswith("#"):
             continue
-        field_name = _normalize_inferred_field_name(match.group(1))
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        class_match = re.match(r"^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)\b", raw_line)
+        if class_match:
+            current_entity = _normalize_class_entity_name(class_match.group(1))
+            current_indent = indent
+            if current_entity and current_entity not in out:
+                out[current_entity] = []
+                seen_by_entity[current_entity] = set()
+            continue
+        if current_entity and indent <= current_indent and not raw_line.lstrip(" ").startswith("@"):
+            current_entity = ""
+            current_indent = -1
+            continue
+        if not current_entity:
+            continue
+        field_match = re.match(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*([^=\n#]+)", raw_line)
+        if not field_match:
+            continue
+        field_name = _normalize_inferred_field_name(field_match.group(1))
         if not field_name:
             continue
         key = field_name.lower()
+        seen = seen_by_entity.setdefault(current_entity, set())
         if key in seen:
             continue
         seen.add(key)
-        out.append({"name": field_name, "type": "string"})
+        out.setdefault(current_entity, []).append({"name": field_name, "type": "string"})
     return out
 
 
-def _candidate_entity_model_files(project_dir: Path, entity_name: str) -> list[Path]:
-    slug = _entity_slug(entity_name)
-    if not slug:
-        return []
-    names = [slug, entity_name.lower()]
-    roots = [
+def _backend_model_roots(project_dir: Path) -> list[Path]:
+    return [
         project_dir / "backend" / "app" / "models",
         project_dir / "backend" / "app" / "schemas",
         project_dir / "app" / "models",
         project_dir / "app" / "schemas",
     ]
-    candidates: list[Path] = []
-    for root in roots:
-        for name in names:
-            candidates.append(root / f"{name}.py")
-    return candidates
 
 
-def _merge_fields_with_code_inference(
+def _extract_backend_fields_by_entity(project_dir: Path) -> dict[str, list[dict[str, str]]]:
+    out: dict[str, list[dict[str, str]]] = {}
+    seen: dict[str, set[str]] = {}
+    for root in _backend_model_roots(project_dir):
+        if not root.exists():
+            continue
+        for path in root.glob("*.py"):
+            inferred = _infer_fields_by_entity_from_python_model(path)
+            for entity, rows in inferred.items():
+                bucket = out.setdefault(entity, [])
+                seen_bucket = seen.setdefault(entity, set())
+                for item in rows:
+                    field_name = str(item.get("name") or "").strip()
+                    if not field_name:
+                        continue
+                    key = field_name.lower()
+                    if key in seen_bucket:
+                        continue
+                    seen_bucket.add(key)
+                    bucket.append(item)
+    return out
+
+
+def _resolve_fields_by_source(
     project_dir: Path,
     entities: list[str],
-    fields_by_entity: dict[str, list[dict[str, str]]],
-) -> dict[str, list[dict[str, str]]]:
+    spec_fields_by_entity: dict[str, list[dict[str, str]]],
+) -> tuple[dict[str, list[dict[str, str]]], dict[str, bool]]:
+    backend_fields_by_entity = _extract_backend_fields_by_entity(project_dir)
     merged: dict[str, list[dict[str, str]]] = {}
+    backend_presence: dict[str, bool] = {}
     for entity in entities:
-        current = list(fields_by_entity.get(entity) or [])
-        seen = {str(item.get("name") or "").strip().lower() for item in current if str(item.get("name") or "").strip()}
-        for candidate in _candidate_entity_model_files(project_dir, entity):
-            if not candidate.exists():
-                continue
-            for item in _infer_fields_from_python_model(candidate):
-                field_name = str(item.get("name") or "").strip()
-                if not field_name:
-                    continue
-                key = field_name.lower()
-                if key in seen:
-                    continue
-                seen.add(key)
-                current.append(item)
-        merged[entity] = current
-    return merged
+        backend_rows = list(backend_fields_by_entity.get(entity) or [])
+        if backend_rows:
+            merged[entity] = backend_rows
+            backend_presence[entity] = True
+            continue
+        merged[entity] = list(spec_fields_by_entity.get(entity) or [])
+        backend_presence[entity] = False
+    return merged, backend_presence
 
 
 def _extract_apis(spec_payload: dict[str, Any]) -> list[dict[str, str]]:
@@ -209,6 +249,7 @@ def _is_detail_path(path: str) -> bool:
 def _compute_entity_crud_status(
     entities: list[str],
     fields_by_entity: dict[str, list[dict[str, str]]],
+    backend_field_presence: dict[str, bool],
     apis: list[dict[str, str]],
     pages: list[str],
 ) -> dict[str, dict[str, Any]]:
@@ -251,7 +292,13 @@ def _compute_entity_crud_status(
 
         field_names = {str(item.get("name") or "").strip().lower() for item in (fields_by_entity.get(entity) or [])}
         missing_important_fields: list[str] = []
-        if not ({"title", "name"} & field_names):
+        has_backend_fields = bool(backend_field_presence.get(entity))
+        missing_title = not ({"title", "name"} & field_names)
+        # For memo/note projects, avoid title false-positives unless backend classes clearly miss it.
+        if _normalize_entity_name(entity) == "Note":
+            if missing_title and has_backend_fields:
+                missing_important_fields.append("title")
+        elif missing_title:
             missing_important_fields.append("title")
         if "created_at" not in field_names:
             missing_important_fields.append("created_at")
@@ -473,12 +520,32 @@ def analyze_project(
     entities, fields_by_entity = _extract_entities(spec)
     apis = _extract_apis(spec)
     pages = _extract_pages(spec)
-    fields_by_entity = _merge_fields_with_code_inference(project_dir, entities, fields_by_entity)
-    entity_crud_status = _compute_entity_crud_status(entities, fields_by_entity, apis, pages)
+    fields_by_entity, backend_field_presence = _resolve_fields_by_source(project_dir, entities, fields_by_entity)
+    entity_crud_status = _compute_entity_crud_status(entities, fields_by_entity, backend_field_presence, apis, pages)
     placeholder_pages = _detect_placeholder_pages(project_dir, pages)
     nav_visible_pages = _extract_nav_visible_pages(project_dir, pages)
     runtime_status = _normalize_runtime_status(runtime_payload if isinstance(runtime_payload, dict) else {})
     suggestions, next_action = _build_suggestions(entities, entity_crud_status, placeholder_pages)
+    # Final safety filter: never keep missing-title suggestion when backend field source already has title/name.
+    filtered: list[dict[str, str]] = []
+    for row in suggestions:
+        if not isinstance(row, dict):
+            continue
+        kind = str(row.get("kind") or "")
+        message = str(row.get("message") or "")
+        if kind == "missing_field" and "important field: title" in message:
+            matched_entity = ""
+            for entity in entities:
+                if message.startswith(f"{entity} is missing"):
+                    matched_entity = entity
+                    break
+            names = {str(item.get("name") or "").strip().lower() for item in (fields_by_entity.get(matched_entity) or [])}
+            if {"title", "name"} & names:
+                continue
+        filtered.append({"kind": kind, "message": message, "command": str(row.get("command") or "")})
+    if filtered:
+        suggestions = filtered[:3]
+        next_action = suggestions[0]
 
     return {
         "project_name": str(project_name or project_dir.name),
