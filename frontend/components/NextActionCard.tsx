@@ -23,33 +23,27 @@ type ParsedCommand =
   | { endpoint: "pages"; payload: { page_path: string } }
   | { endpoint: "apis"; payload: { method: string; path: string } };
 
+function normalizeCommandText(value: string): string {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+  const singleLine = raw.split(/\r?\n/, 1)[0] || "";
+  const withoutLabel = singleLine.replace(/^command:\s*/i, "").trim();
+  return withoutLabel.replace(/^`|`$/g, "").trim();
+}
+
 function parseNextCommand(command: string): ParsedCommand | null {
-  const text = String(command || "").trim();
+  const text = normalizeCommandText(command);
   if (!text) {
     return null;
   }
 
-  if (text.startsWith("/add_field ")) {
-    const rest = text.slice("/add_field ".length).trim();
-    const parts = rest.split(/\s+/).filter(Boolean);
-    if (parts.length < 2) {
-      return null;
-    }
-    const entityName = String(parts[0] || "").trim();
-    const fieldExpr = String(parts[1] || "").trim();
-    let fieldName = "";
-    let fieldType = "";
-    if (fieldExpr.includes(":")) {
-      const [name, type] = fieldExpr.split(":", 2);
-      fieldName = String(name || "").trim();
-      fieldType = String(type || "").trim();
-    } else {
-      fieldName = fieldExpr;
-      fieldType = String(parts[2] || "").trim();
-    }
-    if (!entityName || !fieldName || !fieldType) {
-      return null;
-    }
+  const addFieldMatch = text.match(/^\/add_field\s+([A-Za-z][A-Za-z0-9_]*)\s+([A-Za-z][A-Za-z0-9_]*)\s*:\s*([A-Za-z][A-Za-z0-9_]*)\s*$/);
+  if (addFieldMatch) {
+    const entityName = String(addFieldMatch[1] || "").trim();
+    const fieldName = String(addFieldMatch[2] || "").trim();
+    const fieldType = String(addFieldMatch[3] || "").trim().toLowerCase();
     return {
       endpoint: "fields",
       payload: {
@@ -60,24 +54,19 @@ function parseNextCommand(command: string): ParsedCommand | null {
     };
   }
 
-  if (text.startsWith("/add_page ")) {
-    const pagePath = text.slice("/add_page ".length).trim();
-    if (!pagePath) {
-      return null;
-    }
+  const addPageMatch = text.match(/^\/add_page\s+([A-Za-z0-9_/-]+)\s*$/);
+  if (addPageMatch) {
+    const pagePath = String(addPageMatch[1] || "").trim();
     return {
       endpoint: "pages",
       payload: { page_path: pagePath },
     };
   }
 
-  if (text.startsWith("/add_api ")) {
-    const rest = text.slice("/add_api ".length).trim();
-    const method = rest.split(/\s+/, 1)[0]?.toUpperCase() || "";
-    const path = rest.slice(method.length).trim();
-    if (!method || !path) {
-      return null;
-    }
+  const addApiMatch = text.match(/^\/add_api\s+(GET|POST|PUT|PATCH|DELETE)\s+(\S+)\s*$/i);
+  if (addApiMatch) {
+    const method = String(addApiMatch[1] || "").toUpperCase();
+    const path = String(addApiMatch[2] || "").trim();
     return {
       endpoint: "apis",
       payload: { method, path },
@@ -131,6 +120,9 @@ export default function NextActionCard({ projectName, nextAction }: Props) {
         ok?: boolean;
         detail?: string;
         error?: string;
+        entity_name?: string;
+        field_name?: string;
+        field_type?: string;
       };
       const detail = String(payload.error || payload.detail || "").trim();
 
@@ -143,6 +135,22 @@ export default function NextActionCard({ projectName, nextAction }: Props) {
         setMessageType("error");
         setMessage(detail ? `Failed to run next action: ${detail}` : "Failed to run next action");
         return;
+      }
+
+      if (parsed.endpoint === "fields") {
+        const actualEntity = String(payload.entity_name || "").trim();
+        const actualField = String(payload.field_name || "").trim();
+        const actualType = String(payload.field_type || "").trim().toLowerCase();
+        const expectedEntity = parsed.payload.entity_name;
+        const expectedField = parsed.payload.field_name;
+        const expectedType = parsed.payload.field_type.toLowerCase();
+        if (actualEntity && (actualEntity !== expectedEntity || actualField !== expectedField || actualType !== expectedType)) {
+          setMessageType("error");
+          setMessage(
+            `Failed to run next action: target mismatch (expected ${expectedEntity}.${expectedField}:${expectedType}, got ${actualEntity}.${actualField}:${actualType})`
+          );
+          return;
+        }
       }
 
       setMessageType("success");
