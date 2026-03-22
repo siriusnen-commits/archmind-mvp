@@ -1087,7 +1087,7 @@ def _entity_endpoint_set(entity_name: str) -> list[str]:
     if not normalized:
         return []
     slug = re.sub(r"(?<!^)(?=[A-Z])", "_", normalized).lower()
-    plural = f"{slug}s"
+    plural = _pluralize_resource_name(slug)
     return [
         f"GET /{plural}",
         f"POST /{plural}",
@@ -1098,7 +1098,7 @@ def _entity_endpoint_set(entity_name: str) -> list[str]:
 
 
 def _normalize_api_path(value: str) -> str:
-    path = str(value or "").strip()
+    path = str(value or "").strip().replace("\\", "/")
     if not path:
         return ""
     if not path.startswith("/"):
@@ -1106,7 +1106,22 @@ def _normalize_api_path(value: str) -> str:
     path = re.sub(r"/{2,}", "/", path)
     if " " in path:
         return ""
-    return path
+    parts = [part for part in path.strip("/").split("/") if part]
+    if not parts:
+        return ""
+    normalized_parts: list[str] = []
+    treat_as_resource = len(parts) == 1 or (len(parts) >= 2 and parts[1].startswith("{") and parts[1].endswith("}"))
+    for idx, part in enumerate(parts):
+        if part.startswith("{") and part.endswith("}"):
+            normalized_parts.append(part)
+            continue
+        normalized = _normalize_resource_segment(part)
+        if not normalized:
+            return ""
+        if idx == 0 and treat_as_resource:
+            normalized = _pluralize_resource_name(normalized)
+        normalized_parts.append(normalized)
+    return "/" + "/".join(normalized_parts)
 
 
 def _normalize_api_endpoint(method: str, path: str) -> tuple[str, str, str]:
@@ -1161,7 +1176,7 @@ def _entity_frontend_pages(entity_name: str) -> list[str]:
     if not normalized:
         return []
     slug = re.sub(r"(?<!^)(?=[A-Z])", "_", normalized).lower()
-    plural = f"{slug}s"
+    plural = _pluralize_resource_name(slug)
     return [f"{plural}/list", f"{plural}/detail"]
 
 
@@ -1170,7 +1185,36 @@ def _normalize_frontend_page_path(value: str) -> str:
     page = re.sub(r"/{2,}", "/", page).strip("/")
     if not page or " " in page:
         return ""
-    return page
+    parts = [part for part in page.split("/") if part]
+    normalized_parts: list[str] = []
+    for part in parts:
+        normalized = _normalize_resource_segment(part)
+        if not normalized:
+            return ""
+        normalized_parts.append(normalized)
+    if len(normalized_parts) == 1:
+        return f"{_pluralize_resource_name(normalized_parts[0])}/list"
+    leaf = normalized_parts[-1]
+    if leaf in {"list", "detail"}:
+        normalized_parts[0] = _pluralize_resource_name(normalized_parts[0])
+    return "/".join(normalized_parts)
+
+
+def _normalize_resource_segment(value: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_-]", "", str(value or "").strip().lower())
+
+
+def _pluralize_resource_name(value: str) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    if text.endswith("s"):
+        return text
+    if text.endswith("y") and len(text) > 1 and text[-2] not in "aeiou":
+        return text[:-1] + "ies"
+    if text.endswith(("ch", "sh", "x", "z")):
+        return text + "es"
+    return text + "s"
 
 
 def _rebuild_frontend_pages(spec: dict[str, Any]) -> list[str]:

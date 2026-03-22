@@ -196,6 +196,21 @@ def test_apply_page_scaffold_updates_navigation_with_new_explicit_page(tmp_path:
     assert 'href: "/reports/list"' in nav_text
 
 
+def test_apply_page_scaffold_normalizes_single_segment_and_dedupes_navigation(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_demo"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / "frontend" / "app" / "layout.tsx").write_text("export default function Layout(){return null}\n", encoding="utf-8")
+
+    first = apply_page_scaffold(project_dir, "Tests")
+    second = apply_page_scaffold(project_dir, "/tests/list/")
+
+    assert "frontend/app/tests/list/page.tsx" in first
+    assert second == []
+    nav_text = (project_dir / "frontend" / "app" / "_lib" / "navigation.ts").read_text(encoding="utf-8")
+    assert nav_text.count('href: "/tests/list"') == 1
+
+
 def test_apply_page_scaffold_backfills_legacy_memo_shell_and_surfaces_new_pages(tmp_path: Path) -> None:
     project_dir = tmp_path / "legacy_memo"
     app_dir = project_dir / "frontend" / "app"
@@ -277,6 +292,18 @@ def test_apply_api_scaffold_creates_custom_router_and_registers_main(tmp_path: P
     main_text = (project_dir / "app" / "main.py").read_text(encoding="utf-8")
     assert "from app.routers.custom import router as custom_router" in main_text
     assert main_text.count("app.include_router(custom_router)") == 1
+
+
+def test_apply_api_scaffold_normalizes_singular_path_to_plural(tmp_path: Path) -> None:
+    project_dir = tmp_path / "backend_demo"
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\n\napp = FastAPI()\n", encoding="utf-8")
+
+    generated = apply_api_scaffold(project_dir, "GET", "/task")
+    assert "app/routers/custom.py" in generated
+    custom_text = (project_dir / "app" / "routers" / "custom.py").read_text(encoding="utf-8")
+    assert '@router.get("/tasks")' in custom_text
 
 
 def test_apply_page_scaffold_creates_explicit_page_and_is_idempotent(tmp_path: Path) -> None:
