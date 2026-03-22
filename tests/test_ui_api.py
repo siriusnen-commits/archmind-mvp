@@ -190,6 +190,8 @@ def test_ui_project_detail_response_shape(monkeypatch, tmp_path: Path) -> None:
     assert payload["analysis"]["project_name"] == "beta"
     assert isinstance(payload["analysis"]["suggestions"], list)
     assert isinstance(payload["analysis"]["next_action"], dict)
+    for key in ("kind", "message", "command"):
+        assert key in payload["analysis"]["next_action"]
     assert "warning" in payload
     assert "safe" in payload
     assert "backend_urls" in payload["runtime"]
@@ -231,6 +233,8 @@ def test_ui_project_analysis_endpoint_response_shape(monkeypatch, tmp_path: Path
     assert isinstance(payload["runtime_status"], dict)
     assert isinstance(payload["suggestions"], list)
     assert isinstance(payload["next_action"], dict)
+    for key in ("kind", "message", "command"):
+        assert key in payload["next_action"]
 
 
 def test_ui_projects_response_tolerates_malformed_repository_metadata(monkeypatch, tmp_path: Path) -> None:
