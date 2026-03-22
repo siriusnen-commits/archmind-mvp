@@ -542,6 +542,49 @@ def test_ui_add_field_succeeds_and_returns_updated_spec(monkeypatch, tmp_path: P
     assert any("add_field Note priority:int" in str(item) for item in detail_payload["recent_evolution"])
 
 
+def test_ui_add_field_succeeds_for_task_priority_string_regression(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "field-task")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+    add_entity_response = client.post(
+        "/ui/projects/field-task/entities",
+        json={"entity_name": "Task"},
+    )
+    assert add_entity_response.status_code == 200
+    assert add_entity_response.json().get("ok") is True
+
+    response = client.post(
+        "/ui/projects/field-task/fields",
+        json={"entity_name": "Task", "field_name": "priority", "field_type": "string"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["project_name"] == "field-task"
+    assert payload["entity_name"] == "Task"
+    assert payload["field_name"] == "priority"
+    assert payload["field_type"] == "string"
+    assert "required" not in str(payload.get("error") or "").lower()
+    assert "required" not in str(payload.get("detail") or "").lower()
+
+
+def test_ui_fields_proxy_route_uses_json_body_with_expected_keys() -> None:
+    route_path = Path("frontend/app/api/ui/projects/[project]/fields/route.ts")
+    source = route_path.read_text(encoding="utf-8")
+
+    assert "await request.json()" in source
+    assert "entity_name" in source
+    assert "field_name" in source
+    assert "field_type" in source
+    assert "body: JSON.stringify(body)" in source
+
+    card_source = Path("frontend/components/AddFieldCard.tsx").read_text(encoding="utf-8")
+    assert "entity_name: targetEntity" in card_source
+    assert "field_name: targetFieldName" in card_source
+    assert "field_type: targetFieldType" in card_source
+
+
 def test_ui_add_field_rejects_empty_inputs_safely(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     _make_project(projects_root, "field-empty")
