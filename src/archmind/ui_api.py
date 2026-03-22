@@ -11,6 +11,7 @@ from archmind.project_query import (
     add_project_page,
     add_project_field,
     add_project_entity,
+    build_project_analysis,
     build_project_detail,
     build_project_list_item,
     delete_project_all,
@@ -43,6 +44,7 @@ from archmind.ui_models import (
     ProviderModeResponse,
     RepositorySummary,
     ProviderUpdateRequest,
+    ProjectAnalysisResponse,
     RuntimeActionResponse,
 )
 
@@ -103,6 +105,43 @@ def get_ui_project_detail(project_name: str) -> ProjectDetailResponse:
             status_code=500,
             content={
                 "detail": "Failed to load project detail",
+                "error": str(exc),
+                "project_name": project_name,
+                "safe": True,
+            },
+        )
+
+
+@router.get("/projects/{project_name}/analysis", response_model=ProjectAnalysisResponse)
+def get_ui_project_analysis(project_name: str) -> ProjectAnalysisResponse:
+    try:
+        project_dir = find_project_by_name(project_name)
+        if project_dir is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        payload = build_project_analysis(project_dir)
+        return ProjectAnalysisResponse(
+            project_name=str(payload.get("project_name") or project_name),
+            entities=[str(x) for x in (payload.get("entities") or []) if str(x).strip()],
+            fields_by_entity=payload.get("fields_by_entity") if isinstance(payload.get("fields_by_entity"), dict) else {},
+            apis=[x for x in (payload.get("apis") or []) if isinstance(x, dict)],
+            pages=[str(x) for x in (payload.get("pages") or []) if str(x).strip()],
+            entity_crud_status=payload.get("entity_crud_status")
+            if isinstance(payload.get("entity_crud_status"), dict)
+            else {},
+            placeholder_pages=[str(x) for x in (payload.get("placeholder_pages") or []) if str(x).strip()],
+            nav_visible_pages=[str(x) for x in (payload.get("nav_visible_pages") or []) if str(x).strip()],
+            runtime_status=payload.get("runtime_status") if isinstance(payload.get("runtime_status"), dict) else {},
+            suggestions=[x for x in (payload.get("suggestions") or []) if isinstance(x, dict)][:3],
+            next_action=payload.get("next_action") if isinstance(payload.get("next_action"), dict) else {},
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to load project analysis: %s", project_name)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "Failed to load project analysis",
                 "error": str(exc),
                 "project_name": project_name,
                 "safe": True,
