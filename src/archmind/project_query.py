@@ -10,6 +10,7 @@ from urllib.parse import urlparse, urlunparse
 
 from archmind.deploy import get_local_runtime_status
 from archmind.next_suggester import analyze_spec_progression
+from archmind.project_analysis import analyze_project
 from archmind.runtime_orchestrator import run_all_local_services
 from archmind.state import load_provider_mode, load_state, set_provider_mode, update_runtime_state, write_state
 from archmind.telegram_bot import (
@@ -280,6 +281,7 @@ def _empty_project_detail(project_dir: Path, warning: str = "") -> ProjectDetail
         runtime=RuntimeSummary(),
         recent_evolution=[],
         repository=RepositorySummary(),
+        analysis=analyze_project(project_dir, project_name=project_dir.name, spec_payload={}, runtime_payload={}),
         warning=str(warning or "").strip(),
         safe=True,
     )
@@ -402,6 +404,12 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
             state_payload=state_payload if isinstance(state_payload, dict) else {},
             result_payload=result_payload if isinstance(result_payload, dict) else {},
         )
+        analysis = analyze_project(
+            project_dir,
+            project_name=project_dir.name,
+            spec_payload=spec if isinstance(spec, dict) else {},
+            runtime_payload=runtime_payload if isinstance(runtime_payload, dict) else {},
+        )
         return ProjectDetailResponse(
             name=project_dir.name,
             display_name=_display_name_from_payloads(project_dir, state_payload, spec if isinstance(spec, dict) else {}),
@@ -427,6 +435,7 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
             ),
             recent_evolution=summarize_recent_evolution(spec, limit=5),
             repository=repository,
+            analysis=analysis,
             warning="",
             safe=True,
         )
@@ -543,3 +552,15 @@ def add_project_page(project_dir: Path, page_path: str) -> dict[str, Any]:
         auto_restart_backend=False,
     )
     return result if isinstance(result, dict) else {}
+
+
+def build_project_analysis(project_dir: Path) -> dict[str, Any]:
+    archmind_dir = project_dir / ".archmind"
+    spec_payload = _load_json(archmind_dir / "project_spec.json") or {}
+    runtime_payload = get_local_runtime_status(project_dir)
+    return analyze_project(
+        project_dir,
+        project_name=project_dir.name,
+        spec_payload=spec_payload if isinstance(spec_payload, dict) else {},
+        runtime_payload=runtime_payload if isinstance(runtime_payload, dict) else {},
+    )

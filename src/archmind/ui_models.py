@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -64,6 +64,7 @@ class ProjectDetailResponse(BaseModel):
     runtime: RuntimeSummary
     recent_evolution: list[str] = Field(default_factory=list)
     repository: RepositorySummary = Field(default_factory=RepositorySummary)
+    analysis: dict[str, Any] = Field(default_factory=dict)
     warning: str = ""
     safe: bool = True
 
@@ -163,3 +164,17 @@ class DeleteActionResponse(BaseModel):
     runtime_stopped: bool = False
     detail: str = ""
     error: str = ""
+
+
+class ProjectAnalysisResponse(BaseModel):
+    project_name: str = ""
+    entities: list[str] = Field(default_factory=list)
+    fields_by_entity: dict[str, list[dict[str, str]]] = Field(default_factory=dict)
+    apis: list[dict[str, str]] = Field(default_factory=list)
+    pages: list[str] = Field(default_factory=list)
+    entity_crud_status: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    placeholder_pages: list[str] = Field(default_factory=list)
+    nav_visible_pages: list[str] = Field(default_factory=list)
+    runtime_status: dict[str, Any] = Field(default_factory=dict)
+    suggestions: list[dict[str, str]] = Field(default_factory=list)
+    next_action: dict[str, str] = Field(default_factory=dict)

@@ -186,6 +186,10 @@ def test_ui_project_detail_response_shape(monkeypatch, tmp_path: Path) -> None:
     assert "repository" in payload
     assert payload["repository"]["status"] == "CREATED"
     assert payload["repository"]["url"] == "https://github.com/example/beta"
+    assert "analysis" in payload
+    assert payload["analysis"]["project_name"] == "beta"
+    assert isinstance(payload["analysis"]["suggestions"], list)
+    assert isinstance(payload["analysis"]["next_action"], dict)
     assert "warning" in payload
     assert "safe" in payload
     assert "backend_urls" in payload["runtime"]
@@ -205,6 +209,28 @@ def test_ui_projects_response_includes_safe_repository_when_missing(monkeypatch,
     assert "repository" in item
     assert item["repository"]["status"] == "SKIPPED"
     assert item["repository"]["url"] == ""
+
+
+def test_ui_project_analysis_endpoint_response_shape(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "analysis-project")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.get("/ui/projects/analysis-project/analysis")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["project_name"] == "analysis-project"
+    assert isinstance(payload["entities"], list)
+    assert isinstance(payload["fields_by_entity"], dict)
+    assert isinstance(payload["apis"], list)
+    assert isinstance(payload["pages"], list)
+    assert isinstance(payload["entity_crud_status"], dict)
+    assert isinstance(payload["placeholder_pages"], list)
+    assert isinstance(payload["nav_visible_pages"], list)
+    assert isinstance(payload["runtime_status"], dict)
+    assert isinstance(payload["suggestions"], list)
+    assert isinstance(payload["next_action"], dict)
 
 
 def test_ui_projects_response_tolerates_malformed_repository_metadata(monkeypatch, tmp_path: Path) -> None:
