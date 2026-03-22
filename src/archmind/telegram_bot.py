@@ -88,6 +88,7 @@ PROJECT EVOLUTION
 /implement_page <path> upgrade placeholder page to usable scaffold
 /apply_suggestion      apply last suggestion to spec
 /next                  suggest next development steps
+/auto [n]              auto-run up to n safe next actions (1..3)
 
 PROJECT MANAGEMENT
 /help                  show command guide
@@ -806,6 +807,7 @@ def _command_handler_map() -> dict[str, Any]:
         "/provider": command_provider,
         "/inspect": command_inspect,
         "/next": command_next,
+        "/auto": command_auto,
         "/improve": command_improve,
         "/running": command_running,
         "/restart": command_restart,
@@ -6056,6 +6058,103 @@ async def command_next(update: Any, context: Any) -> None:
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 
 
+AUTO_ALLOWED_COMMANDS = {"/add_field", "/add_api", "/add_page", "/implement_page"}
+
+
+def _parse_auto_max_steps(args: list[str]) -> int:
+    if not args:
+        return 3
+    try:
+        raw = int(str(args[0]).strip())
+    except Exception:
+        return 3
+    return max(1, min(3, raw))
+
+
+def _extract_next_action(analysis: dict[str, Any]) -> tuple[str, str, str]:
+    next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
+    kind = str(next_action.get("kind") or "").strip().lower()
+    message = str(next_action.get("message") or "").strip()
+    command = str(next_action.get("command") or "").strip()
+    return kind, message, command
+
+
+async def command_auto(update: Any, context: Any) -> None:
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text(_no_active_project_guidance())
+        return
+
+    args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
+    max_steps = _parse_auto_max_steps(args)
+
+    lines: list[str] = [
+        "Auto evolution run",
+        f"Target Project: {project_path.name}",
+        "",
+    ]
+    seen_commands: set[str] = set()
+    executed = 0
+    stop_reason = "max step count reached"
+
+    for idx in range(1, max_steps + 1):
+        analysis = _build_project_analysis(project_path)
+        kind, message, raw_command = _extract_next_action(analysis)
+        normalized_command = _normalize_recommended_command(raw_command)
+
+        lines.append(f"Step {idx}")
+        if kind == "none" or not message or message.lower() == "no immediate suggestions.":
+            lines.append("- No immediate next action.")
+            stop_reason = "no immediate next action"
+            break
+
+        if not normalized_command:
+            lines.append(f"- Next: {raw_command or '(empty)'}")
+            lines.append("- Result: STOP (empty or malformed command)")
+            stop_reason = "empty or malformed command"
+            break
+
+        cmd, _ = _parse_command_string(normalized_command)
+        lines.append(f"- Next: {normalized_command}")
+        if cmd not in AUTO_ALLOWED_COMMANDS:
+            lines.append("- Result: STOP (unsupported command)")
+            stop_reason = f"unsupported command: {cmd or normalized_command}"
+            break
+
+        if normalized_command in seen_commands:
+            lines.append("- Result: STOP (repeated-command protection)")
+            stop_reason = "repeated command detected"
+            break
+        seen_commands.add(normalized_command)
+
+        result = execute_command(normalized_command, project_path.name)
+        ok = bool(result.get("ok"))
+        if ok:
+            lines.append("- Result: OK")
+            executed += 1
+        else:
+            detail = str(
+                result.get("error")
+                or result.get("detail")
+                or result.get("message")
+                or "execution failed"
+            ).strip()
+            lines.append(f"- Result: FAIL ({detail})")
+            stop_reason = f"command failed: {detail}"
+            break
+        lines.append("")
+
+    if lines and lines[-1] == "":
+        lines.pop()
+    lines.extend([
+        "",
+        "Summary",
+        f"- Executed: {executed}",
+        f"- Stopped: {stop_reason}",
+    ])
+    await update.message.reply_text(_truncate_message("\n".join(lines)))
+
+
 async def command_suggestion_callback(update: Any, context: Any) -> None:
     query, message, callback_update, callback_context = _build_callback_update_context(update, context, [])
     if query is None or message is None:
@@ -6942,6 +7041,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("apply_suggestion", command_apply_suggestion))
     app.add_handler(CommandHandler("apply_plan", command_apply_plan))
     app.add_handler(CommandHandler("next", command_next))
+    app.add_handler(CommandHandler("auto", command_auto))
     app.add_handler(CallbackQueryHandler(command_suggestion_callback))
     app.add_handler(CommandHandler("continue", command_continue))
     app.add_handler(CommandHandler("fix", command_fix))

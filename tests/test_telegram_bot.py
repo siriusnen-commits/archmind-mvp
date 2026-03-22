@@ -45,6 +45,7 @@ from archmind.telegram_bot import (
     command_apply_suggestion,
     command_apply_plan,
     command_next,
+    command_auto,
     command_suggestion_callback,
     command_plan,
     command_retry,
@@ -5532,6 +5533,129 @@ def test_next_command_omits_command_line_when_next_action_command_is_empty(tmp_p
     assert "Command:" not in out
 
 
+def test_auto_command_without_current_project_returns_safe_guidance(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: None)
+    msg = DummyMessage()
+    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    assert "No active project." in msg.sent[-1]
+
+
+def test_auto_command_stops_when_no_immediate_next_action(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "auto_none"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.telegram_bot._build_project_analysis",
+        lambda _p: {"next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""}},
+    )
+    msg = DummyMessage()
+    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Auto evolution run" in out
+    assert "Step 1" in out
+    assert "- No immediate next action." in out
+    assert "- Executed: 0" in out
+    assert "- Stopped: no immediate next action" in out
+
+
+def test_auto_command_executes_valid_next_actions(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "auto_ok"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    sequence = iter(
+        [
+            {"next_action": {"kind": "missing_api", "message": "add list api", "command": "/add_api GET /tasks"}},
+            {"next_action": {"kind": "missing_page", "message": "add list page", "command": "/add_page tasks/list"}},
+            {"next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""}},
+        ]
+    )
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p: next(sequence))
+    executed_commands: list[str] = []
+
+    def _fake_execute(command: str, _project_name: str) -> dict[str, object]:
+        executed_commands.append(command)
+        return {"ok": True, "message": "ok"}
+
+    monkeypatch.setattr("archmind.telegram_bot.execute_command", _fake_execute)
+    msg = DummyMessage()
+    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert executed_commands == ["/add_api GET /tasks", "/add_page tasks/list"]
+    assert "- Result: OK" in out
+    assert "- Executed: 2" in out
+    assert "- Stopped: no immediate next action" in out
+
+
+def test_auto_command_stops_on_repeated_command(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "auto_repeat"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    sequence = iter(
+        [
+            {"next_action": {"kind": "missing_page", "message": "implement", "command": "/implement_page tasks/list"}},
+            {"next_action": {"kind": "missing_page", "message": "implement again", "command": "/implement_page tasks/list"}},
+        ]
+    )
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p: next(sequence))
+    calls = {"count": 0}
+
+    def _fake_execute(command: str, _project_name: str) -> dict[str, Any]:
+        calls["count"] += 1
+        return {"ok": True, "message": command}
+
+    monkeypatch.setattr("archmind.telegram_bot.execute_command", _fake_execute)
+    msg = DummyMessage()
+    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext(args=["3"])))
+    out = msg.sent[-1]
+    assert calls["count"] == 1
+    assert "repeated-command protection" in out
+    assert "- Stopped: repeated command detected" in out
+
+
+def test_auto_command_stops_on_command_failure(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "auto_fail"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.telegram_bot._build_project_analysis",
+        lambda _p: {"next_action": {"kind": "missing_field", "message": "add field", "command": "/add_field Task title:string"}},
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.execute_command",
+        lambda _c, _p: {"ok": False, "error": "duplicate field"},
+    )
+    msg = DummyMessage()
+    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "- Result: FAIL (duplicate field)" in out
+    assert "- Executed: 0" in out
+    assert "- Stopped: command failed: duplicate field" in out
+
+
+def test_auto_command_respects_max_step_cap_and_allowed_commands(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "auto_cap"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    sequence = iter(
+        [
+            {"next_action": {"kind": "k1", "message": "m1", "command": "/add_api GET /tasks"}},
+            {"next_action": {"kind": "k2", "message": "m2", "command": "/add_page tasks/list"}},
+            {"next_action": {"kind": "k3", "message": "m3", "command": "/run all"}},
+        ]
+    )
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p: next(sequence))
+    executed: list[str] = []
+    monkeypatch.setattr(
+        "archmind.telegram_bot.execute_command",
+        lambda cmd, _p: (executed.append(cmd) or {"ok": True, "message": "ok"}),
+    )
+    msg = DummyMessage()
+    # value 9 must be clamped to 3
+    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext(args=["9"])))
+    out = msg.sent[-1]
+    assert executed == ["/add_api GET /tasks", "/add_page tasks/list"]
+    assert "- Result: STOP (unsupported command)" in out
+    assert "- Stopped: unsupported command: /run" in out
 def test_improve_suggestion_button_dispatches_add_field_command(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "improve_button_dispatch_add_field"
     archmind = project_dir / ".archmind"
