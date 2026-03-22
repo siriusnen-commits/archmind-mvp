@@ -634,8 +634,73 @@ def _entity_identity(entity_name: str) -> tuple[str, str, str]:
         return "", "", ""
     class_name = safe_name[0].upper() + safe_name[1:]
     slug = re.sub(r"(?<!^)(?=[A-Z])", "_", class_name).lower()
-    plural = f"{slug}s"
+    plural = _pluralize_resource_name(slug)
     return class_name, slug, plural
+
+
+def _pluralize_resource_name(value: str) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    if text.endswith("s"):
+        return text
+    if text.endswith("y") and len(text) > 1 and text[-2] not in "aeiou":
+        return text[:-1] + "ies"
+    if text.endswith(("ch", "sh", "x", "z")):
+        return text + "es"
+    return text + "s"
+
+
+def _normalize_resource_segment(value: str) -> str:
+    text = re.sub(r"[^a-zA-Z0-9_-]", "", str(value or "").strip().lower())
+    return text
+
+
+def _canonicalize_api_path(path: str) -> str:
+    raw = str(path or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
+    if not raw.startswith("/"):
+        raw = "/" + raw
+    raw = re.sub(r"/{2,}", "/", raw)
+    if " " in raw:
+        return ""
+    parts = [part for part in raw.strip("/").split("/") if part]
+    if not parts:
+        return ""
+    canonical_parts: list[str] = []
+    treat_as_resource = len(parts) == 1 or (len(parts) >= 2 and parts[1].startswith("{") and parts[1].endswith("}"))
+    for idx, part in enumerate(parts):
+        if part.startswith("{") and part.endswith("}"):
+            canonical_parts.append(part)
+            continue
+        normalized = _normalize_resource_segment(part)
+        if not normalized:
+            return ""
+        if idx == 0 and treat_as_resource:
+            normalized = _pluralize_resource_name(normalized)
+        canonical_parts.append(normalized)
+    return "/" + "/".join(canonical_parts)
+
+
+def _canonicalize_page_path(raw_path: str) -> str:
+    raw = str(raw_path or "").strip().replace("\\", "/")
+    raw = re.sub(r"/{2,}", "/", raw).strip("/")
+    if not raw or " " in raw:
+        return ""
+    parts = [part for part in raw.split("/") if part]
+    normalized_parts: list[str] = []
+    for part in parts:
+        normalized = _normalize_resource_segment(part)
+        if not normalized:
+            return ""
+        normalized_parts.append(normalized)
+    if len(normalized_parts) == 1:
+        return f"{_pluralize_resource_name(normalized_parts[0])}/list"
+    leaf = normalized_parts[-1]
+    if leaf in {"list", "detail"}:
+        normalized_parts[0] = _pluralize_resource_name(normalized_parts[0])
+    return "/".join(normalized_parts)
 
 
 def _write_if_missing(path: Path, content: str, generated: list[str], project_dir: Path) -> None:
@@ -731,7 +796,7 @@ def _frontend_nav_path(app_root: Path) -> Path:
 
 
 def _nav_label_from_href(href: str) -> str:
-    normalized = str(href or "").strip("/")
+    normalized = _canonicalize_nav_href(href).strip("/")
     if not normalized:
         return "Home"
     parts = [part for part in normalized.split("/") if part and not part.startswith("[")]
@@ -741,6 +806,30 @@ def _nav_label_from_href(href: str) -> str:
     if leaf in {"list", "home", "index"} and len(parts) > 1:
         leaf = parts[-2]
     return leaf.replace("-", " ").replace("_", " ").title()
+
+
+def _canonicalize_nav_href(href: str) -> str:
+    text = str(href or "").strip().replace("\\", "/")
+    if not text:
+        return ""
+    if not text.startswith("/"):
+        text = "/" + text
+    text = re.sub(r"/{2,}", "/", text).rstrip("/")
+    if not text:
+        return "/"
+    if " " in text:
+        return ""
+    parts = [part for part in text.strip("/").split("/") if part]
+    normalized_parts: list[str] = []
+    for part in parts:
+        if part.startswith("[") and part.endswith("]"):
+            normalized_parts.append(part)
+            continue
+        normalized = _normalize_resource_segment(part)
+        if not normalized:
+            return ""
+        normalized_parts.append(normalized)
+    return "/" + "/".join(normalized_parts) if normalized_parts else "/"
 
 
 def _discover_frontend_routes(app_root: Path) -> list[str]:
@@ -762,14 +851,14 @@ def _discover_frontend_routes(app_root: Path) -> list[str]:
 
 def _render_frontend_navigation_file(hrefs: list[str]) -> str:
     unique: list[str] = []
+    seen_canonical: set[str] = set()
     for href in hrefs:
-        cleaned = str(href or "").strip()
+        cleaned = _canonicalize_nav_href(href)
         if not cleaned:
             continue
-        if not cleaned.startswith("/"):
-            cleaned = "/" + cleaned
-        if cleaned in unique:
+        if cleaned in seen_canonical:
             continue
+        seen_canonical.add(cleaned)
         unique.append(cleaned)
     lines = []
     for index, href in enumerate(unique):
@@ -792,7 +881,7 @@ def _render_frontend_navigation_file(hrefs: list[str]) -> str:
 def _parse_nav_hrefs(navigation_text: str) -> list[str]:
     hrefs: list[str] = []
     for match in re.finditer(r'href:\s*"([^"]+)"', navigation_text):
-        href = match.group(1).strip()
+        href = _canonicalize_nav_href(match.group(1))
         if href and href not in hrefs:
             hrefs.append(href)
     return hrefs
@@ -936,11 +1025,9 @@ def _ensure_frontend_navigation_shell_upgrade(app_root: Path, generated: list[st
 
 
 def _register_frontend_nav_link(app_root: Path, href: str, generated: list[str], project_dir: Path) -> None:
-    cleaned = str(href or "").strip()
+    cleaned = _canonicalize_nav_href(href)
     if not cleaned:
         return
-    if not cleaned.startswith("/"):
-        cleaned = "/" + cleaned
     nav_path = _frontend_nav_path(app_root)
     existing_hrefs: list[str] = []
     if nav_path.exists():
@@ -1059,7 +1146,7 @@ def apply_api_scaffold(project_dir: Path, method: str, path: str) -> list[str]:
         return []
 
     method_up = str(method or "").strip().upper()
-    route_path = str(path or "").strip()
+    route_path = _canonicalize_api_path(str(path or "").strip())
     if not method_up or not route_path:
         return []
 
@@ -1155,7 +1242,7 @@ def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
     app_root = _resolve_frontend_app_root(project_dir)
     if app_root is None:
         return []
-    rel = str(page_path or "").strip().strip("/")
+    rel = _canonicalize_page_path(page_path)
     if not rel or " " in rel:
         return []
     target = app_root / rel / "page.tsx"
