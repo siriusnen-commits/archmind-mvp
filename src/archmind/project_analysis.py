@@ -14,6 +14,24 @@ def _normalize_entity_name(value: Any) -> str:
     return name[0].upper() + name[1:]
 
 
+def _pluralize_resource_name(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    if raw.endswith(("s", "x", "z", "ch", "sh")):
+        return raw if raw.endswith("s") else f"{raw}es"
+    if raw.endswith("y") and len(raw) > 1 and raw[-2] not in "aeiou":
+        return f"{raw[:-1]}ies"
+    return f"{raw}s"
+
+
+def _canonical_resource_segment(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
+    if not normalized:
+        return ""
+    return _pluralize_resource_name(normalized)
+
+
 def _entity_slug(entity_name: str) -> str:
     value = str(entity_name or "").strip()
     if not value:
@@ -25,17 +43,38 @@ def _entity_resource(entity_name: str) -> str:
     slug = _entity_slug(entity_name)
     if not slug:
         return ""
-    if slug.endswith("s"):
-        return slug
-    return f"{slug}s"
+    return _pluralize_resource_name(slug)
 
 
-def _normalize_page(value: Any) -> str:
+def _canonicalize_page_path(value: Any) -> str:
     page = str(value or "").strip().replace("\\", "/")
     page = re.sub(r"/{2,}", "/", page).strip("/")
     if not page or " " in page:
         return ""
-    return page.lower()
+    parts = [p for p in page.lower().split("/") if p]
+    if not parts:
+        return ""
+    resource = _canonical_resource_segment(parts[0])
+    if not resource:
+        return ""
+    if len(parts) == 1:
+        return f"{resource}/list"
+    action_map = {
+        "list": "list",
+        "lists": "list",
+        "index": "list",
+        "home": "list",
+        "detail": "detail",
+        "details": "detail",
+        "view": "detail",
+        "show": "detail",
+    }
+    action = action_map.get(parts[1], parts[1])
+    return f"{resource}/{action}"
+
+
+def _normalize_page(value: Any) -> str:
+    return _canonicalize_page_path(value)
 
 
 def _parse_api_endpoint(value: Any) -> tuple[str, str] | None:
@@ -51,7 +90,36 @@ def _parse_api_endpoint(value: Any) -> tuple[str, str] | None:
         return None
     if not path.startswith("/"):
         path = "/" + path
+    path = _canonicalize_api_path(path)
     return method, path
+
+
+def _canonicalize_api_path(value: str) -> str:
+    raw = str(value or "").strip().replace("\\", "/")
+    if not raw:
+        return ""
+    if not raw.startswith("/"):
+        raw = "/" + raw
+    parts = [p for p in raw.split("/") if p]
+    if not parts:
+        return ""
+    canonical_parts: list[str] = []
+    for idx, part in enumerate(parts):
+        token = str(part).strip()
+        if not token:
+            continue
+        if token.startswith("{") and token.endswith("}"):
+            canonical_parts.append(token)
+            continue
+        normalized = re.sub(r"[^a-z0-9_]+", "_", token.lower()).strip("_")
+        if not normalized:
+            continue
+        if idx == 0:
+            normalized = _pluralize_resource_name(normalized)
+        canonical_parts.append(normalized)
+    if not canonical_parts:
+        return ""
+    return "/" + "/".join(canonical_parts)
 
 
 def _normalize_fields(item: Any) -> list[dict[str, str]]:
@@ -106,72 +174,112 @@ def _normalize_inferred_field_name(raw_name: str) -> str:
     return field
 
 
-def _infer_fields_from_python_model(path: Path) -> list[dict[str, str]]:
+def _normalize_class_entity_name(raw_name: str) -> str:
+    value = str(raw_name or "").strip()
+    if not value:
+        return ""
+    # Common generated class suffixes
+    for suffix in ("Model", "Schema", "Base", "Create", "Update", "Read", "Response", "Request", "InDB"):
+        if value.endswith(suffix) and len(value) > len(suffix):
+            value = value[: -len(suffix)]
+            break
+    return _normalize_entity_name(value)
+
+
+def _infer_fields_by_entity_from_python_model(path: Path) -> dict[str, list[dict[str, str]]]:
     try:
         content = path.read_text(encoding="utf-8")
     except Exception:
-        return []
-    out: list[dict[str, str]] = []
-    seen: set[str] = set()
+        return {}
+    out: dict[str, list[dict[str, str]]] = {}
+    seen_by_entity: dict[str, set[str]] = {}
+    current_entity = ""
+    current_indent = -1
     for raw_line in content.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
+        if not raw_line.strip():
             continue
-        match = re.match(r"^([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*([^=]+)", line)
-        if not match:
+        stripped = raw_line.strip()
+        if stripped.startswith("#"):
             continue
-        field_name = _normalize_inferred_field_name(match.group(1))
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        class_match = re.match(r"^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)\b", raw_line)
+        if class_match:
+            current_entity = _normalize_class_entity_name(class_match.group(1))
+            current_indent = indent
+            if current_entity and current_entity not in out:
+                out[current_entity] = []
+                seen_by_entity[current_entity] = set()
+            continue
+        if current_entity and indent <= current_indent and not raw_line.lstrip(" ").startswith("@"):
+            current_entity = ""
+            current_indent = -1
+            continue
+        if not current_entity:
+            continue
+        field_match = re.match(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*([^=\n#]+)", raw_line)
+        if not field_match:
+            continue
+        field_name = _normalize_inferred_field_name(field_match.group(1))
         if not field_name:
             continue
         key = field_name.lower()
+        seen = seen_by_entity.setdefault(current_entity, set())
         if key in seen:
             continue
         seen.add(key)
-        out.append({"name": field_name, "type": "string"})
+        out.setdefault(current_entity, []).append({"name": field_name, "type": "string"})
     return out
 
 
-def _candidate_entity_model_files(project_dir: Path, entity_name: str) -> list[Path]:
-    slug = _entity_slug(entity_name)
-    if not slug:
-        return []
-    names = [slug, entity_name.lower()]
-    roots = [
+def _backend_model_roots(project_dir: Path) -> list[Path]:
+    return [
         project_dir / "backend" / "app" / "models",
         project_dir / "backend" / "app" / "schemas",
         project_dir / "app" / "models",
         project_dir / "app" / "schemas",
     ]
-    candidates: list[Path] = []
-    for root in roots:
-        for name in names:
-            candidates.append(root / f"{name}.py")
-    return candidates
 
 
-def _merge_fields_with_code_inference(
+def _extract_backend_fields_by_entity(project_dir: Path) -> dict[str, list[dict[str, str]]]:
+    out: dict[str, list[dict[str, str]]] = {}
+    seen: dict[str, set[str]] = {}
+    for root in _backend_model_roots(project_dir):
+        if not root.exists():
+            continue
+        for path in root.glob("*.py"):
+            inferred = _infer_fields_by_entity_from_python_model(path)
+            for entity, rows in inferred.items():
+                bucket = out.setdefault(entity, [])
+                seen_bucket = seen.setdefault(entity, set())
+                for item in rows:
+                    field_name = str(item.get("name") or "").strip()
+                    if not field_name:
+                        continue
+                    key = field_name.lower()
+                    if key in seen_bucket:
+                        continue
+                    seen_bucket.add(key)
+                    bucket.append(item)
+    return out
+
+
+def _resolve_fields_by_source(
     project_dir: Path,
     entities: list[str],
-    fields_by_entity: dict[str, list[dict[str, str]]],
-) -> dict[str, list[dict[str, str]]]:
+    spec_fields_by_entity: dict[str, list[dict[str, str]]],
+) -> tuple[dict[str, list[dict[str, str]]], dict[str, bool]]:
+    backend_fields_by_entity = _extract_backend_fields_by_entity(project_dir)
     merged: dict[str, list[dict[str, str]]] = {}
+    backend_presence: dict[str, bool] = {}
     for entity in entities:
-        current = list(fields_by_entity.get(entity) or [])
-        seen = {str(item.get("name") or "").strip().lower() for item in current if str(item.get("name") or "").strip()}
-        for candidate in _candidate_entity_model_files(project_dir, entity):
-            if not candidate.exists():
-                continue
-            for item in _infer_fields_from_python_model(candidate):
-                field_name = str(item.get("name") or "").strip()
-                if not field_name:
-                    continue
-                key = field_name.lower()
-                if key in seen:
-                    continue
-                seen.add(key)
-                current.append(item)
-        merged[entity] = current
-    return merged
+        backend_rows = list(backend_fields_by_entity.get(entity) or [])
+        if backend_rows:
+            merged[entity] = backend_rows
+            backend_presence[entity] = True
+            continue
+        merged[entity] = list(spec_fields_by_entity.get(entity) or [])
+        backend_presence[entity] = False
+    return merged, backend_presence
 
 
 def _extract_apis(spec_payload: dict[str, Any]) -> list[dict[str, str]]:
@@ -211,6 +319,7 @@ def _is_detail_path(path: str) -> bool:
 def _compute_entity_crud_status(
     entities: list[str],
     fields_by_entity: dict[str, list[dict[str, str]]],
+    backend_field_presence: dict[str, bool],
     apis: list[dict[str, str]],
     pages: list[str],
 ) -> dict[str, dict[str, Any]]:
@@ -253,7 +362,13 @@ def _compute_entity_crud_status(
 
         field_names = {str(item.get("name") or "").strip().lower() for item in (fields_by_entity.get(entity) or [])}
         missing_important_fields: list[str] = []
-        if not ({"title", "name"} & field_names):
+        has_backend_fields = bool(backend_field_presence.get(entity))
+        missing_title = not ({"title", "name"} & field_names)
+        # For memo/note projects, avoid title false-positives unless backend classes clearly miss it.
+        if _normalize_entity_name(entity) == "Note":
+            if missing_title and has_backend_fields:
+                missing_important_fields.append("title")
+        elif missing_title:
             missing_important_fields.append("title")
 
         status[entity] = {
@@ -467,6 +582,75 @@ def _build_suggestions(
     return suggestions[:3], {"kind": str(next_action.get("kind") or "none"), "message": str(next_action.get("message") or ""), "command": str(next_action.get("command") or "")}
 
 
+def _canonicalize_suggestion_command(command: str) -> str:
+    text = str(command or "").strip()
+    if not text:
+        return ""
+    if not text.startswith("/"):
+        return ""
+    parts = text.split()
+    if len(parts) < 2:
+        return ""
+    cmd = parts[0]
+    if cmd == "/add_page":
+        page = _canonicalize_page_path(parts[1])
+        return f"/add_page {page}" if page else ""
+    if cmd == "/add_api" and len(parts) >= 3:
+        method = str(parts[1] or "").strip().upper()
+        if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+            return ""
+        path = _canonicalize_api_path(parts[2])
+        return f"/add_api {method} {path}" if path else ""
+    if cmd == "/add_entity":
+        entity = _normalize_entity_name(parts[1])
+        return f"/add_entity {entity}" if entity else ""
+    if cmd == "/add_field" and len(parts) >= 3:
+        entity = _normalize_entity_name(parts[1])
+        field_expr = str(parts[2] or "").strip()
+        if ":" in field_expr:
+            field_name, field_type = field_expr.split(":", 1)
+        else:
+            field_name, field_type = field_expr, "string"
+        field_name = re.sub(r"[^a-zA-Z0-9_]+", "_", field_name.strip()).strip("_")
+        field_type = re.sub(r"[^a-zA-Z0-9_]+", "", field_type.strip().lower())
+        if not entity or not field_name or not field_type:
+            return ""
+        return f"/add_field {entity} {field_name}:{field_type}"
+    return text
+
+
+def canonicalize_analysis_suggestions(rows: list[dict[str, Any]]) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        kind = str(raw.get("kind") or "").strip() or "info"
+        message = str(raw.get("message") or "").strip()
+        command_raw = str(raw.get("command") or "").strip()
+        command = _canonicalize_suggestion_command(command_raw)
+        if command_raw and not command:
+            continue
+        if command.startswith("/add_page "):
+            page = command.split(maxsplit=1)[1]
+            message = re.sub(
+                r"^Page\s+\S+\s+is still placeholder-level\.",
+                f"Page {page} is still placeholder-level.",
+                message,
+                flags=re.IGNORECASE,
+            )
+        key = (kind, message, command)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"kind": kind, "message": message, "command": command})
+        if len(out) >= 3:
+            break
+    if not out:
+        return [{"kind": "none", "message": "No immediate suggestions.", "command": ""}]
+    return out
+
+
 def analyze_project(
     project_dir: Path,
     *,
@@ -478,12 +662,56 @@ def analyze_project(
     entities, fields_by_entity = _extract_entities(spec)
     apis = _extract_apis(spec)
     pages = _extract_pages(spec)
-    fields_by_entity = _merge_fields_with_code_inference(project_dir, entities, fields_by_entity)
-    entity_crud_status = _compute_entity_crud_status(entities, fields_by_entity, apis, pages)
+    fields_by_entity, backend_field_presence = _resolve_fields_by_source(project_dir, entities, fields_by_entity)
+    entity_crud_status = _compute_entity_crud_status(entities, fields_by_entity, backend_field_presence, apis, pages)
     placeholder_pages = _detect_placeholder_pages(project_dir, pages)
     nav_visible_pages = _extract_nav_visible_pages(project_dir, pages)
     runtime_status = _normalize_runtime_status(runtime_payload if isinstance(runtime_payload, dict) else {})
     suggestions, next_action = _build_suggestions(entities, entity_crud_status, placeholder_pages)
+
+    # Step 1: backend safety filter (remove false "missing title")
+    filtered: list[dict[str, str]] = []
+    for row in suggestions:
+        if not isinstance(row, dict):
+            continue
+
+        kind = str(row.get("kind") or "")
+        message = str(row.get("message") or "")
+        command = str(row.get("command") or "")
+
+        if kind == "missing_field" and "important field: title" in message:
+            matched_entity = ""
+            for entity in entities:
+                if message.startswith(f"{entity} is missing"):
+                    matched_entity = entity
+                    break
+
+            names = {
+                str(item.get("name") or "").strip().lower()
+                for item in (fields_by_entity.get(matched_entity) or [])
+            }
+
+            if {"title", "name"} & names:
+                continue
+
+        filtered.append({
+            "kind": kind,
+            "message": message,
+            "command": command,
+        })
+
+    if filtered:
+        suggestions = filtered[:3]
+
+    # Step 2: canonical normalization (main branch logic)
+    suggestions = canonicalize_analysis_suggestions(suggestions)
+
+    # Step 3: next_action 결정
+    next_action = suggestions[0] if suggestions else {
+        "kind": "none",
+        "message": "No immediate suggestions.",
+        "command": "",
+    }
 
     return {
         "project_name": str(project_name or project_dir.name),

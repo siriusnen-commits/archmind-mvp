@@ -43,7 +43,7 @@ from archmind.idea_normalizer import normalize_idea
 from archmind.next_suggester import analyze_spec_progression, suggest_next_commands, suggest_spec_improvements
 from archmind.plan_suggester import build_plan_from_project_spec, build_plan_from_suggestion
 from archmind.project_type import detect_project_type, normalize_project_type
-from archmind.project_analysis import analyze_project
+from archmind.project_analysis import analyze_project, canonicalize_analysis_suggestions
 from archmind.design_suggester import build_architecture_design
 from archmind.spec_suggester import suggest_project_spec
 from archmind.state import (
@@ -3564,8 +3564,8 @@ async def command_suggest(update: Any, context: Any) -> None:
         return
 
     analysis = _build_project_analysis(project_path)
-    suggestions = analysis.get("suggestions") if isinstance(analysis.get("suggestions"), list) else []
-    suggestion_rows = [item for item in suggestions if isinstance(item, dict)][:3]
+    raw_suggestions = analysis.get("suggestions") if isinstance(analysis.get("suggestions"), list) else []
+    suggestion_rows = canonicalize_analysis_suggestions([item for item in raw_suggestions if isinstance(item, dict)])
     actionable_rows = [
         row
         for row in suggestion_rows
