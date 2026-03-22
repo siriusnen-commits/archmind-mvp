@@ -21,7 +21,9 @@ def test_project_detail_page_keeps_detail_only_cards_reachable() -> None:
 
     assert 'import AddEntityCard from "@/components/AddEntityCard";' in source
     assert 'import AddFieldCard from "@/components/AddFieldCard";' in source
+    assert 'import AddApiCard from "@/components/AddApiCard";' in source
     assert 'import DangerZoneCard from "@/components/DangerZoneCard";' in source
     assert '<AddEntityCard projectName={detail.name} />' in source
     assert '<AddFieldCard projectName={detail.name} entities={detail.entities} />' in source
+    assert '<AddApiCard projectName={detail.name} />' in source
     assert '<DangerZoneCard projectName={detail.name} repositoryUrl={detail.repository?.url} />' in source
