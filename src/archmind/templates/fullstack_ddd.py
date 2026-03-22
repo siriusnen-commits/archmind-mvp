@@ -12,6 +12,8 @@ def enforce_fullstack_ddd(_: Dict[str, str], project_name: str) -> Dict[str, str
     - Always runnable/testable skeleton
     """
     files: Dict[str, str] = {}
+    project_name_lc = str(project_name or "").strip().lower()
+    is_note_project = any(keyword in project_name_lc for keyword in ("memo", "note", "journal"))
 
     # -------------------------
     # Backend (same pins as fastapi-ddd)
@@ -590,6 +592,7 @@ body {
 }
 """
 
+    layout_routes = "/ · /notes" if is_note_project else "/ · /notes · /ui/defects"
     files["frontend/app/layout.tsx"] = (
         'import "./globals.css";\n\n'
         "export const metadata = {\n"
@@ -605,9 +608,9 @@ body {
         '              <div className="flex items-center justify-between">\n'
         "                <div>\n"
         f'                  <div className="text-lg font-semibold tracking-wide">{project_name}</div>\n'
-        '                  <div className="text-xs text-slate-400">FastAPI + Next.js workspace</div>\n'
+        '                  <div className="text-xs text-slate-300">FastAPI + Next.js workspace</div>\n'
         "                </div>\n"
-        '                <div className="text-xs text-slate-400">/ · /notes · /ui/defects</div>\n'
+        f'                <div className="text-xs text-slate-300">{layout_routes}</div>\n'
         "              </div>\n"
         "            </div>\n"
         "          </header>\n"
@@ -617,6 +620,23 @@ body {
         "    </html>\n"
         "  );\n"
         "}\n"
+    )
+
+    root_links = (
+        """      <div className="flex flex-wrap gap-2 text-sm">
+        <Link href="/notes" className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">
+          Notes
+        </Link>
+      </div>"""
+        if is_note_project
+        else """      <div className="flex flex-wrap gap-2 text-sm">
+        <Link href="/notes" className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">
+          Notes
+        </Link>
+        <Link href="/ui/defects" className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">
+          Defects
+        </Link>
+      </div>"""
     )
 
     files["frontend/app/page.tsx"] = """"use client";
@@ -657,21 +677,390 @@ export default function Page() {
     return <p className="text-sm text-slate-300">Loading workspace...</p>;
   }
 
-  return (
+      return (
     <section className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
       <h1 className="text-lg font-semibold">Project Home</h1>
-      <p className="text-xs text-slate-400">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>
-      <p className="text-sm text-slate-300">
+      <p className="text-xs text-slate-300">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>
+      <p className="text-sm text-slate-200">
         Open the generated domain pages. If Note pages exist, this page will auto-open <code>/notes</code>.
       </p>
-      <div className="flex flex-wrap gap-2 text-sm">
-        <Link href="/notes" className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">
-          Notes
-        </Link>
-        <Link href="/ui/defects" className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">
-          Defects
+__ROOT_LINKS__
+    </section>
+  );
+}
+"""
+    files["frontend/app/page.tsx"] = files["frontend/app/page.tsx"].replace("__ROOT_LINKS__", root_links)
+
+    files["frontend/app/notes/page.tsx"] = """"use client";
+
+import Link from "next/link";
+import { FormEvent, useEffect, useState } from "react";
+import { useApiBaseUrl } from "../_lib/apiBase";
+
+type Note = {
+  id?: number | string;
+  title?: string;
+  content?: string;
+  [key: string]: unknown;
+};
+
+function extractNotes(payload: unknown): Note[] {
+  if (Array.isArray(payload)) return payload as Note[];
+  if (payload && typeof payload === "object" && Array.isArray((payload as { items?: unknown[] }).items)) {
+    return ((payload as { items: unknown[] }).items ?? []) as Note[];
+  }
+  return [];
+}
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error || "Unknown error");
+}
+
+export default function NotesPage() {
+  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+
+  async function loadNotes() {
+    if (!apiBaseUrl) return;
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/notes`, { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error(`Failed to load notes (HTTP ${response.status})`);
+      }
+      const payload = await response.json();
+      setNotes(extractNotes(payload));
+    } catch (err) {
+      setError(getErrorMessage(err));
+      setNotes([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (apiBaseLoading || !apiBaseUrl) return;
+    loadNotes().catch(() => {
+      // handled in loadNotes
+    });
+  }, [apiBaseLoading, apiBaseUrl]);
+
+  async function onCreate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const nextTitle = title.trim();
+    if (!nextTitle) {
+      setMessage("");
+      setError("Title is required.");
+      return;
+    }
+    if (!apiBaseUrl) {
+      setMessage("");
+      setError("API base is not ready.");
+      return;
+    }
+    setSaving(true);
+    setMessage("");
+    setError("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/notes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: nextTitle, content }),
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to create note (HTTP ${response.status})`);
+      }
+      setTitle("");
+      setContent("");
+      setMessage("Note created.");
+      await loadNotes();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="space-y-5 rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
+      <div className="space-y-1">
+        <h1 className="text-lg font-semibold text-slate-50">Notes</h1>
+        <p className="text-xs text-slate-300">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>
+      </div>
+
+      <form onSubmit={onCreate} className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/70 p-4">
+        <h2 className="text-sm font-semibold text-slate-100">Create note</h2>
+        <div>
+          <label className="mb-1 block text-xs text-slate-300">Title *</label>
+          <input
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+            placeholder="Write a short title"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-slate-300">Content</label>
+          <textarea
+            value={content}
+            onChange={(event) => setContent(event.target.value)}
+            className="min-h-24 w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+            placeholder="Write your memo"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="submit"
+            disabled={saving || apiBaseLoading}
+            className="rounded-md bg-emerald-400 px-3 py-2 text-sm font-semibold text-emerald-950 disabled:opacity-60"
+          >
+            {saving ? "Creating..." : "Create note"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setTitle("");
+              setContent("");
+              setError("");
+              setMessage("");
+            }}
+            className="rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200"
+          >
+            Cancel
+          </button>
+        </div>
+        {message ? <p className="text-xs text-emerald-300">{message}</p> : null}
+      </form>
+
+      {loading ? <p className="text-sm text-slate-200">{apiBaseLoading ? "Resolving API base..." : "Loading notes..."}</p> : null}
+      {!loading && error ? <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</p> : null}
+      {!loading && !error && notes.length === 0 ? <p className="text-sm text-slate-300">No notes yet. Create your first note above.</p> : null}
+
+      {!loading && !error && notes.length > 0 ? (
+        <ul className="space-y-2">
+          {notes.map((note, index) => (
+            <li key={String(note.id ?? index)} className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-slate-100">{String(note.title || `Untitled #${note.id ?? index}`)}</p>
+                  <p className="mt-1 line-clamp-2 text-xs text-slate-300">{String(note.content || "(no content)")}</p>
+                </div>
+                {note.id !== undefined ? (
+                  <Link
+                    href={`/notes/${String(note.id)}`}
+                    className="shrink-0 rounded-md border border-cyan-500/40 px-2 py-1 text-xs text-cyan-300 hover:bg-cyan-500/10"
+                  >
+                    Open
+                  </Link>
+                ) : null}
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
+  );
+}
+"""
+
+    files["frontend/app/notes/[id]/page.tsx"] = """"use client";
+
+import Link from "next/link";
+import { FormEvent, useEffect, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { useApiBaseUrl } from "../../_lib/apiBase";
+
+type Note = {
+  id?: number | string;
+  title?: string;
+  content?: string;
+  [key: string]: unknown;
+};
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error || "Unknown error");
+}
+
+export default function NoteDetailPage() {
+  const params = useParams();
+  const router = useRouter();
+  const noteId = String(params.id || "").trim();
+  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();
+  const [note, setNote] = useState<Note | null>(null);
+  const [title, setTitle] = useState("");
+  const [content, setContent] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+
+  async function loadNote() {
+    if (!apiBaseUrl || !noteId) return;
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/notes/${noteId}`, { cache: "no-store" });
+      if (response.status === 404) {
+        setNote(null);
+        setTitle("");
+        setContent("");
+        setError("Note not found.");
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(`Failed to load note (HTTP ${response.status})`);
+      }
+      const payload = (await response.json()) as Note;
+      setNote(payload);
+      setTitle(String(payload.title || ""));
+      setContent(String(payload.content || ""));
+    } catch (err) {
+      setError(getErrorMessage(err));
+      setNote(null);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!noteId) {
+      setError("Missing note id.");
+      setLoading(false);
+      return;
+    }
+    if (apiBaseLoading || !apiBaseUrl) return;
+    loadNote().catch(() => {
+      // handled in loadNote
+    });
+  }, [noteId, apiBaseLoading, apiBaseUrl]);
+
+  async function onSave(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const nextTitle = title.trim();
+    if (!nextTitle) {
+      setMessage("");
+      setError("Title is required.");
+      return;
+    }
+    if (!apiBaseUrl) {
+      setMessage("");
+      setError("API base is not ready.");
+      return;
+    }
+    setSaving(true);
+    setMessage("");
+    setError("");
+    try {
+      let response = await fetch(`${apiBaseUrl}/notes/${noteId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: nextTitle, content }),
+      });
+      if (response.status === 405) {
+        response = await fetch(`${apiBaseUrl}/notes/${noteId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: nextTitle, content }),
+        });
+      }
+      if (!response.ok) {
+        throw new Error(`Failed to update note (HTTP ${response.status})`);
+      }
+      setMessage("Note updated.");
+      await loadNote();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function onDelete() {
+    if (!apiBaseUrl) {
+      setError("API base is not ready.");
+      return;
+    }
+    if (!confirm("Delete this note?")) return;
+    setDeleting(true);
+    setMessage("");
+    setError("");
+    try {
+      const response = await fetch(`${apiBaseUrl}/notes/${noteId}`, { method: "DELETE" });
+      if (!response.ok) {
+        throw new Error(`Failed to delete note (HTTP ${response.status})`);
+      }
+      router.push("/notes");
+      router.refresh();
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <section className="space-y-5 rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
+      <div className="flex items-center justify-between">
+        <h1 className="text-lg font-semibold text-slate-50">Note Detail</h1>
+        <Link href="/notes" className="text-xs text-cyan-300 underline">
+          Back to notes
         </Link>
       </div>
+      <p className="text-xs text-slate-300">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>
+
+      {loading ? <p className="text-sm text-slate-200">{apiBaseLoading ? "Resolving API base..." : "Loading note..."}</p> : null}
+      {!loading && error ? <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</p> : null}
+
+      {!loading && !error && !note ? <p className="text-sm text-slate-300">Note not found.</p> : null}
+
+      {!loading && !error && note ? (
+        <form onSubmit={onSave} className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/70 p-4">
+          <div>
+            <label className="mb-1 block text-xs text-slate-300">Title *</label>
+            <input
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs text-slate-300">Content</label>
+            <textarea
+              value={content}
+              onChange={(event) => setContent(event.target.value)}
+              className="min-h-24 w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="submit"
+              disabled={saving}
+              className="rounded-md bg-emerald-400 px-3 py-2 text-sm font-semibold text-emerald-950 disabled:opacity-60"
+            >
+              {saving ? "Saving..." : "Save changes"}
+            </button>
+            <button
+              type="button"
+              onClick={onDelete}
+              disabled={deleting}
+              className="rounded-md border border-rose-500/50 px-3 py-2 text-sm text-rose-200 disabled:opacity-60"
+            >
+              {deleting ? "Deleting..." : "Delete note"}
+            </button>
+          </div>
+          {message ? <p className="text-xs text-emerald-300">{message}</p> : null}
+        </form>
+      ) : null}
     </section>
   );
 }

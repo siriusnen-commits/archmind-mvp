@@ -146,6 +146,30 @@ def test_apply_frontend_page_scaffold_creates_pages_for_frontend_structure(tmp_p
     assert "placeholder" not in detail_text.lower()
 
 
+def test_apply_frontend_page_scaffold_note_entity_is_usable_crud_mvp(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_demo"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    generated = apply_frontend_page_scaffold(project_dir, "Note")
+    assert "frontend/app/notes/page.tsx" in generated
+    assert "frontend/app/notes/[id]/page.tsx" in generated
+
+    list_text = (project_dir / "frontend" / "app" / "notes" / "page.tsx").read_text(encoding="utf-8")
+    detail_text = (project_dir / "frontend" / "app" / "notes" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+
+    assert "Create note" in list_text
+    assert "method: \"POST\"" in list_text
+    assert "Title is required." in list_text
+    assert "No notes yet." in list_text
+    assert "Open detail" in list_text
+    assert "Save changes" in detail_text
+    assert "method: \"PUT\"" in detail_text
+    assert "method: \"PATCH\"" in detail_text
+    assert "Delete note" in detail_text
+    assert "method: \"DELETE\"" in detail_text
+
+
 def test_apply_frontend_page_scaffold_is_idempotent_and_skips_backend_only(tmp_path: Path) -> None:
     backend_only = tmp_path / "backend_demo"
     (backend_only / "app").mkdir(parents=True, exist_ok=True)
