@@ -15,6 +15,7 @@ type Props = {
 };
 
 type MessageType = "success" | "info" | "error";
+type RunState = "idle" | "running" | "success" | "error";
 
 const API_BASE = "/api/ui";
 
@@ -84,32 +85,37 @@ function isNoImmediate(nextAction: NextAction): boolean {
 
 export default function NextActionCard({ projectName, nextAction }: Props) {
   const router = useRouter();
-  const [loading, setLoading] = useState(false);
+  const [runState, setRunState] = useState<RunState>("idle");
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState<MessageType>("success");
+  const [executedCommand, setExecutedCommand] = useState("");
 
   const action = nextAction || {};
   const noImmediate = isNoImmediate(action);
   const actionMessage = noImmediate ? "No immediate next action." : String(action.message || "").trim();
   const command = String(action.command || "").trim();
-  const canRun = Boolean(command && !noImmediate && String(projectName || "").trim());
+  const normalizedCommand = normalizeCommandText(command);
+  const canRun = Boolean(normalizedCommand && !noImmediate && String(projectName || "").trim()) && runState !== "running" && runState !== "success";
 
   async function runNextAction() {
     const targetProject = String(projectName || "").trim();
     if (!targetProject) {
+      setRunState("error");
       setMessageType("error");
       setMessage("Failed to run next action: project name is missing");
       return;
     }
     const parsed = parseNextCommand(command);
     if (!parsed) {
+      setRunState("error");
       setMessageType("error");
       setMessage("Failed to run next action: unsupported or invalid command");
       return;
     }
 
-    setLoading(true);
+    setRunState("running");
     setMessage("");
+    setExecutedCommand(normalizedCommand);
     try {
       const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(targetProject)}/${parsed.endpoint}`, {
         method: "POST",
@@ -128,10 +134,12 @@ export default function NextActionCard({ projectName, nextAction }: Props) {
 
       if (!response.ok || !Boolean(payload.ok)) {
         if (detail.toLowerCase().includes("already exists")) {
+          setRunState("success");
           setMessageType("info");
           setMessage("Already exists (auto-created)");
           return;
         }
+        setRunState("error");
         setMessageType("error");
         setMessage(detail ? `Failed to run next action: ${detail}` : "Failed to run next action");
         return;
@@ -145,6 +153,7 @@ export default function NextActionCard({ projectName, nextAction }: Props) {
         const expectedField = parsed.payload.field_name;
         const expectedType = parsed.payload.field_type.toLowerCase();
         if (actualEntity && (actualEntity !== expectedEntity || actualField !== expectedField || actualType !== expectedType)) {
+          setRunState("error");
           setMessageType("error");
           setMessage(
             `Failed to run next action: target mismatch (expected ${expectedEntity}.${expectedField}:${expectedType}, got ${actualEntity}.${actualField}:${actualType})`
@@ -153,16 +162,22 @@ export default function NextActionCard({ projectName, nextAction }: Props) {
         }
       }
 
+      setRunState("success");
       setMessageType("success");
-      setMessage(detail || "Next action executed");
-      router.refresh();
+      setMessage(detail || "Completed");
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error || "unknown error");
+      setRunState("error");
       setMessageType("error");
       setMessage(`Failed to run next action: ${detail}`);
-    } finally {
-      setLoading(false);
     }
+  }
+
+  function refreshSuggestions() {
+    setRunState("idle");
+    setMessage("");
+    setExecutedCommand("");
+    router.refresh();
   }
 
   return (
@@ -174,12 +189,21 @@ export default function NextActionCard({ projectName, nextAction }: Props) {
         <button
           type="button"
           onClick={runNextAction}
-          disabled={!canRun || loading}
+          disabled={!canRun}
           className="rounded-md border border-cyan-600 px-3 py-1.5 text-sm text-cyan-200 hover:bg-cyan-900/30 disabled:opacity-60"
         >
-          {loading ? "Running..." : "Run"}
+          {runState === "running" ? "Running..." : runState === "success" ? "Completed" : "Run"}
+        </button>
+        <button
+          type="button"
+          onClick={refreshSuggestions}
+          disabled={runState === "running"}
+          className="rounded-md border border-slate-500 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800 disabled:opacity-60"
+        >
+          Refresh suggestions
         </button>
       </div>
+      {executedCommand ? <p className="mt-2 break-words text-xs text-slate-300">Executed: {executedCommand}</p> : null}
       {message ? (
         <p
           className={
