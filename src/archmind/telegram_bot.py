@@ -43,6 +43,7 @@ from archmind.idea_normalizer import normalize_idea
 from archmind.next_suggester import analyze_spec_progression, suggest_next_commands, suggest_spec_improvements
 from archmind.plan_suggester import build_plan_from_project_spec, build_plan_from_suggestion
 from archmind.project_type import detect_project_type, normalize_project_type
+from archmind.project_analysis import analyze_project
 from archmind.design_suggester import build_architecture_design
 from archmind.spec_suggester import suggest_project_spec
 from archmind.state import (
@@ -70,7 +71,7 @@ PROJECT CREATION
 /idea_local <idea>     generate + run locally
 /pipeline <idea>       alias of /idea
 /preview <idea>        preview Brain reasoning
-/suggest <idea>        show architecture suggestions
+/suggest               show next suggestions for current project
 /design <idea>         generate architecture design document
 /plan <idea>           build development plan from an idea
 /plan                  build next development plan for current project
@@ -510,7 +511,7 @@ def _help_section_text(section: str) -> str:
             "- /idea_local <idea>     generate + run locally\n"
             "- /pipeline <idea>       alias of /idea\n"
             "- /preview <idea>        preview Brain reasoning\n"
-            "- /suggest <idea>        show architecture suggestions\n"
+            "- /suggest               show next suggestions for current project\n"
             "- /design <idea>         generate architecture design document\n"
             "- /plan <idea>           build development plan from an idea\n"
             "- /apply_plan            execute saved development plan"
@@ -3556,68 +3557,60 @@ async def command_preview(update: Any, context: Any) -> None:
 
 
 async def command_suggest(update: Any, context: Any) -> None:
-    idea = extract_idea(getattr(context, "args", []))
-    if not idea:
-        await update.message.reply_text("Usage: /suggest <idea>")
+    del context
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text(_no_active_project_guidance())
         return
 
-    normalized_payload = normalize_idea(idea)
-    normalized = str(normalized_payload.get("normalized") or idea)
-    reasoning = reason_architecture_from_idea(normalized)
-    suggestions = get_template_suggestions(normalized, reasoning) or [str(reasoning.get("recommended_template") or "fastapi")]
-    target_project = _resolve_target_project()
-    spec_suggestion = suggest_project_spec(normalized, reasoning, provider_project_dir=target_project)
-    if target_project is not None:
-        suggestion_path = target_project / ".archmind" / "suggestion.json"
-        suggestion_path.parent.mkdir(parents=True, exist_ok=True)
-        suggestion_path.write_text(json.dumps(spec_suggestion, ensure_ascii=False, indent=2), encoding="utf-8")
+    analysis = _build_project_analysis(project_path)
+    suggestions = analysis.get("suggestions") if isinstance(analysis.get("suggestions"), list) else []
+    suggestion_rows = [item for item in suggestions if isinstance(item, dict)][:3]
+    actionable_rows = [
+        row
+        for row in suggestion_rows
+        if str(row.get("kind") or "").strip().lower() != "none"
+        and str(row.get("message") or "").strip().lower() != "no immediate suggestions."
+    ]
 
-    shape = str(reasoning.get("app_shape") or "unknown")
-    template = str(reasoning.get("recommended_template") or "unknown")
-    modules = [str(x) for x in (reasoning.get("modules") or []) if str(x).strip()]
-    entities = spec_suggestion.get("entities") if isinstance(spec_suggestion.get("entities"), list) else []
-    apis = [str(x) for x in (spec_suggestion.get("api_endpoints") or []) if str(x).strip()]
-    pages = [str(x) for x in (spec_suggestion.get("frontend_pages") or []) if str(x).strip()]
+    if not actionable_rows:
+        await update.message.reply_text(
+            _truncate_message(
+                "Suggestions\n"
+                f"Target Project: {project_path.name}\n\n"
+                "No immediate suggestions."
+            )
+        )
+        return
 
-    entity_lines: list[str] = []
-    for entity in entities:
-        if not isinstance(entity, dict):
-            continue
-        name = str(entity.get("name") or "").strip()
-        fields = entity.get("fields") if isinstance(entity.get("fields"), list) else []
-        pairs = []
-        for field in fields:
-            if not isinstance(field, dict):
-                continue
-            field_name = str(field.get("name") or "").strip()
-            field_type = str(field.get("type") or "").strip()
-            if field_name and field_type:
-                pairs.append(f"{field_name}:{field_type}")
-        if name:
-            entity_lines.append(f"- {name}({', '.join(pairs)})" if pairs else f"- {name}")
+    lines = [
+        "Suggestions",
+        f"Target Project: {project_path.name}",
+        "",
+    ]
+    for idx, item in enumerate(actionable_rows, start=1):
+        message = str(item.get("message") or "").strip() or "No immediate suggestions."
+        command = str(item.get("command") or "").strip()
+        lines.append(f"{idx}. {message}")
+        if command:
+            lines.append(f"   Command: {command}")
+    await update.message.reply_text(_truncate_message("\n".join(lines)))
 
-    template_lines = "\n".join([f"- {name}" for name in suggestions[:3]])
-    reason = str(reasoning.get("reason_summary") or "unclear architecture")
-    message = (
-        "Architecture suggestion\n\n"
-        "Shape:\n"
-        f"{shape}\n\n"
-        "Template:\n"
-        f"{template}\n\n"
-        "Modules:\n"
-        f"{', '.join(modules) if modules else '(none)'}\n\n"
-        "Template candidates:\n"
-        f"{template_lines}\n\n"
-        "Suggested entities:\n"
-        f"{chr(10).join(entity_lines) if entity_lines else '- (none)'}\n\n"
-        "Suggested APIs:\n"
-        f"{chr(10).join([f'- {x}' for x in apis]) if apis else '- (none)'}\n\n"
-        "Suggested pages:\n"
-        f"{chr(10).join([f'- {x}' for x in pages]) if pages else '- (none)'}\n\n"
-        "Reasoning:\n"
-        f"{reason}"
+
+def _build_project_analysis(project_path: Path) -> dict[str, Any]:
+    spec_payload = _load_json(project_path / ".archmind" / "project_spec.json") or {}
+    try:
+        from archmind.deploy import get_local_runtime_status
+
+        runtime_payload = get_local_runtime_status(project_path)
+    except Exception:
+        runtime_payload = {}
+    return analyze_project(
+        project_path,
+        project_name=project_path.name,
+        spec_payload=spec_payload if isinstance(spec_payload, dict) else {},
+        runtime_payload=runtime_payload if isinstance(runtime_payload, dict) else {},
     )
-    await update.message.reply_text(_truncate_message(message))
 
 
 async def command_design(update: Any, context: Any) -> None:
