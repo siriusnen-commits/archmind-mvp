@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 import archmind.current_project as current_project_state
 import archmind.telegram_bot as telegram_bot
-from archmind.execution_history import load_recent_execution_events
+from archmind.execution_history import append_execution_event, load_recent_execution_events
 from archmind.telegram_bot import (
     build_completion_message,
     build_finished_message,
@@ -23,6 +23,7 @@ from archmind.telegram_bot import (
     command_continue,
     command_fix,
     command_current,
+    command_history,
     command_diff,
     command_open,
     command_tree,
@@ -1815,6 +1816,106 @@ def test_current_returns_no_selection_when_persisted_project_is_stale(monkeypatc
     asyncio.run(command_current(update, DummyContext()))
     out = msg.sent[-1]
     assert "No current project selected" in out
+
+
+def test_history_without_current_project_returns_safe_guidance() -> None:
+    clear_current_project()
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_history(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "No active project." in out
+
+
+def test_history_no_history_file_returns_empty_message(tmp_path: Path) -> None:
+    project = tmp_path / "history_empty_proj"
+    _mark_archmind_project(project)
+    set_current_project(project)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_history(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "Execution history" in out
+    assert "Target Project: history_empty_proj" in out
+    assert "No execution history yet." in out
+
+
+def test_history_shows_recent_events_newest_first_and_reason(tmp_path: Path) -> None:
+    project = tmp_path / "history_proj"
+    _mark_archmind_project(project)
+    set_current_project(project)
+    assert append_execution_event(
+        project,
+        project_name=project.name,
+        source="telegram-next",
+        command="/add_field Task title:string",
+        status="ok",
+        message="Field added",
+        timestamp="2026-03-22T00:00:01Z",
+    )
+    assert append_execution_event(
+        project,
+        project_name=project.name,
+        source="telegram-auto",
+        command="/auto",
+        status="stop",
+        message="Stopped",
+        stop_reason="low-priority next action",
+        timestamp="2026-03-22T00:00:02Z",
+    )
+    assert append_execution_event(
+        project,
+        project_name=project.name,
+        source="ui-next-run",
+        command="/implement_page songs/favorite",
+        status="fail",
+        message="Page not found",
+        timestamp="2026-03-22T00:00:03Z",
+    )
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_history(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "Execution history" in out
+    assert "Target Project: history_proj" in out
+    assert "1. [fail] /implement_page songs/favorite" in out
+    assert "Source: ui-next-run" in out
+    assert "Message: Page not found" in out
+    assert "2. [stop] /auto" in out
+    assert "Reason: low-priority next action" in out
+    assert "3. [ok] /add_field Task title:string" in out
+
+
+def test_history_limit_clamps_to_one_to_twenty(tmp_path: Path) -> None:
+    project = tmp_path / "history_limit_proj"
+    _mark_archmind_project(project)
+    set_current_project(project)
+    for idx in range(25):
+        assert append_execution_event(
+            project,
+            project_name=project.name,
+            source="manual-command",
+            command=f"/add_page tasks/{idx}",
+            status="ok",
+            message="ok",
+            timestamp=f"2026-03-22T00:00:{idx:02d}Z",
+        )
+
+    msg_one = DummyMessage()
+    update_one = DummyUpdate(message=msg_one, effective_chat=DummyChat())
+    asyncio.run(command_history(update_one, DummyContext(args=["0"])))
+    out_one = msg_one.sent[-1]
+    assert out_one.count(". [ok]") == 1
+    assert "/add_page tasks/24" in out_one
+
+    msg_twenty = DummyMessage()
+    update_twenty = DummyUpdate(message=msg_twenty, effective_chat=DummyChat())
+    asyncio.run(command_history(update_twenty, DummyContext(args=["999"])))
+    out_twenty = msg_twenty.sent[-1]
+    assert out_twenty.count(". [ok]") == 20
+    assert "/add_page tasks/24" in out_twenty
+    assert "/add_page tasks/5" in out_twenty
+    assert "/add_page tasks/4" not in out_twenty
 
 
 def test_current_shows_frontend_url_when_frontend_running(monkeypatch, tmp_path: Path) -> None:
