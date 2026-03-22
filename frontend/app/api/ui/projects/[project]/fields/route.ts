@@ -9,16 +9,25 @@ type Params = {
 export async function POST(request: Request, { params }: Params) {
   const resolved = await params;
   const project = decodeURIComponent(String(resolved?.project || ""));
-  const bodyText = await request.text();
+  const payload = (await request.json().catch(() => ({}))) as {
+    entity_name?: unknown;
+    field_name?: unknown;
+    field_type?: unknown;
+  };
+  const body = {
+    entity_name: String(payload.entity_name ?? ""),
+    field_name: String(payload.field_name ?? ""),
+    field_type: String(payload.field_type ?? ""),
+  };
   try {
     const response = await fetch(`${BACKEND_UI_BASE}/projects/${encodeURIComponent(project)}/fields`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: bodyText,
+      body: JSON.stringify(body),
       cache: "no-store",
     });
-    const body = await response.text();
-    return new NextResponse(body, {
+    const responseText = await response.text();
+    return new NextResponse(responseText, {
       status: response.status,
       headers: {
         "content-type": response.headers.get("content-type") || "application/json; charset=utf-8",
