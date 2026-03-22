@@ -170,3 +170,18 @@ def test_fullstack_runtime_env_template_uses_api_base_url_and_settings(tmp_path:
     assert "Defect Ledger" not in layout_page
     assert "FastAPI + Next.js workspace" in layout_page
     assert "DefectsPage" in defects_route
+
+
+def test_fullstack_note_project_has_note_oriented_shell_and_pages(tmp_path: Path) -> None:
+    project_dir = _generate_fullstack(tmp_path, name="memo_workspace")
+    layout_page = (project_dir / "frontend" / "app" / "layout.tsx").read_text(encoding="utf-8")
+    root_page = (project_dir / "frontend" / "app" / "page.tsx").read_text(encoding="utf-8")
+    notes_page = (project_dir / "frontend" / "app" / "notes" / "page.tsx").read_text(encoding="utf-8")
+    note_detail_page = (project_dir / "frontend" / "app" / "notes" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+
+    assert "/ui/defects" not in layout_page
+    assert "/ui/defects" not in root_page
+    assert "Create note" in notes_page
+    assert "Create your first note above." in notes_page
+    assert "Save changes" in note_detail_page
+    assert "Delete note" in note_detail_page

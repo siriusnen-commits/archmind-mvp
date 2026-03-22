@@ -1006,6 +1006,8 @@ def _render_frontend_entity_list_page(
     api_helper_import: str = "../_lib/apiBase",
 ) -> str:
     api_path = f"/{str(entity_path or '').strip('/')}"
+    if _is_note_like_entity_path(entity_path):
+        return _render_frontend_note_list_page(component_name=component_name, title=title, api_path=api_path, api_helper_import=api_helper_import)
     detail_base = detail_href_base or api_path
     link_expression = (
         f"`{detail_base}/${{String(item.id)}}`"
@@ -1098,6 +1100,14 @@ def _render_frontend_entity_detail_page(
     api_helper_import: str = "../../_lib/apiBase",
 ) -> str:
     api_path = f"/{str(entity_path or '').strip('/')}"
+    if _is_note_like_entity_path(entity_path):
+        return _render_frontend_note_detail_page(
+            component_name=component_name,
+            title=title,
+            api_path=api_path,
+            id_mode=id_mode,
+            api_helper_import=api_helper_import,
+        )
     id_source = (
         'const id = String(searchParams.get("id") || "").trim();'
         if id_mode == "query"
@@ -1169,6 +1179,321 @@ def _render_frontend_entity_detail_page(
         "      {!loading && error ? <p className=\"text-sm text-rose-300\">Failed to load: {error}</p> : null}\n"
         "      {!loading && !notFound && !error && item ? (\n"
         "        <pre className=\"overflow-x-auto text-xs text-slate-300\">{JSON.stringify(item, null, 2)}</pre>\n"
+        "      ) : null}\n"
+        "    </section>\n"
+        "  );\n"
+        "}\n"
+    )
+
+
+def _is_note_like_entity_path(entity_path: str) -> bool:
+    normalized = str(entity_path or "").strip("/").lower()
+    if not normalized:
+        return False
+    leaf = normalized.split("/")[-1]
+    return leaf in {"note", "notes", "memo", "memos"}
+
+
+def _render_frontend_note_list_page(
+    *,
+    component_name: str,
+    title: str,
+    api_path: str,
+    api_helper_import: str,
+) -> str:
+    return (
+        '"use client";\n\n'
+        'import Link from "next/link";\n'
+        'import { FormEvent, useEffect, useState } from "react";\n'
+        f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n\n'
+        "type NoteItem = Record<string, unknown> & { id?: number | string; title?: string; content?: string };\n\n"
+        "function extractItems(payload: unknown): NoteItem[] {\n"
+        "  if (Array.isArray(payload)) return payload as NoteItem[];\n"
+        "  if (payload && typeof payload === \"object\" && Array.isArray((payload as { items?: unknown[] }).items)) {\n"
+        "    return ((payload as { items: unknown[] }).items ?? []) as NoteItem[];\n"
+        "  }\n"
+        "  return [];\n"
+        "}\n\n"
+        "function errorMessage(error: unknown): string {\n"
+        "  if (error instanceof Error) return error.message;\n"
+        '  return String(error || "Unknown error");\n'
+        "}\n\n"
+        f"export default function {component_name}() {{\n"
+        "  const [items, setItems] = useState<NoteItem[]>([]);\n"
+        "  const [titleInput, setTitleInput] = useState(\"\");\n"
+        "  const [contentInput, setContentInput] = useState(\"\");\n"
+        "  const [loading, setLoading] = useState(true);\n"
+        "  const [saving, setSaving] = useState(false);\n"
+        "  const [error, setError] = useState(\"\");\n"
+        "  const [message, setMessage] = useState(\"\");\n"
+        "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
+        "  async function refreshList() {\n"
+        "    if (!apiBaseUrl) return;\n"
+        "    setLoading(true);\n"
+        "    setError(\"\");\n"
+        "    try {\n"
+        f'      const response = await fetch(`${{apiBaseUrl}}{api_path}`, {{ cache: "no-store" }});\n'
+        "      if (!response.ok) {\n"
+        "        throw new Error(`Failed to load notes (HTTP ${response.status})`);\n"
+        "      }\n"
+        "      setItems(extractItems(await response.json()));\n"
+        "    } catch (error) {\n"
+        "      setItems([]);\n"
+        "      setError(errorMessage(error));\n"
+        "    } finally {\n"
+        "      setLoading(false);\n"
+        "    }\n"
+        "  }\n\n"
+        "  useEffect(() => {\n"
+        "    if (apiBaseLoading || !apiBaseUrl) return;\n"
+        "    refreshList().catch(() => {\n"
+        "      // handled in refreshList\n"
+        "    });\n"
+        "  }, [apiBaseLoading, apiBaseUrl]);\n\n"
+        "  async function onCreate(event: FormEvent<HTMLFormElement>) {\n"
+        "    event.preventDefault();\n"
+        "    const title = titleInput.trim();\n"
+        "    if (!title) {\n"
+        '      setError("Title is required.");\n'
+        "      return;\n"
+        "    }\n"
+        "    if (!apiBaseUrl) {\n"
+        '      setError("API base is not ready.");\n'
+        "      return;\n"
+        "    }\n"
+        "    setSaving(true);\n"
+        "    setError(\"\");\n"
+        "    setMessage(\"\");\n"
+        "    try {\n"
+        f'      const response = await fetch(`${{apiBaseUrl}}{api_path}`, {{\n'
+        '        method: "POST",\n'
+        '        headers: {{ "Content-Type": "application/json" }},\n'
+        "        body: JSON.stringify({ title, content: contentInput }),\n"
+        "      });\n"
+        "      if (!response.ok) {\n"
+        "        throw new Error(`Failed to create note (HTTP ${response.status})`);\n"
+        "      }\n"
+        "      setTitleInput(\"\");\n"
+        "      setContentInput(\"\");\n"
+        '      setMessage("Note created.");\n'
+        "      await refreshList();\n"
+        "    } catch (error) {\n"
+        "      setError(errorMessage(error));\n"
+        "    } finally {\n"
+        "      setSaving(false);\n"
+        "    }\n"
+        "  }\n\n"
+        "  return (\n"
+        '    <section className="space-y-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">\n'
+        f'      <h1 className="text-lg font-semibold">{title}</h1>\n'
+        '      <p className="text-xs text-slate-300">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>\n'
+        '      <form onSubmit={onCreate} className="space-y-3 rounded-lg border border-slate-800 bg-slate-950/70 p-3">\n'
+        '        <h2 className="text-sm font-semibold text-slate-100">Create note</h2>\n'
+        '        <input value={titleInput} onChange={(event) => setTitleInput(event.target.value)} placeholder="Title" className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100" />\n'
+        '        <textarea value={contentInput} onChange={(event) => setContentInput(event.target.value)} placeholder="Content" className="min-h-24 w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100" />\n'
+        '        <div className="flex items-center gap-2">\n'
+        '          <button type="submit" disabled={saving || apiBaseLoading} className="rounded-md bg-emerald-400 px-3 py-2 text-sm font-semibold text-emerald-950 disabled:opacity-60">\n'
+        '            {saving ? "Creating..." : "Create note"}\n'
+        "          </button>\n"
+        '          <button type="button" onClick={() => { setTitleInput(""); setContentInput(""); setError(""); setMessage(""); }} className="rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200">\n'
+        "            Cancel\n"
+        "          </button>\n"
+        "        </div>\n"
+        '        {message ? <p className="text-xs text-emerald-300">{message}</p> : null}\n'
+        "      </form>\n"
+        "      {loading ? <p className=\"text-sm text-slate-300\">{apiBaseLoading ? \"Resolving API base...\" : \"Loading notes...\"}</p> : null}\n"
+        "      {!loading && error ? <p className=\"text-sm text-rose-300\">Failed to load: {error}</p> : null}\n"
+        "      {!loading && !error && items.length === 0 ? <p className=\"text-sm text-slate-300\">No notes yet.</p> : null}\n"
+        "      {!loading && !error && items.length > 0 ? (\n"
+        '        <ul className="space-y-2 text-sm">\n'
+        "          {items.map((item, index) => (\n"
+        '            <li key={String(item.id ?? index)} className="rounded-md border border-slate-700 p-3">\n'
+        '              <div className="font-medium text-slate-100">{String(item.title || `Untitled #${item.id ?? index}`)}</div>\n'
+        '              <p className="mt-1 text-xs text-slate-300">{String(item.content || "(no content)")}</p>\n'
+        "              {item.id !== undefined ? (\n"
+        '                <Link href={`/notes/${String(item.id)}`} className="mt-2 inline-block text-xs text-cyan-300 underline">\n'
+        "                  Open detail\n"
+        "                </Link>\n"
+        "              ) : null}\n"
+        "            </li>\n"
+        "          ))}\n"
+        "        </ul>\n"
+        "      ) : null}\n"
+        "    </section>\n"
+        "  );\n"
+        "}\n"
+    )
+
+
+def _render_frontend_note_detail_page(
+    *,
+    component_name: str,
+    title: str,
+    api_path: str,
+    id_mode: str,
+    api_helper_import: str,
+) -> str:
+    imports = (
+        'import { useSearchParams } from "next/navigation";\n'
+        if id_mode == "query"
+        else 'import { useParams, useRouter } from "next/navigation";\n'
+    )
+    hook = "const searchParams = useSearchParams();" if id_mode == "query" else "const params = useParams();\n  const router = useRouter();"
+    id_source = (
+        'const id = String(searchParams.get("id") || "").trim();'
+        if id_mode == "query"
+        else 'const id = String(params.id || "").trim();'
+    )
+    delete_redirect = (
+        '      if (typeof router !== "undefined") {\n'
+        '        router.push("/notes");\n'
+        "        router.refresh();\n"
+        "      }\n"
+        if id_mode != "query"
+        else ""
+    )
+
+    return (
+        '"use client";\n\n'
+        "import { FormEvent, useEffect, useState } from \"react\";\n"
+        f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n'
+        f"{imports}\n"
+        "type NoteItem = Record<string, unknown> & { title?: string; content?: string };\n\n"
+        f"export default function {component_name}() {{\n"
+        f"  {hook}\n"
+        f"  {id_source}\n"
+        "  const [item, setItem] = useState<NoteItem | null>(null);\n"
+        "  const [titleInput, setTitleInput] = useState(\"\");\n"
+        "  const [contentInput, setContentInput] = useState(\"\");\n"
+        "  const [loading, setLoading] = useState(true);\n"
+        "  const [saving, setSaving] = useState(false);\n"
+        "  const [deleting, setDeleting] = useState(false);\n"
+        "  const [notFound, setNotFound] = useState(false);\n"
+        "  const [error, setError] = useState(\"\");\n"
+        "  const [message, setMessage] = useState(\"\");\n"
+        "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
+        "  async function loadItem() {\n"
+        "    if (!apiBaseUrl || !id) return;\n"
+        "    setLoading(true);\n"
+        "    setError(\"\");\n"
+        "    setNotFound(false);\n"
+        "    try {\n"
+        f'      const response = await fetch(`${{apiBaseUrl}}{api_path}/${{id}}`, {{ cache: "no-store" }});\n'
+        "      if (response.status === 404) {\n"
+        "        setNotFound(true);\n"
+        "        setItem(null);\n"
+        "        return;\n"
+        "      }\n"
+        "      if (!response.ok) {\n"
+        "        throw new Error(`Failed to load note (HTTP ${response.status})`);\n"
+        "      }\n"
+        "      const payload = (await response.json()) as NoteItem;\n"
+        "      setItem(payload);\n"
+        "      setTitleInput(String(payload.title || \"\"));\n"
+        "      setContentInput(String(payload.content || \"\"));\n"
+        "    } catch (error) {\n"
+        "      const message = error instanceof Error ? error.message : String(error || \"Unknown error\");\n"
+        "      setError(message);\n"
+        "    } finally {\n"
+        "      setLoading(false);\n"
+        "    }\n"
+        "  }\n\n"
+        "  useEffect(() => {\n"
+        "    if (!id) {\n"
+        "      setNotFound(true);\n"
+        "      setLoading(false);\n"
+        "      return;\n"
+        "    }\n"
+        "    if (apiBaseLoading || !apiBaseUrl) return;\n"
+        "    loadItem().catch(() => {\n"
+        "      // handled in loadItem\n"
+        "    });\n"
+        "  }, [apiBaseLoading, apiBaseUrl, id]);\n\n"
+        "  async function onSubmit(event: FormEvent<HTMLFormElement>) {\n"
+        "    event.preventDefault();\n"
+        "    const title = titleInput.trim();\n"
+        "    if (!title) {\n"
+        "      setError(\"Title is required.\");\n"
+        "      return;\n"
+        "    }\n"
+        "    if (!apiBaseUrl || !id) {\n"
+        "      setError(\"API base or id is not ready.\");\n"
+        "      return;\n"
+        "    }\n"
+        "    setSaving(true);\n"
+        "    setError(\"\");\n"
+        "    setMessage(\"\");\n"
+        "    try {\n"
+        f'      let response = await fetch(`${{apiBaseUrl}}{api_path}/${{id}}`, {{\n'
+        '        method: "PUT",\n'
+        '        headers: { "Content-Type": "application/json" },\n'
+        "        body: JSON.stringify({ title, content: contentInput }),\n"
+        "      });\n"
+        "      if (response.status === 405) {\n"
+        f'        response = await fetch(`${{apiBaseUrl}}{api_path}/${{id}}`, {{\n'
+        '          method: "PATCH",\n'
+        '          headers: { "Content-Type": "application/json" },\n'
+        "          body: JSON.stringify({ title, content: contentInput }),\n"
+        "        });\n"
+        "      }\n"
+        "      if (!response.ok) {\n"
+        "        throw new Error(`Failed to update note (HTTP ${response.status})`);\n"
+        "      }\n"
+        "      setMessage(\"Note updated.\");\n"
+        "      await loadItem();\n"
+        "    } catch (error) {\n"
+        "      const message = error instanceof Error ? error.message : String(error || \"Unknown error\");\n"
+        "      setError(message);\n"
+        "    } finally {\n"
+        "      setSaving(false);\n"
+        "    }\n"
+        "  }\n\n"
+        "  async function onDelete() {\n"
+        "    if (!apiBaseUrl || !id) {\n"
+        "      setError(\"API base or id is not ready.\");\n"
+        "      return;\n"
+        "    }\n"
+        "    if (!confirm(\"Delete this note?\")) return;\n"
+        "    setDeleting(true);\n"
+        "    setError(\"\");\n"
+        "    setMessage(\"\");\n"
+        "    try {\n"
+        f'      const response = await fetch(`${{apiBaseUrl}}{api_path}/${{id}}`, {{ method: "DELETE" }});\n'
+        "      if (!response.ok) {\n"
+        "        throw new Error(`Failed to delete note (HTTP ${response.status})`);\n"
+        "      }\n"
+        f"{delete_redirect}"
+        "      setMessage(\"Note deleted.\");\n"
+        "      setNotFound(true);\n"
+        "      setItem(null);\n"
+        "    } catch (error) {\n"
+        "      const message = error instanceof Error ? error.message : String(error || \"Unknown error\");\n"
+        "      setError(message);\n"
+        "    } finally {\n"
+        "      setDeleting(false);\n"
+        "    }\n"
+        "  }\n\n"
+        "  return (\n"
+        '    <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">\n'
+        f'      <h1 className="text-lg font-semibold">{title} Detail</h1>\n'
+        "      {!id ? <p className=\"text-sm text-slate-300\">Missing item id.</p> : null}\n"
+        "      {loading ? <p className=\"text-sm text-slate-300\">{apiBaseLoading ? \"Resolving API base...\" : \"Loading...\"}</p> : null}\n"
+        "      {!loading && notFound ? <p className=\"text-sm text-slate-300\">Item not found.</p> : null}\n"
+        "      {!loading && error ? <p className=\"text-sm text-rose-300\">Failed to load: {error}</p> : null}\n"
+        "      {!loading && !notFound ? (\n"
+        "        <form onSubmit={onSubmit} className=\"space-y-3 rounded-md border border-slate-700 p-3\">\n"
+        "          <input value={titleInput} onChange={(event) => setTitleInput(event.target.value)} className=\"w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100\" />\n"
+        "          <textarea value={contentInput} onChange={(event) => setContentInput(event.target.value)} className=\"min-h-24 w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100\" />\n"
+        "          <div className=\"flex items-center gap-2\">\n"
+        "            <button type=\"submit\" disabled={saving} className=\"rounded-md bg-emerald-400 px-3 py-2 text-sm font-semibold text-emerald-950 disabled:opacity-60\">\n"
+        "              {saving ? \"Saving...\" : \"Save changes\"}\n"
+        "            </button>\n"
+        "            <button type=\"button\" onClick={onDelete} disabled={deleting} className=\"rounded-md border border-rose-500/50 px-3 py-2 text-sm text-rose-200 disabled:opacity-60\">\n"
+        "              {deleting ? \"Deleting...\" : \"Delete note\"}\n"
+        "            </button>\n"
+        "          </div>\n"
+        "          {message ? <p className=\"text-xs text-emerald-300\">{message}</p> : null}\n"
+        "        </form>\n"
         "      ) : null}\n"
         "    </section>\n"
         "  );\n"
