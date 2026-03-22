@@ -8,25 +8,26 @@ type Props = {
 };
 
 const API_BASE = "/api/ui";
+type MessageType = "success" | "info" | "error";
 
 export default function AddEntityCard({ projectName }: Props) {
   const router = useRouter();
   const [entityName, setEntityName] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
+  const [message, setMessage] = useState("");
+  const [messageType, setMessageType] = useState<MessageType>("success");
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const targetProject = String(projectName || "").trim();
     const targetEntity = String(entityName || "").trim();
     if (!targetProject) {
-      setError("Failed to add entity: project name is missing");
+      setMessageType("error");
+      setMessage("Failed to add entity: project name is missing");
       return;
     }
     setLoading(true);
-    setError("");
-    setSuccess("");
+    setMessage("");
     try {
       const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(targetProject)}/entities`, {
         method: "POST",
@@ -41,16 +42,24 @@ export default function AddEntityCard({ projectName }: Props) {
       };
       if (!response.ok || !Boolean(payload.ok)) {
         const detail = String(payload.error || payload.detail || "").trim();
-        setError(detail ? `Failed to add entity: ${detail}` : "Failed to add entity");
+        setMessageType("error");
+        setMessage(detail ? `Failed to add entity: ${detail}` : "Failed to add entity");
         return;
       }
       const added = String(payload.entity_name || targetEntity).trim();
       setEntityName("");
-      setSuccess(added ? `Entity added: ${added}` : "Entity added");
+      const resource = added ? `${added.toLowerCase()}s` : "resources";
+      setMessageType("success");
+      setMessage(
+        added
+          ? `Entity added: ${added}. Auto-created APIs: GET/POST /${resource}. Auto-created pages: ${resource}/list, ${resource}/detail.`
+          : "Entity added. Auto-created APIs (GET/POST) and pages (list/detail)."
+      );
       router.refresh();
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e || "unknown error");
-      setError(`Failed to add entity: ${message}`);
+      setMessageType("error");
+      setMessage(`Failed to add entity: ${message}`);
     } finally {
       setLoading(false);
     }
@@ -75,8 +84,19 @@ export default function AddEntityCard({ projectName }: Props) {
           {loading ? "Adding..." : "Add"}
         </button>
       </form>
-      {error ? <p className="mt-2 break-words text-xs text-rose-300">{error}</p> : null}
-      {!error && success ? <p className="mt-2 break-words text-xs text-emerald-300">{success}</p> : null}
+      {message ? (
+        <p
+          className={
+            messageType === "error"
+              ? "mt-2 break-words text-xs text-rose-300"
+              : messageType === "info"
+                ? "mt-2 break-words text-xs text-cyan-300"
+                : "mt-2 break-words text-xs text-emerald-300"
+          }
+        >
+          {message}
+        </p>
+      ) : null}
     </section>
   );
 }

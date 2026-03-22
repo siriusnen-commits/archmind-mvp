@@ -8,25 +8,37 @@ type Props = {
 };
 
 const API_BASE = "/api/ui";
+type MessageType = "success" | "info" | "error";
+
+function normalizePageInput(value: string): string {
+  const trimmed = String(value || "").trim().replace(/^\/+|\/+$/g, "");
+  if (!trimmed) {
+    return "";
+  }
+  if (!trimmed.includes("/")) {
+    return `${trimmed.toLowerCase()}/list`;
+  }
+  return trimmed.toLowerCase();
+}
 
 export default function AddPageCard({ projectName }: Props) {
   const router = useRouter();
   const [pagePath, setPagePath] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
+  const [message, setMessage] = useState("");
+  const [messageType, setMessageType] = useState<MessageType>("success");
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const targetProject = String(projectName || "").trim();
-    const targetPagePath = String(pagePath || "").trim();
+    const targetPagePath = normalizePageInput(pagePath);
     if (!targetProject) {
-      setError("Failed to add page: project name is missing");
+      setMessageType("error");
+      setMessage("Failed to add page: project name is missing");
       return;
     }
     setLoading(true);
-    setError("");
-    setSuccess("");
+    setMessage("");
     try {
       const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(targetProject)}/pages`, {
         method: "POST",
@@ -41,16 +53,30 @@ export default function AddPageCard({ projectName }: Props) {
       };
       if (!response.ok || !Boolean(payload.ok)) {
         const detail = String(payload.error || payload.detail || "").trim();
-        setError(detail ? `Failed to add page: ${detail}` : "Failed to add page");
+        const lowered = detail.toLowerCase();
+        if (lowered.includes("invalid page path")) {
+          setMessageType("error");
+          setMessage("Failed to add page: Use format: tests/list or tests/detail");
+          return;
+        }
+        if (lowered.includes("already exists")) {
+          setMessageType("info");
+          setMessage("Already exists (auto-created)");
+          return;
+        }
+        setMessageType("error");
+        setMessage(detail ? `Failed to add page: ${detail}` : "Failed to add page");
         return;
       }
       const addedPagePath = String(payload.page_path || targetPagePath).trim();
       setPagePath("");
-      setSuccess(addedPagePath ? `Page added: ${addedPagePath}` : "Page added");
+      setMessageType("success");
+      setMessage(addedPagePath ? `Page added: ${addedPagePath}` : "Page added");
       router.refresh();
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e || "unknown error");
-      setError(`Failed to add page: ${message}`);
+      setMessageType("error");
+      setMessage(`Failed to add page: ${message}`);
     } finally {
       setLoading(false);
     }
@@ -76,8 +102,19 @@ export default function AddPageCard({ projectName }: Props) {
           {loading ? "Adding..." : "Add Page"}
         </button>
       </form>
-      {error ? <p className="mt-2 break-words text-xs text-rose-300">{error}</p> : null}
-      {!error && success ? <p className="mt-2 break-words text-xs text-emerald-300">{success}</p> : null}
+      {message ? (
+        <p
+          className={
+            messageType === "error"
+              ? "mt-2 break-words text-xs text-rose-300"
+              : messageType === "info"
+                ? "mt-2 break-words text-xs text-cyan-300"
+                : "mt-2 break-words text-xs text-emerald-300"
+          }
+        >
+          {message}
+        </p>
+      ) : null}
     </section>
   );
 }

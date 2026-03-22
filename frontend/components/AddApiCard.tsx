@@ -9,14 +9,15 @@ type Props = {
 
 const API_BASE = "/api/ui";
 const METHODS = ["GET", "POST", "PUT", "DELETE"];
+type MessageType = "success" | "info" | "error";
 
 export default function AddApiCard({ projectName }: Props) {
   const router = useRouter();
   const [method, setMethod] = useState("GET");
   const [path, setPath] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
+  const [message, setMessage] = useState("");
+  const [messageType, setMessageType] = useState<MessageType>("success");
 
   async function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -24,12 +25,12 @@ export default function AddApiCard({ projectName }: Props) {
     const targetMethod = String(method || "").trim();
     const targetPath = String(path || "").trim();
     if (!targetProject) {
-      setError("Failed to add API: project name is missing");
+      setMessageType("error");
+      setMessage("Failed to add API: project name is missing");
       return;
     }
     setLoading(true);
-    setError("");
-    setSuccess("");
+    setMessage("");
     try {
       const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(targetProject)}/apis`, {
         method: "POST",
@@ -45,17 +46,31 @@ export default function AddApiCard({ projectName }: Props) {
       };
       if (!response.ok || !Boolean(payload.ok)) {
         const detail = String(payload.error || payload.detail || "").trim();
-        setError(detail ? `Failed to add API: ${detail}` : "Failed to add API");
+        const addedMethod = String(payload.method || targetMethod).trim();
+        const addedPath = String(payload.path || targetPath).trim();
+        if (detail.toLowerCase().includes("already exists")) {
+          setMessageType("info");
+          setMessage(
+            addedMethod && addedPath
+              ? `Already exists (auto-created): ${addedMethod} ${addedPath}`
+              : "Already exists (auto-created)"
+          );
+          return;
+        }
+        setMessageType("error");
+        setMessage(detail ? `Failed to add API: ${detail}` : "Failed to add API");
         return;
       }
       const addedMethod = String(payload.method || targetMethod).trim();
       const addedPath = String(payload.path || targetPath).trim();
       setPath("");
-      setSuccess(addedMethod && addedPath ? `API added: ${addedMethod} ${addedPath}` : "API added");
+      setMessageType("success");
+      setMessage(addedMethod && addedPath ? `API added: ${addedMethod} ${addedPath}` : "API added");
       router.refresh();
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e || "unknown error");
-      setError(`Failed to add API: ${message}`);
+      setMessageType("error");
+      setMessage(`Failed to add API: ${message}`);
     } finally {
       setLoading(false);
     }
@@ -93,8 +108,19 @@ export default function AddApiCard({ projectName }: Props) {
           {loading ? "Adding..." : "Add API"}
         </button>
       </form>
-      {error ? <p className="mt-2 break-words text-xs text-rose-300">{error}</p> : null}
-      {!error && success ? <p className="mt-2 break-words text-xs text-emerald-300">{success}</p> : null}
+      {message ? (
+        <p
+          className={
+            messageType === "error"
+              ? "mt-2 break-words text-xs text-rose-300"
+              : messageType === "info"
+                ? "mt-2 break-words text-xs text-cyan-300"
+                : "mt-2 break-words text-xs text-emerald-300"
+          }
+        >
+          {message}
+        </p>
+      ) : null}
     </section>
   );
 }
