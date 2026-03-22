@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-from archmind.generator import GenerateOptions, generate_project
+from archmind.generator import GenerateOptions, apply_frontend_page_scaffold, generate_project
 
 
 def _generate_fullstack(tmp_path: Path, name: str = "fullstack_demo") -> Path:
@@ -133,6 +133,7 @@ def test_fullstack_runtime_env_template_uses_api_base_url_and_settings(tmp_path:
     root_page = (project_dir / "frontend" / "app" / "page.tsx").read_text(encoding="utf-8")
     layout_page = (project_dir / "frontend" / "app" / "layout.tsx").read_text(encoding="utf-8")
     defects_route = (project_dir / "frontend" / "app" / "ui" / "defects" / "page.tsx").read_text(encoding="utf-8")
+    navigation_file = (project_dir / "frontend" / "app" / "_lib" / "navigation.ts").read_text(encoding="utf-8")
 
     assert "cors_allow_origins" in settings_text
     assert "from fastapi.middleware.cors import CORSMiddleware" in backend_main
@@ -163,9 +164,14 @@ def test_fullstack_runtime_env_template_uses_api_base_url_and_settings(tmp_path:
     assert "Backend: {backendUrl}" not in frontend_page
     assert 'Backend: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}' in frontend_page
     assert 'from "./_lib/apiBase"' in root_page
+    assert 'from "./_lib/navigation"' in root_page
+    assert "APP_NAV_LINKS" in root_page
+    assert "primaryHref" in root_page
     assert "useApiBaseUrl()" in root_page
     assert 'API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}' in root_page
-    assert 'router.replace("/notes")' in root_page
+    assert "router.replace(primaryHref)" in root_page
+    assert "APP_NAV_LINKS.map" in layout_page
+    assert '/ui/defects", label: "Defects", primary: true' in navigation_file
     assert "DefectsPage" not in root_page
     assert "Defect Ledger" not in layout_page
     assert "FastAPI + Next.js workspace" in layout_page
@@ -178,6 +184,7 @@ def test_fullstack_note_project_has_note_oriented_shell_and_pages(tmp_path: Path
     root_page = (project_dir / "frontend" / "app" / "page.tsx").read_text(encoding="utf-8")
     notes_page = (project_dir / "frontend" / "app" / "notes" / "page.tsx").read_text(encoding="utf-8")
     note_detail_page = (project_dir / "frontend" / "app" / "notes" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+    navigation_file = (project_dir / "frontend" / "app" / "_lib" / "navigation.ts").read_text(encoding="utf-8")
     backend_router = (project_dir / "backend" / "app" / "api" / "router.py").read_text(encoding="utf-8")
     backend_notes_router = (project_dir / "backend" / "app" / "api" / "routers" / "notes.py").read_text(encoding="utf-8")
 
@@ -189,6 +196,7 @@ def test_fullstack_note_project_has_note_oriented_shell_and_pages(tmp_path: Path
     assert "Create your first note above." in notes_page
     assert "Save changes" in note_detail_page
     assert "Delete note" in note_detail_page
+    assert '/notes", label: "Notes", primary: true' in navigation_file
     assert "notes_router" in backend_router
     assert "defects_router" not in backend_router
     assert 'prefix="/notes"' in backend_notes_router
@@ -226,3 +234,12 @@ def test_fullstack_note_project_backend_and_frontend_are_aligned_on_notes_routes
     assert delete.status_code == 200
 
     assert client.post("/defects", json={"defect_type": "x", "note": "y"}).status_code == 404
+
+
+def test_fullstack_note_project_surfaces_newly_added_entity_pages_in_navigation(tmp_path: Path) -> None:
+    project_dir = _generate_fullstack(tmp_path, name="memo_growth")
+    apply_frontend_page_scaffold(project_dir, "Task")
+
+    nav_text = (project_dir / "frontend" / "app" / "_lib" / "navigation.ts").read_text(encoding="utf-8")
+    assert 'href: "/notes"' in nav_text
+    assert 'href: "/tasks"' in nav_text

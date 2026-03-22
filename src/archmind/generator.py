@@ -726,6 +726,106 @@ def _ensure_frontend_api_base_helper(app_root: Path, generated: list[str], proje
     _write_if_missing(helper_path, _render_frontend_api_base_helper(), generated, project_dir)
 
 
+def _frontend_nav_path(app_root: Path) -> Path:
+    return app_root / "_lib" / "navigation.ts"
+
+
+def _nav_label_from_href(href: str) -> str:
+    normalized = str(href or "").strip("/")
+    if not normalized:
+        return "Home"
+    parts = [part for part in normalized.split("/") if part and not part.startswith("[")]
+    if not parts:
+        return "Home"
+    leaf = parts[-1]
+    if leaf in {"list", "home", "index"} and len(parts) > 1:
+        leaf = parts[-2]
+    return leaf.replace("-", " ").replace("_", " ").title()
+
+
+def _discover_frontend_routes(app_root: Path) -> list[str]:
+    routes: list[str] = []
+    for page in sorted(app_root.rglob("page.tsx")):
+        rel_dir = page.parent.relative_to(app_root)
+        if str(rel_dir) == ".":
+            continue
+        parts = [part for part in rel_dir.parts if part and not part.startswith("_")]
+        if not parts:
+            continue
+        if any(part.startswith("[") or part.endswith("]") for part in parts):
+            continue
+        route = "/" + "/".join(parts)
+        if route not in routes:
+            routes.append(route)
+    return routes
+
+
+def _render_frontend_navigation_file(hrefs: list[str]) -> str:
+    unique: list[str] = []
+    for href in hrefs:
+        cleaned = str(href or "").strip()
+        if not cleaned:
+            continue
+        if not cleaned.startswith("/"):
+            cleaned = "/" + cleaned
+        if cleaned in unique:
+            continue
+        unique.append(cleaned)
+    lines = []
+    for index, href in enumerate(unique):
+        label = _nav_label_from_href(href)
+        primary = ", primary: true" if index == 0 else ""
+        lines.append(f'  {{ href: "{href}", label: "{label}"{primary} }},')
+    entries = "\n".join(lines)
+    return (
+        "export type AppNavLink = {\n"
+        "  href: string;\n"
+        "  label: string;\n"
+        "  primary?: boolean;\n"
+        "};\n\n"
+        "export const APP_NAV_LINKS: AppNavLink[] = [\n"
+        f"{entries}\n"
+        "];\n"
+    )
+
+
+def _parse_nav_hrefs(navigation_text: str) -> list[str]:
+    hrefs: list[str] = []
+    for match in re.finditer(r'href:\s*"([^"]+)"', navigation_text):
+        href = match.group(1).strip()
+        if href and href not in hrefs:
+            hrefs.append(href)
+    return hrefs
+
+
+def _ensure_frontend_navigation_helper(app_root: Path, generated: list[str], project_dir: Path) -> None:
+    nav_path = _frontend_nav_path(app_root)
+    if nav_path.exists():
+        return
+    discovered = _discover_frontend_routes(app_root)
+    if not discovered:
+        discovered = ["/"]
+    _write_if_missing(nav_path, _render_frontend_navigation_file(discovered), generated, project_dir)
+
+
+def _register_frontend_nav_link(app_root: Path, href: str, generated: list[str], project_dir: Path) -> None:
+    cleaned = str(href or "").strip()
+    if not cleaned:
+        return
+    if not cleaned.startswith("/"):
+        cleaned = "/" + cleaned
+    nav_path = _frontend_nav_path(app_root)
+    existing_hrefs: list[str] = []
+    if nav_path.exists():
+        existing_hrefs = _parse_nav_hrefs(nav_path.read_text(encoding="utf-8"))
+    else:
+        existing_hrefs = _discover_frontend_routes(app_root)
+    if cleaned not in existing_hrefs:
+        existing_hrefs.append(cleaned)
+    content = _render_frontend_navigation_file(existing_hrefs)
+    _write_if_changed(nav_path, content, generated, project_dir)
+
+
 def _render_entity_router_content(slug: str, plural: str) -> str:
     return (
         "from fastapi import APIRouter\n\n"
@@ -889,6 +989,7 @@ def apply_frontend_page_scaffold(project_dir: Path, entity_name: str) -> list[st
     detail_page = app_root / plural / "[id]" / "page.tsx"
     generated: list[str] = []
     _ensure_frontend_api_base_helper(app_root, generated, project_dir)
+    _ensure_frontend_navigation_helper(app_root, generated, project_dir)
     list_helper_import = _api_base_helper_import_for_page(app_root, list_page)
     detail_helper_import = _api_base_helper_import_for_page(app_root, detail_page)
 
@@ -914,6 +1015,7 @@ def apply_frontend_page_scaffold(project_dir: Path, entity_name: str) -> list[st
         generated,
         project_dir,
     )
+    _register_frontend_nav_link(app_root, f"/{plural}", generated, project_dir)
     return generated
 
 
@@ -937,6 +1039,7 @@ def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
 
     generated: list[str] = []
     _ensure_frontend_api_base_helper(app_root, generated, project_dir)
+    _ensure_frontend_navigation_helper(app_root, generated, project_dir)
     leaf = segments[-1].lower()
     entity_path = "/".join(segments[:-1]).strip("/")
     helper_import = _api_base_helper_import_for_page(app_root, target)
@@ -954,6 +1057,7 @@ def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
             generated,
             project_dir,
         )
+        _register_frontend_nav_link(app_root, f"/{rel}", generated, project_dir)
         return generated
     if entity_path and leaf == "detail":
         _write_if_missing(
@@ -993,6 +1097,7 @@ def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
         generated,
         project_dir,
     )
+    _register_frontend_nav_link(app_root, f"/{rel}", generated, project_dir)
     return generated
 
 

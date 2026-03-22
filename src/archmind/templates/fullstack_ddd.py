@@ -592,9 +592,26 @@ body {
 }
 """
 
-    layout_routes = "/ · /notes" if is_note_project else "/ · /notes · /ui/defects"
+    nav_entries = (
+        '  { href: "/notes", label: "Notes", primary: true },\n'
+        if is_note_project
+        else '  { href: "/ui/defects", label: "Defects", primary: true },\n'
+    )
+    files["frontend/app/_lib/navigation.ts"] = (
+        "export type AppNavLink = {\n"
+        "  href: string;\n"
+        "  label: string;\n"
+        "  primary?: boolean;\n"
+        "};\n\n"
+        "export const APP_NAV_LINKS: AppNavLink[] = [\n"
+        f"{nav_entries}"
+        "];\n"
+    )
+
     files["frontend/app/layout.tsx"] = (
-        'import "./globals.css";\n\n'
+        'import Link from "next/link";\n'
+        'import "./globals.css";\n'
+        'import { APP_NAV_LINKS } from "./_lib/navigation";\n\n'
         "export const metadata = {\n"
         f'  title: "{project_name}",\n'
         "};\n\n"
@@ -605,12 +622,18 @@ body {
         '        <div className="min-h-screen bg-slate-950 text-slate-100">\n'
         '          <header className="border-b border-slate-800 bg-slate-900/80">\n'
         '            <div className="mx-auto max-w-5xl px-4 py-5">\n'
-        '              <div className="flex items-center justify-between">\n'
+        '              <div className="flex flex-wrap items-center justify-between gap-4">\n'
         "                <div>\n"
         f'                  <div className="text-lg font-semibold tracking-wide">{project_name}</div>\n'
         '                  <div className="text-xs text-slate-300">FastAPI + Next.js workspace</div>\n'
         "                </div>\n"
-        f'                <div className="text-xs text-slate-300">{layout_routes}</div>\n'
+        '                <nav className="flex flex-wrap items-center gap-2 text-xs">\n'
+        "                  {APP_NAV_LINKS.map((link) => (\n"
+        '                    <Link key={link.href} href={link.href} className="rounded-md border border-slate-700 px-2 py-1 text-slate-200 hover:bg-slate-800">\n'
+        "                      {link.label}\n"
+        "                    </Link>\n"
+        "                  ))}\n"
+        "                </nav>\n"
         "              </div>\n"
         "            </div>\n"
         "          </header>\n"
@@ -622,74 +645,66 @@ body {
         "}\n"
     )
 
-    root_links = (
-        """      <div className="flex flex-wrap gap-2 text-sm">
-        <Link href="/notes" className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">
-          Notes
-        </Link>
-      </div>"""
-        if is_note_project
-        else """      <div className="flex flex-wrap gap-2 text-sm">
-        <Link href="/notes" className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">
-          Notes
-        </Link>
-        <Link href="/ui/defects" className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">
-          Defects
-        </Link>
-      </div>"""
-    )
-
     files["frontend/app/page.tsx"] = """"use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useApiBaseUrl } from "./_lib/apiBase";
+import { APP_NAV_LINKS } from "./_lib/navigation";
 
 export default function Page() {
   const router = useRouter();
-  const [checkingNotes, setCheckingNotes] = useState(true);
+  const [checkingPrimary, setCheckingPrimary] = useState(true);
   const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();
+  const primaryHref = useMemo(() => APP_NAV_LINKS.find((link) => link.primary)?.href || APP_NAV_LINKS[0]?.href || "/", []);
 
   useEffect(() => {
     let active = true;
     (async () => {
       try {
-        const response = await fetch("/notes", { cache: "no-store" });
+        if (primaryHref === "/") {
+          setCheckingPrimary(false);
+          return;
+        }
+        const response = await fetch(primaryHref, { cache: "no-store" });
         if (!active) return;
         if (response.ok) {
-          router.replace("/notes");
+          router.replace(primaryHref);
           return;
         }
       } catch {
         // Ignore and show default landing.
       }
       if (active) {
-        setCheckingNotes(false);
+        setCheckingPrimary(false);
       }
     })();
     return () => {
       active = false;
     };
-  }, [router]);
+  }, [router, primaryHref]);
 
-  if (checkingNotes) {
+  if (checkingPrimary) {
     return <p className="text-sm text-slate-300">Loading workspace...</p>;
   }
 
-      return (
+  return (
     <section className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
       <h1 className="text-lg font-semibold">Project Home</h1>
       <p className="text-xs text-slate-300">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>
-      <p className="text-sm text-slate-200">
-        Open the generated domain pages. If Note pages exist, this page will auto-open <code>/notes</code>.
-      </p>
-__ROOT_LINKS__
+      <p className="text-sm text-slate-200">Available sections from generated pages:</p>
+      <div className="flex flex-wrap gap-2 text-sm">
+        {APP_NAV_LINKS.map((link) => (
+          <Link key={link.href} href={link.href} className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">
+            {link.label}
+          </Link>
+        ))}
+      </div>
     </section>
   );
 }
 """
-    files["frontend/app/page.tsx"] = files["frontend/app/page.tsx"].replace("__ROOT_LINKS__", root_links)
 
     files["frontend/app/notes/page.tsx"] = """"use client";
 

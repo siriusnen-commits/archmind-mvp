@@ -170,6 +170,32 @@ def test_apply_frontend_page_scaffold_note_entity_is_usable_crud_mvp(tmp_path: P
     assert "method: \"DELETE\"" in detail_text
 
 
+def test_apply_frontend_page_scaffold_updates_navigation_with_new_entity_route(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_demo"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / "frontend" / "app" / "layout.tsx").write_text("export default function Layout(){return null}\n", encoding="utf-8")
+
+    apply_frontend_page_scaffold(project_dir, "Note")
+    apply_frontend_page_scaffold(project_dir, "Task")
+
+    nav_text = (project_dir / "frontend" / "app" / "_lib" / "navigation.ts").read_text(encoding="utf-8")
+    assert 'href: "/notes"' in nav_text
+    assert 'href: "/tasks"' in nav_text
+
+
+def test_apply_page_scaffold_updates_navigation_with_new_explicit_page(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_demo"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / "frontend" / "app" / "layout.tsx").write_text("export default function Layout(){return null}\n", encoding="utf-8")
+
+    apply_page_scaffold(project_dir, "reports/list")
+
+    nav_text = (project_dir / "frontend" / "app" / "_lib" / "navigation.ts").read_text(encoding="utf-8")
+    assert 'href: "/reports/list"' in nav_text
+
+
 def test_apply_frontend_page_scaffold_is_idempotent_and_skips_backend_only(tmp_path: Path) -> None:
     backend_only = tmp_path / "backend_demo"
     (backend_only / "app").mkdir(parents=True, exist_ok=True)
