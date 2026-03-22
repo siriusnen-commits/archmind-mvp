@@ -1589,6 +1589,334 @@ python -m pytest -q
 - `NEXT_PUBLIC_FRONTEND_PORT` (frontend runtime port)
 """
 
+    if is_note_project:
+        files.pop("app/repositories/defect_repo.py", None)
+        files.pop("app/services/defect_service.py", None)
+        files.pop("app/api/routers/defects.py", None)
+        files.pop("tests/test_defects.py", None)
+
+        files["app/domain/models.py"] = """from __future__ import annotations
+
+from datetime import datetime
+from typing import Optional
+
+from sqlmodel import SQLModel, Field
+
+
+class Note(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    title: str
+    content: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+"""
+
+        files["app/repositories/note_repo.py"] = """from __future__ import annotations
+
+from typing import List, Optional, Tuple
+
+from sqlmodel import Session, func, select
+
+from app.domain.models import Note
+
+
+class NoteRepository:
+    def create(self, session: Session, *, title: str, content: str = "") -> Note:
+        obj = Note(title=title, content=content)
+        session.add(obj)
+        session.commit()
+        session.refresh(obj)
+        return obj
+
+    def get(self, session: Session, note_id: int) -> Optional[Note]:
+        return session.get(Note, note_id)
+
+    def list(
+        self,
+        session: Session,
+        *,
+        q: Optional[str] = None,
+        sort: str = "id",
+        order: str = "desc",
+        offset: int = 0,
+        limit: int = 20,
+    ) -> Tuple[List[Note], int]:
+        conditions = []
+        if q:
+            like = f"%{q}%"
+            conditions.append((Note.title.ilike(like)) | (Note.content.ilike(like)))
+
+        query = select(Note)
+        count_query = select(func.count()).select_from(Note)
+        for cond in conditions:
+            query = query.where(cond)
+            count_query = count_query.where(cond)
+
+        order_col = Note.created_at if sort == "created_at" else Note.id
+        order_by = order_col.asc() if order == "asc" else order_col.desc()
+
+        total = session.exec(count_query).one()
+        items = list(session.exec(query.order_by(order_by).offset(offset).limit(limit)).all())
+        return items, int(total)
+
+    def update(
+        self,
+        session: Session,
+        obj: Note,
+        *,
+        title: Optional[str] = None,
+        content: Optional[str] = None,
+    ) -> Note:
+        if title is not None:
+            obj.title = title
+        if content is not None:
+            obj.content = content
+        session.add(obj)
+        session.commit()
+        session.refresh(obj)
+        return obj
+
+    def delete(self, session: Session, obj: Note) -> None:
+        session.delete(obj)
+        session.commit()
+"""
+
+        files["app/services/note_service.py"] = """from __future__ import annotations
+
+from typing import List, Optional, Tuple
+
+from sqlmodel import Session
+
+from app.domain.models import Note
+from app.repositories.note_repo import NoteRepository
+
+
+class NoteService:
+    def __init__(self, repo: NoteRepository | None = None) -> None:
+        self.repo = repo or NoteRepository()
+
+    def create(self, session: Session, *, title: str, content: str = "") -> Note:
+        return self.repo.create(session, title=title, content=content)
+
+    def get(self, session: Session, note_id: int) -> Optional[Note]:
+        return self.repo.get(session, note_id)
+
+    def list(
+        self,
+        session: Session,
+        *,
+        q: Optional[str] = None,
+        sort: str = "id",
+        order: str = "desc",
+        offset: int = 0,
+        limit: int = 20,
+    ) -> Tuple[List[Note], int]:
+        return self.repo.list(
+            session,
+            q=q,
+            sort=sort,
+            order=order,
+            offset=offset,
+            limit=limit,
+        )
+
+    def update(
+        self,
+        session: Session,
+        obj: Note,
+        *,
+        title: Optional[str] = None,
+        content: Optional[str] = None,
+    ) -> Note:
+        return self.repo.update(session, obj, title=title, content=content)
+
+    def delete(self, session: Session, obj: Note) -> None:
+        return self.repo.delete(session, obj)
+"""
+
+        files["app/api/schemas.py"] = """from __future__ import annotations
+
+from datetime import datetime
+from typing import List, Optional
+from pydantic import BaseModel
+
+
+class NoteCreate(BaseModel):
+    title: str
+    content: str = ""
+
+
+class NoteUpdate(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+
+
+class NoteRead(BaseModel):
+    id: int
+    title: str
+    content: str
+    created_at: datetime
+
+
+class NoteListResponse(BaseModel):
+    items: List[NoteRead]
+    total: int
+    page: int
+    page_size: int
+"""
+
+        files["app/api/routers/notes.py"] = """from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlmodel import Session
+
+from app.api.schemas import NoteCreate, NoteListResponse, NoteRead, NoteUpdate
+from app.db.session import get_session
+from app.services.note_service import NoteService
+
+router = APIRouter(prefix="/notes", tags=["notes"])
+
+
+def _session_dep() -> Session:
+    return get_session()
+
+
+@router.post("", response_model=NoteRead)
+def create_note(payload: NoteCreate, session: Session = Depends(_session_dep)):
+    svc = NoteService()
+    obj = svc.create(session, title=payload.title, content=payload.content)
+    return NoteRead.model_validate(obj, from_attributes=True)
+
+
+@router.get("", response_model=NoteListResponse)
+def list_notes(
+    session: Session = Depends(_session_dep),
+    q: str | None = Query(default=None),
+    sort: str = Query(default="id", pattern="^(id|created_at)$"),
+    order: str = Query(default="desc", pattern="^(asc|desc)$"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+):
+    svc = NoteService()
+    offset = (page - 1) * page_size
+    items, total = svc.list(
+        session,
+        q=q,
+        sort=sort,
+        order=order,
+        offset=offset,
+        limit=page_size,
+    )
+    return NoteListResponse(
+        items=[NoteRead.model_validate(x, from_attributes=True) for x in items],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/{note_id}", response_model=NoteRead)
+def get_note(note_id: int, session: Session = Depends(_session_dep)):
+    svc = NoteService()
+    obj = svc.get(session, note_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Note not found")
+    return NoteRead.model_validate(obj, from_attributes=True)
+
+
+@router.put("/{note_id}", response_model=NoteRead)
+def update_note(
+    note_id: int,
+    payload: NoteUpdate,
+    session: Session = Depends(_session_dep),
+):
+    svc = NoteService()
+    obj = svc.get(session, note_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Note not found")
+    updated = svc.update(session, obj, title=payload.title, content=payload.content)
+    return NoteRead.model_validate(updated, from_attributes=True)
+
+
+@router.patch("/{note_id}", response_model=NoteRead)
+def patch_note(
+    note_id: int,
+    payload: NoteUpdate,
+    session: Session = Depends(_session_dep),
+):
+    svc = NoteService()
+    obj = svc.get(session, note_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Note not found")
+    updated = svc.update(session, obj, title=payload.title, content=payload.content)
+    return NoteRead.model_validate(updated, from_attributes=True)
+
+
+@router.delete("/{note_id}")
+def delete_note(note_id: int, session: Session = Depends(_session_dep)):
+    svc = NoteService()
+    obj = svc.get(session, note_id)
+    if not obj:
+        raise HTTPException(status_code=404, detail="Note not found")
+    svc.delete(session, obj)
+    return {"status": "deleted"}
+"""
+
+        files["app/api/router.py"] = """from fastapi import APIRouter
+
+from app.api.routers.health import router as health_router
+from app.api.routers.notes import router as notes_router
+
+api_router = APIRouter()
+api_router.include_router(health_router)
+api_router.include_router(notes_router)
+"""
+
+        files["tests/test_notes.py"] = """from fastapi.testclient import TestClient
+from app.main import app
+from app.db.session import engine
+from sqlmodel import SQLModel
+from pathlib import Path
+
+
+def setup_function():
+    Path("./data").mkdir(parents=True, exist_ok=True)
+    SQLModel.metadata.drop_all(engine)
+    SQLModel.metadata.create_all(engine)
+
+
+def test_notes_crud_and_pagination():
+    client = TestClient(app)
+    for i in range(5):
+        r = client.post("/notes", json={"title": f"memo {i}", "content": f"c{i}"})
+        assert r.status_code == 200
+
+    r = client.get("/notes", params={"page": 1, "page_size": 2})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total"] == 5
+    assert len(data["items"]) == 2
+    assert data["page"] == 1
+    assert data["page_size"] == 2
+
+    first_id = data["items"][0]["id"]
+    r = client.get(f"/notes/{first_id}")
+    assert r.status_code == 200
+
+    r = client.put(f"/notes/{first_id}", json={"content": "updated"})
+    assert r.status_code == 200
+    assert r.json()["content"] == "updated"
+
+    r = client.delete(f"/notes/{first_id}")
+    assert r.status_code == 200
+
+    r = client.get("/notes", params={"q": "updated"})
+    assert r.status_code == 200
+    assert r.json()["total"] == 0
+"""
+
+        files.pop("frontend/app/ui/DefectsPage.tsx", None)
+        files.pop("frontend/app/ui/defects/page.tsx", None)
+
     backend_prefixed: Dict[str, str] = {}
     for path, content in files.items():
         if path.startswith(("frontend/", "scripts/")) or path == "README.md":
