@@ -5731,6 +5731,50 @@ def test_auto_command_stops_on_repeated_low_value_pattern(tmp_path: Path, monkey
     assert executed == ["/add_field Task title:string"]
     assert "- Result: STOP (repeated low-value pattern)" in out
     assert "- Stopped: repeated low-value pattern" in out
+
+
+def test_auto_command_uses_implement_page_when_existing_page_file_is_placeholder(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "auto_existing_placeholder_page"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "domains": ["songs"],
+                "template": "fullstack-ddd",
+                "modules": [],
+                "entities": [{"name": "Song", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": [
+                    "GET /songs",
+                    "POST /songs",
+                    "GET /songs/{song_id}",
+                    "PUT /songs/{song_id}",
+                    "DELETE /songs/{song_id}",
+                ],
+                # stale/missing page metadata
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (project_dir / "frontend" / "app" / "songs" / "favorite").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "app" / "songs" / "favorite" / "page.tsx").write_text(
+        "export default function Page() { return <p>Page placeholder for songs/favorite</p>; }",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    executed: list[str] = []
+    monkeypatch.setattr(
+        "archmind.telegram_bot.execute_command",
+        lambda cmd, _p: (executed.append(cmd) or {"ok": True, "message": "ok"}),
+    )
+    msg = DummyMessage()
+    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext(args=["1"])))
+    out = msg.sent[-1]
+    assert executed == ["/implement_page songs/favorite"]
+    assert "- Next: /implement_page songs/favorite" in out
+    assert "/add_page songs/favorite" not in out
 def test_improve_suggestion_button_dispatches_add_field_command(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "improve_button_dispatch_add_field"
     archmind = project_dir / ".archmind"
