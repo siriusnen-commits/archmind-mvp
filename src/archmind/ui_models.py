@@ -63,6 +63,7 @@ class ProjectDetailResponse(BaseModel):
     entities: list[str] = Field(default_factory=list)
     runtime: RuntimeSummary
     recent_evolution: list[str] = Field(default_factory=list)
+    recent_runs: list[dict[str, Any]] = Field(default_factory=list)
     repository: RepositorySummary = Field(default_factory=RepositorySummary)
     analysis: dict[str, Any] = Field(default_factory=dict)
     warning: str = ""
