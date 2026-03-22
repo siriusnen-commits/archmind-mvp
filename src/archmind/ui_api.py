@@ -7,6 +7,7 @@ from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
 from archmind.project_query import (
+    add_project_api,
     add_project_field,
     add_project_entity,
     build_project_detail,
@@ -25,6 +26,8 @@ from archmind.project_query import (
 )
 from archmind.deploy import get_local_runtime_status
 from archmind.ui_models import (
+    AddApiRequest,
+    AddApiResponse,
     AddFieldRequest,
     AddFieldResponse,
     AddEntityRequest,
@@ -254,6 +257,46 @@ def post_ui_project_add_field(project_name: str, body: AddFieldRequest) -> AddFi
             field_name=str(body.field_name or ""),
             field_type=str(body.field_type or ""),
             detail="Failed to add field",
+            error=str(exc),
+        )
+
+
+@router.post("/projects/{project_name}/apis", response_model=AddApiResponse)
+def post_ui_project_add_api(project_name: str, body: AddApiRequest) -> AddApiResponse:
+    try:
+        project_dir = find_project_by_name(project_name)
+        if project_dir is None:
+            return AddApiResponse(
+                ok=False,
+                project_name=project_name,
+                method=str(body.method or ""),
+                path=str(body.path or ""),
+                detail="Project not found",
+                error="Project not found",
+            )
+        result = add_project_api(
+            project_dir,
+            str(body.method or ""),
+            str(body.path or ""),
+        )
+        return AddApiResponse(
+            ok=bool(result.get("ok")),
+            project_name=str(result.get("project_name") or project_name),
+            method=str(result.get("method") or ""),
+            path=str(result.get("path") or ""),
+            detail=str(result.get("detail") or ""),
+            error=str(result.get("error") or ""),
+            spec_summary=result.get("spec_summary") if isinstance(result.get("spec_summary"), dict) else {},
+            recent_evolution=[str(x) for x in (result.get("recent_evolution") or []) if str(x).strip()],
+        )
+    except Exception as exc:
+        logger.exception("Failed to add API: %s", project_name)
+        return AddApiResponse(
+            ok=False,
+            project_name=project_name,
+            method=str(body.method or ""),
+            path=str(body.path or ""),
+            detail="Failed to add API",
             error=str(exc),
         )
 

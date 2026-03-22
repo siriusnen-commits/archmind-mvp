@@ -5396,6 +5396,180 @@ def add_field_to_project(
         }
 
 
+def add_api_to_project(
+    project_path: Path,
+    method_raw: str,
+    path_raw: str,
+    *,
+    auto_restart_backend: bool = False,
+) -> dict[str, Any]:
+    target = project_path.expanduser().resolve()
+    if not target.exists() or not target.is_dir():
+        return {
+            "ok": False,
+            "status": "not_found",
+            "project_name": project_path.name,
+            "method": "",
+            "path": "",
+            "detail": "Project not found",
+            "error": "Project not found",
+            "spec_summary": {},
+            "recent_evolution": [],
+            "message_text": "Project not found",
+        }
+
+    raw_method = str(method_raw or "").upper().strip()
+    if raw_method == "PUT":
+        raw_method = "PATCH"
+    raw_path = str(path_raw or "").strip()
+    if not raw_method or not raw_path:
+        return {
+            "ok": False,
+            "status": "invalid",
+            "project_name": target.name,
+            "method": raw_method,
+            "path": raw_path,
+            "detail": "Invalid API input",
+            "error": "method and path are required",
+            "spec_summary": {},
+            "recent_evolution": [],
+            "message_text": "Usage: /add_api <METHOD> <path>",
+        }
+    if raw_method not in set(SUPPORTED_API_METHODS):
+        return {
+            "ok": False,
+            "status": "invalid_method",
+            "project_name": target.name,
+            "method": raw_method,
+            "path": raw_path,
+            "detail": "Unknown method",
+            "error": f"Unknown method: {raw_method}",
+            "spec_summary": {},
+            "recent_evolution": [],
+            "message_text": "Unknown method: " + raw_method + "\n\nAvailable methods:\n" + ", ".join(SUPPORTED_API_METHODS),
+        }
+
+    method, path, endpoint = _normalize_api_endpoint(raw_method, raw_path)
+    if not path:
+        return {
+            "ok": False,
+            "status": "invalid_path",
+            "project_name": target.name,
+            "method": raw_method,
+            "path": raw_path,
+            "detail": "Invalid path",
+            "error": "Invalid path",
+            "spec_summary": {},
+            "recent_evolution": [],
+            "message_text": "Invalid path. Use /add_api <METHOD> /path",
+        }
+
+    try:
+        spec, spec_path = _read_or_init_project_spec(target)
+        current = _rebuild_api_endpoints(spec)
+        current_keys = {str(item).upper() for item in current}
+        if endpoint.upper() in current_keys:
+            progression = analyze_spec_progression(spec)
+            recent = summarize_recent_evolution(spec, limit=5)
+            return {
+                "ok": False,
+                "status": "exists",
+                "project_name": target.name,
+                "method": method,
+                "path": path,
+                "detail": "API already exists",
+                "error": "API already exists",
+                "spec_summary": {
+                    "stage": str(progression.get("stage_label") or "Stage 0"),
+                    "entities": int(progression.get("entities_count") or 0),
+                    "apis": int(progression.get("apis_count") or 0),
+                    "pages": int(progression.get("pages_count") or 0),
+                    "history_count": len(
+                        (spec.get("evolution") or {}).get("history")
+                        if isinstance((spec.get("evolution") or {}).get("history"), list)
+                        else []
+                    ),
+                },
+                "recent_evolution": recent,
+                "message_text": (
+                    "API already exists\n\n"
+                    "Project:\n"
+                    f"{target.name}\n\n"
+                    "Endpoint:\n"
+                    f"{endpoint}"
+                ),
+            }
+
+        spec["api_endpoints"] = current + [endpoint]
+        _rebuild_api_endpoints(spec)
+        _append_evolution_event(spec, {"action": "add_api", "method": method, "path": path})
+
+        apply_api_scaffold(target, method, path)
+        spec_path.parent.mkdir(parents=True, exist_ok=True)
+        spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        auto_restart_lines = ["Auto restart:", "SKIPPED"]
+        restart_failed = False
+        if auto_restart_backend:
+            auto_restart_lines, restart_failed = _auto_restart_backend_lines(target)
+
+        next_lines = ["- /inspect", "- /restart"]
+        if method == "GET" and "{id}" not in path:
+            next_lines.insert(0, f"- /add_api POST {path}")
+        elif method == "POST" and "{id}" not in path:
+            next_lines.insert(0, f"- /add_api GET {path}")
+        if restart_failed:
+            next_lines.append("- /logs")
+
+        progression = analyze_spec_progression(spec)
+        recent = summarize_recent_evolution(spec, limit=5)
+        return {
+            "ok": True,
+            "status": "added",
+            "project_name": target.name,
+            "method": method,
+            "path": path,
+            "detail": "API added",
+            "error": "",
+            "spec_summary": {
+                "stage": str(progression.get("stage_label") or "Stage 0"),
+                "entities": int(progression.get("entities_count") or 0),
+                "apis": int(progression.get("apis_count") or 0),
+                "pages": int(progression.get("pages_count") or 0),
+                "history_count": len(
+                    (spec.get("evolution") or {}).get("history")
+                    if isinstance((spec.get("evolution") or {}).get("history"), list)
+                    else []
+                ),
+            },
+            "recent_evolution": recent,
+            "message_text": (
+                "API added\n\n"
+                "Project:\n"
+                f"{target.name}\n\n"
+                "Endpoint:\n"
+                f"{endpoint}\n\n"
+                + "\n".join(auto_restart_lines)
+                + "\n\n"
+                "Next:\n"
+                + "\n".join(next_lines)
+            ),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status": "error",
+            "project_name": target.name,
+            "method": method,
+            "path": path,
+            "detail": "Failed to add API",
+            "error": str(exc),
+            "spec_summary": {},
+            "recent_evolution": [],
+            "message_text": f"Failed to add API: {exc}",
+        }
+
+
 async def command_add_entity(update: Any, context: Any) -> None:
     project_path = _resolve_target_project()
     if project_path is None:
@@ -5453,52 +5627,8 @@ async def command_add_api(update: Any, context: Any) -> None:
             "Unknown method: " + raw_method + "\n\nAvailable methods:\n" + ", ".join(SUPPORTED_API_METHODS)
         )
         return
-    method, path, endpoint = _normalize_api_endpoint(raw_method, args[1])
-    if not path:
-        await update.message.reply_text("Invalid path. Use /add_api <METHOD> /path")
-        return
-
-    spec, spec_path = _read_or_init_project_spec(project_path)
-    current = _rebuild_api_endpoints(spec)
-    current_keys = {str(item).upper() for item in current}
-    if endpoint.upper() in current_keys:
-        await update.message.reply_text(
-            "API already exists\n\n"
-            "Project:\n"
-            f"{project_path.name}\n\n"
-            "Endpoint:\n"
-            f"{endpoint}"
-        )
-        return
-
-    spec["api_endpoints"] = current + [endpoint]
-    _rebuild_api_endpoints(spec)
-    _append_evolution_event(spec, {"action": "add_api", "method": method, "path": path})
-
-    apply_api_scaffold(project_path, method, path)
-    spec_path.parent.mkdir(parents=True, exist_ok=True)
-    spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    auto_restart_lines, restart_failed = _auto_restart_backend_lines(project_path)
-    next_lines = ["- /inspect", "- /restart"]
-    if method == "GET" and "{id}" not in path:
-        next_lines.insert(0, f"- /add_api POST {path}")
-    elif method == "POST" and "{id}" not in path:
-        next_lines.insert(0, f"- /add_api GET {path}")
-    if restart_failed:
-        next_lines.append("- /logs")
-
-    await update.message.reply_text(
-        "API added\n\n"
-        "Project:\n"
-        f"{project_path.name}\n\n"
-        "Endpoint:\n"
-        f"{endpoint}\n\n"
-        + "\n".join(auto_restart_lines)
-        + "\n\n"
-        "Next:\n"
-        + "\n".join(next_lines)
-    )
+    result = add_api_to_project(project_path, raw_method, args[1], auto_restart_backend=True)
+    await update.message.reply_text(str(result.get("message_text") or result.get("detail") or "Failed to add API"))
 
 
 async def command_add_page(update: Any, context: Any) -> None:

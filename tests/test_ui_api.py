@@ -597,6 +597,86 @@ def test_ui_add_field_duplicate_is_safe(monkeypatch, tmp_path: Path) -> None:
     assert "already exists" in str(payload["detail"]).lower()
 
 
+def test_ui_add_api_succeeds_and_returns_updated_spec(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "api-project")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.post(
+        "/ui/projects/api-project/apis",
+        json={"method": "GET", "path": "/reports"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["project_name"] == "api-project"
+    assert payload["method"] == "GET"
+    assert payload["path"] == "/reports"
+    assert payload["spec_summary"]["apis"] >= 2
+    assert any("add_api GET /reports" in str(item) for item in payload["recent_evolution"])
+
+    detail_response = client.get("/ui/projects/api-project")
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.json()
+    assert detail_payload["spec_summary"]["apis"] >= 2
+    assert any("add_api GET /reports" in str(item) for item in detail_payload["recent_evolution"])
+
+
+def test_ui_add_api_rejects_empty_values_safely(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "api-empty")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.post(
+        "/ui/projects/api-empty/apis",
+        json={"method": " ", "path": " "},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["project_name"] == "api-empty"
+    assert "invalid api input" in str(payload["detail"]).lower()
+
+
+def test_ui_add_api_duplicate_is_safe(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "api-duplicate")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.post(
+        "/ui/projects/api-duplicate/apis",
+        json={"method": "GET", "path": "/notes"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["project_name"] == "api-duplicate"
+    assert payload["method"] == "GET"
+    assert payload["path"] == "/notes"
+    assert "already exists" in str(payload["detail"]).lower()
+
+
+def test_ui_add_api_put_is_accepted_via_shared_normalization(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "api-put")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.post(
+        "/ui/projects/api-put/apis",
+        json={"method": "PUT", "path": "/reports/{id}"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["project_name"] == "api-put"
+    assert payload["method"] == "PATCH"
+    assert payload["path"] == "/reports/{id}"
+
+
 def test_ui_display_name_falls_back_to_identifier(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     project_dir = projects_root / "safe-id"
