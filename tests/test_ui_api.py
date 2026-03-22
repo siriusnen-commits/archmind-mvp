@@ -677,6 +677,84 @@ def test_ui_add_api_put_is_accepted_via_shared_normalization(monkeypatch, tmp_pa
     assert payload["path"] == "/reports/{id}"
 
 
+def test_ui_add_page_succeeds_and_returns_updated_spec(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "page-project")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.post(
+        "/ui/projects/page-project/pages",
+        json={"page_path": "dashboard/home"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["project_name"] == "page-project"
+    assert payload["page_path"] == "dashboard/home"
+    assert payload["spec_summary"]["pages"] >= 2
+    assert any("add_page dashboard/home" in str(item) for item in payload["recent_evolution"])
+
+    detail_response = client.get("/ui/projects/page-project")
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.json()
+    assert detail_payload["spec_summary"]["pages"] >= 2
+    assert any("add_page dashboard/home" in str(item) for item in detail_payload["recent_evolution"])
+
+
+def test_ui_add_page_rejects_empty_path_safely(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "page-empty")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.post(
+        "/ui/projects/page-empty/pages",
+        json={"page_path": " "},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["project_name"] == "page-empty"
+    assert "invalid page path" in str(payload["detail"]).lower()
+
+
+def test_ui_add_page_rejects_invalid_path_safely(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "page-invalid")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.post(
+        "/ui/projects/page-invalid/pages",
+        json={"page_path": "invalid path"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["project_name"] == "page-invalid"
+    assert payload["page_path"] == "invalid path"
+    assert "invalid page path" in str(payload["detail"]).lower()
+
+
+def test_ui_add_page_duplicate_is_safe(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "page-duplicate")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.post(
+        "/ui/projects/page-duplicate/pages",
+        json={"page_path": "notes/list"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["project_name"] == "page-duplicate"
+    assert payload["page_path"] == "notes/list"
+    assert "already exists" in str(payload["detail"]).lower()
+
+
 def test_ui_display_name_falls_back_to_identifier(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     project_dir = projects_root / "safe-id"

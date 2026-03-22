@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 
 from archmind.project_query import (
     add_project_api,
+    add_project_page,
     add_project_field,
     add_project_entity,
     build_project_detail,
@@ -28,6 +29,8 @@ from archmind.deploy import get_local_runtime_status
 from archmind.ui_models import (
     AddApiRequest,
     AddApiResponse,
+    AddPageRequest,
+    AddPageResponse,
     AddFieldRequest,
     AddFieldResponse,
     AddEntityRequest,
@@ -297,6 +300,42 @@ def post_ui_project_add_api(project_name: str, body: AddApiRequest) -> AddApiRes
             method=str(body.method or ""),
             path=str(body.path or ""),
             detail="Failed to add API",
+            error=str(exc),
+        )
+
+
+@router.post("/projects/{project_name}/pages", response_model=AddPageResponse)
+def post_ui_project_add_page(project_name: str, body: AddPageRequest) -> AddPageResponse:
+    try:
+        project_dir = find_project_by_name(project_name)
+        if project_dir is None:
+            return AddPageResponse(
+                ok=False,
+                project_name=project_name,
+                page_path=str(body.page_path or ""),
+                detail="Project not found",
+                error="Project not found",
+            )
+        result = add_project_page(
+            project_dir,
+            str(body.page_path or ""),
+        )
+        return AddPageResponse(
+            ok=bool(result.get("ok")),
+            project_name=str(result.get("project_name") or project_name),
+            page_path=str(result.get("page_path") or ""),
+            detail=str(result.get("detail") or ""),
+            error=str(result.get("error") or ""),
+            spec_summary=result.get("spec_summary") if isinstance(result.get("spec_summary"), dict) else {},
+            recent_evolution=[str(x) for x in (result.get("recent_evolution") or []) if str(x).strip()],
+        )
+    except Exception as exc:
+        logger.exception("Failed to add page: %s", project_name)
+        return AddPageResponse(
+            ok=False,
+            project_name=project_name,
+            page_path=str(body.page_path or ""),
+            detail="Failed to add page",
             error=str(exc),
         )
 
