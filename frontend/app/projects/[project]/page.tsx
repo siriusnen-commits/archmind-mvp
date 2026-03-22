@@ -7,6 +7,7 @@ import AddFieldCard from "@/components/AddFieldCard";
 import AddApiCard from "@/components/AddApiCard";
 import AddPageCard from "@/components/AddPageCard";
 import DangerZoneCard from "@/components/DangerZoneCard";
+import NextActionCard from "@/components/NextActionCard";
 import ProjectSummaryCard from "@/components/ProjectSummaryCard";
 import ProviderCard from "@/components/ProviderCard";
 import RefreshButton from "@/components/RefreshButton";
@@ -35,6 +36,16 @@ type RepositoryInfo = {
   url?: string;
 };
 
+type AnalysisNextAction = {
+  kind?: string;
+  message?: string;
+  command?: string;
+};
+
+type ProjectAnalysis = {
+  next_action?: AnalysisNextAction;
+};
+
 type ProjectDetail = {
   name?: string;
   display_name?: string;
@@ -47,6 +58,7 @@ type ProjectDetail = {
   runtime?: RuntimeInfo;
   recent_evolution?: string[];
   repository?: RepositoryInfo;
+  analysis?: ProjectAnalysis;
 };
 
 export const dynamic = "force-dynamic";
@@ -109,6 +121,7 @@ export default async function ProjectDetailPage({ params }: PageProps) {
       {detail ? (
         <section className="space-y-3">
           <ProjectSummaryCard project={detail} />
+          <NextActionCard projectName={detail.name} nextAction={detail.analysis?.next_action} />
           <RuntimeCard runtime={detail.runtime} />
           <RuntimeActionsCard projectName={detail.name} />
           <AddEntityCard projectName={detail.name} />
