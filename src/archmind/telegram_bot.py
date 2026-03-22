@@ -24,6 +24,7 @@ from archmind.current_project import (
     save_last_project_path as save_backend_last_project_path,
     set_current_project as set_backend_current_project,
 )
+from archmind.command_executor import execute_command
 from archmind.brain import reason_architecture_from_idea
 from archmind.backend_runtime import detect_backend_runtime_entry
 from archmind.decision import decide_next_action, next_action_suggestions
@@ -35,6 +36,7 @@ from archmind.generator import (
     apply_entity_fields_to_scaffold,
     apply_entity_scaffold,
     apply_frontend_page_scaffold,
+    implement_page_scaffold,
     apply_modules_to_project,
     apply_page_scaffold,
     has_frontend_structure,
@@ -83,6 +85,7 @@ PROJECT EVOLUTION
 /add_field <E> <f:t>   add entity field metadata
 /add_api <M> <path>    add API endpoint metadata
 /add_page <path>       add frontend page metadata
+/implement_page <path> upgrade placeholder page to usable scaffold
 /apply_suggestion      apply last suggestion to spec
 /next                  suggest next development steps
 
@@ -822,6 +825,7 @@ def _command_handler_map() -> dict[str, Any]:
         "/add_field": command_add_field,
         "/add_api": command_add_api,
         "/add_page": command_add_page,
+        "/implement_page": command_implement_page,
     }
 
 
@@ -5749,6 +5753,111 @@ def add_page_to_project(
         }
 
 
+def implement_page_in_project(
+    project_path: Path,
+    page_path_raw: str,
+    *,
+    auto_restart_backend: bool = False,
+) -> dict[str, Any]:
+    target = project_path.expanduser().resolve()
+    if not target.exists() or not target.is_dir():
+        return {
+            "ok": False,
+            "status": "not_found",
+            "project_name": project_path.name,
+            "page_path": "",
+            "detail": "Project not found",
+            "error": "Project not found",
+            "spec_summary": {},
+            "recent_evolution": [],
+            "message_text": "Project not found",
+        }
+
+    page_path = _normalize_frontend_page_path(page_path_raw)
+    if not page_path:
+        return {
+            "ok": False,
+            "status": "invalid",
+            "project_name": target.name,
+            "page_path": str(page_path_raw or "").strip(),
+            "detail": "Invalid page path",
+            "error": "Invalid page path",
+            "spec_summary": {},
+            "recent_evolution": [],
+            "message_text": "Usage: /implement_page <path>",
+        }
+
+    try:
+        spec, spec_path = _read_or_init_project_spec(target)
+        result = implement_page_scaffold(target, page_path)
+        ok = bool(result.get("ok"))
+        status = str(result.get("status") or "").strip().lower()
+        detail = str(result.get("detail") or "").strip()
+        error = str(result.get("error") or "").strip()
+        changed_files = [str(x) for x in (result.get("changed_files") or []) if str(x).strip()]
+
+        if status == "implemented":
+            _append_evolution_event(spec, {"action": "implement_page", "page": page_path})
+            spec_path.parent.mkdir(parents=True, exist_ok=True)
+            spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+        elif status == "already_implemented":
+            ok = True
+
+        auto_restart_lines = ["Auto restart:", "SKIPPED"]
+        restart_failed = False
+        if auto_restart_backend and status == "implemented":
+            auto_restart_lines, restart_failed = _auto_restart_backend_lines(target)
+
+        progression = analyze_spec_progression(spec)
+        recent = summarize_recent_evolution(spec, limit=5)
+        lines = [detail or ("Implemented page: " + page_path if ok else "Failed to implement page")]
+        lines += ["", "Project:", target.name, "", "Page:", page_path]
+        if changed_files:
+            lines += ["", "Changed:"] + [f"- {item}" for item in changed_files]
+        if status == "implemented":
+            lines += ["", *auto_restart_lines]
+            next_lines = ["- /inspect", "- /next"]
+            if restart_failed:
+                next_lines.append("- /logs")
+            lines += ["", "Next:", *next_lines]
+
+        return {
+            "ok": ok,
+            "status": status or ("implemented" if ok else "error"),
+            "project_name": target.name,
+            "page_path": page_path,
+            "detail": detail or ("Implemented page: " + page_path if ok else "Failed to implement page"),
+            "error": error,
+            "spec_summary": {
+                "stage": str(progression.get("stage_label") or "Stage 0"),
+                "entities": int(progression.get("entities_count") or 0),
+                "apis": int(progression.get("apis_count") or 0),
+                "pages": int(progression.get("pages_count") or 0),
+                "history_count": len(
+                    (spec.get("evolution") or {}).get("history")
+                    if isinstance((spec.get("evolution") or {}).get("history"), list)
+                    else []
+                ),
+            },
+            "recent_evolution": recent,
+            "changed_files": changed_files,
+            "message_text": "\n".join(lines),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status": "error",
+            "project_name": target.name,
+            "page_path": page_path,
+            "detail": "Failed to implement page",
+            "error": str(exc),
+            "spec_summary": {},
+            "recent_evolution": [],
+            "changed_files": [],
+            "message_text": f"Failed to implement page: {exc}",
+        }
+
+
 async def command_add_entity(update: Any, context: Any) -> None:
     project_path = _resolve_target_project()
     if project_path is None:
@@ -5785,8 +5894,11 @@ async def command_add_field(update: Any, context: Any) -> None:
         await update.message.reply_text("Usage: /add_field <Entity> <field_name>:<field_type>")
         return
 
-    result = add_field_to_project(project_path, entity_name, field_name, field_type, auto_restart_backend=True)
-    await update.message.reply_text(str(result.get("message_text") or result.get("detail") or "Failed to add field"))
+    command = f"/add_field {entity_name} {field_name}:{field_type}"
+    result = execute_command(command, project_path.name)
+    await update.message.reply_text(
+        str(result.get("message_text") or result.get("detail") or result.get("message") or "Failed to add field")
+    )
 
 
 async def command_add_api(update: Any, context: Any) -> None:
@@ -5806,8 +5918,11 @@ async def command_add_api(update: Any, context: Any) -> None:
             "Unknown method: " + raw_method + "\n\nAvailable methods:\n" + ", ".join(SUPPORTED_API_METHODS)
         )
         return
-    result = add_api_to_project(project_path, raw_method, args[1], auto_restart_backend=True)
-    await update.message.reply_text(str(result.get("message_text") or result.get("detail") or "Failed to add API"))
+    command = f"/add_api {raw_method} {str(args[1]).strip()}"
+    result = execute_command(command, project_path.name)
+    await update.message.reply_text(
+        str(result.get("message_text") or result.get("detail") or result.get("message") or "Failed to add API")
+    )
 
 
 async def command_add_page(update: Any, context: Any) -> None:
@@ -5820,8 +5935,28 @@ async def command_add_page(update: Any, context: Any) -> None:
     if not args:
         await update.message.reply_text("Usage: /add_page <path>")
         return
-    result = add_page_to_project(project_path, args[0], auto_restart_backend=True)
-    await update.message.reply_text(str(result.get("message_text") or result.get("detail") or "Failed to add page"))
+    command = f"/add_page {str(args[0]).strip()}"
+    result = execute_command(command, project_path.name)
+    await update.message.reply_text(
+        str(result.get("message_text") or result.get("detail") or result.get("message") or "Failed to add page")
+    )
+
+
+async def command_implement_page(update: Any, context: Any) -> None:
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text(_no_active_project_guidance())
+        return
+
+    args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
+    if not args:
+        await update.message.reply_text("Usage: /implement_page <path>")
+        return
+    command = f"/implement_page {str(args[0]).strip()}"
+    result = execute_command(command, project_path.name)
+    await update.message.reply_text(
+        str(result.get("message_text") or result.get("detail") or result.get("message") or "Failed to implement page")
+    )
 
 
 async def command_apply_suggestion(update: Any, context: Any) -> None:
@@ -6803,6 +6938,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("add_field", command_add_field))
     app.add_handler(CommandHandler("add_api", command_add_api))
     app.add_handler(CommandHandler("add_page", command_add_page))
+    app.add_handler(CommandHandler("implement_page", command_implement_page))
     app.add_handler(CommandHandler("apply_suggestion", command_apply_suggestion))
     app.add_handler(CommandHandler("apply_plan", command_apply_plan))
     app.add_handler(CommandHandler("next", command_next))

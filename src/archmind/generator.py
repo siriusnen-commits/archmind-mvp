@@ -1317,6 +1317,167 @@ def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
     return generated
 
 
+def _page_signal_score(content: str) -> int:
+    text = str(content or "").lower()
+    score = 0
+    for token in (
+        "useapibaseurl",
+        "fetch(",
+        "loading",
+        "failed to load",
+        "no items found",
+        "item not found",
+        "missing item id",
+        "items.map(",
+        "json.stringify(",
+        "onsubmit(",
+        "method: \"post\"",
+        "method: \"put\"",
+        "method: \"patch\"",
+        "method: \"delete\"",
+    ):
+        if token in text:
+            score += 1
+    return score
+
+
+def _is_placeholder_level_page(content: str) -> bool:
+    text = str(content or "").lower()
+    if not text.strip():
+        return True
+    placeholder_markers = (
+        "page placeholder for",
+        "placeholder page",
+        "coming soon",
+        "todo",
+        "tbd",
+    )
+    marker_hit = any(token in text for token in placeholder_markers)
+    if not marker_hit:
+        return False
+    return _page_signal_score(text) < 3
+
+
+def _render_generic_page_scaffold(
+    *,
+    component_name: str,
+    title: str,
+    rel: str,
+    api_helper_import: str,
+) -> str:
+    return (
+        '"use client";\n\n'
+        f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n\n'
+        f"export default function {component_name}() {{\n"
+        "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n"
+        "  return (\n"
+        '    <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">\n'
+        f'      <h1 className="text-lg font-semibold">{title}</h1>\n'
+        '      <p className="text-xs text-slate-400">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>\n'
+        '      <p className="text-sm text-slate-200">This page is implemented and ready for project-specific content.</p>\n'
+        '      <div className="rounded-md border border-slate-700 bg-slate-950/60 p-3 text-sm text-slate-300">\n'
+        f"        Route: /{rel}\n"
+        "      </div>\n"
+        "    </section>\n"
+        "  );\n"
+        "}\n"
+    )
+
+
+def _render_implemented_page_content(app_root: Path, target: Path, rel: str) -> str:
+    segments = [seg for seg in rel.split("/") if seg]
+    title = " ".join(seg.replace("-", " ").replace("_", " ").title() for seg in segments)
+    comp_name = "".join(seg.replace("-", " ").replace("_", " ").title().replace(" ", "") for seg in segments) + "Page"
+    leaf = segments[-1].lower() if segments else ""
+    entity_path = "/".join(segments[:-1]).strip("/")
+    helper_import = _api_base_helper_import_for_page(app_root, target)
+    if entity_path and leaf == "list":
+        return _render_frontend_entity_list_page(
+            component_name=comp_name,
+            title=title,
+            entity_path=entity_path,
+            detail_link_mode="query",
+            detail_href_base=f"/{entity_path}/detail",
+            api_helper_import=helper_import,
+        )
+    if entity_path and leaf == "detail":
+        return _render_frontend_entity_detail_page(
+            component_name=comp_name,
+            title=title,
+            entity_path=entity_path,
+            id_mode="query",
+            api_helper_import=helper_import,
+        )
+    return _render_generic_page_scaffold(
+        component_name=comp_name,
+        title=title,
+        rel=rel,
+        api_helper_import=helper_import,
+    )
+
+
+def implement_page_scaffold(project_dir: Path, page_path: str) -> dict[str, Any]:
+    app_root = _resolve_frontend_app_root(project_dir)
+    raw = str(page_path or "").strip()
+    rel = _canonicalize_page_path(raw)
+    if not rel:
+        return {
+            "ok": False,
+            "status": "invalid",
+            "page_path": raw,
+            "detail": "Invalid page path",
+            "error": "Invalid page path",
+            "changed_files": [],
+        }
+    if app_root is None:
+        return {
+            "ok": False,
+            "status": "no_frontend",
+            "page_path": rel,
+            "detail": "Frontend structure not found",
+            "error": "Frontend structure not found",
+            "changed_files": [],
+        }
+
+    target = app_root / rel / "page.tsx"
+    if not target.exists():
+        return {
+            "ok": False,
+            "status": "not_found",
+            "page_path": rel,
+            "detail": f"Page not found: {rel}",
+            "error": "Page not found",
+            "changed_files": [],
+        }
+
+    before = target.read_text(encoding="utf-8")
+    if not _is_placeholder_level_page(before):
+        return {
+            "ok": True,
+            "status": "already_implemented",
+            "page_path": rel,
+            "detail": f"Page already implemented: {rel}",
+            "error": "",
+            "changed_files": [],
+        }
+
+    changed: list[str] = []
+    _ensure_frontend_api_base_helper(app_root, changed, project_dir)
+    _ensure_frontend_navigation_helper(app_root, changed, project_dir)
+    _ensure_frontend_navigation_shell_upgrade(app_root, changed, project_dir)
+    content = _render_implemented_page_content(app_root, target, rel)
+    _write_if_changed(target, content, changed, project_dir)
+    _register_frontend_nav_link(app_root, f"/{rel}", changed, project_dir)
+    return {
+        "ok": True,
+        "status": "implemented",
+        "page_path": rel,
+        "detail": f"Implemented page: {rel}",
+        "error": "",
+        "changed_files": changed,
+    }
+
+
 def _render_frontend_entity_list_page(
     *,
     component_name: str,
