@@ -178,10 +178,51 @@ def test_fullstack_note_project_has_note_oriented_shell_and_pages(tmp_path: Path
     root_page = (project_dir / "frontend" / "app" / "page.tsx").read_text(encoding="utf-8")
     notes_page = (project_dir / "frontend" / "app" / "notes" / "page.tsx").read_text(encoding="utf-8")
     note_detail_page = (project_dir / "frontend" / "app" / "notes" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+    backend_router = (project_dir / "backend" / "app" / "api" / "router.py").read_text(encoding="utf-8")
+    backend_notes_router = (project_dir / "backend" / "app" / "api" / "routers" / "notes.py").read_text(encoding="utf-8")
 
     assert "/ui/defects" not in layout_page
     assert "/ui/defects" not in root_page
+    assert "/notes" in notes_page
+    assert "/notes/" in note_detail_page
     assert "Create note" in notes_page
     assert "Create your first note above." in notes_page
     assert "Save changes" in note_detail_page
     assert "Delete note" in note_detail_page
+    assert "notes_router" in backend_router
+    assert "defects_router" not in backend_router
+    assert 'prefix="/notes"' in backend_notes_router
+    assert not (project_dir / "backend" / "app" / "api" / "routers" / "defects.py").exists()
+    assert not (project_dir / "frontend" / "app" / "ui" / "DefectsPage.tsx").exists()
+
+
+def test_fullstack_note_project_backend_and_frontend_are_aligned_on_notes_routes(tmp_path: Path) -> None:
+    project_dir = _generate_fullstack(tmp_path, name="memo_alignment")
+    db_path = project_dir / "backend" / "data" / "note.db"
+    db_url = f"sqlite:///{db_path}"
+    app = _import_app(project_dir, db_url)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(app)
+
+    create = client.post("/notes", json={"title": "first memo", "content": "hello"})
+    assert create.status_code == 200
+    note_id = create.json()["id"]
+
+    listing = client.get("/notes")
+    assert listing.status_code == 200
+    assert listing.json()["total"] >= 1
+
+    detail = client.get(f"/notes/{note_id}")
+    assert detail.status_code == 200
+    assert detail.json()["title"] == "first memo"
+
+    update = client.put(f"/notes/{note_id}", json={"title": "updated memo", "content": "updated"})
+    assert update.status_code == 200
+    assert update.json()["title"] == "updated memo"
+
+    delete = client.delete(f"/notes/{note_id}")
+    assert delete.status_code == 200
+
+    assert client.post("/defects", json={"defect_type": "x", "note": "y"}).status_code == 404
