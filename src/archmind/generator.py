@@ -808,6 +808,133 @@ def _ensure_frontend_navigation_helper(app_root: Path, generated: list[str], pro
     _write_if_missing(nav_path, _render_frontend_navigation_file(discovered), generated, project_dir)
 
 
+def _render_frontend_layout_with_navigation(title: str) -> str:
+    safe_title = str(title or "").strip() or "ArchMind App"
+    return (
+        'import Link from "next/link";\n'
+        'import "./globals.css";\n'
+        'import { APP_NAV_LINKS } from "./_lib/navigation";\n\n'
+        "export const metadata = {\n"
+        f'  title: "{safe_title}",\n'
+        "};\n\n"
+        "export default function RootLayout({ children }: { children: React.ReactNode }) {\n"
+        "  return (\n"
+        '    <html lang="en">\n'
+        "      <body>\n"
+        '        <div className="min-h-screen bg-slate-950 text-slate-100">\n'
+        '          <header className="border-b border-slate-800 bg-slate-900/80">\n'
+        '            <div className="mx-auto max-w-5xl px-4 py-5">\n'
+        '              <div className="flex flex-wrap items-center justify-between gap-4">\n'
+        "                <div>\n"
+        f'                  <div className="text-lg font-semibold tracking-wide">{safe_title}</div>\n'
+        '                  <div className="text-xs text-slate-300">FastAPI + Next.js workspace</div>\n'
+        "                </div>\n"
+        '                <nav className="flex flex-wrap items-center gap-2 text-xs">\n'
+        "                  {APP_NAV_LINKS.map((link) => (\n"
+        '                    <Link key={link.href} href={link.href} className="rounded-md border border-slate-700 px-2 py-1 text-slate-200 hover:bg-slate-800">\n'
+        "                      {link.label}\n"
+        "                    </Link>\n"
+        "                  ))}\n"
+        "                </nav>\n"
+        "              </div>\n"
+        "            </div>\n"
+        "          </header>\n"
+        '          <main className="mx-auto max-w-5xl px-4 py-8">{children}</main>\n'
+        "        </div>\n"
+        "      </body>\n"
+        "    </html>\n"
+        "  );\n"
+        "}\n"
+    )
+
+
+def _render_frontend_root_with_navigation() -> str:
+    return (
+        '"use client";\n\n'
+        'import Link from "next/link";\n'
+        'import { useEffect, useMemo, useState } from "react";\n'
+        'import { useRouter } from "next/navigation";\n'
+        'import { useApiBaseUrl } from "./_lib/apiBase";\n'
+        'import { APP_NAV_LINKS } from "./_lib/navigation";\n\n'
+        "export default function Page() {\n"
+        "  const router = useRouter();\n"
+        "  const [checkingPrimary, setCheckingPrimary] = useState(true);\n"
+        "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n"
+        "  const primaryHref = useMemo(() => APP_NAV_LINKS.find((link) => link.primary)?.href || APP_NAV_LINKS[0]?.href || \"/\", []);\n\n"
+        "  useEffect(() => {\n"
+        "    let active = true;\n"
+        "    (async () => {\n"
+        "      try {\n"
+        "        if (primaryHref === \"/\") {\n"
+        "          setCheckingPrimary(false);\n"
+        "          return;\n"
+        "        }\n"
+        "        const response = await fetch(primaryHref, { cache: \"no-store\" });\n"
+        "        if (!active) return;\n"
+        "        if (response.ok) {\n"
+        "          router.replace(primaryHref);\n"
+        "          return;\n"
+        "        }\n"
+        "      } catch {\n"
+        "        // Ignore and show default landing.\n"
+        "      }\n"
+        "      if (active) {\n"
+        "        setCheckingPrimary(false);\n"
+        "      }\n"
+        "    })();\n"
+        "    return () => {\n"
+        "      active = false;\n"
+        "    };\n"
+        "  }, [router, primaryHref]);\n\n"
+        "  if (checkingPrimary) {\n"
+        '    return <p className="text-sm text-slate-300">Loading workspace...</p>;\n'
+        "  }\n\n"
+        "  return (\n"
+        '    <section className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900/60 p-6">\n'
+        '      <h1 className="text-lg font-semibold">Project Home</h1>\n'
+        '      <p className="text-xs text-slate-300">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>\n'
+        '      <p className="text-sm text-slate-200">Available sections from generated pages:</p>\n'
+        '      <div className="flex flex-wrap gap-2 text-sm">\n'
+        "        {APP_NAV_LINKS.map((link) => (\n"
+        '          <Link key={link.href} href={link.href} className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">\n'
+        "            {link.label}\n"
+        "          </Link>\n"
+        "        ))}\n"
+        "      </div>\n"
+        "    </section>\n"
+        "  );\n"
+        "}\n"
+    )
+
+
+def _ensure_frontend_navigation_shell_upgrade(app_root: Path, generated: list[str], project_dir: Path) -> None:
+    layout_path = app_root / "layout.tsx"
+    if layout_path.exists():
+        layout_text = layout_path.read_text(encoding="utf-8")
+        if "APP_NAV_LINKS" not in layout_text:
+            legacy_markers = (
+                "FastAPI + Next.js workspace" in layout_text
+                or "/ · /notes" in layout_text
+                or "/ui/defects" in layout_text
+            )
+            if legacy_markers:
+                title_match = re.search(r'title:\s*["\']([^"\']+)["\']', layout_text)
+                title = title_match.group(1) if title_match else project_dir.name
+                _write_if_changed(layout_path, _render_frontend_layout_with_navigation(title), generated, project_dir)
+
+    root_page_path = app_root / "page.tsx"
+    if root_page_path.exists():
+        root_text = root_page_path.read_text(encoding="utf-8")
+        if "APP_NAV_LINKS" not in root_text:
+            legacy_markers = (
+                "Open the generated domain pages" in root_text
+                or 'router.replace("/notes")' in root_text
+                or "__ROOT_LINKS__" in root_text
+            )
+            if legacy_markers:
+                _write_if_changed(root_page_path, _render_frontend_root_with_navigation(), generated, project_dir)
+
+
 def _register_frontend_nav_link(app_root: Path, href: str, generated: list[str], project_dir: Path) -> None:
     cleaned = str(href or "").strip()
     if not cleaned:
@@ -990,6 +1117,7 @@ def apply_frontend_page_scaffold(project_dir: Path, entity_name: str) -> list[st
     generated: list[str] = []
     _ensure_frontend_api_base_helper(app_root, generated, project_dir)
     _ensure_frontend_navigation_helper(app_root, generated, project_dir)
+    _ensure_frontend_navigation_shell_upgrade(app_root, generated, project_dir)
     list_helper_import = _api_base_helper_import_for_page(app_root, list_page)
     detail_helper_import = _api_base_helper_import_for_page(app_root, detail_page)
 
@@ -1040,6 +1168,7 @@ def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
     generated: list[str] = []
     _ensure_frontend_api_base_helper(app_root, generated, project_dir)
     _ensure_frontend_navigation_helper(app_root, generated, project_dir)
+    _ensure_frontend_navigation_shell_upgrade(app_root, generated, project_dir)
     leaf = segments[-1].lower()
     entity_path = "/".join(segments[:-1]).strip("/")
     helper_import = _api_base_helper_import_for_page(app_root, target)
