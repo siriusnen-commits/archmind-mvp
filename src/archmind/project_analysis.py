@@ -91,6 +91,87 @@ def _extract_entities(spec_payload: dict[str, Any]) -> tuple[list[str], dict[str
     return names, fields_by_entity
 
 
+def _normalize_inferred_field_name(raw_name: str) -> str:
+    field = str(raw_name or "").strip()
+    if not field:
+        return ""
+    if field.startswith("_") or field in {"self", "cls"}:
+        return ""
+    if field.lower() in {"config", "model_config"}:
+        return ""
+    if re.match(r"^[A-Z]", field):
+        return ""
+    return field
+
+
+def _infer_fields_from_python_model(path: Path) -> list[dict[str, str]]:
+    try:
+        content = path.read_text(encoding="utf-8")
+    except Exception:
+        return []
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = re.match(r"^([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*([^=]+)", line)
+        if not match:
+            continue
+        field_name = _normalize_inferred_field_name(match.group(1))
+        if not field_name:
+            continue
+        key = field_name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"name": field_name, "type": "string"})
+    return out
+
+
+def _candidate_entity_model_files(project_dir: Path, entity_name: str) -> list[Path]:
+    slug = _entity_slug(entity_name)
+    if not slug:
+        return []
+    names = [slug, entity_name.lower()]
+    roots = [
+        project_dir / "backend" / "app" / "models",
+        project_dir / "backend" / "app" / "schemas",
+        project_dir / "app" / "models",
+        project_dir / "app" / "schemas",
+    ]
+    candidates: list[Path] = []
+    for root in roots:
+        for name in names:
+            candidates.append(root / f"{name}.py")
+    return candidates
+
+
+def _merge_fields_with_code_inference(
+    project_dir: Path,
+    entities: list[str],
+    fields_by_entity: dict[str, list[dict[str, str]]],
+) -> dict[str, list[dict[str, str]]]:
+    merged: dict[str, list[dict[str, str]]] = {}
+    for entity in entities:
+        current = list(fields_by_entity.get(entity) or [])
+        seen = {str(item.get("name") or "").strip().lower() for item in current if str(item.get("name") or "").strip()}
+        for candidate in _candidate_entity_model_files(project_dir, entity):
+            if not candidate.exists():
+                continue
+            for item in _infer_fields_from_python_model(candidate):
+                field_name = str(item.get("name") or "").strip()
+                if not field_name:
+                    continue
+                key = field_name.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                current.append(item)
+        merged[entity] = current
+    return merged
+
+
 def _extract_apis(spec_payload: dict[str, Any]) -> list[dict[str, str]]:
     rows = spec_payload.get("api_endpoints") if isinstance(spec_payload.get("api_endpoints"), list) else []
     out: list[dict[str, str]] = []
@@ -214,7 +295,22 @@ def _candidate_page_files(project_dir: Path, page: str) -> list[Path]:
 
 def _is_placeholder_text(content: str) -> bool:
     text = str(content or "").lower()
-    return "placeholder" in text or "todo" in text
+    return "placeholder" in text or "todo" in text or "coming soon" in text or "tbd" in text
+
+
+def _usability_signal_score(content: str) -> int:
+    text = str(content or "")
+    lowered = text.lower()
+    score = 0
+    if any(token in text for token in ("fetch(", "await fetch", "axios.", "useEffect(")):
+        score += 1
+    if any(token in text for token in (".map(", "<li", "<table", "items.map(")):
+        score += 1
+    if any(token in lowered for token in ("onsubmit", "<form", "textarea", "input", "handlesubmit")):
+        score += 1
+    if any(token in lowered for token in ("delete", "update", "edit", "create", "router.refresh", "router.push")):
+        score += 1
+    return score
 
 
 def _detect_placeholder_pages(project_dir: Path, pages: list[str]) -> list[str]:
@@ -227,7 +323,11 @@ def _detect_placeholder_pages(project_dir: Path, pages: list[str]) -> list[str]:
                 content = candidate.read_text(encoding="utf-8")
             except Exception:
                 break
-            if _is_placeholder_text(content):
+            placeholder_token = _is_placeholder_text(content)
+            signal_score = _usability_signal_score(content)
+            # A placeholder token alone is not enough when the page already has usable flow signals.
+            is_placeholder = placeholder_token and signal_score < 2
+            if is_placeholder:
                 out.append(page)
             break
     seen: set[str] = set()
@@ -288,6 +388,7 @@ def _build_suggestions(
     placeholder_pages: list[str],
 ) -> tuple[list[dict[str, str]], dict[str, str]]:
     suggestions: list[dict[str, str]] = []
+    added_field_suggestion = False
 
     def add(kind: str, message: str, command: str = "") -> None:
         if len(suggestions) >= 3:
@@ -339,13 +440,14 @@ def _build_suggestions(
                 f"/add_page {resource}/{page_kind}",
             )
 
-        if missing_fields and len(suggestions) < 3:
+        if missing_fields and len(suggestions) < 3 and not added_field_suggestion:
             field_name = str(missing_fields[0])
             add(
                 "missing_field",
                 f"{entity} is missing an important field: {field_name}",
                 f"/add_field {entity} {field_name}:string",
             )
+            added_field_suggestion = True
 
     if not suggestions:
         suggestions.append(
@@ -371,6 +473,7 @@ def analyze_project(
     entities, fields_by_entity = _extract_entities(spec)
     apis = _extract_apis(spec)
     pages = _extract_pages(spec)
+    fields_by_entity = _merge_fields_with_code_inference(project_dir, entities, fields_by_entity)
     entity_crud_status = _compute_entity_crud_status(entities, fields_by_entity, apis, pages)
     placeholder_pages = _detect_placeholder_pages(project_dir, pages)
     nav_visible_pages = _extract_nav_visible_pages(project_dir, pages)
