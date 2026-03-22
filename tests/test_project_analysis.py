@@ -182,6 +182,48 @@ class NoteModel:
     assert any("Note is missing an important field: title" in str(s.get("message")) for s in out["suggestions"])
 
 
+def test_project_analysis_treats_name_as_equivalent_to_title_for_all_entities(tmp_path: Path) -> None:
+    project_dir = tmp_path / "task-name-equivalent"
+    spec = {
+        "entities": [{"name": "Task", "fields": []}],
+        "api_endpoints": ["GET /tasks", "POST /tasks"],
+        "frontend_pages": ["tasks/list"],
+    }
+    _write(
+        project_dir / "backend" / "app" / "models" / "task.py",
+        """
+class TaskModel:
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+""",
+    )
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    missing = out["entity_crud_status"]["Task"]["missing_important_fields"]
+    assert "title" not in missing
+    assert not any("Task is missing an important field: title" in str(s.get("message")) for s in out["suggestions"])
+
+
+def test_project_analysis_suggests_missing_title_when_title_and_name_are_both_absent(tmp_path: Path) -> None:
+    project_dir = tmp_path / "task-missing-text-identifier"
+    spec = {
+        "entities": [{"name": "Task", "fields": []}],
+        "api_endpoints": ["GET /tasks", "POST /tasks"],
+        "frontend_pages": ["tasks/list"],
+    }
+    _write(
+        project_dir / "backend" / "app" / "models" / "task.py",
+        """
+class TaskModel:
+    id = Column(Integer, primary_key=True)
+    priority = Column(String, nullable=True)
+""",
+    )
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    missing = out["entity_crud_status"]["Task"]["missing_important_fields"]
+    assert "title" in missing
+    assert any("Task is missing an important field: title" in str(s.get("message")) for s in out["suggestions"])
+
+
 def test_project_analysis_limits_missing_field_suggestions_to_reduce_repetition(tmp_path: Path) -> None:
     project_dir = tmp_path / "multi-entity-app"
     spec = {
