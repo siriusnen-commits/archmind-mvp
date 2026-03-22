@@ -5899,50 +5899,26 @@ async def command_next(update: Any, context: Any) -> None:
         await update.message.reply_text(_no_active_project_guidance())
         return
 
-    spec_path = project_path / ".archmind" / "project_spec.json"
-    raw = _load_json(spec_path) or {}
-    if not raw:
-        raw, _ = _read_or_init_project_spec(project_path)
-    spec = dict(raw)
-    if not isinstance(spec.get("modules"), list):
-        spec["modules"] = []
-    spec["entities"] = _normalize_entities(spec.get("entities"))
-    if not isinstance(spec.get("api_endpoints"), list):
-        spec["api_endpoints"] = []
-    if not isinstance(spec.get("frontend_pages"), list):
-        spec["frontend_pages"] = []
-    spec["shape"] = str(spec.get("shape") or "unknown")
-
-    suggestions = suggest_next_commands(spec, limit=3)
-    if not suggestions:
-        await update.message.reply_text(
-            "Next development suggestions\n"
-            f"Target Project: {project_path.name}\n\n"
-            "No immediate suggestions.\n\n"
-            "Next:\n- /inspect\n- continue evolving the project"
-        )
-        return
+    analysis = _build_project_analysis(project_path)
+    next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
+    message = str(next_action.get("message") or "").strip()
+    command = str(next_action.get("command") or "").strip()
+    kind = str(next_action.get("kind") or "").strip().lower()
 
     lines = [
-        "Next development suggestions",
+        "Next development suggestion",
         f"Target Project: {project_path.name}",
         "",
     ]
-    callback_rows: list[list[Any]] = []
-    InlineKeyboardButton, InlineKeyboardMarkup = _inline_keyboard_classes()
-    for i, item in enumerate(suggestions, start=1):
-        command = str(item.get("command") or "").strip()
-        reason = str(item.get("reason") or "").strip()
-        lines.append(f"{i}. {command}")
-        if reason:
-            lines.append(f"   reason: {reason}")
-        lines.append("")
-        callback_rows.append([InlineKeyboardButton(text=command, callback_data=_encode_callback_data("cmd", command))])
-    lines += ["Next:", "- run suggested commands", "- /inspect"]
-    if callback_rows:
-        await update.message.reply_text(_truncate_message("\n".join(lines)), reply_markup=InlineKeyboardMarkup(callback_rows))
+
+    if kind == "none" or not message or message.lower() == "no immediate suggestions.":
+        lines.append("No immediate next action.")
     else:
-        await update.message.reply_text(_truncate_message("\n".join(lines)))
+        lines.append(message)
+        if command:
+            lines.append(f"Command: {command}")
+
+    await update.message.reply_text(_truncate_message("\n".join(lines)))
 
 
 async def command_suggestion_callback(update: Any, context: Any) -> None:

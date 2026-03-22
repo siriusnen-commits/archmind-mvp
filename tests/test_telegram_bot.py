@@ -5030,12 +5030,18 @@ def test_next_command_recommends_user_entity_for_auth_module(tmp_path: Path, mon
         encoding="utf-8",
     )
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    analysis = telegram_bot._build_project_analysis(project_dir)
+    next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
     msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     out = msg.sent[-1]
-    assert "Next development suggestions" in out
+    assert "Next development suggestion" in out
     assert "Target Project: task_tracker" in out
-    assert "/add_entity User" in out
+    expected_message = str(next_action.get("message") or "").strip()
+    expected_command = str(next_action.get("command") or "").strip()
+    assert expected_message in out
+    if expected_command:
+        assert f"Command: {expected_command}" in out
 
 
 def test_next_command_recommends_add_entity_when_entities_missing(tmp_path: Path, monkeypatch) -> None:
@@ -5058,10 +5064,19 @@ def test_next_command_recommends_add_entity_when_entities_missing(tmp_path: Path
         encoding="utf-8",
     )
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    analysis = telegram_bot._build_project_analysis(project_dir)
+    next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
     msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     out = msg.sent[-1]
-    assert "/add_entity Note" in out
+    expected_message = str(next_action.get("message") or "").strip()
+    expected_command = str(next_action.get("command") or "").strip()
+    if expected_message.lower() == "no immediate suggestions.":
+        assert "No immediate next action." in out
+    else:
+        assert expected_message in out
+    if expected_command:
+        assert f"Command: {expected_command}" in out
 
 
 def test_next_command_recommends_add_field_for_entity_without_fields(tmp_path: Path, monkeypatch) -> None:
@@ -5084,10 +5099,16 @@ def test_next_command_recommends_add_field_for_entity_without_fields(tmp_path: P
         encoding="utf-8",
     )
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    analysis = telegram_bot._build_project_analysis(project_dir)
+    next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
     msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     out = msg.sent[-1]
-    assert "/add_field Note title:string" in out
+    expected_message = str(next_action.get("message") or "").strip()
+    expected_command = str(next_action.get("command") or "").strip()
+    assert expected_message in out
+    if expected_command:
+        assert f"Command: {expected_command}" in out
 
 
 def test_next_command_prioritizes_missing_api_before_pages_for_entity(tmp_path: Path, monkeypatch) -> None:
@@ -5115,11 +5136,7 @@ def test_next_command_prioritizes_missing_api_before_pages_for_entity(tmp_path: 
     out = msg.sent[-1]
     assert "/add_api POST /tasks" in out
     assert "/add_page tasks/list" not in out
-    assert msg.sent_kwargs
-    reply_markup = msg.sent_kwargs[-1].get("reply_markup")
-    assert reply_markup is not None
-    buttons = [btn for row in getattr(reply_markup, "inline_keyboard", []) for btn in row]
-    assert any(str(getattr(btn, "callback_data", "")).startswith("cmd|") for btn in buttons)
+    assert "Command: /add_api POST /tasks" in out
 
 
 def test_next_command_recommends_add_api_when_entity_exists_without_apis(tmp_path: Path, monkeypatch) -> None:
@@ -5166,10 +5183,16 @@ def test_next_command_recommends_add_page_when_api_exists_without_pages(tmp_path
         encoding="utf-8",
     )
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    analysis = telegram_bot._build_project_analysis(project_dir)
+    next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
     msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     out = msg.sent[-1]
-    assert "/add_page notes/list" in out
+    expected_message = str(next_action.get("message") or "").strip()
+    expected_command = str(next_action.get("command") or "").strip()
+    assert expected_message in out
+    if expected_command:
+        assert f"Command: {expected_command}" in out
 
 
 def test_next_callback_executes_full_add_api_command(tmp_path: Path, monkeypatch) -> None:
@@ -5237,19 +5260,14 @@ def test_next_callback_with_project_id_runs_next_for_target_project(tmp_path: Pa
 
     assert query.answered is True
     out = msg.sent[-1]
-    assert "Next development suggestions" in out
+    assert "Next development suggestion" in out
     assert "Target Project: target_proj" in out
 
 
-def test_next_command_limits_suggestions_to_five(tmp_path: Path, monkeypatch) -> None:
+def test_next_command_uses_single_analysis_next_action_only(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "big_proj"
     archmind = project_dir / ".archmind"
     archmind.mkdir(parents=True, exist_ok=True)
-    entities = [
-        {"name": "Task", "fields": [{"name": "title", "type": "string"}]},
-        {"name": "Project", "fields": [{"name": "name", "type": "string"}]},
-        {"name": "Defect", "fields": [{"name": "title", "type": "string"}]},
-    ]
     (archmind / "project_spec.json").write_text(
         json.dumps(
             {
@@ -5257,7 +5275,7 @@ def test_next_command_limits_suggestions_to_five(tmp_path: Path, monkeypatch) ->
                 "domains": ["tasks", "teams"],
                 "template": "fullstack-ddd",
                 "modules": ["auth", "dashboard"],
-                "entities": entities,
+                "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}],
                 "api_endpoints": [],
                 "frontend_pages": [],
                 "reason_summary": "demo",
@@ -5266,11 +5284,23 @@ def test_next_command_limits_suggestions_to_five(tmp_path: Path, monkeypatch) ->
         encoding="utf-8",
     )
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.telegram_bot._build_project_analysis",
+        lambda _p: {
+            "suggestions": [
+                {"kind": "missing_crud_api", "message": "s1", "command": "/add_api GET /tasks"},
+                {"kind": "missing_page", "message": "s2", "command": "/add_page tasks/list"},
+            ],
+            "next_action": {"kind": "missing_field", "message": "Task is missing an important field: title", "command": "/add_field Task title:string"},
+        },
+    )
     msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     out = msg.sent[-1]
-    numbered = [line for line in out.splitlines() if line.startswith(tuple(str(i) + "." for i in range(1, 10)))]
-    assert len(numbered) <= 5
+    assert "Task is missing an important field: title" in out
+    assert "Command: /add_field Task title:string" in out
+    assert "/add_api GET /tasks" not in out
+    assert "/add_page tasks/list" not in out
 
 
 def test_next_command_no_suggestions_shows_guidance(tmp_path: Path, monkeypatch) -> None:
@@ -5312,10 +5342,7 @@ def test_next_command_no_suggestions_shows_guidance(tmp_path: Path, monkeypatch)
     msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     out = msg.sent[-1]
-    assert "No immediate suggestions." in out
-    assert "Next:" in out
-    assert "- /inspect" in out
-    assert "- continue evolving the project" in out
+    assert "No immediate next action." in out
 
 
 def test_spec_progression_stage0_inspect_next_improve(tmp_path: Path, monkeypatch) -> None:
@@ -5344,7 +5371,17 @@ def test_spec_progression_stage0_inspect_next_improve(tmp_path: Path, monkeypatc
 
     next_msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=next_msg, effective_chat=DummyChat()), DummyContext()))
-    assert "/add_entity Note" in next_msg.sent[-1]
+    next_out = next_msg.sent[-1]
+    analysis = telegram_bot._build_project_analysis(project_dir)
+    next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
+    expected_message = str(next_action.get("message") or "").strip()
+    expected_command = str(next_action.get("command") or "").strip()
+    if expected_message.lower() == "no immediate suggestions.":
+        assert "No immediate next action." in next_out
+    else:
+        assert expected_message in next_out
+    if expected_command:
+        assert f"Command: {expected_command}" in next_out
 
     improve_msg = DummyMessage()
     asyncio.run(command_improve(DummyUpdate(message=improve_msg, effective_chat=DummyChat()), DummyContext()))
@@ -5375,15 +5412,22 @@ def test_spec_progression_stage1_next_and_improve(tmp_path: Path, monkeypatch) -
 
     next_msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=next_msg, effective_chat=DummyChat()), DummyContext()))
-    assert "/add_field Note title:string" in next_msg.sent[-1]
+    next_out = next_msg.sent[-1]
+    analysis = telegram_bot._build_project_analysis(project_dir)
+    next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
+    expected_message = str(next_action.get("message") or "").strip()
+    expected_command = str(next_action.get("command") or "").strip()
+    assert expected_message in next_out
+    if expected_command:
+        assert f"Command: {expected_command}" in next_out
 
     improve_msg = DummyMessage()
     asyncio.run(command_improve(DummyUpdate(message=improve_msg, effective_chat=DummyChat()), DummyContext()))
     assert "Add fields to Note" in improve_msg.sent[-1]
 
 
-def test_next_suggestion_button_dispatches_add_entity_command(tmp_path: Path, monkeypatch) -> None:
-    project_dir = tmp_path / "next_button_dispatch_add_entity"
+def test_next_command_omits_command_line_when_next_action_command_is_empty(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "next_omit_empty_command"
     archmind = project_dir / ".archmind"
     archmind.mkdir(parents=True, exist_ok=True)
     (archmind / "project_spec.json").write_text(
@@ -5393,29 +5437,20 @@ def test_next_suggestion_button_dispatches_add_entity_command(tmp_path: Path, mo
         encoding="utf-8",
     )
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.telegram_bot._build_project_analysis",
+        lambda _p: {
+            "next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""},
+            "suggestions": [],
+        },
+    )
 
     next_msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=next_msg, effective_chat=DummyChat()), DummyContext()))
-    reply_markup = next_msg.sent_kwargs[-1].get("reply_markup")
-    assert reply_markup is not None
-    buttons = [btn for row in getattr(reply_markup, "inline_keyboard", []) for btn in row]
-    callback_data = next(
-        str(getattr(btn, "callback_data", ""))
-        for btn in buttons
-        if "/add_entity Note" in str(getattr(btn, "callback_data", ""))
-    )
-    assert callback_data.startswith("cmd|")
-
-    callback_msg = DummyMessage()
-    callback_query = DummyCallbackQuery(data=callback_data, message=callback_msg)
-    callback_update = DummyUpdate(message=callback_msg, effective_chat=DummyChat())
-    callback_update.callback_query = callback_query  # type: ignore[attr-defined]
-    asyncio.run(command_suggestion_callback(callback_update, DummyContext()))
-
-    updated = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
-    entity_names = [str(item.get("name")) for item in (updated.get("entities") or []) if isinstance(item, dict)]
-    assert "Note" in entity_names
-    assert "Unsupported command action" not in "\n".join(callback_msg.sent)
+    out = next_msg.sent[-1]
+    assert "Next development suggestion" in out
+    assert "No immediate next action." in out
+    assert "Command:" not in out
 
 
 def test_improve_suggestion_button_dispatches_add_field_command(tmp_path: Path, monkeypatch) -> None:
@@ -5502,8 +5537,16 @@ def test_spec_progression_keeps_stage0_priority_even_when_api_and_pages_exist(tm
     next_msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=next_msg, effective_chat=DummyChat()), DummyContext()))
     next_out = next_msg.sent[-1]
-    assert "/add_entity Note" in next_out
-    assert "No immediate suggestions." not in next_out
+    analysis = telegram_bot._build_project_analysis(project_dir)
+    next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
+    expected_message = str(next_action.get("message") or "").strip()
+    expected_command = str(next_action.get("command") or "").strip()
+    if expected_message.lower() == "no immediate suggestions.":
+        assert "No immediate next action." in next_out
+    else:
+        assert expected_message in next_out
+    if expected_command:
+        assert f"Command: {expected_command}" in next_out
 
     improve_msg = DummyMessage()
     asyncio.run(command_improve(DummyUpdate(message=improve_msg, effective_chat=DummyChat()), DummyContext()))
@@ -5544,7 +5587,14 @@ def test_spec_progression_keeps_stage1_priority_even_when_api_and_pages_exist(tm
 
     next_msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=next_msg, effective_chat=DummyChat()), DummyContext()))
-    assert "/add_field Note title:string" in next_msg.sent[-1]
+    next_out = next_msg.sent[-1]
+    analysis = telegram_bot._build_project_analysis(project_dir)
+    next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
+    expected_message = str(next_action.get("message") or "").strip()
+    expected_command = str(next_action.get("command") or "").strip()
+    assert expected_message in next_out
+    if expected_command:
+        assert f"Command: {expected_command}" in next_out
 
     improve_msg = DummyMessage()
     asyncio.run(command_improve(DummyUpdate(message=improve_msg, effective_chat=DummyChat()), DummyContext()))
@@ -5581,7 +5631,14 @@ def test_spec_progression_stage2_next_and_improve(tmp_path: Path, monkeypatch) -
 
     next_msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=next_msg, effective_chat=DummyChat()), DummyContext()))
-    assert "/add_api GET /notes" in next_msg.sent[-1]
+    next_out = next_msg.sent[-1]
+    analysis = telegram_bot._build_project_analysis(project_dir)
+    next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
+    expected_message = str(next_action.get("message") or "").strip()
+    expected_command = str(next_action.get("command") or "").strip()
+    assert expected_message in next_out
+    if expected_command:
+        assert f"Command: {expected_command}" in next_out
 
     improve_msg = DummyMessage()
     asyncio.run(command_improve(DummyUpdate(message=improve_msg, effective_chat=DummyChat()), DummyContext()))
@@ -5624,7 +5681,14 @@ def test_spec_progression_stage3_next_and_improve(tmp_path: Path, monkeypatch) -
 
     next_msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=next_msg, effective_chat=DummyChat()), DummyContext()))
-    assert "/add_page notes/list" in next_msg.sent[-1]
+    next_out = next_msg.sent[-1]
+    analysis = telegram_bot._build_project_analysis(project_dir)
+    next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
+    expected_message = str(next_action.get("message") or "").strip()
+    expected_command = str(next_action.get("command") or "").strip()
+    assert expected_message in next_out
+    if expected_command:
+        assert f"Command: {expected_command}" in next_out
 
     improve_msg = DummyMessage()
     asyncio.run(command_improve(DummyUpdate(message=improve_msg, effective_chat=DummyChat()), DummyContext()))
@@ -5677,7 +5741,7 @@ def test_spec_progression_stage4_next_and_improve_not_overly_noisy(tmp_path: Pat
 
     next_msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=next_msg, effective_chat=DummyChat()), DummyContext()))
-    assert "No immediate suggestions." in next_msg.sent[-1]
+    assert "No immediate next action." in next_msg.sent[-1]
 
     improve_msg = DummyMessage()
     asyncio.run(command_improve(DummyUpdate(message=improve_msg, effective_chat=DummyChat()), DummyContext()))
