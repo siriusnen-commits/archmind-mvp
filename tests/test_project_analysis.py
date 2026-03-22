@@ -137,6 +137,51 @@ class NoteBase:
     assert any(f.get("name") == "title" for f in out["fields_by_entity"]["Note"])
 
 
+def test_project_analysis_backend_first_uses_class_variants_for_entity_matching(tmp_path: Path) -> None:
+    project_dir = tmp_path / "memo-backend-class-variants"
+    spec = {
+        "entities": [{"name": "Note", "fields": []}],
+        "api_endpoints": ["GET /notes", "POST /notes"],
+        "frontend_pages": ["notes/list"],
+    }
+    _write(
+        project_dir / "backend" / "app" / "schemas" / "note.py",
+        """
+class NoteSchema:
+    title: str
+    content: str
+
+class NoteModel:
+    created_at: str
+""",
+    )
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    names = {str(f.get("name")) for f in out["fields_by_entity"]["Note"]}
+    assert "title" in names
+    assert "created_at" in names
+    assert not any("Note is missing an important field: title" in str(s.get("message")) for s in out["suggestions"])
+
+
+def test_project_analysis_backend_first_can_still_report_real_missing_title(tmp_path: Path) -> None:
+    project_dir = tmp_path / "memo-backend-missing-title"
+    spec = {
+        "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": ["GET /notes", "POST /notes"],
+        "frontend_pages": ["notes/list"],
+    }
+    _write(
+        project_dir / "backend" / "app" / "models" / "note.py",
+        """
+class NoteModel:
+    content: str
+""",
+    )
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    missing = out["entity_crud_status"]["Note"]["missing_important_fields"]
+    assert "title" in missing
+    assert any("Note is missing an important field: title" in str(s.get("message")) for s in out["suggestions"])
+
+
 def test_project_analysis_limits_missing_field_suggestions_to_reduce_repetition(tmp_path: Path) -> None:
     project_dir = tmp_path / "multi-entity-app"
     spec = {
