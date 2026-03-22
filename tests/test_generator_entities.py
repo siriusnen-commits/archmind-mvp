@@ -196,6 +196,54 @@ def test_apply_page_scaffold_updates_navigation_with_new_explicit_page(tmp_path:
     assert 'href: "/reports/list"' in nav_text
 
 
+def test_apply_page_scaffold_backfills_legacy_memo_shell_and_surfaces_new_pages(tmp_path: Path) -> None:
+    project_dir = tmp_path / "legacy_memo"
+    app_dir = project_dir / "frontend" / "app"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (app_dir / "notes").mkdir(parents=True, exist_ok=True)
+    (app_dir / "notes" / "page.tsx").write_text("export default function Notes(){return null}\n", encoding="utf-8")
+    (app_dir / "layout.tsx").write_text(
+        'import "./globals.css";\n\n'
+        "export const metadata = {\n"
+        '  title: "legacy_memo",\n'
+        "};\n\n"
+        "export default function RootLayout({ children }: { children: React.ReactNode }) {\n"
+        "  return (\n"
+        "    <html lang=\"en\"><body>\n"
+        "      <div>\n"
+        "        <div>FastAPI + Next.js workspace</div>\n"
+        "        <div>/ · /notes</div>\n"
+        "        {children}\n"
+        "      </div>\n"
+        "    </body></html>\n"
+        "  );\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (app_dir / "page.tsx").write_text(
+        '"use client";\n'
+        'import Link from "next/link";\n'
+        "import { useRouter } from \"next/navigation\";\n"
+        "export default function Page(){\n"
+        "  const router = useRouter();\n"
+        '  return <div><p>Open the generated domain pages.</p><Link href="/notes">Notes</Link></div>;\n'
+        "}\n",
+        encoding="utf-8",
+    )
+
+    apply_page_scaffold(project_dir, "reminders/list")
+
+    nav_text = (app_dir / "_lib" / "navigation.ts").read_text(encoding="utf-8")
+    layout_text = (app_dir / "layout.tsx").read_text(encoding="utf-8")
+    root_text = (app_dir / "page.tsx").read_text(encoding="utf-8")
+    assert 'href: "/notes"' in nav_text
+    assert 'href: "/reminders/list"' in nav_text
+    assert "APP_NAV_LINKS.map" in layout_text
+    assert 'from "./_lib/navigation"' in root_text
+    assert "router.replace(primaryHref)" in root_text
+
+
 def test_apply_frontend_page_scaffold_is_idempotent_and_skips_backend_only(tmp_path: Path) -> None:
     backend_only = tmp_path / "backend_demo"
     (backend_only / "app").mkdir(parents=True, exist_ok=True)
