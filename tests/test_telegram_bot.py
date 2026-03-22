@@ -5679,6 +5679,58 @@ def test_auto_command_respects_max_step_cap_and_allowed_commands(tmp_path: Path,
     assert executed == ["/add_api GET /tasks", "/add_page tasks/list"]
     assert "- Result: STOP (unsupported command)" in out
     assert "- Stopped: unsupported command: /run" in out
+
+
+def test_auto_command_stops_on_low_priority_next_action(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "auto_low_priority"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.telegram_bot._build_project_analysis",
+        lambda _p: {
+            "next_action": {
+                "kind": "missing_field",
+                "message": "Task is missing an important field: created_at",
+                "command": "/add_field Task created_at:datetime",
+            }
+        },
+    )
+    executed: list[str] = []
+    monkeypatch.setattr(
+        "archmind.telegram_bot.execute_command",
+        lambda cmd, _p: (executed.append(cmd) or {"ok": True, "message": "ok"}),
+    )
+    msg = DummyMessage()
+    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert executed == []
+    assert "- Result: STOP (low-priority next action)" in out
+    assert "- Stopped: low-priority next action" in out
+
+
+def test_auto_command_stops_on_repeated_low_value_pattern(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "auto_repeated_weak_pattern"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    sequence = iter(
+        [
+            {"next_action": {"kind": "missing_field", "message": "Task is missing an important field: title", "command": "/add_field Task title:string"}},
+            {"next_action": {"kind": "missing_field", "message": "Reminder is missing an important field: title", "command": "/add_field Reminder title:string"}},
+            {"next_action": {"kind": "missing_page", "message": "Reminder is missing list page coverage.", "command": "/add_page reminders/list"}},
+        ]
+    )
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p: next(sequence))
+    executed: list[str] = []
+    monkeypatch.setattr(
+        "archmind.telegram_bot.execute_command",
+        lambda cmd, _p: (executed.append(cmd) or {"ok": True, "message": "ok"}),
+    )
+    msg = DummyMessage()
+    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext(args=["3"])))
+    out = msg.sent[-1]
+    assert executed == ["/add_field Task title:string"]
+    assert "- Result: STOP (repeated low-value pattern)" in out
+    assert "- Stopped: repeated low-value pattern" in out
 def test_improve_suggestion_button_dispatches_add_field_command(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "improve_button_dispatch_add_field"
     archmind = project_dir / ".archmind"
