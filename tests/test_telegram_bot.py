@@ -2565,17 +2565,33 @@ def test_preview_command_outputs_brain_reasoning_fields() -> None:
     assert "dashboard" in out
 
 
-def test_suggest_command_outputs_suggestion_list() -> None:
+def test_suggest_command_outputs_suggestion_list(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.telegram_bot._build_project_analysis",
+        lambda _project: {
+            "suggestions": [
+                {"kind": "api", "message": "Add update endpoint for Task.", "command": "/add_api PUT /tasks/{id}"},
+                {"kind": "page", "message": "Add detail page for Task.", "command": "/add_page tasks/detail"},
+                {"kind": "field", "message": "Add priority field to Task.", "command": ""},
+            ]
+        },
+    )
+
     msg = DummyMessage()
     update = DummyUpdate(message=msg, effective_chat=DummyChat())
-    asyncio.run(command_suggest(update, DummyContext(args=["document", "upload", "admin", "tool"])))
+    asyncio.run(command_suggest(update, DummyContext()))
     out = msg.sent[-1]
-    assert "Architecture suggestion" in out
-    assert "Template candidates:" in out
-    assert "Suggested entities:" in out
-    assert "Suggested APIs:" in out
-    assert "Suggested pages:" in out
-    assert "Reasoning:" in out
+    assert out.startswith("Suggestions")
+    assert f"Target Project: {project_dir.name}" in out
+    assert "1. Add update endpoint for Task." in out
+    assert "Command: /add_api PUT /tasks/{id}" in out
+    assert "2. Add detail page for Task." in out
+    assert "Command: /add_page tasks/detail" in out
+    assert "3. Add priority field to Task." in out
+    assert out.count("   Command:") == 2
 
 
 def test_design_command_outputs_design_sections() -> None:
@@ -4817,21 +4833,27 @@ def test_inspect_reflects_explicitly_added_api_and_page(tmp_path: Path, monkeypa
     assert "- reports/list" in out
 
 
-def test_suggest_writes_suggestion_json_for_current_project(tmp_path: Path, monkeypatch) -> None:
+def test_suggest_command_no_suggestions_shows_guidance(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "task_tracker"
-    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    project_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _project: {"suggestions": []})
 
     msg = DummyMessage()
     update = DummyUpdate(message=msg, effective_chat=DummyChat())
-    asyncio.run(command_suggest(update, DummyContext(args=["team", "defect", "tracker"])))
+    asyncio.run(command_suggest(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "Suggestions" in out
+    assert f"Target Project: {project_dir.name}" in out
+    assert "No immediate suggestions." in out
 
-    suggestion_path = project_dir / ".archmind" / "suggestion.json"
-    assert suggestion_path.exists()
-    payload = json.loads(suggestion_path.read_text(encoding="utf-8"))
-    assert isinstance(payload.get("entities"), list)
-    assert isinstance(payload.get("api_endpoints"), list)
-    assert isinstance(payload.get("frontend_pages"), list)
+
+def test_suggest_command_without_current_project_returns_safe_guidance(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: None)
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_suggest(update, DummyContext()))
+    assert "No active project." in msg.sent[-1]
 
 
 def test_apply_suggestion_entities_api_pages_modes_and_history(tmp_path: Path, monkeypatch) -> None:
