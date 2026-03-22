@@ -6079,6 +6079,45 @@ def _extract_next_action(analysis: dict[str, Any]) -> tuple[str, str, str]:
     return kind, message, command
 
 
+def _extract_add_field_name(command: str) -> str:
+    text = str(command or "").strip()
+    if not text.startswith("/add_field "):
+        return ""
+    parts = text.split()
+    if len(parts) < 3:
+        return ""
+    field_expr = str(parts[2] or "").strip()
+    if not field_expr:
+        return ""
+    field_name = field_expr.split(":", 1)[0].strip().lower()
+    return field_name
+
+
+def classify_auto_action_priority(next_action: dict[str, Any] | None) -> str:
+    row = next_action if isinstance(next_action, dict) else {}
+    kind = str(row.get("kind") or "").strip().lower()
+    message = str(row.get("message") or "").strip().lower()
+    command = _normalize_recommended_command(str(row.get("command") or "").strip())
+
+    if kind == "none" or not message or message == "no immediate suggestions.":
+        return "none"
+
+    if command.startswith("/add_field "):
+        field_name = _extract_add_field_name(command)
+        # High-signal text identifiers are still worth auto execution.
+        if field_name in {"title", "name"}:
+            return "high"
+        return "low"
+
+    if kind in {"placeholder_page", "missing_crud_api", "missing_page"}:
+        return "high"
+
+    if "polish" in message or "optional" in message:
+        return "low"
+
+    return "high"
+
+
 async def command_auto(update: Any, context: Any) -> None:
     project_path = _resolve_target_project()
     if project_path is None:
@@ -6094,16 +6133,18 @@ async def command_auto(update: Any, context: Any) -> None:
         "",
     ]
     seen_commands: set[str] = set()
+    weak_pattern_counts: dict[str, int] = {}
     executed = 0
     stop_reason = "max step count reached"
 
     for idx in range(1, max_steps + 1):
         analysis = _build_project_analysis(project_path)
         kind, message, raw_command = _extract_next_action(analysis)
+        priority = classify_auto_action_priority({"kind": kind, "message": message, "command": raw_command})
         normalized_command = _normalize_recommended_command(raw_command)
 
         lines.append(f"Step {idx}")
-        if kind == "none" or not message or message.lower() == "no immediate suggestions.":
+        if priority == "none":
             lines.append("- No immediate next action.")
             stop_reason = "no immediate next action"
             break
@@ -6119,6 +6160,21 @@ async def command_auto(update: Any, context: Any) -> None:
         if cmd not in AUTO_ALLOWED_COMMANDS:
             lines.append("- Result: STOP (unsupported command)")
             stop_reason = f"unsupported command: {cmd or normalized_command}"
+            break
+
+        weak_pattern_key = ""
+        if normalized_command.startswith("/add_field "):
+            weak_pattern_key = "add_field"
+        if weak_pattern_key:
+            weak_pattern_counts[weak_pattern_key] = weak_pattern_counts.get(weak_pattern_key, 0) + 1
+            if weak_pattern_counts[weak_pattern_key] >= 2:
+                lines.append("- Result: STOP (repeated low-value pattern)")
+                stop_reason = "repeated low-value pattern"
+                break
+
+        if priority == "low":
+            lines.append("- Result: STOP (low-priority next action)")
+            stop_reason = "low-priority next action"
             break
 
         if normalized_command in seen_commands:
