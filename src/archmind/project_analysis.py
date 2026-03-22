@@ -524,7 +524,7 @@ def _build_suggestions(
         add(
             "placeholder_page",
             f"Page {target} is still placeholder-level. Implement a usable UI flow.",
-            f"/add_page {target}",
+            f"/implement_page {target}",
         )
 
     # Priority 2/3/4 per entity
@@ -603,6 +603,9 @@ def _canonicalize_suggestion_command(command: str) -> str:
     if cmd == "/add_page":
         page = _canonicalize_page_path(parts[1])
         return f"/add_page {page}" if page else ""
+    if cmd == "/implement_page":
+        page = _canonicalize_page_path(parts[1])
+        return f"/implement_page {page}" if page else ""
     if cmd == "/add_api" and len(parts) >= 3:
         method = str(parts[1] or "").strip().upper()
         if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
@@ -639,8 +642,16 @@ def canonicalize_analysis_suggestions(rows: list[dict[str, Any]]) -> list[dict[s
         command = _canonicalize_suggestion_command(command_raw)
         if command_raw and not command:
             continue
-        if command.startswith("/add_page "):
-            page = command.split(maxsplit=1)[1]
+        page_for_message = ""
+        if kind == "placeholder_page" and command.startswith("/add_page "):
+            page_for_message = command.split(maxsplit=1)[1]
+            command = f"/implement_page {page_for_message}"
+        elif command.startswith("/add_page "):
+            page_for_message = command.split(maxsplit=1)[1]
+        elif command.startswith("/implement_page "):
+            page_for_message = command.split(maxsplit=1)[1]
+        if page_for_message:
+            page = page_for_message
             message = re.sub(
                 r"^Page\s+\S+\s+is still placeholder-level\.",
                 f"Page {page} is still placeholder-level.",

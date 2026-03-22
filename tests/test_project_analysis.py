@@ -75,7 +75,8 @@ def test_project_analysis_detects_placeholder_pages_and_suggestions_priority(tmp
     assert len(out["suggestions"]) >= 1
     assert out["suggestions"][0]["kind"] == "placeholder_page"
     assert out["next_action"]["kind"] == "placeholder_page"
-    assert out["suggestions"][0]["command"] == "/add_page notes/list"
+    assert out["suggestions"][0]["command"] == "/implement_page notes/list"
+    assert out["next_action"]["command"] == "/implement_page notes/list"
 
 
 def test_project_analysis_treats_page_with_real_flow_signals_as_usable(tmp_path: Path) -> None:
@@ -288,8 +289,26 @@ def test_project_analysis_canonicalizes_noncanonical_page_path_in_suggestions(tm
 
     out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
     assert out["pages"] == ["tasks/list"]
-    assert out["suggestions"][0]["command"] == "/add_page tasks/list"
+    assert out["suggestions"][0]["command"] == "/implement_page tasks/list"
     assert "task/lists" not in out["suggestions"][0]["command"]
+
+
+def test_project_analysis_missing_page_still_suggests_add_page(tmp_path: Path) -> None:
+    project_dir = tmp_path / "task-missing-page-app"
+    spec = {
+        "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": [
+            "GET /tasks",
+            "POST /tasks",
+            "GET /tasks/{task_id}",
+            "PUT /tasks/{task_id}",
+            "DELETE /tasks/{task_id}",
+        ],
+        "frontend_pages": [],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert out["next_action"]["kind"] == "missing_page"
+    assert out["next_action"]["command"] == "/add_page tasks/list"
 
 
 def test_project_analysis_note_template_does_not_suggest_missing_title_when_present(tmp_path: Path) -> None:
