@@ -46,6 +46,7 @@ from archmind.next_suggester import analyze_spec_progression, suggest_next_comma
 from archmind.plan_suggester import build_plan_from_project_spec, build_plan_from_suggestion
 from archmind.project_type import detect_project_type, normalize_project_type
 from archmind.project_analysis import analyze_project, canonicalize_analysis_suggestions
+from archmind.execution_history import append_execution_event
 from archmind.design_suggester import build_architecture_design
 from archmind.spec_suggester import suggest_project_spec
 from archmind.state import (
@@ -831,14 +832,23 @@ def _command_handler_map() -> dict[str, Any]:
     }
 
 
-async def _dispatch_command_text(update: Any, context: Any, command_text: str) -> bool:
+def _execution_source_from_context(context: Any, default: str = "manual-command") -> str:
+    source = str(getattr(context, "_archmind_source", "") or "").strip()
+    return source or default
+
+
+async def _dispatch_command_text(update: Any, context: Any, command_text: str, *, source: str = "manual-command") -> bool:
     cmd, args = _parse_command_string(command_text)
     handler = _command_handler_map().get(cmd)
     if handler is None:
         return False
+    setattr(context, "_archmind_source", source)
     context.args = args
-    await handler(update, context)
-    return True
+    try:
+        await handler(update, context)
+        return True
+    finally:
+        setattr(context, "_archmind_source", "")
 
 
 def _build_action_keyboard(commands: list[str], *, max_buttons: int = 6) -> Any:
@@ -5897,7 +5907,7 @@ async def command_add_field(update: Any, context: Any) -> None:
         return
 
     command = f"/add_field {entity_name} {field_name}:{field_type}"
-    result = execute_command(command, project_path.name)
+    result = execute_command(command, project_path.name, source=_execution_source_from_context(context))
     await update.message.reply_text(
         str(result.get("message_text") or result.get("detail") or result.get("message") or "Failed to add field")
     )
@@ -5921,7 +5931,7 @@ async def command_add_api(update: Any, context: Any) -> None:
         )
         return
     command = f"/add_api {raw_method} {str(args[1]).strip()}"
-    result = execute_command(command, project_path.name)
+    result = execute_command(command, project_path.name, source=_execution_source_from_context(context))
     await update.message.reply_text(
         str(result.get("message_text") or result.get("detail") or result.get("message") or "Failed to add API")
     )
@@ -5938,7 +5948,7 @@ async def command_add_page(update: Any, context: Any) -> None:
         await update.message.reply_text("Usage: /add_page <path>")
         return
     command = f"/add_page {str(args[0]).strip()}"
-    result = execute_command(command, project_path.name)
+    result = execute_command(command, project_path.name, source=_execution_source_from_context(context))
     await update.message.reply_text(
         str(result.get("message_text") or result.get("detail") or result.get("message") or "Failed to add page")
     )
@@ -5955,7 +5965,7 @@ async def command_implement_page(update: Any, context: Any) -> None:
         await update.message.reply_text("Usage: /implement_page <path>")
         return
     command = f"/implement_page {str(args[0]).strip()}"
-    result = execute_command(command, project_path.name)
+    result = execute_command(command, project_path.name, source=_execution_source_from_context(context))
     await update.message.reply_text(
         str(result.get("message_text") or result.get("detail") or result.get("message") or "Failed to implement page")
     )
@@ -6136,6 +6146,7 @@ async def command_auto(update: Any, context: Any) -> None:
     weak_pattern_counts: dict[str, int] = {}
     executed = 0
     stop_reason = "max step count reached"
+    run_id = f"auto-{int(time.time() * 1000)}-{project_path.name}"
 
     for idx in range(1, max_steps + 1):
         analysis = _build_project_analysis(project_path)
@@ -6147,12 +6158,34 @@ async def command_auto(update: Any, context: Any) -> None:
         if priority == "none":
             lines.append("- No immediate next action.")
             stop_reason = "no immediate next action"
+            append_execution_event(
+                project_path,
+                project_name=project_path.name,
+                source="telegram-auto",
+                command=normalized_command or raw_command or "",
+                status="stop",
+                message="No immediate next action.",
+                run_id=run_id,
+                step_no=idx,
+                stop_reason=stop_reason,
+            )
             break
 
         if not normalized_command:
             lines.append(f"- Next: {raw_command or '(empty)'}")
             lines.append("- Result: STOP (empty or malformed command)")
             stop_reason = "empty or malformed command"
+            append_execution_event(
+                project_path,
+                project_name=project_path.name,
+                source="telegram-auto",
+                command=raw_command or "",
+                status="stop",
+                message="Empty or malformed command.",
+                run_id=run_id,
+                step_no=idx,
+                stop_reason=stop_reason,
+            )
             break
 
         cmd, _ = _parse_command_string(normalized_command)
@@ -6160,6 +6193,17 @@ async def command_auto(update: Any, context: Any) -> None:
         if cmd not in AUTO_ALLOWED_COMMANDS:
             lines.append("- Result: STOP (unsupported command)")
             stop_reason = f"unsupported command: {cmd or normalized_command}"
+            append_execution_event(
+                project_path,
+                project_name=project_path.name,
+                source="telegram-auto",
+                command=normalized_command,
+                status="stop",
+                message="Unsupported command for auto run.",
+                run_id=run_id,
+                step_no=idx,
+                stop_reason=stop_reason,
+            )
             break
 
         weak_pattern_key = ""
@@ -6170,20 +6214,59 @@ async def command_auto(update: Any, context: Any) -> None:
             if weak_pattern_counts[weak_pattern_key] >= 2:
                 lines.append("- Result: STOP (repeated low-value pattern)")
                 stop_reason = "repeated low-value pattern"
+                append_execution_event(
+                    project_path,
+                    project_name=project_path.name,
+                    source="telegram-auto",
+                    command=normalized_command,
+                    status="stop",
+                    message="Repeated low-value action pattern.",
+                    run_id=run_id,
+                    step_no=idx,
+                    stop_reason=stop_reason,
+                )
                 break
 
         if priority == "low":
             lines.append("- Result: STOP (low-priority next action)")
             stop_reason = "low-priority next action"
+            append_execution_event(
+                project_path,
+                project_name=project_path.name,
+                source="telegram-auto",
+                command=normalized_command,
+                status="stop",
+                message="Low-priority next action.",
+                run_id=run_id,
+                step_no=idx,
+                stop_reason=stop_reason,
+            )
             break
 
         if normalized_command in seen_commands:
             lines.append("- Result: STOP (repeated-command protection)")
             stop_reason = "repeated command detected"
+            append_execution_event(
+                project_path,
+                project_name=project_path.name,
+                source="telegram-auto",
+                command=normalized_command,
+                status="stop",
+                message="Repeated command detected.",
+                run_id=run_id,
+                step_no=idx,
+                stop_reason=stop_reason,
+            )
             break
         seen_commands.add(normalized_command)
 
-        result = execute_command(normalized_command, project_path.name)
+        result = execute_command(
+            normalized_command,
+            project_path.name,
+            source="telegram-auto",
+            run_id=run_id,
+            step_no=idx,
+        )
         ok = bool(result.get("ok"))
         if ok:
             lines.append("- Result: OK")
@@ -6197,6 +6280,17 @@ async def command_auto(update: Any, context: Any) -> None:
             ).strip()
             lines.append(f"- Result: FAIL ({detail})")
             stop_reason = f"command failed: {detail}"
+            append_execution_event(
+                project_path,
+                project_name=project_path.name,
+                source="telegram-auto",
+                command=normalized_command,
+                status="stop",
+                message=detail,
+                run_id=run_id,
+                step_no=idx,
+                stop_reason=stop_reason,
+            )
             break
         lines.append("")
 
@@ -6246,7 +6340,7 @@ async def command_suggestion_callback(update: Any, context: Any) -> None:
     if action == "suggest":
         # Backward compatibility for older suggest| callbacks.
         command_text = _normalize_recommended_command(str(payload or "")) or str(payload or "")
-        dispatched = await _dispatch_command_text(callback_update, callback_context, command_text)
+        dispatched = await _dispatch_command_text(callback_update, callback_context, command_text, source="telegram-next")
         if not dispatched:
             await message.reply_text(f"Unsupported suggestion command: {payload}")
             return
@@ -6257,7 +6351,7 @@ async def command_suggestion_callback(update: Any, context: Any) -> None:
         await command_help(callback_update, callback_context)
         return
     if action == "cmd":
-        dispatched = await _dispatch_command_text(callback_update, callback_context, str(payload or ""))
+        dispatched = await _dispatch_command_text(callback_update, callback_context, str(payload or ""), source="telegram-next")
         if not dispatched:
             await message.reply_text(f"Unsupported command action: {payload}")
             return
