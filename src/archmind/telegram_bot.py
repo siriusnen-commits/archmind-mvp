@@ -46,7 +46,7 @@ from archmind.next_suggester import analyze_spec_progression, suggest_next_comma
 from archmind.plan_suggester import build_plan_from_project_spec, build_plan_from_suggestion
 from archmind.project_type import detect_project_type, normalize_project_type
 from archmind.project_analysis import analyze_project, canonicalize_analysis_suggestions
-from archmind.execution_history import append_execution_event
+from archmind.execution_history import append_execution_event, load_recent_execution_events
 from archmind.design_suggester import build_architecture_design
 from archmind.spec_suggester import suggest_project_spec
 from archmind.state import (
@@ -96,6 +96,7 @@ PROJECT MANAGEMENT
 /projects              list projects
 /use <n>               select project
 /current               show selected project
+/history [n]           show recent execution history (default 10, max 20)
 /status                show current status
 /state                 show raw pipeline state
 
@@ -542,6 +543,7 @@ def _help_section_text(section: str) -> str:
             "- /projects              list projects\n"
             "- /use <n>               select project\n"
             "- /current               show selected project\n"
+            "- /history [n]           show recent execution history\n"
             "- /status                show current status\n"
             "- /state                 show raw pipeline state"
         )
@@ -823,6 +825,7 @@ def _command_handler_map() -> dict[str, Any]:
         "/continue": command_continue,
         "/projects": command_projects,
         "/current": command_current,
+        "/history": command_history,
         "/use": command_use,
         "/add_entity": command_add_entity,
         "/add_field": command_add_field,
@@ -4315,6 +4318,68 @@ async def command_inspect(update: Any, context: Any) -> None:
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 
 
+def _parse_history_limit(args: list[str]) -> int:
+    if not args:
+        return 10
+    try:
+        raw = int(str(args[0]).strip())
+    except Exception:
+        return 10
+    return max(1, min(20, raw))
+
+
+async def command_history(update: Any, context: Any) -> None:
+    project_path = _resolve_target_project()
+    if project_path is None:
+        await update.message.reply_text(_no_active_project_guidance())
+        return
+
+    args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
+    limit = _parse_history_limit(args)
+    events = load_recent_execution_events(project_path, limit=limit)
+    if not events:
+        await update.message.reply_text(
+            _truncate_message(
+                "\n".join(
+                    [
+                        "Execution history",
+                        f"Target Project: {project_path.name}",
+                        "",
+                        "No execution history yet.",
+                    ]
+                )
+            )
+        )
+        return
+
+    lines: list[str] = [
+        "Execution history",
+        f"Target Project: {project_path.name}",
+        "",
+    ]
+    for idx, event in enumerate(reversed(events), start=1):
+        if not isinstance(event, dict):
+            continue
+        status = str(event.get("status") or "unknown").strip().lower() or "unknown"
+        command = str(event.get("command") or "").strip() or "(none)"
+        source = str(event.get("source") or "").strip()
+        message = str(event.get("message") or "").strip()
+        stop_reason = str(event.get("stop_reason") or "").strip()
+
+        lines.append(f"{idx}. [{status}] {command}")
+        if source:
+            lines.append(f"   Source: {source}")
+        if message:
+            lines.append(f"   Message: {message}")
+        if stop_reason:
+            lines.append(f"   Reason: {stop_reason}")
+        lines.append("")
+
+    if lines and lines[-1] == "":
+        lines.pop()
+    await update.message.reply_text(_truncate_message("\n".join(lines)))
+
+
 async def command_improve(update: Any, context: Any) -> None:
     del context
     project_path = _resolve_target_project()
@@ -7198,6 +7263,7 @@ def run_bot() -> None:
     app.add_handler(CommandHandler("retry", command_retry))
     app.add_handler(CommandHandler("use", command_use))
     app.add_handler(CommandHandler("current", command_current))
+    app.add_handler(CommandHandler("history", command_history))
     app.add_handler(CommandHandler("inspect", command_inspect))
     app.add_handler(CommandHandler("improve", command_improve))
     app.add_handler(CommandHandler("provider", command_provider))
