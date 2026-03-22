@@ -216,10 +216,18 @@ def _infer_fields_by_entity_from_python_model(path: Path) -> dict[str, list[dict
             continue
         if not current_entity:
             continue
+        field_name = ""
         field_match = re.match(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*([^=\n#]+)", raw_line)
-        if not field_match:
-            continue
-        field_name = _normalize_inferred_field_name(field_match.group(1))
+        if field_match:
+            field_name = _normalize_inferred_field_name(field_match.group(1))
+        else:
+            assign_match = re.match(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(.+)$", raw_line)
+            if not assign_match:
+                continue
+            rhs = str(assign_match.group(2) or "").lower()
+            if not any(token in rhs for token in ("column(", "mapped_column(", "field(")):
+                continue
+            field_name = _normalize_inferred_field_name(assign_match.group(1))
         if not field_name:
             continue
         key = field_name.lower()
