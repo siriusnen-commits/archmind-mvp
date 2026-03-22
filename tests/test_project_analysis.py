@@ -77,6 +77,29 @@ def test_project_analysis_detects_placeholder_pages_and_suggestions_priority(tmp
     assert out["next_action"]["kind"] == "placeholder_page"
 
 
+def test_project_analysis_treats_page_with_real_flow_signals_as_usable(tmp_path: Path) -> None:
+    project_dir = tmp_path / "memo-usable-app"
+    spec = {
+        "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": ["GET /notes", "POST /notes", "GET /notes/{note_id}"],
+        "frontend_pages": ["notes/list"],
+    }
+    _write(
+        project_dir / "frontend" / "app" / "notes" / "page.tsx",
+        """
+export default function NotesPage() {
+  // TODO: polish copy later
+  async function loadNotes() { return await fetch("/api/notes"); }
+  const items = [{ id: "1", title: "hello" }];
+  return <ul>{items.map((item) => <li key={item.id}>{item.title}</li>)}</ul>;
+}
+""",
+    )
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert "notes/list" not in out["placeholder_pages"]
+    assert all(s.get("kind") != "placeholder_page" for s in out["suggestions"])
+
+
 def test_project_analysis_next_action_prioritizes_missing_crud_then_pages_then_fields(tmp_path: Path) -> None:
     project_dir = tmp_path / "priority-app"
     spec = {
@@ -89,6 +112,40 @@ def test_project_analysis_next_action_prioritizes_missing_crud_then_pages_then_f
 
     assert out["next_action"]["kind"] == "missing_crud_api"
     assert "create API" in out["next_action"]["message"] or "CRUD API" in out["next_action"]["message"]
+
+
+def test_project_analysis_uses_model_field_inference_to_avoid_false_missing_title(tmp_path: Path) -> None:
+    project_dir = tmp_path / "memo-field-inference"
+    spec = {
+        "entities": [{"name": "Note", "fields": []}],
+        "api_endpoints": ["GET /notes", "POST /notes"],
+        "frontend_pages": ["notes/list"],
+    }
+    _write(
+        project_dir / "backend" / "app" / "models" / "note.py",
+        """
+class NoteBase:
+    title: str
+    content: str
+""",
+    )
+
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    missing_fields = out["entity_crud_status"]["Note"]["missing_important_fields"]
+    assert "title" not in missing_fields
+    assert any(f.get("name") == "title" for f in out["fields_by_entity"]["Note"])
+
+
+def test_project_analysis_limits_missing_field_suggestions_to_reduce_repetition(tmp_path: Path) -> None:
+    project_dir = tmp_path / "multi-entity-app"
+    spec = {
+        "entities": [{"name": "Note", "fields": []}, {"name": "Task", "fields": []}],
+        "api_endpoints": ["GET /notes", "POST /notes", "GET /tasks", "POST /tasks"],
+        "frontend_pages": ["notes/list", "tasks/list"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    missing_field_rows = [row for row in out["suggestions"] if row.get("kind") == "missing_field"]
+    assert len(missing_field_rows) <= 1
 
 
 def test_project_analysis_safe_with_missing_or_malformed_data(tmp_path: Path) -> None:
