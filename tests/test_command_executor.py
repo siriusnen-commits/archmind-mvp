@@ -58,6 +58,22 @@ def test_execute_command_add_page_valid(monkeypatch) -> None:
     assert out["error"] is None
 
 
+def test_execute_command_implement_page_valid(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: Path("/tmp/demo"))
+
+    def fake_implement_page(project_dir: Path, page_path: str, auto_restart_backend: bool = True):  # type: ignore[no-untyped-def]
+        assert project_dir == Path("/tmp/demo")
+        assert page_path == "tasks/list"
+        assert auto_restart_backend is True
+        return {"ok": True, "detail": "Implemented page: tasks/list", "page_path": page_path}
+
+    monkeypatch.setattr("archmind.telegram_bot.implement_page_in_project", fake_implement_page)
+    out = execute_command("/implement_page tasks/list", "demo")
+    assert out["ok"] is True
+    assert out["message"] == "Implemented page: tasks/list"
+    assert out["error"] is None
+
+
 def test_execute_command_invalid_command(monkeypatch) -> None:
     monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: Path("/tmp/demo"))
     out = execute_command("/unknown foo", "demo")

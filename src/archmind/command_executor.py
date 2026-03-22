@@ -8,6 +8,7 @@ from typing import Any
 ADD_FIELD_RE = re.compile(r"^/add_field\s+(\S+)\s+([^:\s]+)\s*:\s*(\S+)\s*$")
 ADD_API_RE = re.compile(r"^/add_api\s+(GET|POST|PUT|DELETE)\s+(\S+)\s*$", re.IGNORECASE)
 ADD_PAGE_RE = re.compile(r"^/add_page\s+(.+)$")
+ADD_IMPLEMENT_PAGE_RE = re.compile(r"^/implement_page\s+(.+)$")
 
 
 def _resolve_project_dir(project_name: str) -> Path | None:
@@ -69,9 +70,15 @@ def execute_command(command: str, project_name: str) -> dict:
     field_match = ADD_FIELD_RE.match(normalized_command)
     api_match = ADD_API_RE.match(normalized_command)
     page_match = ADD_PAGE_RE.match(normalized_command)
+    implement_page_match = ADD_IMPLEMENT_PAGE_RE.match(normalized_command)
 
     try:
-        from archmind.telegram_bot import add_api_to_project, add_field_to_project, add_page_to_project
+        from archmind.telegram_bot import (
+            add_api_to_project,
+            add_field_to_project,
+            add_page_to_project,
+            implement_page_in_project,
+        )
 
         result: dict[str, Any]
         if field_match:
@@ -94,13 +101,24 @@ def execute_command(command: str, project_name: str) -> dict:
                     "error": "Usage: /add_page <path>",
                 }
             result = add_page_to_project(project_dir, page_path, auto_restart_backend=True)
+        elif implement_page_match:
+            page_path = str(implement_page_match.group(1) or "").strip()
+            if not page_path:
+                return {
+                    "ok": False,
+                    "command": normalized_command,
+                    "project_name": key,
+                    "message": "",
+                    "error": "Usage: /implement_page <path>",
+                }
+            result = implement_page_in_project(project_dir, page_path, auto_restart_backend=True)
         else:
             return {
                 "ok": False,
                 "command": normalized_command,
                 "project_name": key,
                 "message": "",
-                "error": "Unsupported command. Supported: /add_field, /add_api, /add_page",
+                "error": "Unsupported command. Supported: /add_field, /add_api, /add_page, /implement_page",
             }
     except Exception as exc:
         return {

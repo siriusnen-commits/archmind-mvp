@@ -879,6 +879,81 @@ def test_ui_add_page_duplicate_is_safe(monkeypatch, tmp_path: Path) -> None:
     assert "already exists" in str(payload["detail"]).lower()
 
 
+def test_ui_implement_page_succeeds_for_placeholder(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "implement-page")
+    target_page = project_dir / "frontend" / "app" / "reports" / "list" / "page.tsx"
+    target_page.parent.mkdir(parents=True, exist_ok=True)
+    target_page.write_text(
+        '"use client";\n'
+        "export default function ReportsListPage(){\n"
+        "  return <p>Page placeholder for reports/list</p>;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    spec_path = project_dir / ".archmind" / "project_spec.json"
+    spec_payload = json.loads(spec_path.read_text(encoding="utf-8"))
+    spec_payload["frontend_pages"] = ["reports/list"]
+    spec_path.write_text(json.dumps(spec_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.post("/ui/projects/implement-page/implement-page", json={"page_path": "reports/list"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["project_name"] == "implement-page"
+    assert payload["page_path"] == "reports/list"
+    assert "Implemented page: reports/list" in str(payload["detail"])
+
+
+def test_ui_implement_page_returns_already_implemented_info(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "implement-page-ready")
+    target_page = project_dir / "frontend" / "app" / "reports" / "list" / "page.tsx"
+    target_page.parent.mkdir(parents=True, exist_ok=True)
+    target_page.write_text(
+        '"use client";\n'
+        'import { useApiBaseUrl } from "../../_lib/apiBase";\n'
+        "export default function ReportsListPage(){\n"
+        "  const { apiBaseUrl } = useApiBaseUrl();\n"
+        "  return <div>{apiBaseUrl}</div>;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    spec_path = project_dir / ".archmind" / "project_spec.json"
+    spec_payload = json.loads(spec_path.read_text(encoding="utf-8"))
+    spec_payload["frontend_pages"] = ["reports/list"]
+    spec_path.write_text(json.dumps(spec_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.post("/ui/projects/implement-page-ready/implement-page", json={"page_path": "reports/list"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["project_name"] == "implement-page-ready"
+    assert payload["page_path"] == "reports/list"
+    assert "Page already implemented: reports/list" in str(payload["detail"])
+
+
+def test_ui_implement_page_returns_not_found_error(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "implement-page-missing")
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.post("/ui/projects/implement-page-missing/implement-page", json={"page_path": "reports/list"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["project_name"] == "implement-page-missing"
+    assert payload["page_path"] == "reports/list"
+    assert "page not found" in str(payload["detail"]).lower()
+
+
 def test_ui_display_name_falls_back_to_identifier(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     project_dir = projects_root / "safe-id"

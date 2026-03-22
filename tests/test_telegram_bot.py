@@ -41,6 +41,7 @@ from archmind.telegram_bot import (
     command_add_field,
     command_add_api,
     command_add_page,
+    command_implement_page,
     command_apply_suggestion,
     command_apply_plan,
     command_next,
@@ -4826,6 +4827,84 @@ def test_add_page_normalizes_single_token_to_plural_list_route(tmp_path: Path, m
 
     payload = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
     assert "tests/list" in (payload.get("frontend_pages") or [])
+
+
+def test_implement_page_upgrades_placeholder_page(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "implement_page_proj"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / "frontend" / "app" / "tasks" / "list").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "app" / "tasks" / "list" / "page.tsx").write_text(
+        '"use client";\n'
+        "export default function TasksListPage(){\n"
+        "  return <p>Page placeholder for tasks/list</p>;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": ["tasks/list"],
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    asyncio.run(command_implement_page(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext(args=["tasks/list"])))
+    out = msg.sent[-1]
+    assert "Implemented page: tasks/list" in out
+
+    page_text = (project_dir / "frontend" / "app" / "tasks" / "list" / "page.tsx").read_text(encoding="utf-8")
+    assert "Page placeholder for tasks/list" not in page_text
+    assert "fetch(`${apiBaseUrl}/tasks`" in page_text
+
+
+def test_implement_page_reports_already_implemented(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "implement_page_ready_proj"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / "frontend" / "app" / "tasks" / "list").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "app" / "tasks" / "list" / "page.tsx").write_text(
+        '"use client";\n'
+        'import { useApiBaseUrl } from "../../_lib/apiBase";\n'
+        "export default function TasksListPage(){\n"
+        "  const { apiBaseUrl } = useApiBaseUrl();\n"
+        "  return <div>{apiBaseUrl}</div>;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "modules": [],
+                "entities": [],
+                "api_endpoints": [],
+                "frontend_pages": ["tasks/list"],
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    asyncio.run(command_implement_page(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext(args=["tasks/list"])))
+    out = msg.sent[-1]
+    assert "Page already implemented: tasks/list" in out
 
 
 def test_inspect_reflects_explicitly_added_api_and_page(tmp_path: Path, monkeypatch) -> None:
