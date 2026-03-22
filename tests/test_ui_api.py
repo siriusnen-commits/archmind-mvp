@@ -599,6 +599,44 @@ def test_ui_add_field_succeeds_for_task_priority_string_regression(monkeypatch, 
     assert "required" not in str(payload.get("detail") or "").lower()
 
 
+def test_ui_add_field_targets_requested_entity_without_touching_others(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "field-target-entity")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    for entity in ("Task", "Reminder", "Test"):
+        response = client.post(f"/ui/projects/{project_dir.name}/entities", json={"entity_name": entity})
+        assert response.status_code == 200
+        assert response.json().get("ok") is True
+
+    response = client.post(
+        f"/ui/projects/{project_dir.name}/fields",
+        json={"entity_name": "Test", "field_name": "title", "field_type": "string"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["entity_name"] == "Test"
+    assert payload["field_name"] == "title"
+    assert payload["field_type"] == "string"
+
+    spec = json.loads((project_dir / ".archmind" / "project_spec.json").read_text(encoding="utf-8"))
+    entities = spec.get("entities") if isinstance(spec.get("entities"), list) else []
+    fields_by_entity = {
+        str(item.get("name")): {
+            str(field.get("name"))
+            for field in (item.get("fields") or [])
+            if isinstance(field, dict) and str(field.get("name") or "").strip()
+        }
+        for item in entities
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    }
+    assert "title" in fields_by_entity.get("Test", set())
+    assert "title" not in fields_by_entity.get("Task", set())
+    assert "title" not in fields_by_entity.get("Reminder", set())
+
+
 def test_ui_fields_proxy_route_uses_json_body_with_expected_keys() -> None:
     route_path = Path("frontend/app/api/ui/projects/[project]/fields/route.ts")
     source = route_path.read_text(encoding="utf-8")
@@ -613,6 +651,12 @@ def test_ui_fields_proxy_route_uses_json_body_with_expected_keys() -> None:
     assert "entity_name: targetEntity" in card_source
     assert "field_name: targetFieldName" in card_source
     assert "field_type: targetFieldType" in card_source
+
+    next_action_source = Path("frontend/components/NextActionCard.tsx").read_text(encoding="utf-8")
+    assert "entity_name: entityName" in next_action_source
+    assert "field_name: fieldName" in next_action_source
+    assert "field_type: fieldType" in next_action_source
+    assert "targetEntity" not in next_action_source
 
 
 def test_ui_add_field_rejects_empty_inputs_safely(monkeypatch, tmp_path: Path) -> None:
