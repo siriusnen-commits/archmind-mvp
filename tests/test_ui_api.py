@@ -657,6 +657,13 @@ def test_ui_fields_proxy_route_uses_json_body_with_expected_keys() -> None:
     assert "field_name: fieldName" in next_action_source
     assert "field_type: fieldType" in next_action_source
     assert "targetEntity" not in next_action_source
+    assert 'type RunState = "idle" | "running" | "success" | "error"' in next_action_source
+    assert 'setRunState("running")' in next_action_source
+    assert 'setRunState("success")' in next_action_source
+    assert 'setRunState("error")' in next_action_source
+    assert "Executed: {executedCommand}" in next_action_source
+    assert "Refresh suggestions" in next_action_source
+    assert '{runState === "running" ? "Running..." : runState === "success" ? "Completed" : "Run"}' in next_action_source
 
 
 def test_ui_add_field_rejects_empty_inputs_safely(monkeypatch, tmp_path: Path) -> None:
