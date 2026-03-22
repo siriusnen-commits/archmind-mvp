@@ -24,6 +24,7 @@ from archmind.current_project import (
     save_last_project_path as save_backend_last_project_path,
     set_current_project as set_backend_current_project,
 )
+from archmind.command_executor import execute_command
 from archmind.brain import reason_architecture_from_idea
 from archmind.backend_runtime import detect_backend_runtime_entry
 from archmind.decision import decide_next_action, next_action_suggestions
@@ -5785,8 +5786,9 @@ async def command_add_field(update: Any, context: Any) -> None:
         await update.message.reply_text("Usage: /add_field <Entity> <field_name>:<field_type>")
         return
 
-    result = add_field_to_project(project_path, entity_name, field_name, field_type, auto_restart_backend=True)
-    await update.message.reply_text(str(result.get("message_text") or result.get("detail") or "Failed to add field"))
+    command = f"/add_field {entity_name} {field_name}:{field_type}"
+    result = execute_command(command, project_path.name)
+    await update.message.reply_text(str(result.get("message_text") or result.get("message") or result.get("detail") or "Failed to add field"))
 
 
 async def command_add_api(update: Any, context: Any) -> None:
@@ -5806,8 +5808,9 @@ async def command_add_api(update: Any, context: Any) -> None:
             "Unknown method: " + raw_method + "\n\nAvailable methods:\n" + ", ".join(SUPPORTED_API_METHODS)
         )
         return
-    result = add_api_to_project(project_path, raw_method, args[1], auto_restart_backend=True)
-    await update.message.reply_text(str(result.get("message_text") or result.get("detail") or "Failed to add API"))
+    command = f"/add_api {raw_method} {str(args[1]).strip()}"
+    result = execute_command(command, project_path.name)
+    await update.message.reply_text(str(result.get("message_text") or result.get("message") or result.get("detail") or "Failed to add API"))
 
 
 async def command_add_page(update: Any, context: Any) -> None:
@@ -5820,8 +5823,9 @@ async def command_add_page(update: Any, context: Any) -> None:
     if not args:
         await update.message.reply_text("Usage: /add_page <path>")
         return
-    result = add_page_to_project(project_path, args[0], auto_restart_backend=True)
-    await update.message.reply_text(str(result.get("message_text") or result.get("detail") or "Failed to add page"))
+    command = f"/add_page {str(args[0]).strip()}"
+    result = execute_command(command, project_path.name)
+    await update.message.reply_text(str(result.get("message_text") or result.get("message") or result.get("detail") or "Failed to add page"))
 
 
 async def command_apply_suggestion(update: Any, context: Any) -> None:

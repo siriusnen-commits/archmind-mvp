@@ -6,10 +6,8 @@ from typing import Any
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 
+from archmind.command_executor import execute_command
 from archmind.project_query import (
-    add_project_api,
-    add_project_page,
-    add_project_field,
     add_project_entity,
     build_project_analysis,
     build_project_detail,
@@ -262,30 +260,30 @@ def post_ui_project_add_entity(project_name: str, body: AddEntityRequest) -> Add
 @router.post("/projects/{project_name}/fields", response_model=AddFieldResponse)
 def post_ui_project_add_field(project_name: str, body: AddFieldRequest) -> AddFieldResponse:
     try:
-        project_dir = find_project_by_name(project_name)
-        if project_dir is None:
+        entity_name = str(body.entity_name or "").strip()
+        field_name = str(body.field_name or "").strip()
+        field_type = str(body.field_type or "").strip()
+        if not entity_name or not field_name or not field_type:
             return AddFieldResponse(
                 ok=False,
                 project_name=project_name,
-                entity_name=str(body.entity_name or ""),
-                field_name=str(body.field_name or ""),
-                field_type=str(body.field_type or ""),
-                detail="Project not found",
-                error="Project not found",
+                entity_name=entity_name,
+                field_name=field_name,
+                field_type=field_type,
+                detail="Invalid field input: entity_name, field_name, and field_type are required",
+                error="invalid field input",
             )
-        result = add_project_field(
-            project_dir,
-            str(body.entity_name or ""),
-            str(body.field_name or ""),
-            str(body.field_type or ""),
-        )
+
+        command = f"/add_field {entity_name} {field_name}:{field_type}"
+        result = execute_command(command, project_name)
+        detail = str(result.get("detail") or result.get("message") or result.get("error") or "")
         return AddFieldResponse(
             ok=bool(result.get("ok")),
             project_name=str(result.get("project_name") or project_name),
-            entity_name=str(result.get("entity_name") or ""),
-            field_name=str(result.get("field_name") or ""),
-            field_type=str(result.get("field_type") or ""),
-            detail=str(result.get("detail") or ""),
+            entity_name=str(result.get("entity_name") or entity_name),
+            field_name=str(result.get("field_name") or field_name),
+            field_type=str(result.get("field_type") or field_type),
+            detail=detail,
             error=str(result.get("error") or ""),
             spec_summary=result.get("spec_summary") if isinstance(result.get("spec_summary"), dict) else {},
             recent_evolution=[str(x) for x in (result.get("recent_evolution") or []) if str(x).strip()],
@@ -306,27 +304,27 @@ def post_ui_project_add_field(project_name: str, body: AddFieldRequest) -> AddFi
 @router.post("/projects/{project_name}/apis", response_model=AddApiResponse)
 def post_ui_project_add_api(project_name: str, body: AddApiRequest) -> AddApiResponse:
     try:
-        project_dir = find_project_by_name(project_name)
-        if project_dir is None:
+        method = str(body.method or "").strip().upper()
+        path = str(body.path or "").strip()
+        if not method or not path:
             return AddApiResponse(
                 ok=False,
                 project_name=project_name,
-                method=str(body.method or ""),
-                path=str(body.path or ""),
-                detail="Project not found",
-                error="Project not found",
+                method=method,
+                path=path,
+                detail="Invalid API input: method and path are required",
+                error="invalid api input",
             )
-        result = add_project_api(
-            project_dir,
-            str(body.method or ""),
-            str(body.path or ""),
-        )
+
+        command = f"/add_api {method} {path}"
+        result = execute_command(command, project_name)
+        detail = str(result.get("detail") or result.get("message") or result.get("error") or "")
         return AddApiResponse(
             ok=bool(result.get("ok")),
             project_name=str(result.get("project_name") or project_name),
-            method=str(result.get("method") or ""),
-            path=str(result.get("path") or ""),
-            detail=str(result.get("detail") or ""),
+            method=str(result.get("method") or method),
+            path=str(result.get("path") or path),
+            detail=detail,
             error=str(result.get("error") or ""),
             spec_summary=result.get("spec_summary") if isinstance(result.get("spec_summary"), dict) else {},
             recent_evolution=[str(x) for x in (result.get("recent_evolution") or []) if str(x).strip()],
@@ -346,24 +344,24 @@ def post_ui_project_add_api(project_name: str, body: AddApiRequest) -> AddApiRes
 @router.post("/projects/{project_name}/pages", response_model=AddPageResponse)
 def post_ui_project_add_page(project_name: str, body: AddPageRequest) -> AddPageResponse:
     try:
-        project_dir = find_project_by_name(project_name)
-        if project_dir is None:
+        page_path = str(body.page_path or "").strip()
+        if not page_path:
             return AddPageResponse(
                 ok=False,
                 project_name=project_name,
-                page_path=str(body.page_path or ""),
-                detail="Project not found",
-                error="Project not found",
+                page_path=page_path,
+                detail="Invalid page path",
+                error="invalid page path",
             )
-        result = add_project_page(
-            project_dir,
-            str(body.page_path or ""),
-        )
+
+        command = f"/add_page {page_path}"
+        result = execute_command(command, project_name)
+        detail = str(result.get("detail") or result.get("message") or result.get("error") or "")
         return AddPageResponse(
             ok=bool(result.get("ok")),
             project_name=str(result.get("project_name") or project_name),
-            page_path=str(result.get("page_path") or ""),
-            detail=str(result.get("detail") or ""),
+            page_path=str(result.get("page_path") or page_path),
+            detail=detail,
             error=str(result.get("error") or ""),
             spec_summary=result.get("spec_summary") if isinstance(result.get("spec_summary"), dict) else {},
             recent_evolution=[str(x) for x in (result.get("recent_evolution") or []) if str(x).strip()],
