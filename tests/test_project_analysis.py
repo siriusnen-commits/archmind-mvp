@@ -75,6 +75,7 @@ def test_project_analysis_detects_placeholder_pages_and_suggestions_priority(tmp
     assert len(out["suggestions"]) >= 1
     assert out["suggestions"][0]["kind"] == "placeholder_page"
     assert out["next_action"]["kind"] == "placeholder_page"
+    assert out["suggestions"][0]["command"] == "/add_page notes/list"
 
 
 def test_project_analysis_treats_page_with_real_flow_signals_as_usable(tmp_path: Path) -> None:
@@ -136,6 +137,51 @@ class NoteBase:
     assert any(f.get("name") == "title" for f in out["fields_by_entity"]["Note"])
 
 
+def test_project_analysis_backend_first_uses_class_variants_for_entity_matching(tmp_path: Path) -> None:
+    project_dir = tmp_path / "memo-backend-class-variants"
+    spec = {
+        "entities": [{"name": "Note", "fields": []}],
+        "api_endpoints": ["GET /notes", "POST /notes"],
+        "frontend_pages": ["notes/list"],
+    }
+    _write(
+        project_dir / "backend" / "app" / "schemas" / "note.py",
+        """
+class NoteSchema:
+    title: str
+    content: str
+
+class NoteModel:
+    created_at: str
+""",
+    )
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    names = {str(f.get("name")) for f in out["fields_by_entity"]["Note"]}
+    assert "title" in names
+    assert "created_at" in names
+    assert not any("Note is missing an important field: title" in str(s.get("message")) for s in out["suggestions"])
+
+
+def test_project_analysis_backend_first_can_still_report_real_missing_title(tmp_path: Path) -> None:
+    project_dir = tmp_path / "memo-backend-missing-title"
+    spec = {
+        "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": ["GET /notes", "POST /notes"],
+        "frontend_pages": ["notes/list"],
+    }
+    _write(
+        project_dir / "backend" / "app" / "models" / "note.py",
+        """
+class NoteModel:
+    content: str
+""",
+    )
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    missing = out["entity_crud_status"]["Note"]["missing_important_fields"]
+    assert "title" in missing
+    assert any("Note is missing an important field: title" in str(s.get("message")) for s in out["suggestions"])
+
+
 def test_project_analysis_limits_missing_field_suggestions_to_reduce_repetition(tmp_path: Path) -> None:
     project_dir = tmp_path / "multi-entity-app"
     spec = {
@@ -165,18 +211,63 @@ def test_project_analysis_does_not_suggest_created_at_as_important_field(tmp_pat
 
 
 def test_project_analysis_still_suggests_high_priority_missing_title(tmp_path: Path) -> None:
-    project_dir = tmp_path / "title-high-priority"
+    project_dir = tmp_path / "title-high-priority-backend-missing"
     spec = {
         "entities": [{"name": "Note", "fields": []}],
         "api_endpoints": ["GET /notes", "POST /notes"],
         "frontend_pages": ["notes/list"],
     }
+    _write(
+        project_dir / "backend" / "app" / "models" / "note.py",
+        """
+class NoteModel:
+    content: str
+""",
+    )
     out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
     assert "title" in out["entity_crud_status"]["Note"]["missing_important_fields"]
     assert any(
         "important field: title" in str(item.get("message") or "")
         for item in out["suggestions"]
     )
+
+
+def test_project_analysis_canonicalizes_noncanonical_page_path_in_suggestions(tmp_path: Path) -> None:
+    project_dir = tmp_path / "task-placeholder-app"
+    spec = {
+        "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": ["GET /task", "POST /task"],
+        "frontend_pages": ["task/lists"],
+    }
+    _write(
+        project_dir / "frontend" / "app" / "tasks" / "page.tsx",
+        "export default function Page() { return <p>TODO placeholder list</p>; }",
+    )
+
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert out["pages"] == ["tasks/list"]
+    assert out["suggestions"][0]["command"] == "/add_page tasks/list"
+    assert "task/lists" not in out["suggestions"][0]["command"]
+
+
+def test_project_analysis_note_template_does_not_suggest_missing_title_when_present(tmp_path: Path) -> None:
+    project_dir = tmp_path / "memo-note-app"
+    spec = {
+        "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}, {"name": "content", "type": "string"}]}],
+        "api_endpoints": [
+            "GET /notes",
+            "POST /notes",
+            "GET /notes/{id}",
+            "PUT /notes/{id}",
+            "DELETE /notes/{id}",
+        ],
+        "frontend_pages": ["notes/list", "notes/detail"],
+    }
+    _write(project_dir / "frontend" / "app" / "notes" / "page.tsx", "export default function Page() { return <div>ok</div>; }")
+    _write(project_dir / "frontend" / "app" / "notes" / "[id]" / "page.tsx", "export default function Page() { return <div>ok</div>; }")
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert "title" not in out["entity_crud_status"]["Note"]["missing_important_fields"]
+    assert not any("Note is missing an important field: title" in str(s.get("message")) for s in out["suggestions"])
 
 
 def test_project_analysis_safe_with_missing_or_malformed_data(tmp_path: Path) -> None:
