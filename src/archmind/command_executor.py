@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from archmind.execution_history import append_execution_event
 
 ADD_FIELD_RE = re.compile(r"^/add_field\s+(\S+)\s+([^:\s]+)\s*:\s*(\S+)\s*$")
 ADD_API_RE = re.compile(r"^/add_api\s+(GET|POST|PUT|DELETE)\s+(\S+)\s*$", re.IGNORECASE)
@@ -37,7 +38,41 @@ def _resolve_project_dir(project_name: str) -> Path | None:
     return None
 
 
-def execute_command(command: str, project_name: str) -> dict:
+def _write_execution_event(
+    project_dir: Path | None,
+    *,
+    project_name: str,
+    source: str,
+    command: str,
+    status: str,
+    message: str,
+    run_id: str | None = None,
+    step_no: int | None = None,
+    stop_reason: str | None = None,
+) -> None:
+    if project_dir is None:
+        return
+    append_execution_event(
+        project_dir,
+        project_name=project_name,
+        source=source,
+        command=command,
+        status=status,
+        message=message,
+        run_id=run_id,
+        step_no=step_no,
+        stop_reason=stop_reason,
+    )
+
+
+def execute_command(
+    command: str,
+    project_name: str,
+    *,
+    source: str = "manual-command",
+    run_id: str | None = None,
+    step_no: int | None = None,
+) -> dict:
     normalized_command = str(command or "").strip()
     key = str(project_name or "").strip()
     if not normalized_command:
@@ -93,50 +128,105 @@ def execute_command(command: str, project_name: str) -> dict:
         elif page_match:
             page_path = str(page_match.group(1) or "").strip()
             if not page_path:
-                return {
+                payload = {
                     "ok": False,
                     "command": normalized_command,
                     "project_name": key,
                     "message": "",
                     "error": "Usage: /add_page <path>",
                 }
+                _write_execution_event(
+                    project_dir,
+                    project_name=key,
+                    source=source,
+                    command=normalized_command,
+                    status="fail",
+                    message=str(payload.get("error") or ""),
+                    run_id=run_id,
+                    step_no=step_no,
+                )
+                return payload
             result = add_page_to_project(project_dir, page_path, auto_restart_backend=True)
         elif implement_page_match:
             page_path = str(implement_page_match.group(1) or "").strip()
             if not page_path:
-                return {
+                payload = {
                     "ok": False,
                     "command": normalized_command,
                     "project_name": key,
                     "message": "",
                     "error": "Usage: /implement_page <path>",
                 }
+                _write_execution_event(
+                    project_dir,
+                    project_name=key,
+                    source=source,
+                    command=normalized_command,
+                    status="fail",
+                    message=str(payload.get("error") or ""),
+                    run_id=run_id,
+                    step_no=step_no,
+                )
+                return payload
             result = implement_page_in_project(project_dir, page_path, auto_restart_backend=True)
         else:
-            return {
+            payload = {
                 "ok": False,
                 "command": normalized_command,
                 "project_name": key,
                 "message": "",
                 "error": "Unsupported command. Supported: /add_field, /add_api, /add_page, /implement_page",
             }
+            _write_execution_event(
+                project_dir,
+                project_name=key,
+                source=source,
+                command=normalized_command,
+                status="fail",
+                message=str(payload.get("error") or ""),
+                run_id=run_id,
+                step_no=step_no,
+            )
+            return payload
     except Exception as exc:
-        return {
+        payload = {
             "ok": False,
             "command": normalized_command,
             "project_name": key,
             "message": "",
             "error": str(exc),
         }
+        _write_execution_event(
+            project_dir,
+            project_name=key,
+            source=source,
+            command=normalized_command,
+            status="fail",
+            message=str(payload.get("error") or ""),
+            run_id=run_id,
+            step_no=step_no,
+        )
+        return payload
 
     if not isinstance(result, dict):
-        return {
+        payload = {
             "ok": False,
             "command": normalized_command,
             "project_name": key,
             "message": "",
             "error": "Command execution failed",
         }
+        _write_execution_event(
+            project_dir,
+            project_name=key,
+            source=source,
+            command=normalized_command,
+            status="fail",
+            message=str(payload.get("error") or ""),
+            run_id=run_id,
+            step_no=step_no,
+        )
+        return payload
 
     message = str(result.get("message_text") or result.get("detail") or "").strip()
     error = str(result.get("error") or "").strip() or None
@@ -149,5 +239,15 @@ def execute_command(command: str, project_name: str) -> dict:
             "message": message,
             "error": error,
         }
+    )
+    _write_execution_event(
+        project_dir,
+        project_name=str(payload.get("project_name") or key),
+        source=source,
+        command=normalized_command,
+        status="ok" if bool(payload.get("ok")) else "fail",
+        message=str(payload.get("message") or payload.get("error") or ""),
+        run_id=run_id,
+        step_no=step_no,
     )
     return payload

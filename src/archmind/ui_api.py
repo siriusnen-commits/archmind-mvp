@@ -276,7 +276,7 @@ def post_ui_project_add_field(project_name: str, body: AddFieldRequest) -> AddFi
                 error="invalid field input",
             )
         command = f"/add_field {entity_name} {field_name}:{field_type}"
-        result = execute_command(command, project_name)
+        result = execute_command(command, project_name, source="ui-next-run")
         detail = str(result.get("detail") or result.get("message") or result.get("error") or "")
         return AddFieldResponse(
             ok=bool(result.get("ok")),
@@ -317,7 +317,7 @@ def post_ui_project_add_api(project_name: str, body: AddApiRequest) -> AddApiRes
                 error="invalid api input",
             )
         command = f"/add_api {method} {path}"
-        result = execute_command(command, project_name)
+        result = execute_command(command, project_name, source="ui-next-run")
         detail = str(result.get("detail") or result.get("message") or result.get("error") or "")
         return AddApiResponse(
             ok=bool(result.get("ok")),
@@ -354,7 +354,7 @@ def post_ui_project_add_page(project_name: str, body: AddPageRequest) -> AddPage
                 error="invalid page path",
             )
         command = f"/add_page {page_path}"
-        result = execute_command(command, project_name)
+        result = execute_command(command, project_name, source="ui-next-run")
         detail = str(result.get("detail") or result.get("message") or result.get("error") or "")
         return AddPageResponse(
             ok=bool(result.get("ok")),
@@ -389,7 +389,7 @@ def post_ui_project_implement_page(project_name: str, body: ImplementPageRequest
                 error="invalid page path",
             )
         command = f"/implement_page {page_path}"
-        result = execute_command(command, project_name)
+        result = execute_command(command, project_name, source="ui-next-run")
         detail = str(result.get("detail") or result.get("message") or result.get("error") or "")
         return ImplementPageResponse(
             ok=bool(result.get("ok")),

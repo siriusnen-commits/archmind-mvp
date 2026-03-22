@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from archmind.command_executor import execute_command
+from archmind.execution_history import load_recent_execution_events
 
 
 def test_execute_command_add_field_valid(monkeypatch) -> None:
@@ -105,3 +106,42 @@ def test_execute_command_generator_failure(monkeypatch) -> None:
     out = execute_command("/add_api GET /tasks", "demo")
     assert out["ok"] is False
     assert out["error"] == "boom"
+
+
+def test_execute_command_success_creates_history_entry(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "demo"
+    monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: project_dir)
+
+    def fake_add_page(project_dir_arg: Path, page_path: str, auto_restart_backend: bool = True):  # type: ignore[no-untyped-def]
+        assert project_dir_arg == project_dir
+        assert page_path == "tasks/list"
+        assert auto_restart_backend is True
+        return {"ok": True, "detail": "Page added", "page_path": page_path}
+
+    monkeypatch.setattr("archmind.telegram_bot.add_page_to_project", fake_add_page)
+    out = execute_command("/add_page tasks/list", "demo", source="ui-next-run")
+    assert out["ok"] is True
+    events = load_recent_execution_events(project_dir, limit=5)
+    assert len(events) == 1
+    assert events[0]["source"] == "ui-next-run"
+    assert events[0]["status"] == "ok"
+    assert events[0]["command"] == "/add_page tasks/list"
+
+
+def test_execute_command_failure_creates_history_entry(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "demo"
+    monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: project_dir)
+
+    def raise_error(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("archmind.telegram_bot.add_api_to_project", raise_error)
+    out = execute_command("/add_api GET /tasks", "demo", source="telegram-auto", run_id="r1", step_no=2)
+    assert out["ok"] is False
+    events = load_recent_execution_events(project_dir, limit=5)
+    assert len(events) == 1
+    assert events[0]["source"] == "telegram-auto"
+    assert events[0]["status"] == "fail"
+    assert events[0]["command"] == "/add_api GET /tasks"
+    assert events[0]["run_id"] == "r1"
+    assert events[0]["step_no"] == 2

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import archmind.current_project as current_project_state
 import archmind.telegram_bot as telegram_bot
+from archmind.execution_history import load_recent_execution_events
 from archmind.telegram_bot import (
     build_completion_message,
     build_finished_message,
@@ -5332,6 +5333,10 @@ def test_next_callback_executes_full_add_api_command(tmp_path: Path, monkeypatch
     assert "Endpoint:\nGET /tasks/{id}" in out
     payload = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
     assert "GET /tasks/{id}" in (payload.get("api_endpoints") or [])
+    events = load_recent_execution_events(project_dir, limit=5)
+    assert len(events) >= 1
+    assert events[-1].get("source") == "telegram-next"
+    assert events[-1].get("status") == "ok"
 
 
 def test_next_callback_with_project_id_runs_next_for_target_project(tmp_path: Path, monkeypatch) -> None:
@@ -5579,6 +5584,12 @@ def test_auto_command_stops_when_no_immediate_next_action(tmp_path: Path, monkey
     assert "- No immediate next action." in out
     assert "- Executed: 0" in out
     assert "- Stopped: no immediate next action" in out
+    events = load_recent_execution_events(project_dir, limit=5)
+    assert len(events) >= 1
+    last = events[-1]
+    assert last.get("source") == "telegram-auto"
+    assert last.get("status") == "stop"
+    assert last.get("stop_reason") == "no immediate next action"
 
 
 def test_auto_command_executes_valid_next_actions(tmp_path: Path, monkeypatch) -> None:
@@ -5595,7 +5606,7 @@ def test_auto_command_executes_valid_next_actions(tmp_path: Path, monkeypatch) -
     monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p: next(sequence))
     executed_commands: list[str] = []
 
-    def _fake_execute(command: str, _project_name: str) -> dict[str, object]:
+    def _fake_execute(command: str, _project_name: str, **_kwargs: Any) -> dict[str, object]:
         executed_commands.append(command)
         return {"ok": True, "message": "ok"}
 
@@ -5622,7 +5633,7 @@ def test_auto_command_stops_on_repeated_command(tmp_path: Path, monkeypatch) -> 
     monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p: next(sequence))
     calls = {"count": 0}
 
-    def _fake_execute(command: str, _project_name: str) -> dict[str, Any]:
+    def _fake_execute(command: str, _project_name: str, **_kwargs: Any) -> dict[str, Any]:
         calls["count"] += 1
         return {"ok": True, "message": command}
 
@@ -5645,7 +5656,7 @@ def test_auto_command_stops_on_command_failure(tmp_path: Path, monkeypatch) -> N
     )
     monkeypatch.setattr(
         "archmind.telegram_bot.execute_command",
-        lambda _c, _p: {"ok": False, "error": "duplicate field"},
+        lambda _c, _p, **_kwargs: {"ok": False, "error": "duplicate field"},
     )
     msg = DummyMessage()
     asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
@@ -5670,7 +5681,7 @@ def test_auto_command_respects_max_step_cap_and_allowed_commands(tmp_path: Path,
     executed: list[str] = []
     monkeypatch.setattr(
         "archmind.telegram_bot.execute_command",
-        lambda cmd, _p: (executed.append(cmd) or {"ok": True, "message": "ok"}),
+        lambda cmd, _p, **_kwargs: (executed.append(cmd) or {"ok": True, "message": "ok"}),
     )
     msg = DummyMessage()
     # value 9 must be clamped to 3
@@ -5698,7 +5709,7 @@ def test_auto_command_stops_on_low_priority_next_action(tmp_path: Path, monkeypa
     executed: list[str] = []
     monkeypatch.setattr(
         "archmind.telegram_bot.execute_command",
-        lambda cmd, _p: (executed.append(cmd) or {"ok": True, "message": "ok"}),
+        lambda cmd, _p, **_kwargs: (executed.append(cmd) or {"ok": True, "message": "ok"}),
     )
     msg = DummyMessage()
     asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
@@ -5723,7 +5734,7 @@ def test_auto_command_stops_on_repeated_low_value_pattern(tmp_path: Path, monkey
     executed: list[str] = []
     monkeypatch.setattr(
         "archmind.telegram_bot.execute_command",
-        lambda cmd, _p: (executed.append(cmd) or {"ok": True, "message": "ok"}),
+        lambda cmd, _p, **_kwargs: (executed.append(cmd) or {"ok": True, "message": "ok"}),
     )
     msg = DummyMessage()
     asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext(args=["3"])))
@@ -5767,7 +5778,7 @@ def test_auto_command_uses_implement_page_when_existing_page_file_is_placeholder
     executed: list[str] = []
     monkeypatch.setattr(
         "archmind.telegram_bot.execute_command",
-        lambda cmd, _p: (executed.append(cmd) or {"ok": True, "message": "ok"}),
+        lambda cmd, _p, **_kwargs: (executed.append(cmd) or {"ok": True, "message": "ok"}),
     )
     msg = DummyMessage()
     asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext(args=["1"])))
