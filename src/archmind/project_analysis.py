@@ -320,6 +320,74 @@ def _extract_pages(spec_payload: dict[str, Any]) -> list[str]:
     return out
 
 
+def _page_from_app_relative(rel: Path) -> str:
+    parts = list(rel.parts)
+    if not parts or parts[-1] != "page.tsx":
+        return ""
+    segs = parts[:-1]
+    if not segs:
+        return ""
+    if segs[0] == "api" or segs[0].startswith("_"):
+        return ""
+    if len(segs) == 1:
+        return _normalize_page(f"{segs[0]}/list")
+    if len(segs) == 2 and segs[1] == "[id]":
+        return _normalize_page(f"{segs[0]}/detail")
+    return _normalize_page("/".join(segs))
+
+
+def _extract_frontend_file_pages(project_dir: Path) -> list[str]:
+    app_root = project_dir / "frontend" / "app"
+    if not app_root.exists():
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for page_file in app_root.rglob("page.tsx"):
+        try:
+            rel = page_file.relative_to(app_root)
+        except Exception:
+            continue
+        page = _page_from_app_relative(rel)
+        if not page or page in seen:
+            continue
+        seen.add(page)
+        out.append(page)
+    return out
+
+
+def _extract_nav_manifest_pages(project_dir: Path) -> list[str]:
+    nav_file = project_dir / "frontend" / "app" / "_lib" / "navigation.ts"
+    if not nav_file.exists():
+        return []
+    try:
+        source = nav_file.read_text(encoding="utf-8")
+    except Exception:
+        return []
+    hrefs = re.findall(r"href\s*:\s*['\"]([^'\"]+)['\"]", source)
+    out: list[str] = []
+    seen: set[str] = set()
+    for href in hrefs:
+        value = _normalize_page(href)
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        out.append(value)
+    return out
+
+
+def _merge_known_pages(*sources: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for rows in sources:
+        for raw in rows:
+            page = _normalize_page(raw)
+            if not page or page in seen:
+                continue
+            seen.add(page)
+            out.append(page)
+    return out
+
+
 def _is_detail_path(path: str) -> bool:
     return bool(re.search(r"/\{[^}]+\}$", path))
 
@@ -464,24 +532,9 @@ def _detect_placeholder_pages(project_dir: Path, pages: list[str]) -> list[str]:
 
 
 def _extract_nav_visible_pages(project_dir: Path, pages: list[str]) -> list[str]:
-    nav_file = project_dir / "frontend" / "app" / "_lib" / "navigation.ts"
-    if nav_file.exists():
-        try:
-            source = nav_file.read_text(encoding="utf-8")
-        except Exception:
-            source = ""
-        hrefs = re.findall(r"href\s*:\s*['\"]([^'\"]+)['\"]", source)
-        out: list[str] = []
-        seen: set[str] = set()
-        for href in hrefs:
-            value = _normalize_page(href)
-            if not value:
-                continue
-            if value in seen:
-                continue
-            seen.add(value)
-            out.append(value)
-        return out
+    nav_pages = _extract_nav_manifest_pages(project_dir)
+    if nav_pages:
+        return nav_pages
 
     # Fallback to list-like pages from spec when nav manifest is absent.
     out: list[str] = []
@@ -680,7 +733,10 @@ def analyze_project(
     spec = spec_payload if isinstance(spec_payload, dict) else {}
     entities, fields_by_entity = _extract_entities(spec)
     apis = _extract_apis(spec)
-    pages = _extract_pages(spec)
+    spec_pages = _extract_pages(spec)
+    file_pages = _extract_frontend_file_pages(project_dir)
+    nav_pages = _extract_nav_manifest_pages(project_dir)
+    pages = _merge_known_pages(spec_pages, nav_pages, file_pages)
     fields_by_entity, backend_field_presence = _resolve_fields_by_source(project_dir, entities, fields_by_entity)
     entity_crud_status = _compute_entity_crud_status(entities, fields_by_entity, backend_field_presence, apis, pages)
     placeholder_pages = _detect_placeholder_pages(project_dir, pages)

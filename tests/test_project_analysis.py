@@ -311,6 +311,46 @@ def test_project_analysis_missing_page_still_suggests_add_page(tmp_path: Path) -
     assert out["next_action"]["command"] == "/add_page tasks/list"
 
 
+def test_project_analysis_detects_existing_page_from_frontend_files_when_spec_is_stale(tmp_path: Path) -> None:
+    project_dir = tmp_path / "stale-spec-existing-page"
+    spec = {
+        "entities": [{"name": "Song", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": ["GET /songs", "POST /songs", "GET /songs/{song_id}", "PUT /songs/{song_id}", "DELETE /songs/{song_id}"],
+        "frontend_pages": [],
+    }
+    _write(
+        project_dir / "frontend" / "app" / "songs" / "favorite" / "page.tsx",
+        """
+export default function FavoriteSongsPage() {
+  return <div>Favorite songs</div>;
+}
+""",
+    )
+
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert "songs/favorite" in out["pages"]
+    assert not any(row.get("command") == "/add_page songs/favorite" for row in out["suggestions"])
+
+
+def test_project_analysis_detects_placeholder_existing_custom_page_as_implement_page(tmp_path: Path) -> None:
+    project_dir = tmp_path / "stale-spec-placeholder-page"
+    spec = {
+        "entities": [{"name": "Song", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": ["GET /songs", "POST /songs", "GET /songs/{song_id}", "PUT /songs/{song_id}", "DELETE /songs/{song_id}"],
+        "frontend_pages": [],
+    }
+    _write(
+        project_dir / "frontend" / "app" / "songs" / "favorite" / "page.tsx",
+        "export default function Page() { return <p>Page placeholder for songs/favorite</p>; }",
+    )
+
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert "songs/favorite" in out["placeholder_pages"]
+    assert out["next_action"]["kind"] == "placeholder_page"
+    assert out["next_action"]["command"] == "/implement_page songs/favorite"
+    assert not any(row.get("command") == "/add_page songs/favorite" for row in out["suggestions"])
+
+
 def test_project_analysis_note_template_does_not_suggest_missing_title_when_present(tmp_path: Path) -> None:
     project_dir = tmp_path / "memo-note-app"
     spec = {
