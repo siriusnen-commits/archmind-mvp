@@ -2625,10 +2625,33 @@ def test_suggest_command_canonicalizes_and_filters_malformed_commands(tmp_path: 
     update = DummyUpdate(message=msg, effective_chat=DummyChat())
     asyncio.run(command_suggest(update, DummyContext()))
     out = msg.sent[-1]
-    assert "/add_page tasks/list" in out
+    assert "/implement_page tasks/list" in out
     assert "/add_page task/lists" not in out
     assert "/add_api GET /tasks" in out
     assert "INVALID" not in out
+
+
+def test_next_command_outputs_implement_page_for_existing_placeholder_page(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "task_tracker"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.telegram_bot._build_project_analysis",
+        lambda _project: {
+            "next_action": {
+                "kind": "placeholder_page",
+                "message": "Page tasks/list is still placeholder-level. Implement a usable UI flow.",
+                "command": "/implement_page tasks/list",
+            }
+        },
+    )
+
+    msg = DummyMessage()
+    update = DummyUpdate(message=msg, effective_chat=DummyChat())
+    asyncio.run(command_next(update, DummyContext()))
+    out = msg.sent[-1]
+    assert "Page tasks/list is still placeholder-level." in out
+    assert "Command: /implement_page tasks/list" in out
 
 
 def test_design_command_outputs_design_sections() -> None:
