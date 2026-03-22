@@ -18,6 +18,7 @@ from archmind.telegram_bot import (
     _repository_summary_from_state,
     _resolve_project_type,
     add_api_to_project,
+    add_page_to_project,
     add_field_to_project,
     add_entity_to_project,
     save_last_project_path,
@@ -530,6 +531,15 @@ def add_project_api(project_dir: Path, method: str, path: str) -> dict[str, Any]
         project_dir,
         method,
         path,
+        auto_restart_backend=False,
+    )
+    return result if isinstance(result, dict) else {}
+
+
+def add_project_page(project_dir: Path, page_path: str) -> dict[str, Any]:
+    result = add_page_to_project(
+        project_dir,
+        page_path,
         auto_restart_backend=False,
     )
     return result if isinstance(result, dict) else {}

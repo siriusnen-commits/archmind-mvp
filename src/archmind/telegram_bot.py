@@ -5570,6 +5570,148 @@ def add_api_to_project(
         }
 
 
+def add_page_to_project(
+    project_path: Path,
+    page_path_raw: str,
+    *,
+    auto_restart_backend: bool = False,
+) -> dict[str, Any]:
+    target = project_path.expanduser().resolve()
+    if not target.exists() or not target.is_dir():
+        return {
+            "ok": False,
+            "status": "not_found",
+            "project_name": project_path.name,
+            "page_path": "",
+            "detail": "Project not found",
+            "error": "Project not found",
+            "spec_summary": {},
+            "recent_evolution": [],
+            "message_text": "Project not found",
+        }
+
+    page_path = _normalize_frontend_page_path(page_path_raw)
+    if not page_path:
+        return {
+            "ok": False,
+            "status": "invalid",
+            "project_name": target.name,
+            "page_path": str(page_path_raw or "").strip(),
+            "detail": "Invalid page path",
+            "error": "Invalid page path",
+            "spec_summary": {},
+            "recent_evolution": [],
+            "message_text": "Invalid page path. Use /add_page reports/list",
+        }
+
+    try:
+        spec, spec_path = _read_or_init_project_spec(target)
+        current = _rebuild_frontend_pages(spec)
+        current_keys = {str(item).lower() for item in current}
+        if page_path.lower() in current_keys:
+            progression = analyze_spec_progression(spec)
+            recent = summarize_recent_evolution(spec, limit=5)
+            return {
+                "ok": False,
+                "status": "exists",
+                "project_name": target.name,
+                "page_path": page_path,
+                "detail": "Page already exists",
+                "error": "Page already exists",
+                "spec_summary": {
+                    "stage": str(progression.get("stage_label") or "Stage 0"),
+                    "entities": int(progression.get("entities_count") or 0),
+                    "apis": int(progression.get("apis_count") or 0),
+                    "pages": int(progression.get("pages_count") or 0),
+                    "history_count": len(
+                        (spec.get("evolution") or {}).get("history")
+                        if isinstance((spec.get("evolution") or {}).get("history"), list)
+                        else []
+                    ),
+                },
+                "recent_evolution": recent,
+                "message_text": (
+                    "Page already exists\n\n"
+                    "Project:\n"
+                    f"{target.name}\n\n"
+                    "Page:\n"
+                    f"{page_path}"
+                ),
+            }
+
+        spec["frontend_pages"] = current + [page_path]
+        _rebuild_frontend_pages(spec)
+        _append_evolution_event(spec, {"action": "add_page", "page": page_path})
+
+        generated = apply_page_scaffold(target, page_path)
+        frontend_exists = has_frontend_structure(target)
+        spec_path.parent.mkdir(parents=True, exist_ok=True)
+        spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        auto_restart_lines = ["Auto restart:", "SKIPPED"]
+        restart_failed = False
+        if auto_restart_backend:
+            auto_restart_lines, restart_failed = _auto_restart_backend_lines(target)
+
+        lines = [
+            "Page added",
+            "",
+            "Project:",
+            target.name,
+            "",
+            "Page:",
+            page_path,
+        ]
+        if not frontend_exists:
+            lines += ["", "Frontend scaffold:", "SKIPPED (no frontend structure)"]
+        elif generated:
+            lines += ["", "Generated:"] + [f"- {item}" for item in generated]
+        next_lines = ["- /inspect", "- /restart"]
+        if page_path.endswith("/list"):
+            next_lines.insert(0, f"- /add_page {page_path[:-5]}/detail")
+        elif page_path.endswith("/detail"):
+            next_lines.insert(0, f"- /add_page {page_path[:-7]}/list")
+        lines += ["", *auto_restart_lines, "", "Next:", *next_lines]
+        if restart_failed:
+            lines.append("- /logs")
+
+        progression = analyze_spec_progression(spec)
+        recent = summarize_recent_evolution(spec, limit=5)
+        return {
+            "ok": True,
+            "status": "added",
+            "project_name": target.name,
+            "page_path": page_path,
+            "detail": "Page added",
+            "error": "",
+            "spec_summary": {
+                "stage": str(progression.get("stage_label") or "Stage 0"),
+                "entities": int(progression.get("entities_count") or 0),
+                "apis": int(progression.get("apis_count") or 0),
+                "pages": int(progression.get("pages_count") or 0),
+                "history_count": len(
+                    (spec.get("evolution") or {}).get("history")
+                    if isinstance((spec.get("evolution") or {}).get("history"), list)
+                    else []
+                ),
+            },
+            "recent_evolution": recent,
+            "message_text": "\n".join(lines),
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status": "error",
+            "project_name": target.name,
+            "page_path": page_path,
+            "detail": "Failed to add page",
+            "error": str(exc),
+            "spec_summary": {},
+            "recent_evolution": [],
+            "message_text": f"Failed to add page: {exc}",
+        }
+
+
 async def command_add_entity(update: Any, context: Any) -> None:
     project_path = _resolve_target_project()
     if project_path is None:
@@ -5641,56 +5783,8 @@ async def command_add_page(update: Any, context: Any) -> None:
     if not args:
         await update.message.reply_text("Usage: /add_page <path>")
         return
-    page_path = _normalize_frontend_page_path(args[0])
-    if not page_path:
-        await update.message.reply_text("Invalid page path. Use /add_page reports/list")
-        return
-
-    spec, spec_path = _read_or_init_project_spec(project_path)
-    current = _rebuild_frontend_pages(spec)
-    current_keys = {str(item).lower() for item in current}
-    if page_path.lower() in current_keys:
-        await update.message.reply_text(
-            "Page already exists\n\n"
-            "Project:\n"
-            f"{project_path.name}\n\n"
-            "Page:\n"
-            f"{page_path}"
-        )
-        return
-
-    spec["frontend_pages"] = current + [page_path]
-    _rebuild_frontend_pages(spec)
-    _append_evolution_event(spec, {"action": "add_page", "page": page_path})
-
-    generated = apply_page_scaffold(project_path, page_path)
-    frontend_exists = has_frontend_structure(project_path)
-    spec_path.parent.mkdir(parents=True, exist_ok=True)
-    spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    auto_restart_lines, restart_failed = _auto_restart_backend_lines(project_path)
-    lines = [
-        "Page added",
-        "",
-        "Project:",
-        project_path.name,
-        "",
-        "Page:",
-        page_path,
-    ]
-    if not frontend_exists:
-        lines += ["", "Frontend scaffold:", "SKIPPED (no frontend structure)"]
-    elif generated:
-        lines += ["", "Generated:"] + [f"- {item}" for item in generated]
-    next_lines = ["- /inspect", "- /restart"]
-    if page_path.endswith("/list"):
-        next_lines.insert(0, f"- /add_page {page_path[:-5]}/detail")
-    elif page_path.endswith("/detail"):
-        next_lines.insert(0, f"- /add_page {page_path[:-7]}/list")
-    lines += ["", *auto_restart_lines, "", "Next:", *next_lines]
-    if restart_failed:
-        lines.append("- /logs")
-    await update.message.reply_text("\n".join(lines))
+    result = add_page_to_project(project_path, args[0], auto_restart_backend=True)
+    await update.message.reply_text(str(result.get("message_text") or result.get("detail") or "Failed to add page"))
 
 
 async def command_apply_suggestion(update: Any, context: Any) -> None:
