@@ -10,6 +10,7 @@ import DangerZoneCard from "@/components/DangerZoneCard";
 import NextActionCard from "@/components/NextActionCard";
 import ProjectSummaryCard from "@/components/ProjectSummaryCard";
 import ProviderCard from "@/components/ProviderCard";
+import RecentRunsCard from "@/components/RecentRunsCard";
 import RefreshButton from "@/components/RefreshButton";
 import RuntimeActionsCard from "@/components/RuntimeActionsCard";
 import RuntimeCard from "@/components/RuntimeCard";
@@ -57,6 +58,14 @@ type ProjectDetail = {
   entities?: string[];
   runtime?: RuntimeInfo;
   recent_evolution?: string[];
+  recent_runs?: Array<{
+    timestamp?: string;
+    source?: string;
+    command?: string;
+    status?: string;
+    message?: string;
+    stop_reason?: string;
+  }>;
   repository?: RepositoryInfo;
   analysis?: ProjectAnalysis;
 };
@@ -122,6 +131,7 @@ export default async function ProjectDetailPage({ params }: PageProps) {
         <section className="space-y-3">
           <ProjectSummaryCard project={detail} />
           <NextActionCard projectName={detail.name} nextAction={detail.analysis?.next_action} />
+          <RecentRunsCard items={Array.isArray(detail.recent_runs) ? detail.recent_runs : []} />
           <RuntimeCard runtime={detail.runtime} />
           <RuntimeActionsCard projectName={detail.name} />
           <AddEntityCard projectName={detail.name} />

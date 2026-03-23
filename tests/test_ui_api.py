@@ -7,6 +7,7 @@ from urllib.parse import quote
 from fastapi.testclient import TestClient
 
 import archmind.current_project as current_project_state
+from archmind.execution_history import append_execution_event
 from archmind.state import write_state
 from archmind.telegram_bot import clear_current_project, get_validated_current_project, set_current_project
 from archmind.ui_api import create_ui_app
@@ -183,6 +184,8 @@ def test_ui_project_detail_response_shape(monkeypatch, tmp_path: Path) -> None:
     assert "Note" in payload["entities"]
     assert "runtime" in payload
     assert "recent_evolution" in payload
+    assert "recent_runs" in payload
+    assert isinstance(payload["recent_runs"], list)
     assert "repository" in payload
     assert payload["repository"]["status"] == "CREATED"
     assert payload["repository"]["url"] == "https://github.com/example/beta"
@@ -197,6 +200,57 @@ def test_ui_project_detail_response_shape(monkeypatch, tmp_path: Path) -> None:
     assert "backend_urls" in payload["runtime"]
     assert "frontend_urls" in payload["runtime"]
     assert payload["spec_summary"]["stage"].startswith("Stage")
+
+
+def test_ui_project_detail_includes_recent_runs_newest_first(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "recent-runs")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    assert append_execution_event(
+        project_dir,
+        project_name="recent-runs",
+        source="telegram-next",
+        command="/add_field Task title:string",
+        status="ok",
+        message="Field added",
+        timestamp="2026-03-22T00:00:01Z",
+    )
+    assert append_execution_event(
+        project_dir,
+        project_name="recent-runs",
+        source="telegram-auto",
+        command="/auto",
+        status="stop",
+        message="Stopped",
+        stop_reason="low-priority next action",
+        timestamp="2026-03-22T00:00:02Z",
+    )
+
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/recent-runs")
+    assert response.status_code == 200
+    payload = response.json()
+    runs = payload["recent_runs"]
+    assert isinstance(runs, list)
+    assert len(runs) == 2
+    assert runs[0]["command"] == "/auto"
+    assert runs[0]["status"] == "stop"
+    assert runs[0]["stop_reason"] == "low-priority next action"
+    assert runs[1]["command"] == "/add_field Task title:string"
+    assert runs[1]["status"] == "ok"
+
+
+def test_ui_project_detail_recent_runs_empty_when_history_missing(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "no-history")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/no-history")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "recent_runs" in payload
+    assert payload["recent_runs"] == []
 
 
 def test_ui_projects_response_includes_safe_repository_when_missing(monkeypatch, tmp_path: Path) -> None:
