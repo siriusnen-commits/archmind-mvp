@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import importlib
+import os
+import sys
 from pathlib import Path
 
 from archmind.generator import (
@@ -12,7 +15,26 @@ from archmind.generator import (
 )
 
 
-def test_apply_entity_scaffold_creates_backend_placeholder_files(tmp_path: Path) -> None:
+def _import_generated_backend_app(project_dir: Path, db_url: str):
+    prev = os.environ.get("DB_URL")
+    os.environ["DB_URL"] = db_url
+    sys.path.insert(0, str(project_dir))
+    try:
+        for mod in list(sys.modules):
+            if mod == "app" or mod.startswith("app."):
+                del sys.modules[mod]
+        module = importlib.import_module("app.main")
+        return module.app
+    finally:
+        if str(project_dir) in sys.path:
+            sys.path.remove(str(project_dir))
+        if prev is None:
+            os.environ.pop("DB_URL", None)
+        else:
+            os.environ["DB_URL"] = prev
+
+
+def test_apply_entity_scaffold_creates_backend_persistent_router_files(tmp_path: Path) -> None:
     project_dir = tmp_path / "backend_demo"
     (project_dir / "app").mkdir(parents=True, exist_ok=True)
     (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
@@ -29,10 +51,61 @@ def test_apply_entity_scaffold_creates_backend_placeholder_files(tmp_path: Path)
     assert (project_dir / "app" / "routers" / "task.py").exists()
     router_text = (project_dir / "app" / "routers" / "task.py").read_text(encoding="utf-8")
     assert "def list_tasks()" in router_text
-    assert "def create_task()" in router_text
+    assert "def create_task(payload: dict[str, Any] = Body(default_factory=dict))" in router_text
     assert "def get_task(id: int)" in router_text
-    assert "def update_task(id: int)" in router_text
+    assert "def update_task(id: int, payload: dict[str, Any] = Body(default_factory=dict))" in router_text
     assert "def delete_task(id: int)" in router_text
+    assert "sqlite3.connect" in router_text
+    assert "CREATE TABLE IF NOT EXISTS" in router_text
+
+
+def test_apply_entity_scaffold_router_persists_crud_across_app_reload(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    project_dir = tmp_path / "backend_demo"
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\n\napp = FastAPI()\n", encoding="utf-8")
+    apply_entity_scaffold(project_dir, "Note")
+
+    db_path = project_dir / "data" / "notes.db"
+    db_url = f"sqlite:///{db_path}"
+
+    app_first = _import_generated_backend_app(project_dir, db_url)
+    client = TestClient(app_first)
+
+    create = client.post("/notes", json={"title": "first memo", "content": "hello"})
+    assert create.status_code == 200
+    created = create.json()
+    note_id = int(created["id"])
+    assert created["title"] == "first memo"
+
+    listing = client.get("/notes")
+    assert listing.status_code == 200
+    ids = [int(item["id"]) for item in listing.json()]
+    assert note_id in ids
+
+    detail = client.get(f"/notes/{note_id}")
+    assert detail.status_code == 200
+    assert detail.json()["title"] == "first memo"
+
+    update = client.patch(f"/notes/{note_id}", json={"content": "updated content"})
+    assert update.status_code == 200
+    assert update.json()["content"] == "updated content"
+
+    app_reloaded = _import_generated_backend_app(project_dir, db_url)
+    reloaded_client = TestClient(app_reloaded)
+    after_restart = reloaded_client.get(f"/notes/{note_id}")
+    assert after_restart.status_code == 200
+    assert after_restart.json()["content"] == "updated content"
+
+    delete = reloaded_client.delete(f"/notes/{note_id}")
+    assert delete.status_code == 200
+    assert delete.json()["status"] == "deleted"
+
+    app_reloaded_again = _import_generated_backend_app(project_dir, db_url)
+    reloaded_again_client = TestClient(app_reloaded_again)
+    assert reloaded_again_client.get(f"/notes/{note_id}").status_code == 404
 
 
 def test_apply_entity_scaffold_is_idempotent_and_does_not_overwrite_existing_files(tmp_path: Path) -> None:

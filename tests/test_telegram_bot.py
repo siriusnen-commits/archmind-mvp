@@ -4317,10 +4317,11 @@ def test_add_entity_generates_backend_scaffold_and_main_router_registration(tmp_
     assert (project_dir / "app" / "routers" / "task.py").exists()
     router_text = (project_dir / "app" / "routers" / "task.py").read_text(encoding="utf-8")
     assert "def list_tasks()" in router_text
-    assert "def create_task()" in router_text
+    assert "def create_task(payload: dict[str, Any] = Body(default_factory=dict))" in router_text
     assert "def get_task(id: int)" in router_text
-    assert "def update_task(id: int)" in router_text
+    assert "def update_task(id: int, payload: dict[str, Any] = Body(default_factory=dict))" in router_text
     assert "def delete_task(id: int)" in router_text
+    assert "sqlite3.connect" in router_text
 
     main_text = (project_dir / "app" / "main.py").read_text(encoding="utf-8")
     assert "from app.routers.task import router as task_router" in main_text
