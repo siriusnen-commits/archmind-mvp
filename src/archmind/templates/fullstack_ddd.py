@@ -732,6 +732,15 @@ function getErrorMessage(error: unknown): string {
   return String(error || "Unknown error");
 }
 
+function mergeNoteItem(current: Note[], incoming: Note): Note[] {
+  const nextId = String(incoming.id ?? "").trim();
+  if (!nextId) {
+    return [incoming, ...current];
+  }
+  const filtered = current.filter((item) => String(item.id ?? "").trim() !== nextId);
+  return [incoming, ...filtered];
+}
+
 export default function NotesPage() {
   const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();
   const [notes, setNotes] = useState<Note[]>([]);
@@ -793,10 +802,14 @@ export default function NotesPage() {
       if (!response.ok) {
         throw new Error(`Failed to create note (HTTP ${response.status})`);
       }
+      const created = (await response.json()) as Note;
       setTitle("");
       setContent("");
       setMessage("Note created.");
-      await loadNotes();
+      setNotes((prev) => mergeNoteItem(prev, created));
+      loadNotes().catch(() => {
+        // keep optimistic update even if refresh fails
+      });
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -991,8 +1004,14 @@ export default function NoteDetailPage() {
       if (!response.ok) {
         throw new Error(`Failed to update note (HTTP ${response.status})`);
       }
+      const updated = (await response.json()) as Note;
+      setNote(updated);
+      setTitle(String(updated.title || ""));
+      setContent(String(updated.content || ""));
       setMessage("Note updated.");
-      await loadNote();
+      loadNote().catch(() => {
+        // keep optimistic update even if refresh fails
+      });
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -1207,6 +1226,18 @@ export default function DefectsPage() {
     return "Unknown error";
   }
 
+  function upsertLocal(item: Defect) {
+    setItems((prev) => {
+      const nextId = Number(item.id);
+      const filtered = prev.filter((current) => Number(current.id) !== nextId);
+      return [item, ...filtered];
+    });
+  }
+
+  function removeLocal(id: number) {
+    setItems((prev) => prev.filter((current) => Number(current.id) !== Number(id)));
+  }
+
   const api = useMemo(
     () => ({
       async list(params: {
@@ -1300,12 +1331,15 @@ export default function DefectsPage() {
     setError(null);
     try {
       if (editing) {
-        await api.update(editing.id, {
+        const updated = await api.update(editing.id, {
           defect_type: defectType.trim(),
           note: note.trim(),
         });
+        upsertLocal(updated);
       } else {
-        await api.create({ defect_type: defectType.trim(), note: note.trim() });
+        const created = await api.create({ defect_type: defectType.trim(), note: note.trim() });
+        upsertLocal(created);
+        setTotal((prev) => prev + 1);
       }
       setNote("");
       setEditing(null);
@@ -1335,6 +1369,8 @@ export default function DefectsPage() {
     setError(null);
     try {
       await api.remove(item.id);
+      removeLocal(item.id);
+      setTotal((prev) => Math.max(0, prev - 1));
       await refresh(page);
     } catch (err) {
       setError(humanizeError(err));

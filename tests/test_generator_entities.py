@@ -234,11 +234,15 @@ def test_apply_frontend_page_scaffold_note_entity_is_usable_crud_mvp(tmp_path: P
 
     assert "Create note" in list_text
     assert "method: \"POST\"" in list_text
+    assert "function mergeNoteItem(current: NoteItem[], incoming: NoteItem): NoteItem[]" in list_text
+    assert "setItems((prev) => mergeNoteItem(prev, created));" in list_text
     assert "Title is required." in list_text
     assert "No notes yet." in list_text
     assert "Open detail" in list_text
     assert "Save changes" in detail_text
     assert "method: \"PUT\"" in detail_text
+    assert "const updated = (await response.json()) as NoteItem;" in detail_text
+    assert "setItem(updated);" in detail_text
     assert "method: \"PATCH\"" in detail_text
     assert "Delete note" in detail_text
     assert "method: \"DELETE\"" in detail_text
