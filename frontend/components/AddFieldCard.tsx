@@ -2,13 +2,13 @@
 
 import { FormEvent, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { UI_API_BASE } from "@/components/uiApi";
 
 type Props = {
   projectName?: string;
   entities?: string[];
 };
 
-const API_BASE = "/api/ui";
 const FIELD_TYPES = ["string", "int", "float", "bool", "datetime"];
 
 export default function AddFieldCard({ projectName, entities }: Props) {
@@ -40,7 +40,7 @@ export default function AddFieldCard({ projectName, entities }: Props) {
     setError("");
     setSuccess("");
     try {
-      const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(targetProject)}/fields`, {
+      const response = await fetch(`${UI_API_BASE}/projects/${encodeURIComponent(targetProject)}/fields`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

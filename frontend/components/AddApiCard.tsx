@@ -2,12 +2,12 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
+import { UI_API_BASE } from "@/components/uiApi";
 
 type Props = {
   projectName?: string;
 };
 
-const API_BASE = "/api/ui";
 const METHODS = ["GET", "POST", "PUT", "DELETE"];
 type MessageType = "success" | "info" | "error";
 
@@ -32,7 +32,7 @@ export default function AddApiCard({ projectName }: Props) {
     setLoading(true);
     setMessage("");
     try {
-      const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(targetProject)}/apis`, {
+      const response = await fetch(`${UI_API_BASE}/projects/${encodeURIComponent(targetProject)}/apis`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ method: targetMethod, path: targetPath }),

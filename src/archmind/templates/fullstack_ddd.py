@@ -1197,6 +1197,7 @@ export default function DefectsPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [total, setTotal] = useState(0);
+  const apiBaseReady = !apiBaseLoading && Boolean(apiBaseUrl);
 
   function humanizeError(err: unknown) {
     if (err instanceof TypeError) {
@@ -1224,13 +1225,13 @@ export default function DefectsPage() {
         if (params.page) qs.set("page", String(params.page));
         if (params.page_size) qs.set("page_size", String(params.page_size));
 
-        if (!apiBaseUrl) throw new Error("API base URL is not ready yet.");
+        if (!apiBaseReady) throw new Error("API base is not ready.");
         const r = await fetch(`${apiBaseUrl}/defects?${qs.toString()}`, { cache: "no-store" });
         if (!r.ok) throw new Error(`GET /defects failed: ${r.status}`);
         return (await r.json()) as DefectListResponse;
       },
       async create(payload: { defect_type: string; note: string }) {
-        if (!apiBaseUrl) throw new Error("API base URL is not ready yet.");
+        if (!apiBaseReady) throw new Error("API base is not ready.");
         const r = await fetch(`${apiBaseUrl}/defects`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1240,7 +1241,7 @@ export default function DefectsPage() {
         return (await r.json()) as Defect;
       },
       async update(id: number, payload: { defect_type?: string; note?: string }) {
-        if (!apiBaseUrl) throw new Error("API base URL is not ready yet.");
+        if (!apiBaseReady) throw new Error("API base is not ready.");
         const r = await fetch(`${apiBaseUrl}/defects/${id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -1250,13 +1251,13 @@ export default function DefectsPage() {
         return (await r.json()) as Defect;
       },
       async remove(id: number) {
-        if (!apiBaseUrl) throw new Error("API base URL is not ready yet.");
+        if (!apiBaseReady) throw new Error("API base is not ready.");
         const r = await fetch(`${apiBaseUrl}/defects/${id}`, { method: "DELETE" });
         if (!r.ok) throw new Error(`DELETE /defects/${id} failed: ${r.status}`);
         return (await r.json()) as { status: string };
       },
     }),
-    [apiBaseUrl]
+    [apiBaseReady, apiBaseUrl]
   );
 
   async function refresh(nextPage = page) {
@@ -1283,13 +1284,14 @@ export default function DefectsPage() {
   }
 
   useEffect(() => {
-    if (apiBaseLoading || !apiBaseUrl) return;
+    if (!apiBaseReady) return;
     refresh(1).catch(console.error);
-  }, [apiBaseLoading, apiBaseUrl]);
+  }, [apiBaseReady]);
 
   useEffect(() => {
+    if (!apiBaseReady) return;
     refresh(1).catch(console.error);
-  }, [q, filterType, sort, order, pageSize]);
+  }, [apiBaseReady, q, filterType, sort, order, pageSize]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -1349,11 +1351,11 @@ export default function DefectsPage() {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-semibold">Defect intake</h2>
-            <p className="text-xs text-slate-400">Backend: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>
+            <p className="text-xs text-slate-400">Backend: {apiBaseReady ? apiBaseUrl : "(resolving...)"}</p>
           </div>
           <div className="text-xs text-slate-500">Total {total}</div>
         </div>
-        {apiBaseLoading && <p className="mb-3 text-xs text-slate-400">Resolving API base...</p>}
+        {!apiBaseReady && <p className="mb-3 text-xs text-slate-400">Resolving API base...</p>}
 
         <form onSubmit={onSubmit} className="grid gap-3 md:grid-cols-6">
           <div className="md:col-span-2">
@@ -1378,7 +1380,7 @@ export default function DefectsPage() {
             <button
               type="submit"
               className="w-full rounded-lg bg-emerald-400 px-3 py-2 text-sm font-semibold text-emerald-950"
-              disabled={loading || apiBaseLoading || !apiBaseUrl}
+              disabled={loading || !apiBaseReady}
             >
               {editing ? "Update" : "Add"}
             </button>

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const BACKEND_UI_BASE = process.env.ARCHMIND_UI_API_BASE || "http://127.0.0.1:8010/ui";
+import { getBackendUiBase } from "../../_backend";
 
 type Params = {
   params: Promise<{ project: string }>;
@@ -10,7 +10,7 @@ export async function POST(_request: Request, { params }: Params) {
   const resolved = await params;
   const project = decodeURIComponent(String(resolved?.project || ""));
   try {
-    const response = await fetch(`${BACKEND_UI_BASE}/projects/${encodeURIComponent(project)}/delete-local`, {
+    const response = await fetch(`${getBackendUiBase()}/projects/${encodeURIComponent(project)}/delete-local`, {
       method: "POST",
       cache: "no-store",
     });

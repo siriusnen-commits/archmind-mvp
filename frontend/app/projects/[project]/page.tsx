@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { headers } from "next/headers";
 
 import EvolutionCard from "@/components/EvolutionCard";
 import AddEntityCard from "@/components/AddEntityCard";
@@ -14,6 +13,7 @@ import RecentRunsCard from "@/components/RecentRunsCard";
 import RefreshButton from "@/components/RefreshButton";
 import RuntimeActionsCard from "@/components/RuntimeActionsCard";
 import RuntimeCard from "@/components/RuntimeCard";
+import { resolveUiApiBaseUrl } from "@/app/_lib/uiApiBase";
 
 type SpecSummary = {
   stage?: string;
@@ -73,13 +73,6 @@ type ProjectDetail = {
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-async function resolveApiBaseUrl(): Promise<string> {
-  const reqHeaders = await headers();
-  const host = reqHeaders.get("x-forwarded-host") || reqHeaders.get("host") || "127.0.0.1:3000";
-  const proto = reqHeaders.get("x-forwarded-proto") || "http";
-  return `${proto}://${host}/api/ui`;
-}
-
 async function fetchProjectDetail(apiBaseUrl: string, name: string): Promise<{ detail: ProjectDetail | null; error: string }> {
   if (!name) {
     return { detail: null, error: "Project not found" };
@@ -109,7 +102,7 @@ type PageProps = {
 export default async function ProjectDetailPage({ params }: PageProps) {
   const resolved = await params;
   const projectName = decodeURIComponent(String(resolved?.project || ""));
-  const apiBaseUrl = await resolveApiBaseUrl();
+  const apiBaseUrl = await resolveUiApiBaseUrl();
   const result = await fetchProjectDetail(apiBaseUrl, projectName);
   const detail = result.detail;
 

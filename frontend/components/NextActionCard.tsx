@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { UI_API_BASE } from "@/components/uiApi";
 
 type NextAction = {
   kind?: string;
@@ -17,7 +18,6 @@ type Props = {
 type MessageType = "success" | "info" | "error";
 type RunState = "idle" | "running" | "success" | "error";
 
-const API_BASE = "/api/ui";
 
 type ParsedCommand =
   | { endpoint: "fields"; payload: { entity_name: string; field_name: string; field_type: string } }
@@ -117,7 +117,7 @@ export default function NextActionCard({ projectName, nextAction }: Props) {
     setMessage("");
     setExecutedCommand(normalizedCommand);
     try {
-      const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(targetProject)}/${parsed.endpoint}`, {
+      const response = await fetch(`${UI_API_BASE}/projects/${encodeURIComponent(targetProject)}/${parsed.endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(parsed.payload),

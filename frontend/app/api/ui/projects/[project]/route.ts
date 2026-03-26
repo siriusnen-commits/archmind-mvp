@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
+import { getBackendUiBase } from "../_backend";
 
-const BACKEND_UI_BASE = process.env.ARCHMIND_UI_API_BASE || "http://127.0.0.1:8010/ui";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
@@ -12,7 +12,7 @@ export async function GET(_request: Request, { params }: Params) {
   const resolved = await params;
   const project = decodeURIComponent(String(resolved?.project || ""));
   try {
-    const response = await fetch(`${BACKEND_UI_BASE}/projects/${encodeURIComponent(project)}`, {
+    const response = await fetch(`${getBackendUiBase()}/projects/${encodeURIComponent(project)}`, {
       cache: "no-store",
     });
     const body = await response.text();
