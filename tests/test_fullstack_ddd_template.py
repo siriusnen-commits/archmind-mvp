@@ -23,6 +23,9 @@ def _import_app(project_dir: Path, db_url: str):
     backend_dir = project_dir / "backend"
     sys.path.insert(0, str(backend_dir))
     try:
+        from sqlmodel import SQLModel
+
+        SQLModel.metadata.clear()
         for mod in list(sys.modules):
             if mod == "app" or mod.startswith("app."):
                 del sys.modules[mod]
@@ -84,6 +87,51 @@ def test_defects_query_sort_pagination(tmp_path: Path) -> None:
     assert r.status_code == 200
     ids = [item["id"] for item in r.json()["items"]]
     assert ids == sorted(ids)
+
+
+def test_fullstack_defects_persist_crud_across_backend_reload(tmp_path: Path) -> None:
+    project_dir = _generate_fullstack(tmp_path, name="defect_persistence")
+    db_path = project_dir / "backend" / "data" / "defect_persistence.db"
+    db_url = f"sqlite:///{db_path}"
+    app = _import_app(project_dir, db_url)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(app)
+    create = client.post("/defects", json={"defect_type": "HDMI_CEC", "note": "first"})
+    assert create.status_code == 200
+    defect_id = int(create.json()["id"])
+
+    app_reloaded = _import_app(project_dir, db_url)
+    client_reloaded = TestClient(app_reloaded)
+
+    listing = client_reloaded.get("/defects")
+    assert listing.status_code == 200
+    ids = [int(item["id"]) for item in listing.json()["items"]]
+    assert defect_id in ids
+
+    update = client_reloaded.put(f"/defects/{defect_id}", json={"note": "updated"})
+    assert update.status_code == 200
+    assert update.json()["note"] == "updated"
+
+    app_reloaded_again = _import_app(project_dir, db_url)
+    client_reloaded_again = TestClient(app_reloaded_again)
+    persisted_listing = client_reloaded_again.get("/defects")
+    assert persisted_listing.status_code == 200
+    persisted_rows = persisted_listing.json()["items"]
+    persisted_row = next((item for item in persisted_rows if int(item["id"]) == defect_id), None)
+    assert persisted_row is not None
+    assert persisted_row["note"] == "updated"
+
+    delete = client_reloaded_again.delete(f"/defects/{defect_id}")
+    assert delete.status_code == 200
+
+    app_reloaded_after_delete = _import_app(project_dir, db_url)
+    client_reloaded_after_delete = TestClient(app_reloaded_after_delete)
+    listing_after_delete = client_reloaded_after_delete.get("/defects")
+    assert listing_after_delete.status_code == 200
+    ids_after_delete = [int(item["id"]) for item in listing_after_delete.json()["items"]]
+    assert defect_id not in ids_after_delete
 
 
 def test_pipeline_generate_and_run_backend_only(tmp_path: Path) -> None:
@@ -234,6 +282,49 @@ def test_fullstack_note_project_backend_and_frontend_are_aligned_on_notes_routes
     assert delete.status_code == 200
 
     assert client.post("/defects", json={"defect_type": "x", "note": "y"}).status_code == 404
+
+
+def test_fullstack_note_project_persists_crud_across_backend_reload(tmp_path: Path) -> None:
+    project_dir = _generate_fullstack(tmp_path, name="memo_persistence")
+    db_path = project_dir / "backend" / "data" / "memo_persistence.db"
+    db_url = f"sqlite:///{db_path}"
+    app = _import_app(project_dir, db_url)
+
+    from fastapi.testclient import TestClient
+
+    client = TestClient(app)
+    create = client.post("/notes", json={"title": "first memo", "content": "hello"})
+    assert create.status_code == 200
+    note_id = int(create.json()["id"])
+
+    app_reloaded = _import_app(project_dir, db_url)
+    client_reloaded = TestClient(app_reloaded)
+
+    listing = client_reloaded.get("/notes")
+    assert listing.status_code == 200
+    ids = [int(item["id"]) for item in listing.json()["items"]]
+    assert note_id in ids
+
+    detail = client_reloaded.get(f"/notes/{note_id}")
+    assert detail.status_code == 200
+    assert detail.json()["content"] == "hello"
+
+    update = client_reloaded.patch(f"/notes/{note_id}", json={"content": "updated memo"})
+    assert update.status_code == 200
+    assert update.json()["content"] == "updated memo"
+
+    app_reloaded_again = _import_app(project_dir, db_url)
+    client_reloaded_again = TestClient(app_reloaded_again)
+    persisted_detail = client_reloaded_again.get(f"/notes/{note_id}")
+    assert persisted_detail.status_code == 200
+    assert persisted_detail.json()["content"] == "updated memo"
+
+    delete = client_reloaded_again.delete(f"/notes/{note_id}")
+    assert delete.status_code == 200
+
+    app_reloaded_after_delete = _import_app(project_dir, db_url)
+    client_reloaded_after_delete = TestClient(app_reloaded_after_delete)
+    assert client_reloaded_after_delete.get(f"/notes/{note_id}").status_code == 404
 
 
 def test_fullstack_note_project_surfaces_newly_added_entity_pages_in_navigation(tmp_path: Path) -> None:
