@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { UI_API_BASE } from "@/components/uiApi";
 
 export type ProjectListItem = {
   name?: string;
@@ -39,7 +40,7 @@ export default function ProjectList({ projects, selectedName }: Props) {
     setSettingCurrentName(target);
     setSetCurrentError("");
     try {
-      const response = await fetch(`/api/ui/projects/${encodeURIComponent(target)}/select`, {
+      const response = await fetch(`${UI_API_BASE}/projects/${encodeURIComponent(target)}/select`, {
         method: "POST",
       });
       const payload = (await response.json().catch(() => ({}))) as {

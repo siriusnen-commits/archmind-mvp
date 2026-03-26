@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { UI_API_BASE } from "@/components/uiApi";
 
 type Props = {
   projectName?: string;
@@ -12,7 +13,6 @@ type RuntimeAction = {
   label: string;
 };
 
-const API_BASE = "/api/ui";
 const ACTIONS: RuntimeAction[] = [
   { path: "run-backend", label: "Run Backend" },
   { path: "run-all", label: "Run All" },
@@ -33,7 +33,7 @@ export default function RuntimeActionsCard({ projectName }: Props) {
     setError("");
     setLoadingAction(action.path);
     try {
-      const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectName)}/${action.path}`, {
+      const response = await fetch(`${UI_API_BASE}/projects/${encodeURIComponent(projectName)}/${action.path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });

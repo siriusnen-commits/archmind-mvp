@@ -2,12 +2,12 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
+import { UI_API_BASE } from "@/components/uiApi";
 
 type Props = {
   projectName?: string;
 };
 
-const API_BASE = "/api/ui";
 type MessageType = "success" | "info" | "error";
 
 export default function AddEntityCard({ projectName }: Props) {
@@ -29,7 +29,7 @@ export default function AddEntityCard({ projectName }: Props) {
     setLoading(true);
     setMessage("");
     try {
-      const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(targetProject)}/entities`, {
+      const response = await fetch(`${UI_API_BASE}/projects/${encodeURIComponent(targetProject)}/entities`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ entity_name: targetEntity }),

@@ -720,6 +720,34 @@ def test_ui_fields_proxy_route_uses_json_body_with_expected_keys() -> None:
     assert '{runState === "running" ? "Running..." : runState === "success" ? "Completed" : "Run"}' in next_action_source
 
 
+def test_frontend_ui_proxy_routes_use_single_backend_base_source_with_8000_default() -> None:
+    backend_source = Path("frontend/app/api/ui/projects/_backend.ts").read_text(encoding="utf-8")
+    assert "ARCHMIND_UI_API_BASE" in backend_source
+    assert "http://127.0.0.1:8000/ui" in backend_source
+    assert "8010" not in backend_source
+
+    for route_path in Path("frontend/app/api/ui/projects").rglob("route.ts"):
+        source = route_path.read_text(encoding="utf-8")
+        assert "getBackendUiBase" in source
+        assert "8010" not in source
+        assert "ARCHMIND_UI_API_BASE ||" not in source
+
+
+def test_dashboard_and_project_detail_share_ui_api_base_resolver() -> None:
+    helper_source = Path("frontend/app/_lib/uiApiBase.ts").read_text(encoding="utf-8")
+    assert "resolveUiApiBaseUrl" in helper_source
+    assert '/api/ui' in helper_source
+
+    dashboard_source = Path("frontend/app/dashboard/page.tsx").read_text(encoding="utf-8")
+    project_detail_source = Path("frontend/app/projects/[project]/page.tsx").read_text(encoding="utf-8")
+    assert 'from "@/app/_lib/uiApiBase"' in dashboard_source
+    assert 'from "@/app/_lib/uiApiBase"' in project_detail_source
+    assert "resolveUiApiBaseUrl()" in dashboard_source
+    assert "resolveUiApiBaseUrl()" in project_detail_source
+    assert "resolveApiBaseUrl" not in dashboard_source
+    assert "resolveApiBaseUrl" not in project_detail_source
+
+
 def test_ui_add_field_rejects_empty_inputs_safely(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     _make_project(projects_root, "field-empty")

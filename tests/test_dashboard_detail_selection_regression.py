@@ -10,7 +10,8 @@ def test_project_list_keeps_detail_link_and_separate_set_current_action() -> Non
 
     assert 'href={name ? `/projects/${encodeURIComponent(name)}` : "/dashboard"}' in source
     assert 'onClick={() => void handleSetCurrent(name)}' in source
-    assert 'fetch(`/api/ui/projects/${encodeURIComponent(target)}/select`' in source
+    assert 'import { UI_API_BASE } from "@/components/uiApi";' in source
+    assert 'fetch(`${UI_API_BASE}/projects/${encodeURIComponent(target)}/select`' in source
     assert '>\n                      Set current\n                    </button>' in source
 
 

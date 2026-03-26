@@ -210,7 +210,10 @@ def test_fullstack_runtime_env_template_uses_api_base_url_and_settings(tmp_path:
     assert 'return "http://127.0.0.1:8000";' in frontend_api_helper
     assert "NEXT_PUBLIC_BACKEND_URL" not in frontend_page
     assert "Backend: {backendUrl}" not in frontend_page
-    assert 'Backend: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}' in frontend_page
+    assert "const apiBaseReady = !apiBaseLoading && Boolean(apiBaseUrl);" in frontend_page
+    assert 'Backend: {apiBaseReady ? apiBaseUrl : "(resolving...)"}' in frontend_page
+    assert 'if (!apiBaseReady) throw new Error("API base is not ready.");' in frontend_page
+    assert "API base URL is not ready yet." not in frontend_page
     assert 'from "./_lib/apiBase"' in root_page
     assert 'from "./_lib/navigation"' in root_page
     assert "APP_NAV_LINKS" in root_page

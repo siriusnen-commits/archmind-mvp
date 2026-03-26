@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { UI_API_BASE } from "@/components/uiApi";
 import { useState } from "react";
 
 type Props = {
@@ -19,7 +20,6 @@ type DeletePayload = {
   error?: string;
 };
 
-const API_BASE = "/api/ui";
 
 export default function DangerZoneCard({ projectName, repositoryUrl }: Props) {
   const router = useRouter();
@@ -101,7 +101,7 @@ export default function DangerZoneCard({ projectName, repositoryUrl }: Props) {
     setError("");
     setLoadingAction(actionLabel);
     try {
-      const response = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectName)}/${path}`, {
+      const response = await fetch(`${UI_API_BASE}/projects/${encodeURIComponent(projectName)}/${path}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });

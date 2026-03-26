@@ -1,11 +1,10 @@
-import { headers } from "next/headers";
-
 import EvolutionCard from "@/components/EvolutionCard";
 import ProjectList, { ProjectListItem } from "@/components/ProjectList";
 import ProjectSummaryCard from "@/components/ProjectSummaryCard";
 import ProviderCard from "@/components/ProviderCard";
 import RefreshButton from "@/components/RefreshButton";
 import RuntimeCard from "@/components/RuntimeCard";
+import { resolveUiApiBaseUrl } from "@/app/_lib/uiApiBase";
 
 type SpecSummary = {
   stage?: string;
@@ -49,13 +48,6 @@ type DashboardPageProps = {
   searchParams: Promise<{ selected?: string | string[] }>;
 };
 
-async function resolveApiBaseUrl(): Promise<string> {
-  const reqHeaders = await headers();
-  const host = reqHeaders.get("x-forwarded-host") || reqHeaders.get("host") || "127.0.0.1:3000";
-  const proto = reqHeaders.get("x-forwarded-proto") || "http";
-  return `${proto}://${host}/api/ui`;
-}
-
 async function fetchProjects(apiBaseUrl: string): Promise<{ projects: ProjectListItem[]; error: string }> {
   try {
     const response = await fetch(`${apiBaseUrl}/projects`, { cache: "no-store" });
@@ -89,7 +81,7 @@ async function fetchProjectDetail(apiBaseUrl: string, name: string): Promise<{ d
 }
 
 export default async function DashboardPage({ searchParams }: DashboardPageProps) {
-  const apiBaseUrl = await resolveApiBaseUrl();
+  const apiBaseUrl = await resolveUiApiBaseUrl();
   const projectsResult = await fetchProjects(apiBaseUrl);
   const projects = projectsResult.projects;
   const resolvedSearchParams = await searchParams;

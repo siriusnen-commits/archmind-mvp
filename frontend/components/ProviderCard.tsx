@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { UI_API_BASE } from "@/components/uiApi";
 
 type ProviderMode = "local" | "cloud" | "auto";
 
@@ -9,9 +10,6 @@ type Props = {
   projectName?: string;
   mode?: ProviderMode | string;
 };
-
-const API_BASE =
-  "/api/ui";
 
 export default function ProviderCard({ projectName, mode }: Props) {
   const router = useRouter();
@@ -31,7 +29,7 @@ export default function ProviderCard({ projectName, mode }: Props) {
     setLoading(true);
     setError("");
     try {
-      const endpoint = `${API_BASE}/projects/${encodeURIComponent(projectName)}/provider`;
+      const endpoint = `${UI_API_BASE}/projects/${encodeURIComponent(projectName)}/provider`;
       const response = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const BACKEND_UI_BASE = process.env.ARCHMIND_UI_API_BASE || "http://127.0.0.1:8010/ui";
+import { getBackendUiBase } from "../../_backend";
 
 type Params = {
   params: Promise<{ project: string }>;
@@ -20,7 +20,7 @@ export async function POST(request: Request, { params }: Params) {
     field_type: String(payload.field_type ?? ""),
   };
   try {
-    const response = await fetch(`${BACKEND_UI_BASE}/projects/${encodeURIComponent(project)}/fields`, {
+    const response = await fetch(`${getBackendUiBase()}/projects/${encodeURIComponent(project)}/fields`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
