@@ -388,3 +388,69 @@ def test_project_analysis_safe_with_missing_or_malformed_data(tmp_path: Path) ->
     assert out["pages"] == []
     assert out["runtime_status"]["backend_status"] == "STOPPED"
     assert out["next_action"]["kind"] in {"missing_crud_api", "none", "missing_page", "missing_field"}
+
+
+def test_project_analysis_filters_low_value_next_action_when_only_metadata_fields_remain(tmp_path: Path) -> None:
+    project_dir = tmp_path / "metadata-only-remaining"
+    spec = {
+        "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}, {"name": "content", "type": "string"}]}],
+        "api_endpoints": [
+            "GET /notes",
+            "POST /notes",
+            "GET /notes/{note_id}",
+            "PUT /notes/{note_id}",
+            "DELETE /notes/{note_id}",
+        ],
+        "frontend_pages": ["notes/list", "notes/detail"],
+    }
+    _write(project_dir / "frontend" / "app" / "notes" / "page.tsx", "export default function Page() { return <div>ok</div>; }")
+    _write(project_dir / "frontend" / "app" / "notes" / "[id]" / "page.tsx", "export default function Page() { return <div>ok</div>; }")
+
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert any("metadata field" in str(item.get("message") or "") for item in out["suggestions"])
+    assert out["next_action"]["kind"] == "none"
+    assert out["next_action"]["command"] == ""
+
+
+def test_project_analysis_prefers_high_priority_over_medium_field_suggestions(tmp_path: Path) -> None:
+    project_dir = tmp_path / "prefer-high"
+    spec = {
+        "entities": [{"name": "Defect", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": ["GET /defects"],
+        "frontend_pages": ["defects/list"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert any("useful domain field" in str(item.get("message") or "") for item in out["suggestions"])
+    assert out["next_action"]["kind"] == "missing_crud_api"
+    assert str(out["next_action"]["command"] or "").startswith("/add_api ")
+
+
+def test_project_analysis_suppresses_repeated_add_field_suggestion_from_history(tmp_path: Path) -> None:
+    project_dir = tmp_path / "history-suppress-repeat"
+    spec = {
+        "entities": [{"name": "Defect", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": [
+            "GET /defects",
+            "POST /defects",
+            "GET /defects/{id}",
+            "PUT /defects/{id}",
+            "DELETE /defects/{id}",
+        ],
+        "frontend_pages": ["defects/list", "defects/detail"],
+    }
+    _write(project_dir / ".archmind" / "execution_history.jsonl", '{"command": "/add_field Defect description:string"}\n')
+
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    commands = {str(item.get("command") or "") for item in out["suggestions"]}
+    assert "/add_field Defect description:string" not in commands
+
+
+def test_project_analysis_suggests_add_entity_when_none_exists(tmp_path: Path) -> None:
+    project_dir = tmp_path / "no-entity"
+    spec = {
+        "entities": [],
+        "api_endpoints": [],
+        "frontend_pages": [],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert out["next_action"]["command"] == "/add_entity Task"
