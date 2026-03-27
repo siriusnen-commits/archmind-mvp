@@ -43,6 +43,39 @@ def test_execute_command_add_api_valid(monkeypatch) -> None:
     assert out["error"] is None
 
 
+def test_execute_command_add_api_patch_valid(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: Path("/tmp/demo"))
+
+    def fake_add_api(project_dir: Path, method: str, path: str, auto_restart_backend: bool = True):  # type: ignore[no-untyped-def]
+        assert project_dir == Path("/tmp/demo")
+        assert method == "PATCH"
+        assert path == "/tasks/{id}"
+        assert auto_restart_backend is True
+        return {"ok": True, "detail": "API patched", "method": method, "path": path}
+
+    monkeypatch.setattr("archmind.telegram_bot.add_api_to_project", fake_add_api)
+    out = execute_command("/add_api PATCH /tasks/{id}", "demo")
+    assert out["ok"] is True
+    assert out["message"] == "API patched"
+    assert out["error"] is None
+
+
+def test_execute_command_add_entity_valid(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: Path("/tmp/demo"))
+
+    def fake_add_entity(project_dir: Path, entity_name: str, auto_restart_backend: bool = True):  # type: ignore[no-untyped-def]
+        assert project_dir == Path("/tmp/demo")
+        assert entity_name == "Task"
+        assert auto_restart_backend is True
+        return {"ok": True, "detail": "Entity added", "entity_name": entity_name}
+
+    monkeypatch.setattr("archmind.telegram_bot.add_entity_to_project", fake_add_entity)
+    out = execute_command("/add_entity Task", "demo")
+    assert out["ok"] is True
+    assert out["message"] == "Entity added"
+    assert out["error"] is None
+
+
 def test_execute_command_add_page_valid(monkeypatch) -> None:
     monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: Path("/tmp/demo"))
 

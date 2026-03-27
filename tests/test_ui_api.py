@@ -569,6 +569,34 @@ def test_ui_add_entity_succeeds_and_returns_updated_spec(monkeypatch, tmp_path: 
     assert any("add_entity Task" in str(item) for item in detail_payload["recent_evolution"])
 
 
+def test_ui_run_command_executes_add_entity_same_as_telegram(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "command-project")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.post("/ui/projects/command-project/commands", json={"command": "/add_entity Task"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["project_name"] == "command-project"
+    assert payload["command"] == "/add_entity Task"
+    assert payload["spec_summary"]["entities"] >= 2
+
+
+def test_ui_run_command_rejects_invalid_consistently(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "command-invalid")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.post("/ui/projects/command-invalid/commands", json={"command": "/unknown foo"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert "Unsupported command" in str(payload["error"])
+
+
 def test_ui_add_entity_rejects_empty_name_safely(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     _make_project(projects_root, "entity-empty")
@@ -706,11 +734,14 @@ def test_ui_fields_proxy_route_uses_json_body_with_expected_keys() -> None:
     assert "field_name: targetFieldName" in card_source
     assert "field_type: targetFieldType" in card_source
 
+    command_route_source = Path("frontend/app/api/ui/projects/[project]/commands/route.ts").read_text(encoding="utf-8")
+    assert "/commands" in command_route_source
+    assert "body: bodyText" in command_route_source
+
     next_action_source = Path("frontend/components/NextActionCard.tsx").read_text(encoding="utf-8")
-    assert "entity_name: entityName" in next_action_source
-    assert "field_name: fieldName" in next_action_source
-    assert "field_type: fieldType" in next_action_source
-    assert "targetEntity" not in next_action_source
+    assert "/commands" in next_action_source
+    assert "JSON.stringify({ command: normalizedCommand })" in next_action_source
+    assert "parseNextCommand" not in next_action_source
     assert 'type RunState = "idle" | "running" | "success" | "error"' in next_action_source
     assert 'setRunState("running")' in next_action_source
     assert 'setRunState("success")' in next_action_source

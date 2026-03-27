@@ -18,12 +18,6 @@ type Props = {
 type MessageType = "success" | "info" | "error";
 type RunState = "idle" | "running" | "success" | "error";
 
-
-type ParsedCommand =
-  | { endpoint: "fields"; payload: { entity_name: string; field_name: string; field_type: string } }
-  | { endpoint: "pages"; payload: { page_path: string } }
-  | { endpoint: "apis"; payload: { method: string; path: string } };
-
 function normalizeCommandText(value: string): string {
   const raw = String(value || "").trim();
   if (!raw) {
@@ -32,49 +26,6 @@ function normalizeCommandText(value: string): string {
   const singleLine = raw.split(/\r?\n/, 1)[0] || "";
   const withoutLabel = singleLine.replace(/^command:\s*/i, "").trim();
   return withoutLabel.replace(/^`|`$/g, "").trim();
-}
-
-function parseNextCommand(command: string): ParsedCommand | null {
-  const text = normalizeCommandText(command);
-  if (!text) {
-    return null;
-  }
-
-  const addFieldMatch = text.match(/^\/add_field\s+([A-Za-z][A-Za-z0-9_]*)\s+([A-Za-z][A-Za-z0-9_]*)\s*:\s*([A-Za-z][A-Za-z0-9_]*)\s*$/);
-  if (addFieldMatch) {
-    const entityName = String(addFieldMatch[1] || "").trim();
-    const fieldName = String(addFieldMatch[2] || "").trim();
-    const fieldType = String(addFieldMatch[3] || "").trim().toLowerCase();
-    return {
-      endpoint: "fields",
-      payload: {
-        entity_name: entityName,
-        field_name: fieldName,
-        field_type: fieldType,
-      },
-    };
-  }
-
-  const addPageMatch = text.match(/^\/add_page\s+([A-Za-z0-9_/-]+)\s*$/);
-  if (addPageMatch) {
-    const pagePath = String(addPageMatch[1] || "").trim();
-    return {
-      endpoint: "pages",
-      payload: { page_path: pagePath },
-    };
-  }
-
-  const addApiMatch = text.match(/^\/add_api\s+(GET|POST|PUT|PATCH|DELETE)\s+(\S+)\s*$/i);
-  if (addApiMatch) {
-    const method = String(addApiMatch[1] || "").toUpperCase();
-    const path = String(addApiMatch[2] || "").trim();
-    return {
-      endpoint: "apis",
-      payload: { method, path },
-    };
-  }
-
-  return null;
 }
 
 function isNoImmediate(nextAction: NextAction): boolean {
@@ -105,8 +56,7 @@ export default function NextActionCard({ projectName, nextAction }: Props) {
       setMessage("Failed to run next action: project name is missing");
       return;
     }
-    const parsed = parseNextCommand(command);
-    if (!parsed) {
+    if (!normalizedCommand) {
       setRunState("error");
       setMessageType("error");
       setMessage("Failed to run next action: unsupported or invalid command");
@@ -117,18 +67,15 @@ export default function NextActionCard({ projectName, nextAction }: Props) {
     setMessage("");
     setExecutedCommand(normalizedCommand);
     try {
-      const response = await fetch(`${UI_API_BASE}/projects/${encodeURIComponent(targetProject)}/${parsed.endpoint}`, {
+      const response = await fetch(`${UI_API_BASE}/projects/${encodeURIComponent(targetProject)}/commands`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(parsed.payload),
+        body: JSON.stringify({ command: normalizedCommand }),
       });
       const payload = (await response.json().catch(() => ({}))) as {
         ok?: boolean;
         detail?: string;
         error?: string;
-        entity_name?: string;
-        field_name?: string;
-        field_type?: string;
       };
       const detail = String(payload.error || payload.detail || "").trim();
 
@@ -143,23 +90,6 @@ export default function NextActionCard({ projectName, nextAction }: Props) {
         setMessageType("error");
         setMessage(detail ? `Failed to run next action: ${detail}` : "Failed to run next action");
         return;
-      }
-
-      if (parsed.endpoint === "fields") {
-        const actualEntity = String(payload.entity_name || "").trim();
-        const actualField = String(payload.field_name || "").trim();
-        const actualType = String(payload.field_type || "").trim().toLowerCase();
-        const expectedEntity = parsed.payload.entity_name;
-        const expectedField = parsed.payload.field_name;
-        const expectedType = parsed.payload.field_type.toLowerCase();
-        if (actualEntity && (actualEntity !== expectedEntity || actualField !== expectedField || actualType !== expectedType)) {
-          setRunState("error");
-          setMessageType("error");
-          setMessage(
-            `Failed to run next action: target mismatch (expected ${expectedEntity}.${expectedField}:${expectedType}, got ${actualEntity}.${actualField}:${actualType})`
-          );
-          return;
-        }
       }
 
       setRunState("success");
