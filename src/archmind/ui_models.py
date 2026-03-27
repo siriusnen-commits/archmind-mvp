@@ -193,3 +193,17 @@ class ProjectAnalysisResponse(BaseModel):
     runtime_status: dict[str, Any] = Field(default_factory=dict)
     suggestions: list[dict[str, str]] = Field(default_factory=list)
     next_action: dict[str, str] = Field(default_factory=dict)
+
+
+class RunCommandRequest(BaseModel):
+    command: str = ""
+
+
+class RunCommandResponse(BaseModel):
+    ok: bool = False
+    project_name: str = ""
+    command: str = ""
+    detail: str = ""
+    error: str = ""
+    spec_summary: SpecSummary = Field(default_factory=SpecSummary)
+    recent_evolution: list[str] = Field(default_factory=list)

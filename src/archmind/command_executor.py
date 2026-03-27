@@ -7,9 +7,10 @@ from typing import Any
 from archmind.execution_history import append_execution_event
 
 ADD_FIELD_RE = re.compile(r"^/add_field\s+(\S+)\s+([^:\s]+)\s*:\s*(\S+)\s*$")
-ADD_API_RE = re.compile(r"^/add_api\s+(GET|POST|PUT|DELETE)\s+(\S+)\s*$", re.IGNORECASE)
+ADD_API_RE = re.compile(r"^/add_api\s+(GET|POST|PUT|PATCH|DELETE)\s+(\S+)\s*$", re.IGNORECASE)
 ADD_PAGE_RE = re.compile(r"^/add_page\s+(.+)$")
 ADD_IMPLEMENT_PAGE_RE = re.compile(r"^/implement_page\s+(.+)$")
+ADD_ENTITY_RE = re.compile(r"^/add_entity\s+(\S+)\s*$")
 
 
 def _resolve_project_dir(project_name: str) -> Path | None:
@@ -106,17 +107,22 @@ def execute_command(
     api_match = ADD_API_RE.match(normalized_command)
     page_match = ADD_PAGE_RE.match(normalized_command)
     implement_page_match = ADD_IMPLEMENT_PAGE_RE.match(normalized_command)
+    entity_match = ADD_ENTITY_RE.match(normalized_command)
 
     try:
         from archmind.telegram_bot import (
             add_api_to_project,
+            add_entity_to_project,
             add_field_to_project,
             add_page_to_project,
             implement_page_in_project,
         )
 
         result: dict[str, Any]
-        if field_match:
+        if entity_match:
+            entity_name = str(entity_match.group(1) or "").strip()
+            result = add_entity_to_project(project_dir, entity_name, auto_restart_backend=True)
+        elif field_match:
             entity_name = str(field_match.group(1) or "").strip()
             field_name = str(field_match.group(2) or "").strip()
             field_type = str(field_match.group(3) or "").strip().lower()
@@ -175,7 +181,7 @@ def execute_command(
                 "command": normalized_command,
                 "project_name": key,
                 "message": "",
-                "error": "Unsupported command. Supported: /add_field, /add_api, /add_page, /implement_page",
+                "error": "Unsupported command. Supported: /add_entity, /add_field, /add_api, /add_page, /implement_page",
             }
             _write_execution_event(
                 project_dir,
