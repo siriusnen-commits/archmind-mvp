@@ -2402,6 +2402,66 @@ def validate_generated_project_structure(
     }
 
 
+def _normalize_spec_seed(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    payload: dict[str, Any] = {}
+    for key in ("entities", "api_endpoints", "frontend_pages"):
+        value = raw.get(key)
+        if isinstance(value, list):
+            payload[key] = value
+    return payload
+
+
+def _parse_api_endpoint_hint(raw: str) -> tuple[str, str]:
+    text = str(raw or "").strip()
+    if not text:
+        return "", ""
+    parts = text.split(maxsplit=1)
+    if len(parts) != 2:
+        return "", ""
+    method = str(parts[0]).strip().upper()
+    path = _canonicalize_api_path(parts[1])
+    if method not in {"GET", "POST", "PUT", "PATCH", "DELETE"} or not path:
+        return "", ""
+    return method, path
+
+
+def _apply_spec_scaffolds(project_dir: Path, spec: dict[str, Any]) -> list[str]:
+    changed: list[str] = []
+    entities_raw = spec.get("entities") if isinstance(spec.get("entities"), list) else []
+    for item in entities_raw:
+        if not isinstance(item, dict):
+            continue
+        entity_name = str(item.get("name") or "").strip()
+        if not entity_name:
+            continue
+        changed.extend(apply_entity_scaffold(project_dir, entity_name))
+        fields = item.get("fields")
+        if isinstance(fields, list):
+            changed.extend(apply_entity_fields_to_scaffold(project_dir, entity_name, fields))
+        changed.extend(apply_frontend_page_scaffold(project_dir, entity_name))
+
+    api_endpoints = spec.get("api_endpoints") if isinstance(spec.get("api_endpoints"), list) else []
+    for endpoint in api_endpoints:
+        method, path = _parse_api_endpoint_hint(str(endpoint or ""))
+        if method and path:
+            changed.extend(apply_api_scaffold(project_dir, method, path))
+
+    frontend_pages = spec.get("frontend_pages") if isinstance(spec.get("frontend_pages"), list) else []
+    for page in frontend_pages:
+        changed.extend(apply_page_scaffold(project_dir, str(page or "")))
+
+    # Preserve ordering while deduplicating.
+    unique: list[str] = []
+    seen: set[str] = set()
+    for path in changed:
+        if path not in seen:
+            seen.add(path)
+            unique.append(path)
+    return unique
+
+
 # -----------------------------
 # Public entrypoint (CLI calls this)
 # -----------------------------
@@ -2435,8 +2495,12 @@ def generate_project(idea: str, opt: GenerateOptions):
             )
 
         spec = generate_valid_spec(prompt_text, idea, opt)
+    spec_seed = _normalize_spec_seed(getattr(opt, "project_spec", None))
+    if spec_seed:
+        spec.update(spec_seed)
     spec = apply_template(spec, opt)
     project_dir = write_project(spec, opt)
+    _apply_spec_scaffolds(project_dir, spec)
     apply_modules_to_project(project_dir, opt.template, list(getattr(opt, "modules", []) or []))
     structure_check = validate_generated_project_structure(project_dir, template_name=opt.template)
     if not bool(structure_check.get("ok")):
