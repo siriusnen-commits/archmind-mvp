@@ -46,6 +46,8 @@ from archmind.ui_models import (
     ProviderUpdateRequest,
     ProjectAnalysisResponse,
     RuntimeActionResponse,
+    RunCommandRequest,
+    RunCommandResponse,
 )
 
 router = APIRouter(prefix="/ui", tags=["ui"])
@@ -407,6 +409,32 @@ def post_ui_project_implement_page(project_name: str, body: ImplementPageRequest
             project_name=project_name,
             page_path=str(body.page_path or ""),
             detail="Failed to implement page",
+            error=str(exc),
+        )
+
+
+@router.post("/projects/{project_name}/commands", response_model=RunCommandResponse)
+def post_ui_project_run_command(project_name: str, body: RunCommandRequest) -> RunCommandResponse:
+    try:
+        command = str(body.command or "").strip()
+        result = execute_command(command, project_name, source="ui-next-run")
+        detail = str(result.get("detail") or result.get("message") or result.get("error") or "")
+        return RunCommandResponse(
+            ok=bool(result.get("ok")),
+            project_name=str(result.get("project_name") or project_name),
+            command=str(result.get("command") or command),
+            detail=detail,
+            error=str(result.get("error") or ""),
+            spec_summary=result.get("spec_summary") if isinstance(result.get("spec_summary"), dict) else {},
+            recent_evolution=[str(x) for x in (result.get("recent_evolution") or []) if str(x).strip()],
+        )
+    except Exception as exc:
+        logger.exception("Failed to run command: %s", project_name)
+        return RunCommandResponse(
+            ok=False,
+            project_name=project_name,
+            command=str(body.command or ""),
+            detail="Failed to run command",
             error=str(exc),
         )
 

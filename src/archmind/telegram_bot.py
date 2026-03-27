@@ -5946,12 +5946,11 @@ async def command_add_entity(update: Any, context: Any) -> None:
         await update.message.reply_text("Usage: /add_entity <name>")
         return
 
-    result = add_entity_to_project(project_path, args[0], auto_restart_backend=True)
-    status = str(result.get("status") or "").strip().lower()
-    if status == "invalid" and not str(args[0]).strip():
-        await update.message.reply_text("Usage: /add_entity <name>")
-        return
-    await update.message.reply_text(str(result.get("message_text") or result.get("detail") or "Failed to add entity"))
+    command = f"/add_entity {str(args[0]).strip()}"
+    result = execute_command(command, project_path.name, source=_execution_source_from_context(context))
+    await update.message.reply_text(
+        str(result.get("message_text") or result.get("detail") or result.get("message") or "Failed to add entity")
+    )
 
 
 async def command_add_field(update: Any, context: Any) -> None:
