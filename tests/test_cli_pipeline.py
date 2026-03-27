@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 
 from archmind.cli import main
+from archmind.project_analysis import analyze_project
+from archmind.project_query import build_project_detail
 import json
 import subprocess
 import sys
@@ -368,13 +370,50 @@ def test_pipeline_writes_project_spec_and_module_alignment(tmp_path: Path, monke
     assert spec_payload.get("modules") == reasoning_payload.get("modules")
     assert spec_payload.get("template")
     assert spec_payload.get("reason_summary")
-    assert spec_payload.get("entities") == []
-    assert spec_payload.get("api_endpoints") == []
-    assert spec_payload.get("frontend_pages") == []
+    assert isinstance(spec_payload.get("entities"), list)
+    assert isinstance(spec_payload.get("api_endpoints"), list)
+    assert isinstance(spec_payload.get("frontend_pages"), list)
+    assert len(spec_payload.get("entities") or []) >= 1
+    assert len(spec_payload.get("api_endpoints") or []) >= 1
     evolution = spec_payload.get("evolution") or {}
     assert evolution.get("version") == 1
     assert evolution.get("added_modules") == []
     assert evolution.get("history") == []
+
+
+def test_pipeline_generated_project_spec_is_visible_to_inspect_and_next(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project)
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "personal diary webapp with notes and calendar",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "spec_sync_demo",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+
+    project_dir = tmp_path / "spec_sync_demo"
+    spec_payload = json.loads((project_dir / ".archmind" / "project_spec.json").read_text(encoding="utf-8"))
+
+    assert len(spec_payload.get("entities") or []) >= 1
+    assert len(spec_payload.get("api_endpoints") or []) >= 1
+
+    detail = build_project_detail(project_dir)
+    assert detail.spec_summary.entities >= 1
+    assert detail.spec_summary.apis >= 1
+
+    analysis = analyze_project(project_dir, spec_payload=spec_payload, runtime_payload={})
+    next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
+    assert str(next_action.get("kind") or "").strip().lower() != "none"
 
 
 def test_pipeline_cli_type_keeps_fallback_metadata(tmp_path: Path, monkeypatch) -> None:

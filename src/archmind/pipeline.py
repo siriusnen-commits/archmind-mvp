@@ -20,6 +20,7 @@ from archmind.github_repo import create_github_repo_with_status
 from archmind.deploy import deploy_project
 from archmind.planner import write_project_plan
 from archmind.project_type import detect_project_type, normalize_project_type
+from archmind.spec_suggester import suggest_project_spec
 from archmind.template_selector import (
     resolve_default_template,
     resolve_effective_template,
@@ -543,6 +544,7 @@ def _write_project_spec(
     architecture_reasoning: dict[str, Any],
     selected_template: str,
     effective_template: str,
+    suggested_spec: dict[str, Any] | None = None,
 ) -> Optional[Path]:
     try:
         out = project_dir / ".archmind" / "project_spec.json"
@@ -553,15 +555,78 @@ def _write_project_spec(
             or effective_template
             or "fastapi"
         )
+        suggestion = suggested_spec if isinstance(suggested_spec, dict) else {}
+        raw_entities = suggestion.get("entities") if isinstance(suggestion.get("entities"), list) else []
+        entities: list[dict[str, Any]] = []
+        seen_entities: set[str] = set()
+        for item in raw_entities:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            key = name.lower()
+            if key in seen_entities:
+                continue
+            seen_entities.add(key)
+            fields_raw = item.get("fields") if isinstance(item.get("fields"), list) else []
+            fields: list[dict[str, str]] = []
+            seen_fields: set[str] = set()
+            for field in fields_raw:
+                if not isinstance(field, dict):
+                    continue
+                field_name = str(field.get("name") or "").strip()
+                field_type = str(field.get("type") or "").strip().lower()
+                if not field_name or not field_type:
+                    continue
+                field_key = field_name.lower()
+                if field_key in seen_fields:
+                    continue
+                seen_fields.add(field_key)
+                fields.append({"name": field_name, "type": field_type})
+            entities.append({"name": name, "fields": fields})
+            if len(entities) >= 10:
+                break
+
+        raw_api_endpoints = suggestion.get("api_endpoints") if isinstance(suggestion.get("api_endpoints"), list) else []
+        api_endpoints: list[str] = []
+        seen_api: set[str] = set()
+        for item in raw_api_endpoints:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            key = text.lower()
+            if key in seen_api:
+                continue
+            seen_api.add(key)
+            api_endpoints.append(text)
+            if len(api_endpoints) >= 20:
+                break
+
+        raw_pages = suggestion.get("frontend_pages") if isinstance(suggestion.get("frontend_pages"), list) else []
+        frontend_pages: list[str] = []
+        seen_pages: set[str] = set()
+        for item in raw_pages:
+            page = str(item or "").strip().strip("/")
+            if not page:
+                continue
+            key = page.lower()
+            if key in seen_pages:
+                continue
+            seen_pages.add(key)
+            frontend_pages.append(page)
+            if len(frontend_pages) >= 20:
+                break
+
         payload = {
             "shape": str(architecture_reasoning.get("app_shape") or "unknown"),
             "domains": [str(item) for item in (architecture_reasoning.get("domains") or []) if str(item).strip()],
             "template": preferred_template,
             "modules": [str(item) for item in (architecture_reasoning.get("modules") or []) if str(item).strip()],
             "reason_summary": str(architecture_reasoning.get("reason_summary") or ""),
-            "entities": [],
-            "api_endpoints": [],
-            "frontend_pages": [],
+            "entities": entities,
+            "api_endpoints": api_endpoints,
+            "frontend_pages": frontend_pages,
             "evolution": {
                 "version": 1,
                 "added_modules": [],
@@ -742,11 +807,27 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
 
     reasoning_path: Optional[Path] = None
     project_spec_path: Optional[Path] = None
+    project_spec_seed: dict[str, Any] = {}
     if architecture_reasoning:
         architecture_reasoning["selected_template"] = selected_template
         architecture_reasoning["effective_template"] = effective_template
+        if normalized_idea:
+            try:
+                project_spec_seed = suggest_project_spec(
+                    normalized_idea,
+                    architecture_reasoning,
+                    provider_project_dir=project_dir,
+                )
+            except Exception as exc:
+                print(f"[WARN] project spec suggestion failed: {exc}", file=sys.stderr)
         reasoning_path = _write_architecture_reasoning(project_dir, architecture_reasoning)
-        project_spec_path = _write_project_spec(project_dir, architecture_reasoning, selected_template, effective_template)
+        project_spec_path = _write_project_spec(
+            project_dir,
+            architecture_reasoning,
+            selected_template,
+            effective_template,
+            suggested_spec=project_spec_seed,
+        )
 
     plan_md_path: Optional[Path] = None
     plan_json_path: Optional[Path] = None
