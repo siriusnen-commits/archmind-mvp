@@ -6,11 +6,13 @@ import sys
 from pathlib import Path
 
 from archmind.generator import (
+    GenerateOptions,
     apply_api_scaffold,
     apply_entity_fields_to_scaffold,
     apply_entity_scaffold,
     apply_frontend_page_scaffold,
     apply_page_scaffold,
+    generate_project,
     implement_page_scaffold,
 )
 
@@ -106,6 +108,35 @@ def test_apply_entity_scaffold_router_persists_crud_across_app_reload(tmp_path: 
     app_reloaded_again = _import_generated_backend_app(project_dir, db_url)
     reloaded_again_client = TestClient(app_reloaded_again)
     assert reloaded_again_client.get(f"/notes/{note_id}").status_code == 404
+
+
+def test_generate_project_fullstack_ddd_applies_project_spec_entities(tmp_path: Path) -> None:
+    opt = GenerateOptions(out=tmp_path, force=False, name="diary_entities", template="fullstack-ddd")
+    setattr(
+        opt,
+        "project_spec",
+        {
+            "entities": [
+                {
+                    "name": "Entry",
+                    "fields": [
+                        {"name": "title", "type": "string"},
+                        {"name": "content", "type": "string"},
+                    ],
+                }
+            ],
+            "frontend_pages": ["entries/list"],
+        },
+    )
+
+    project_dir = Path(generate_project("personal diary webapp", opt))
+    assert (project_dir / "backend" / "app" / "routers" / "entry.py").exists()
+    assert (project_dir / "frontend" / "app" / "entries" / "page.tsx").exists()
+
+    backend_text = (project_dir / "backend" / "app" / "main.py").read_text(encoding="utf-8").lower()
+    frontend_text = (project_dir / "frontend" / "app" / "entries" / "page.tsx").read_text(encoding="utf-8").lower()
+    assert "defect" not in backend_text
+    assert "defect" not in frontend_text
 
 
 def test_apply_entity_scaffold_is_idempotent_and_does_not_overwrite_existing_files(tmp_path: Path) -> None:

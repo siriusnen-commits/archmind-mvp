@@ -1,4 +1,3 @@
-# src/archmind/templates/fullstack_ddd.py
 from __future__ import annotations
 
 from typing import Dict
@@ -6,57 +5,45 @@ from typing import Dict
 
 def enforce_fullstack_ddd(_: Dict[str, str], project_name: str) -> Dict[str, str]:
     """
-    Deterministic Fullstack DDD template.
-    - Backend: FastAPI + SQLModel (DDD-ish)
-    - Frontend: Next.js(App Router) + TS + Tailwind
-    - Always runnable/testable skeleton
+    Deterministic Fullstack DDD template (domain-neutral baseline).
+
+    This template intentionally ships only generic shell structure.
+    Domain entities/APIs/pages are added later from project spec via generator scaffolds.
     """
     files: Dict[str, str] = {}
-    project_name_lc = str(project_name or "").strip().lower()
-    is_note_project = any(keyword in project_name_lc for keyword in ("memo", "note", "journal"))
 
-    # -------------------------
-    # Backend (same pins as fastapi-ddd)
-    # -------------------------
-    files["requirements.txt"] = (
+    files["backend/requirements.txt"] = (
         "fastapi==0.115.0\n"
         "uvicorn[standard]==0.30.6\n"
-        "sqlmodel==0.0.21\n"
         "pydantic==2.8.2\n"
         "pydantic-settings==2.4.0\n"
         "pytest==9.0.2\n"
         "httpx==0.27.0\n"
     )
 
-    files["pytest.ini"] = (
+    files["backend/pytest.ini"] = (
         "[pytest]\n"
         "testpaths = tests\n"
         "addopts = -q\n"
     )
 
-    files[".env.example"] = (
+    files["backend/.env.example"] = (
         f"APP_NAME={project_name}\n"
         "APP_PORT=8000\n"
         "BACKEND_BASE_URL=http://127.0.0.1:8000\n"
-        "DB_URL=sqlite:///./data/app.db\n"
         "CORS_ALLOW_ORIGINS=http://localhost:3000,http://127.0.0.1:3000\n"
     )
 
-    # packages
-    for p in [
-        "app/__init__.py",
-        "app/api/__init__.py",
-        "app/api/routers/__init__.py",
-        "app/core/__init__.py",
-        "app/db/__init__.py",
-        "app/domain/__init__.py",
-        "app/repositories/__init__.py",
-        "app/services/__init__.py",
-        "tests/__init__.py",
+    for package in [
+        "backend/app/__init__.py",
+        "backend/app/api/__init__.py",
+        "backend/app/api/routers/__init__.py",
+        "backend/app/core/__init__.py",
+        "backend/tests/__init__.py",
     ]:
-        files[p] = ""
+        files[package] = ""
 
-    files["app/core/settings.py"] = f"""from __future__ import annotations
+    files["backend/app/core/settings.py"] = f"""from __future__ import annotations
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -67,461 +54,109 @@ class Settings(BaseSettings):
     app_name: str = "{project_name}"
     app_port: int = 8000
     backend_base_url: str = "http://127.0.0.1:8000"
-    db_url: str = "sqlite:///./data/app.db"
     cors_allow_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
 
 
 settings = Settings()
 """
 
-    files["app/db/session.py"] = """from __future__ import annotations
+    files["backend/app/api/router.py"] = """from fastapi import APIRouter
 
-from pathlib import Path
-from sqlmodel import SQLModel, Session, create_engine
+from app.api.routers.health import router as health_router
 
-from app.core.settings import settings
-
-
-engine = create_engine(settings.db_url, echo=False)
-
-
-def init_db() -> None:
-    Path("./data").mkdir(parents=True, exist_ok=True)
-    SQLModel.metadata.create_all(engine)
-
-
-def get_session() -> Session:
-    return Session(engine)
+api_router = APIRouter()
+api_router.include_router(health_router)
 """
 
-    files["app/domain/models.py"] = """from __future__ import annotations
-
-from datetime import datetime
-from typing import Optional
-
-from sqlmodel import SQLModel, Field
-
-
-class Defect(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    defect_type: str
-    note: str = ""
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-"""
-
-    files["app/repositories/defect_repo.py"] = """from __future__ import annotations
-
-from typing import List, Optional, Tuple
-
-from sqlmodel import Session, func, select
-
-from app.domain.models import Defect
-
-
-class DefectRepository:
-    def create(self, session: Session, *, defect_type: str, note: str = "") -> Defect:
-        obj = Defect(defect_type=defect_type, note=note)
-        session.add(obj)
-        session.commit()
-        session.refresh(obj)
-        return obj
-
-    def get(self, session: Session, defect_id: int) -> Optional[Defect]:
-        return session.get(Defect, defect_id)
-
-    def list(
-        self,
-        session: Session,
-        *,
-        q: Optional[str] = None,
-        defect_type: Optional[str] = None,
-        sort: str = "id",
-        order: str = "desc",
-        offset: int = 0,
-        limit: int = 20,
-    ) -> Tuple[List[Defect], int]:
-        conditions = []
-        if q:
-            like = f"%{q}%"
-            conditions.append((Defect.note.ilike(like)) | (Defect.defect_type.ilike(like)))
-        if defect_type:
-            conditions.append(Defect.defect_type.ilike(f"%{defect_type}%"))
-
-        query = select(Defect)
-        count_query = select(func.count()).select_from(Defect)
-        for cond in conditions:
-            query = query.where(cond)
-            count_query = count_query.where(cond)
-
-        order_col = Defect.created_at if sort == "created_at" else Defect.id
-        order_by = order_col.asc() if order == "asc" else order_col.desc()
-
-        total = session.exec(count_query).one()
-        items = list(session.exec(query.order_by(order_by).offset(offset).limit(limit)).all())
-        return items, int(total)
-
-    def update(
-        self,
-        session: Session,
-        obj: Defect,
-        *,
-        defect_type: Optional[str] = None,
-        note: Optional[str] = None,
-    ) -> Defect:
-        if defect_type is not None:
-            obj.defect_type = defect_type
-        if note is not None:
-            obj.note = note
-        session.add(obj)
-        session.commit()
-        session.refresh(obj)
-        return obj
-
-    def delete(self, session: Session, obj: Defect) -> None:
-        session.delete(obj)
-        session.commit()
-"""
-
-    files["app/services/defect_service.py"] = """from __future__ import annotations
-
-from typing import List, Optional, Tuple
-
-from sqlmodel import Session
-
-from app.domain.models import Defect
-from app.repositories.defect_repo import DefectRepository
-
-
-class DefectService:
-    def __init__(self, repo: DefectRepository | None = None) -> None:
-        self.repo = repo or DefectRepository()
-
-    def create(self, session: Session, *, defect_type: str, note: str = "") -> Defect:
-        return self.repo.create(session, defect_type=defect_type, note=note)
-
-    def get(self, session: Session, defect_id: int) -> Optional[Defect]:
-        return self.repo.get(session, defect_id)
-
-    def list(
-        self,
-        session: Session,
-        *,
-        q: Optional[str] = None,
-        defect_type: Optional[str] = None,
-        sort: str = "id",
-        order: str = "desc",
-        offset: int = 0,
-        limit: int = 20,
-    ) -> Tuple[List[Defect], int]:
-        return self.repo.list(
-            session,
-            q=q,
-            defect_type=defect_type,
-            sort=sort,
-            order=order,
-            offset=offset,
-            limit=limit,
-        )
-
-    def update(
-        self,
-        session: Session,
-        obj: Defect,
-        *,
-        defect_type: Optional[str] = None,
-        note: Optional[str] = None,
-    ) -> Defect:
-        return self.repo.update(session, obj, defect_type=defect_type, note=note)
-
-    def delete(self, session: Session, obj: Defect) -> None:
-        return self.repo.delete(session, obj)
-"""
-
-    files["app/api/schemas.py"] = """from __future__ import annotations
-
-from datetime import datetime
-from typing import List, Optional
-from pydantic import BaseModel
-
-
-class DefectCreate(BaseModel):
-    defect_type: str
-    note: str = ""
-
-
-class DefectUpdate(BaseModel):
-    defect_type: Optional[str] = None
-    note: Optional[str] = None
-
-
-class DefectRead(BaseModel):
-    id: int
-    defect_type: str
-    note: str
-    created_at: datetime
-
-
-class DefectListResponse(BaseModel):
-    items: List[DefectRead]
-    total: int
-    page: int
-    page_size: int
-"""
-
-    files["app/api/routers/health.py"] = """from fastapi import APIRouter
+    files["backend/app/api/routers/health.py"] = """from fastapi import APIRouter
 
 router = APIRouter(tags=["health"])
 
 
 @router.get("/health")
-def health():
+def health() -> dict[str, str]:
     return {"status": "ok"}
 """
 
-    files["app/api/routers/defects.py"] = """from __future__ import annotations
-
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlmodel import Session
-
-from app.api.schemas import DefectCreate, DefectListResponse, DefectRead, DefectUpdate
-from app.db.session import get_session
-from app.services.defect_service import DefectService
-
-router = APIRouter(prefix="/defects", tags=["defects"])
-
-
-def _session_dep() -> Session:
-    return get_session()
-
-
-@router.post("", response_model=DefectRead)
-def create_defect(payload: DefectCreate, session: Session = Depends(_session_dep)):
-    svc = DefectService()
-    obj = svc.create(session, defect_type=payload.defect_type, note=payload.note)
-    return DefectRead.model_validate(obj, from_attributes=True)
-
-
-@router.get("", response_model=DefectListResponse)
-def list_defects(
-    session: Session = Depends(_session_dep),
-    q: str | None = Query(default=None),
-    defect_type: str | None = Query(default=None, description="Partial match on defect_type"),
-    sort: str = Query(default="id", pattern="^(id|created_at)$"),
-    order: str = Query(default="desc", pattern="^(asc|desc)$"),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
-):
-    svc = DefectService()
-    offset = (page - 1) * page_size
-    items, total = svc.list(
-        session,
-        q=q,
-        defect_type=defect_type,
-        sort=sort,
-        order=order,
-        offset=offset,
-        limit=page_size,
-    )
-    return DefectListResponse(
-        items=[DefectRead.model_validate(x, from_attributes=True) for x in items],
-        total=total,
-        page=page,
-        page_size=page_size,
-    )
-
-
-@router.put("/{defect_id}", response_model=DefectRead)
-def update_defect(
-    defect_id: int,
-    payload: DefectUpdate,
-    session: Session = Depends(_session_dep),
-):
-    svc = DefectService()
-    obj = svc.get(session, defect_id)
-    if not obj:
-        raise HTTPException(status_code=404, detail="Defect not found")
-    updated = svc.update(session, obj, defect_type=payload.defect_type, note=payload.note)
-    return DefectRead.model_validate(updated, from_attributes=True)
-
-
-@router.delete("/{defect_id}")
-def delete_defect(defect_id: int, session: Session = Depends(_session_dep)):
-    svc = DefectService()
-    obj = svc.get(session, defect_id)
-    if not obj:
-        raise HTTPException(status_code=404, detail="Defect not found")
-    svc.delete(session, obj)
-    return {"status": "deleted"}
-"""
-
-    files["app/api/router.py"] = """from fastapi import APIRouter
-
-from app.api.routers.health import router as health_router
-from app.api.routers.defects import router as defects_router
-
-api_router = APIRouter()
-api_router.include_router(health_router)
-api_router.include_router(defects_router)
-"""
-
-    # lifespan (경고 제거)
-    files["app/main.py"] = """from __future__ import annotations
-
-from contextlib import asynccontextmanager
+    files["backend/app/main.py"] = """from __future__ import annotations
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
 from app.core.settings import settings
-from app.db.session import init_db
 
+app = FastAPI(title=settings.app_name)
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    init_db()
-    yield
+allow_origins = [x.strip() for x in settings.cors_allow_origins.split(",") if x.strip()]
+if not allow_origins:
+    allow_origins = ["*"]
 
-
-app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 app.include_router(api_router)
 """
 
-    files["main.py"] = """import os
-import uvicorn
+    files["backend/tests/test_health.py"] = """from fastapi.testclient import TestClient
 
-if __name__ == "__main__":
-    host = os.getenv("HOST", "0.0.0.0")
-    port = int(os.getenv("APP_PORT", os.getenv("PORT", "8000")))
-    uvicorn.run("app.main:app", host=host, port=port, reload=True)
-"""
-
-    files["tests/conftest.py"] = """import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-"""
-
-    files["tests/test_health.py"] = """from fastapi.testclient import TestClient
 from app.main import app
 
 
-def test_health():
+def test_health() -> None:
     client = TestClient(app)
-    r = client.get("/health")
-    assert r.status_code == 200
-    assert r.json() == {"status": "ok"}
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
 """
 
-    files["tests/test_defects.py"] = """from fastapi.testclient import TestClient
-from app.main import app
-from app.db.session import engine
-from sqlmodel import SQLModel
-from pathlib import Path
-
-
-def setup_function():
-    Path("./data").mkdir(parents=True, exist_ok=True)
-    SQLModel.metadata.drop_all(engine)
-    SQLModel.metadata.create_all(engine)
-
-
-def test_defects_crud_and_pagination():
-    client = TestClient(app)
-    for i in range(5):
-        r = client.post("/defects", json={"defect_type": f"HDMI_{i}", "note": f"n{i}"})
-        assert r.status_code == 200
-
-    r = client.get("/defects", params={"page": 1, "page_size": 2})
-    assert r.status_code == 200
-    data = r.json()
-    assert data["total"] == 5
-    assert len(data["items"]) == 2
-    assert data["page"] == 1
-    assert data["page_size"] == 2
-
-    first_id = data["items"][0]["id"]
-    r = client.put(f"/defects/{first_id}", json={"note": "updated"})
-    assert r.status_code == 200
-    assert r.json()["note"] == "updated"
-
-    r = client.delete(f"/defects/{first_id}")
-    assert r.status_code == 200
-
-    r = client.get("/defects", params={"q": "updated"})
-    assert r.status_code == 200
-    assert r.json()["total"] == 0
-
-
-def test_defects_query_and_sorting():
-    client = TestClient(app)
-    for dtype in ["HDMI_CEC", "HDMI_ARC", "USB_POWER"]:
-        client.post("/defects", json={"defect_type": dtype, "note": f"note {dtype}"})
-
-    # defect_type partial match
-    r = client.get("/defects", params={"defect_type": "HDMI"})
-    assert r.status_code == 200
-    data = r.json()
-    assert data["total"] == 2
-
-    # text search (q) across note/defect_type
-    r = client.get("/defects", params={"q": "USB"})
-    assert r.status_code == 200
-    assert r.json()["total"] == 1
-
-    # sort by id asc
-    r = client.get("/defects", params={"sort": "id", "order": "asc"})
-    assert r.status_code == 200
-    ids = [item["id"] for item in r.json()["items"]]
-    assert ids == sorted(ids)
+    files["frontend/package.json"] = """{
+  "name": "archmind-fullstack-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "sh -c 'next start -p ${PORT:-3000}'",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "14.2.5",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.10",
+    "@types/react": "18.3.3",
+    "@types/react-dom": "18.3.0",
+    "autoprefixer": "10.4.19",
+    "eslint": "8.57.0",
+    "eslint-config-next": "14.2.5",
+    "postcss": "8.4.39",
+    "tailwindcss": "3.4.7",
+    "typescript": "5.5.4"
+  }
+}
 """
 
-    # -------------------------
-    # Frontend (Next.js App Router)
-    # -------------------------
     files["frontend/.env.example"] = (
         "NEXT_PUBLIC_API_BASE_URL=\n"
         "NEXT_PUBLIC_RUNTIME_BACKEND_URL=\n"
-        "NEXT_PUBLIC_FRONTEND_PORT=3000\n"
+        "NEXT_PUBLIC_BACKEND_PORT=\n"
+        "NEXT_PUBLIC_FRONTEND_PORT=\n"
     )
 
-    files["frontend/package.json"] = f"""{{
-  "name": "{project_name}-frontend",
-  "private": true,
-  "version": "0.1.0",
-  "type": "module",
-  "scripts": {{
-    "dev": "next dev -p 5173",
-    "build": "next build",
-    "start": "sh -c 'next start -p ${{PORT:-3000}}'",
-    "lint": "next lint"
-  }},
-  "dependencies": {{
-    "next": "15.1.6",
-    "react": "19.0.0",
-    "react-dom": "19.0.0"
-  }},
-  "devDependencies": {{
-    "@types/node": "20.11.30",
-    "@types/react": "19.0.8",
-    "@types/react-dom": "19.0.3",
-    "autoprefixer": "10.4.20",
-    "postcss": "8.4.49",
-    "tailwindcss": "3.4.17",
-    "typescript": "5.6.3",
-    "eslint": "9.18.0",
-    "eslint-config-next": "15.1.6"
-  }}
-}}
+    files["frontend/next.config.js"] = """/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+};
+
+module.exports = nextConfig;
 """
 
     files["frontend/tsconfig.json"] = """{
@@ -539,9 +174,12 @@ def test_defects_query_and_sorting():
     "isolatedModules": true,
     "jsx": "preserve",
     "incremental": true,
-    "types": ["node"]
+    "plugins": [{ "name": "next" }],
+    "paths": {
+      "@/*": ["./*"]
+    }
   },
-  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx"],
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
   "exclude": ["node_modules"]
 }
 """
@@ -549,18 +187,10 @@ def test_defects_query_and_sorting():
     files["frontend/next-env.d.ts"] = """/// <reference types="next" />
 /// <reference types="next/image-types/global" />
 
-// NOTE: This file should not be edited
+// This file is auto-generated by Next.js
 """
 
-    files["frontend/next.config.mjs"] = """/** @type {import('next').NextConfig} */
-const nextConfig = {
-  output: "standalone"
-};
-
-export default nextConfig;
-"""
-
-    files["frontend/postcss.config.mjs"] = """export default {
+    files["frontend/postcss.config.js"] = """module.exports = {
   plugins: {
     tailwindcss: {},
     autoprefixer: {},
@@ -568,15 +198,20 @@ export default nextConfig;
 };
 """
 
-    files["frontend/tailwind.config.ts"] = """import type { Config } from "tailwindcss";
+    files["frontend/tailwind.config.ts"] = """import type { Config } from \"tailwindcss\";
 
-export default {
-  content: ["./app/**/*.{ts,tsx}"],
+const config: Config = {
+  content: [
+    \"./app/**/*.{js,ts,jsx,tsx,mdx}\",
+    \"./components/**/*.{js,ts,jsx,tsx,mdx}\",
+  ],
   theme: {
     extend: {},
   },
   plugins: [],
-} satisfies Config;
+};
+
+export default config;
 """
 
     files["frontend/app/globals.css"] = """@tailwind base;
@@ -584,1027 +219,55 @@ export default {
 @tailwind utilities;
 
 :root {
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 body {
   margin: 0;
+  background: #020617;
+  color: #e2e8f0;
 }
 """
 
-    nav_entries = (
-        '  { href: "/notes", label: "Notes", primary: true },\n'
-        if is_note_project
-        else '  { href: "/ui/defects", label: "Defects", primary: true },\n'
-    )
-    files["frontend/app/_lib/navigation.ts"] = (
-        "export type AppNavLink = {\n"
-        "  href: string;\n"
-        "  label: string;\n"
-        "  primary?: boolean;\n"
-        "};\n\n"
-        "export const APP_NAV_LINKS: AppNavLink[] = [\n"
-        f"{nav_entries}"
-        "];\n"
-    )
+    files["frontend/app/layout.tsx"] = f"""import \"./globals.css\";
 
-    files["frontend/app/layout.tsx"] = (
-        'import Link from "next/link";\n'
-        'import "./globals.css";\n'
-        'import { APP_NAV_LINKS } from "./_lib/navigation";\n\n'
-        "export const metadata = {\n"
-        f'  title: "{project_name}",\n'
-        "};\n\n"
-        "export default function RootLayout({ children }: { children: React.ReactNode }) {\n"
-        "  return (\n"
-        '    <html lang="en">\n'
-        "      <body>\n"
-        '        <div className="min-h-screen bg-slate-950 text-slate-100">\n'
-        '          <header className="border-b border-slate-800 bg-slate-900/80">\n'
-        '            <div className="mx-auto max-w-5xl px-4 py-5">\n'
-        '              <div className="flex flex-wrap items-center justify-between gap-4">\n'
-        "                <div>\n"
-        f'                  <div className="text-lg font-semibold tracking-wide">{project_name}</div>\n'
-        '                  <div className="text-xs text-slate-300">FastAPI + Next.js workspace</div>\n'
-        "                </div>\n"
-        '                <nav className="flex flex-wrap items-center gap-2 text-xs">\n'
-        "                  {APP_NAV_LINKS.map((link) => (\n"
-        '                    <Link key={link.href} href={link.href} className="rounded-md border border-slate-700 px-2 py-1 text-slate-200 hover:bg-slate-800">\n'
-        "                      {link.label}\n"
-        "                    </Link>\n"
-        "                  ))}\n"
-        "                </nav>\n"
-        "              </div>\n"
-        "            </div>\n"
-        "          </header>\n"
-        '          <main className="mx-auto max-w-5xl px-4 py-8">{children}</main>\n'
-        "        </div>\n"
-        "      </body>\n"
-        "    </html>\n"
-        "  );\n"
-        "}\n"
-    )
+export const metadata = {{
+  title: \"{project_name}\",
+}};
 
-    files["frontend/app/page.tsx"] = """"use client";
-
-import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
-import { useApiBaseUrl } from "./_lib/apiBase";
-import { APP_NAV_LINKS } from "./_lib/navigation";
-
-export default function Page() {
-  const router = useRouter();
-  const [checkingPrimary, setCheckingPrimary] = useState(true);
-  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();
-  const primaryHref = useMemo(() => APP_NAV_LINKS.find((link) => link.primary)?.href || APP_NAV_LINKS[0]?.href || "/", []);
-
-  useEffect(() => {
-    let active = true;
-    (async () => {
-      try {
-        if (primaryHref === "/") {
-          setCheckingPrimary(false);
-          return;
-        }
-        const response = await fetch(primaryHref, { cache: "no-store" });
-        if (!active) return;
-        if (response.ok) {
-          router.replace(primaryHref);
-          return;
-        }
-      } catch {
-        // Ignore and show default landing.
-      }
-      if (active) {
-        setCheckingPrimary(false);
-      }
-    })();
-    return () => {
-      active = false;
-    };
-  }, [router, primaryHref]);
-
-  if (checkingPrimary) {
-    return <p className="text-sm text-slate-300">Loading workspace...</p>;
-  }
-
+export default function RootLayout({{ children }}: {{ children: React.ReactNode }}) {{
   return (
-    <section className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900/60 p-6">
-      <h1 className="text-lg font-semibold">Project Home</h1>
-      <p className="text-xs text-slate-300">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>
-      <p className="text-sm text-slate-200">Available sections from generated pages:</p>
-      <div className="flex flex-wrap gap-2 text-sm">
-        {APP_NAV_LINKS.map((link) => (
-          <Link key={link.href} href={link.href} className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">
-            {link.label}
-          </Link>
-        ))}
-      </div>
+    <html lang=\"en\">
+      <body>
+        <main className=\"mx-auto min-h-screen max-w-4xl p-6\">{{children}}</main>
+      </body>
+    </html>
+  );
+}}
+"""
+
+    files["frontend/app/page.tsx"] = """export default function HomePage() {
+  return (
+    <section className=\"space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-6\">
+      <h1 className=\"text-2xl font-semibold\">ArchMind Fullstack Workspace</h1>
+      <p className=\"text-sm text-slate-300\">
+        This scaffold is domain-neutral. Entities, APIs, and pages are generated from project spec.
+      </p>
     </section>
   );
 }
-"""
-
-    files["frontend/app/notes/page.tsx"] = """"use client";
-
-import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
-import { useApiBaseUrl } from "../_lib/apiBase";
-
-type Note = {
-  id?: number | string;
-  title?: string;
-  content?: string;
-  [key: string]: unknown;
-};
-
-function extractNotes(payload: unknown): Note[] {
-  if (Array.isArray(payload)) return payload as Note[];
-  if (payload && typeof payload === "object" && Array.isArray((payload as { items?: unknown[] }).items)) {
-    return ((payload as { items: unknown[] }).items ?? []) as Note[];
-  }
-  return [];
-}
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error || "Unknown error");
-}
-
-function mergeNoteItem(current: Note[], incoming: Note): Note[] {
-  const nextId = String(incoming.id ?? "").trim();
-  if (!nextId) {
-    return [incoming, ...current];
-  }
-  const filtered = current.filter((item) => String(item.id ?? "").trim() !== nextId);
-  return [incoming, ...filtered];
-}
-
-export default function NotesPage() {
-  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();
-  const [notes, setNotes] = useState<Note[]>([]);
-  const [title, setTitle] = useState("");
-  const [content, setContent] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
-
-  async function loadNotes() {
-    if (!apiBaseUrl) return;
-    setLoading(true);
-    setError("");
-    try {
-      const response = await fetch(`${apiBaseUrl}/notes`, { cache: "no-store" });
-      if (!response.ok) {
-        throw new Error(`Failed to load notes (HTTP ${response.status})`);
-      }
-      const payload = await response.json();
-      setNotes(extractNotes(payload));
-    } catch (err) {
-      setError(getErrorMessage(err));
-      setNotes([]);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    if (apiBaseLoading || !apiBaseUrl) return;
-    loadNotes().catch(() => {
-      // handled in loadNotes
-    });
-  }, [apiBaseLoading, apiBaseUrl]);
-
-  async function onCreate(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const nextTitle = title.trim();
-    if (!nextTitle) {
-      setMessage("");
-      setError("Title is required.");
-      return;
-    }
-    if (!apiBaseUrl) {
-      setMessage("");
-      setError("API base is not ready.");
-      return;
-    }
-    setSaving(true);
-    setMessage("");
-    setError("");
-    try {
-      const response = await fetch(`${apiBaseUrl}/notes`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: nextTitle, content }),
-      });
-      if (!response.ok) {
-        throw new Error(`Failed to create note (HTTP ${response.status})`);
-      }
-      const created = (await response.json()) as Note;
-      setTitle("");
-      setContent("");
-      setMessage("Note created.");
-      setNotes((prev) => mergeNoteItem(prev, created));
-      loadNotes().catch(() => {
-        // keep optimistic update even if refresh fails
-      });
-    } catch (err) {
-      setError(getErrorMessage(err));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <section className="space-y-5 rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
-      <div className="space-y-1">
-        <h1 className="text-lg font-semibold text-slate-50">Notes</h1>
-        <p className="text-xs text-slate-300">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>
-      </div>
-
-      <form onSubmit={onCreate} className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/70 p-4">
-        <h2 className="text-sm font-semibold text-slate-100">Create note</h2>
-        <div>
-          <label className="mb-1 block text-xs text-slate-300">Title *</label>
-          <input
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
-            placeholder="Write a short title"
-          />
-        </div>
-        <div>
-          <label className="mb-1 block text-xs text-slate-300">Content</label>
-          <textarea
-            value={content}
-            onChange={(event) => setContent(event.target.value)}
-            className="min-h-24 w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
-            placeholder="Write your memo"
-          />
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="submit"
-            disabled={saving || apiBaseLoading}
-            className="rounded-md bg-emerald-400 px-3 py-2 text-sm font-semibold text-emerald-950 disabled:opacity-60"
-          >
-            {saving ? "Creating..." : "Create note"}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setTitle("");
-              setContent("");
-              setError("");
-              setMessage("");
-            }}
-            className="rounded-md border border-slate-700 px-3 py-2 text-sm text-slate-200"
-          >
-            Cancel
-          </button>
-        </div>
-        {message ? <p className="text-xs text-emerald-300">{message}</p> : null}
-      </form>
-
-      {loading ? <p className="text-sm text-slate-200">{apiBaseLoading ? "Resolving API base..." : "Loading notes..."}</p> : null}
-      {!loading && error ? <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</p> : null}
-      {!loading && !error && notes.length === 0 ? <p className="text-sm text-slate-300">No notes yet. Create your first note above.</p> : null}
-
-      {!loading && !error && notes.length > 0 ? (
-        <ul className="space-y-2">
-          {notes.map((note, index) => (
-            <li key={String(note.id ?? index)} className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-slate-100">{String(note.title || `Untitled #${note.id ?? index}`)}</p>
-                  <p className="mt-1 line-clamp-2 text-xs text-slate-300">{String(note.content || "(no content)")}</p>
-                </div>
-                {note.id !== undefined ? (
-                  <Link
-                    href={`/notes/${String(note.id)}`}
-                    className="shrink-0 rounded-md border border-cyan-500/40 px-2 py-1 text-xs text-cyan-300 hover:bg-cyan-500/10"
-                  >
-                    Open
-                  </Link>
-                ) : null}
-              </div>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-    </section>
-  );
-}
-"""
-
-    files["frontend/app/notes/[id]/page.tsx"] = """"use client";
-
-import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
-import { useApiBaseUrl } from "../../_lib/apiBase";
-
-type Note = {
-  id?: number | string;
-  title?: string;
-  content?: string;
-  [key: string]: unknown;
-};
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error || "Unknown error");
-}
-
-export default function NoteDetailPage() {
-  const params = useParams();
-  const router = useRouter();
-  const noteId = String(params.id || "").trim();
-  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();
-  const [note, setNote] = useState<Note | null>(null);
-  const [title, setTitle] = useState("");
-  const [content, setContent] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
-
-  async function loadNote() {
-    if (!apiBaseUrl || !noteId) return;
-    setLoading(true);
-    setError("");
-    try {
-      const response = await fetch(`${apiBaseUrl}/notes/${noteId}`, { cache: "no-store" });
-      if (response.status === 404) {
-        setNote(null);
-        setTitle("");
-        setContent("");
-        setError("Note not found.");
-        return;
-      }
-      if (!response.ok) {
-        throw new Error(`Failed to load note (HTTP ${response.status})`);
-      }
-      const payload = (await response.json()) as Note;
-      setNote(payload);
-      setTitle(String(payload.title || ""));
-      setContent(String(payload.content || ""));
-    } catch (err) {
-      setError(getErrorMessage(err));
-      setNote(null);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    if (!noteId) {
-      setError("Missing note id.");
-      setLoading(false);
-      return;
-    }
-    if (apiBaseLoading || !apiBaseUrl) return;
-    loadNote().catch(() => {
-      // handled in loadNote
-    });
-  }, [noteId, apiBaseLoading, apiBaseUrl]);
-
-  async function onSave(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const nextTitle = title.trim();
-    if (!nextTitle) {
-      setMessage("");
-      setError("Title is required.");
-      return;
-    }
-    if (!apiBaseUrl) {
-      setMessage("");
-      setError("API base is not ready.");
-      return;
-    }
-    setSaving(true);
-    setMessage("");
-    setError("");
-    try {
-      let response = await fetch(`${apiBaseUrl}/notes/${noteId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: nextTitle, content }),
-      });
-      if (response.status === 405) {
-        response = await fetch(`${apiBaseUrl}/notes/${noteId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title: nextTitle, content }),
-        });
-      }
-      if (!response.ok) {
-        throw new Error(`Failed to update note (HTTP ${response.status})`);
-      }
-      const updated = (await response.json()) as Note;
-      setNote(updated);
-      setTitle(String(updated.title || ""));
-      setContent(String(updated.content || ""));
-      setMessage("Note updated.");
-      loadNote().catch(() => {
-        // keep optimistic update even if refresh fails
-      });
-    } catch (err) {
-      setError(getErrorMessage(err));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function onDelete() {
-    if (!apiBaseUrl) {
-      setError("API base is not ready.");
-      return;
-    }
-    if (!confirm("Delete this note?")) return;
-    setDeleting(true);
-    setMessage("");
-    setError("");
-    try {
-      const response = await fetch(`${apiBaseUrl}/notes/${noteId}`, { method: "DELETE" });
-      if (!response.ok) {
-        throw new Error(`Failed to delete note (HTTP ${response.status})`);
-      }
-      router.push("/notes");
-      router.refresh();
-    } catch (err) {
-      setError(getErrorMessage(err));
-    } finally {
-      setDeleting(false);
-    }
-  }
-
-  return (
-    <section className="space-y-5 rounded-2xl border border-slate-800 bg-slate-900/70 p-5">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-slate-50">Note Detail</h1>
-        <Link href="/notes" className="text-xs text-cyan-300 underline">
-          Back to notes
-        </Link>
-      </div>
-      <p className="text-xs text-slate-300">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>
-
-      {loading ? <p className="text-sm text-slate-200">{apiBaseLoading ? "Resolving API base..." : "Loading note..."}</p> : null}
-      {!loading && error ? <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</p> : null}
-
-      {!loading && !error && !note ? <p className="text-sm text-slate-300">Note not found.</p> : null}
-
-      {!loading && !error && note ? (
-        <form onSubmit={onSave} className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/70 p-4">
-          <div>
-            <label className="mb-1 block text-xs text-slate-300">Title *</label>
-            <input
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs text-slate-300">Content</label>
-            <textarea
-              value={content}
-              onChange={(event) => setContent(event.target.value)}
-              className="min-h-24 w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="submit"
-              disabled={saving}
-              className="rounded-md bg-emerald-400 px-3 py-2 text-sm font-semibold text-emerald-950 disabled:opacity-60"
-            >
-              {saving ? "Saving..." : "Save changes"}
-            </button>
-            <button
-              type="button"
-              onClick={onDelete}
-              disabled={deleting}
-              className="rounded-md border border-rose-500/50 px-3 py-2 text-sm text-rose-200 disabled:opacity-60"
-            >
-              {deleting ? "Deleting..." : "Delete note"}
-            </button>
-          </div>
-          {message ? <p className="text-xs text-emerald-300">{message}</p> : null}
-        </form>
-      ) : null}
-    </section>
-  );
-}
-"""
-
-    files["frontend/app/ui/defects/page.tsx"] = """import DefectsPage from "../../ui/DefectsPage";
-
-export default function DefectsRoutePage() {
-  return <DefectsPage />;
-}
-"""
-
-    files["frontend/app/_lib/apiBase.ts"] = """"use client";
-
-import { useEffect, useState } from "react";
-
-const ENV_API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL;
-const ENV_RUNTIME_BACKEND_URL = process.env.NEXT_PUBLIC_RUNTIME_BACKEND_URL;
-const ENV_BACKEND_PORT = process.env.NEXT_PUBLIC_BACKEND_PORT || "";
-const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
-
-function isLoopbackHost(hostname: string) {
-  return LOOPBACK_HOSTS.has((hostname || "").trim().toLowerCase());
-}
-
-function normalizeApiBase(raw: string): string {
-  return String(raw || "").trim().replace(/\\/$/, "");
-}
-
-function rewriteLoopbackToBrowserHost(rawUrl: string, browserHost: string): string {
-  try {
-    const parsed = new URL(rawUrl);
-    if (!isLoopbackHost(parsed.hostname)) {
-      return normalizeApiBase(parsed.toString());
-    }
-    if (!browserHost || isLoopbackHost(browserHost)) {
-      return normalizeApiBase(parsed.toString());
-    }
-    parsed.hostname = browserHost;
-    return normalizeApiBase(parsed.toString());
-  } catch {
-    return normalizeApiBase(rawUrl);
-  }
-}
-
-export function resolveRuntimeApiBaseUrl(): string {
-  const explicitApiBase = String(ENV_API_BASE || "").trim();
-  const runtimeBackendBase = String(ENV_RUNTIME_BACKEND_URL || "").trim();
-  const explicitPort = String(ENV_BACKEND_PORT || "").trim();
-  const browserHost = (window.location.hostname || "").trim();
-  const browserProtocol = window.location.protocol === "https:" ? "https" : "http";
-  if (explicitApiBase) {
-    return rewriteLoopbackToBrowserHost(explicitApiBase, browserHost);
-  }
-  if (runtimeBackendBase) {
-    return rewriteLoopbackToBrowserHost(runtimeBackendBase, browserHost);
-  }
-  if (explicitPort) {
-    if (browserHost) {
-      return `${browserProtocol}://${browserHost}:${explicitPort}`;
-    }
-    return `http://127.0.0.1:${explicitPort}`;
-  }
-  if (browserHost) {
-    return `${browserProtocol}://${browserHost}:8000`;
-  }
-  return "http://127.0.0.1:8000";
-}
-
-export function useApiBaseUrl(): { apiBaseUrl: string; apiBaseLoading: boolean } {
-  const [apiBaseUrl, setApiBaseUrl] = useState("");
-  const [apiBaseLoading, setApiBaseLoading] = useState(true);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    setApiBaseUrl(resolveRuntimeApiBaseUrl());
-    setApiBaseLoading(false);
-  }, []);
-
-  return { apiBaseUrl, apiBaseLoading };
-}
-"""
-
-    files["frontend/app/ui/DefectsPage.tsx"] = """"use client";
-
-import { useEffect, useMemo, useState } from "react";
-import { useApiBaseUrl } from "../_lib/apiBase";
-
-type Defect = {
-  id: number;
-  defect_type: string;
-  note: string;
-  created_at: string;
-};
-
-type DefectListResponse = {
-  items: Defect[];
-  total: number;
-  page: number;
-  page_size: number;
-};
-
-export default function DefectsPage() {
-  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();
-  const [items, setItems] = useState<Defect[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const [defectType, setDefectType] = useState("HDMI_CEC");
-  const [note, setNote] = useState("");
-  const [editing, setEditing] = useState<Defect | null>(null);
-
-  const [q, setQ] = useState("");
-  const [filterType, setFilterType] = useState("");
-  const [sort, setSort] = useState<"id" | "created_at">("id");
-  const [order, setOrder] = useState<"asc" | "desc">("desc");
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
-  const [total, setTotal] = useState(0);
-  const apiBaseReady = !apiBaseLoading && Boolean(apiBaseUrl);
-
-  function humanizeError(err: unknown) {
-    if (err instanceof TypeError) {
-      return "Network/CORS error. Check backend URL and CORS settings.";
-    }
-    if (err instanceof Error) return err.message;
-    return "Unknown error";
-  }
-
-  function upsertLocal(item: Defect) {
-    setItems((prev) => {
-      const nextId = Number(item.id);
-      const filtered = prev.filter((current) => Number(current.id) !== nextId);
-      return [item, ...filtered];
-    });
-  }
-
-  function removeLocal(id: number) {
-    setItems((prev) => prev.filter((current) => Number(current.id) !== Number(id)));
-  }
-
-  const api = useMemo(
-    () => ({
-      async list(params: {
-        q?: string;
-        defect_type?: string;
-        sort?: string;
-        order?: string;
-        page?: number;
-        page_size?: number;
-      }) {
-        const qs = new URLSearchParams();
-        if (params.q) qs.set("q", params.q);
-        if (params.defect_type) qs.set("defect_type", params.defect_type);
-        if (params.sort) qs.set("sort", params.sort);
-        if (params.order) qs.set("order", params.order);
-        if (params.page) qs.set("page", String(params.page));
-        if (params.page_size) qs.set("page_size", String(params.page_size));
-
-        if (!apiBaseReady) throw new Error("API base is not ready.");
-        const r = await fetch(`${apiBaseUrl}/defects?${qs.toString()}`, { cache: "no-store" });
-        if (!r.ok) throw new Error(`GET /defects failed: ${r.status}`);
-        return (await r.json()) as DefectListResponse;
-      },
-      async create(payload: { defect_type: string; note: string }) {
-        if (!apiBaseReady) throw new Error("API base is not ready.");
-        const r = await fetch(`${apiBaseUrl}/defects`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (!r.ok) throw new Error(`POST /defects failed: ${r.status}`);
-        return (await r.json()) as Defect;
-      },
-      async update(id: number, payload: { defect_type?: string; note?: string }) {
-        if (!apiBaseReady) throw new Error("API base is not ready.");
-        const r = await fetch(`${apiBaseUrl}/defects/${id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (!r.ok) throw new Error(`PUT /defects/${id} failed: ${r.status}`);
-        return (await r.json()) as Defect;
-      },
-      async remove(id: number) {
-        if (!apiBaseReady) throw new Error("API base is not ready.");
-        const r = await fetch(`${apiBaseUrl}/defects/${id}`, { method: "DELETE" });
-        if (!r.ok) throw new Error(`DELETE /defects/${id} failed: ${r.status}`);
-        return (await r.json()) as { status: string };
-      },
-    }),
-    [apiBaseReady, apiBaseUrl]
-  );
-
-  async function refresh(nextPage = page) {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await api.list({
-        q: q.trim() || undefined,
-        defect_type: filterType.trim() || undefined,
-        sort,
-        order,
-        page: nextPage,
-        page_size: pageSize,
-      });
-      setItems(data.items);
-      setTotal(data.total);
-      setPage(data.page);
-      setPageSize(data.page_size);
-    } catch (err) {
-      setError(humanizeError(err));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    if (!apiBaseReady) return;
-    refresh(1).catch(console.error);
-  }, [apiBaseReady]);
-
-  useEffect(() => {
-    if (!apiBaseReady) return;
-    refresh(1).catch(console.error);
-  }, [apiBaseReady, q, filterType, sort, order, pageSize]);
-
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!defectType.trim()) return;
-    setLoading(true);
-    setError(null);
-    try {
-      if (editing) {
-        const updated = await api.update(editing.id, {
-          defect_type: defectType.trim(),
-          note: note.trim(),
-        });
-        upsertLocal(updated);
-      } else {
-        const created = await api.create({ defect_type: defectType.trim(), note: note.trim() });
-        upsertLocal(created);
-        setTotal((prev) => prev + 1);
-      }
-      setNote("");
-      setEditing(null);
-      await refresh(1);
-    } catch (err) {
-      setError(humanizeError(err));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function beginEdit(item: Defect) {
-    setEditing(item);
-    setDefectType(item.defect_type);
-    setNote(item.note);
-  }
-
-  function cancelEdit() {
-    setEditing(null);
-    setDefectType("HDMI_CEC");
-    setNote("");
-  }
-
-  async function remove(item: Defect) {
-    if (!confirm(`Delete defect #${item.id}?`)) return;
-    setLoading(true);
-    setError(null);
-    try {
-      await api.remove(item.id);
-      removeLocal(item.id);
-      setTotal((prev) => Math.max(0, prev - 1));
-      await refresh(page);
-    } catch (err) {
-      setError(humanizeError(err));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-
-  return (
-    <div className="space-y-6">
-      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-lg">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-base font-semibold">Defect intake</h2>
-            <p className="text-xs text-slate-400">Backend: {apiBaseReady ? apiBaseUrl : "(resolving...)"}</p>
-          </div>
-          <div className="text-xs text-slate-500">Total {total}</div>
-        </div>
-        {!apiBaseReady && <p className="mb-3 text-xs text-slate-400">Resolving API base...</p>}
-
-        <form onSubmit={onSubmit} className="grid gap-3 md:grid-cols-6">
-          <div className="md:col-span-2">
-            <label className="text-xs text-slate-400">defect_type</label>
-            <input
-              value={defectType}
-              onChange={(e) => setDefectType(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
-              placeholder="HDMI_CEC"
-            />
-          </div>
-          <div className="md:col-span-3">
-            <label className="text-xs text-slate-400">note</label>
-            <input
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
-              placeholder="Explain the issue"
-            />
-          </div>
-          <div className="md:col-span-1 flex items-end gap-2">
-            <button
-              type="submit"
-              className="w-full rounded-lg bg-emerald-400 px-3 py-2 text-sm font-semibold text-emerald-950"
-              disabled={loading || !apiBaseReady}
-            >
-              {editing ? "Update" : "Add"}
-            </button>
-          </div>
-          {editing && (
-            <div className="md:col-span-6">
-              <button
-                type="button"
-                onClick={cancelEdit}
-                className="rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-200"
-              >
-                Cancel edit
-              </button>
-            </div>
-          )}
-        </form>
-
-        {error && <div className="mt-3 rounded-lg border border-rose-500/60 bg-rose-500/10 px-3 py-2 text-xs">{error}</div>}
-      </section>
-
-      <section className="rounded-2xl border border-slate-800 bg-slate-900/40 p-5 shadow-lg">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-base font-semibold">Defects</h2>
-          <div className="text-xs text-slate-400">
-            Page {page} / {totalPages}
-          </div>
-        </div>
-
-        <div className="mb-4 grid gap-3 md:grid-cols-6">
-          <div className="md:col-span-2">
-            <label className="text-xs text-slate-400">Search</label>
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
-              placeholder="type to search"
-            />
-          </div>
-          <div className="md:col-span-2">
-            <label className="text-xs text-slate-400">Filter defect_type</label>
-            <input
-              value={filterType}
-              onChange={(e) => setFilterType(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
-              placeholder="HDMI"
-            />
-          </div>
-          <div className="md:col-span-1">
-            <label className="text-xs text-slate-400">Sort</label>
-            <select
-              value={sort}
-              onChange={(e) => setSort(e.target.value as "id" | "created_at")}
-              className="mt-1 w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
-            >
-              <option value="id">id</option>
-              <option value="created_at">created_at</option>
-            </select>
-          </div>
-          <div className="md:col-span-1">
-            <label className="text-xs text-slate-400">Order</label>
-            <select
-              value={order}
-              onChange={(e) => setOrder(e.target.value as "asc" | "desc")}
-              className="mt-1 w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
-            >
-              <option value="desc">desc</option>
-              <option value="asc">asc</option>
-            </select>
-          </div>
-          <div className="md:col-span-1">
-            <label className="text-xs text-slate-400">Page size</label>
-            <select
-              value={pageSize}
-              onChange={(e) => setPageSize(Number(e.target.value))}
-              className="mt-1 w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm"
-            >
-              {[5, 10, 20, 50].map((size) => (
-                <option key={size} value={size}>
-                  {size}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="text-left text-xs text-slate-400">
-              <tr>
-                <th className="py-2">ID</th>
-                <th>Type</th>
-                <th>Note</th>
-                <th>Created</th>
-                <th className="text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((x) => (
-                <tr key={x.id} className="border-t border-slate-800/70">
-                  <td className="py-2">{x.id}</td>
-                  <td className="font-mono text-emerald-300">{x.defect_type}</td>
-                  <td>{x.note}</td>
-                  <td className="text-xs text-slate-500">{new Date(x.created_at).toLocaleString()}</td>
-                  <td className="text-right">
-                    <div className="flex items-center justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={() => beginEdit(x)}
-                        className="rounded-md border border-slate-700 px-2 py-1 text-xs"
-                      >
-                        Edit
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => remove(x)}
-                        className="rounded-md border border-rose-500/60 px-2 py-1 text-xs text-rose-300"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {items.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="py-6 text-center text-slate-500">
-                    {loading ? "Loading..." : "No defects yet."}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400">
-          <div>
-            Showing {items.length} of {total}
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => refresh(Math.max(1, page - 1))}
-              disabled={page <= 1 || loading}
-              className="rounded-md border border-slate-700 px-2 py-1"
-            >
-              Prev
-            </button>
-            <button
-              type="button"
-              onClick={() => refresh(Math.min(totalPages, page + 1))}
-              disabled={page >= totalPages || loading}
-              className="rounded-md border border-slate-700 px-2 py-1"
-            >
-              Next
-            </button>
-            <button
-              type="button"
-              onClick={() => refresh(page)}
-              disabled={loading}
-              className="rounded-md border border-slate-700 px-2 py-1"
-            >
-              Refresh
-            </button>
-          </div>
-        </div>
-      </section>
-    </div>
-  );
-}
-"""
-
-    # Root helper scripts (선택)
-    files["scripts/dev_backend.sh"] = """#!/usr/bin/env bash
-set -euo pipefail
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port ${APP_PORT:-${PORT:-8000}}
-"""
-    files["scripts/dev_frontend.sh"] = """#!/usr/bin/env bash
-set -euo pipefail
-cd frontend
-npm install
-cp -n .env.example .env.local || true
-npm run dev
 """
 
     files["README.md"] = f"""# {project_name}
 
+Generated by ArchMind `fullstack-ddd` template.
+
+This baseline is intentionally domain-neutral.
+Use project spec driven scaffolding (`entities`, `api_endpoints`, `frontend_pages`) to materialize domain features.
+
 ## Backend setup
 ```bash
+cd backend
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
@@ -1612,421 +275,39 @@ python -m pip install -r requirements.txt
 
 ## Backend run
 ```bash
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port ${{APP_PORT:-${{PORT:-8000}}}}
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port ${{PORT:-8000}}
 ```
 
 ## Frontend setup
 ```bash
 cd frontend
 npm install
-cp -n .env.example .env.local
+cp -n .env.example .env
 ```
 
 ## Frontend run
 ```bash
 npm run dev
 ```
-
-## Tests
-```bash
-python -m pytest -q
-```
-
-## Environment
-- `APP_NAME` (default: {project_name})
-- `APP_PORT` (default: 8000)
-- `BACKEND_BASE_URL` (default: http://127.0.0.1:8000)
-- `DB_URL` (default: sqlite:///./data/app.db)
-- `CORS_ALLOW_ORIGINS` (comma-separated frontend origins)
-- `NEXT_PUBLIC_API_BASE_URL` (frontend -> backend base URL)
-- `NEXT_PUBLIC_FRONTEND_PORT` (frontend runtime port)
 """
 
-    if is_note_project:
-        files.pop("app/repositories/defect_repo.py", None)
-        files.pop("app/services/defect_service.py", None)
-        files.pop("app/api/routers/defects.py", None)
-        files.pop("tests/test_defects.py", None)
-
-        files["app/domain/models.py"] = """from __future__ import annotations
-
-from datetime import datetime
-from typing import Optional
-
-from sqlmodel import SQLModel, Field
-
-
-class Note(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    title: str
-    content: str = ""
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-"""
-
-        files["app/repositories/note_repo.py"] = """from __future__ import annotations
-
-from typing import List, Optional, Tuple
-
-from sqlmodel import Session, func, select
-
-from app.domain.models import Note
-
-
-class NoteRepository:
-    def create(self, session: Session, *, title: str, content: str = "") -> Note:
-        obj = Note(title=title, content=content)
-        session.add(obj)
-        session.commit()
-        session.refresh(obj)
-        return obj
-
-    def get(self, session: Session, note_id: int) -> Optional[Note]:
-        return session.get(Note, note_id)
-
-    def list(
-        self,
-        session: Session,
-        *,
-        q: Optional[str] = None,
-        sort: str = "id",
-        order: str = "desc",
-        offset: int = 0,
-        limit: int = 20,
-    ) -> Tuple[List[Note], int]:
-        conditions = []
-        if q:
-            like = f"%{q}%"
-            conditions.append((Note.title.ilike(like)) | (Note.content.ilike(like)))
-
-        query = select(Note)
-        count_query = select(func.count()).select_from(Note)
-        for cond in conditions:
-            query = query.where(cond)
-            count_query = count_query.where(cond)
-
-        order_col = Note.created_at if sort == "created_at" else Note.id
-        order_by = order_col.asc() if order == "asc" else order_col.desc()
-
-        total = session.exec(count_query).one()
-        items = list(session.exec(query.order_by(order_by).offset(offset).limit(limit)).all())
-        return items, int(total)
-
-    def update(
-        self,
-        session: Session,
-        obj: Note,
-        *,
-        title: Optional[str] = None,
-        content: Optional[str] = None,
-    ) -> Note:
-        if title is not None:
-            obj.title = title
-        if content is not None:
-            obj.content = content
-        session.add(obj)
-        session.commit()
-        session.refresh(obj)
-        return obj
-
-    def delete(self, session: Session, obj: Note) -> None:
-        session.delete(obj)
-        session.commit()
-"""
-
-        files["app/services/note_service.py"] = """from __future__ import annotations
-
-from typing import List, Optional, Tuple
-
-from sqlmodel import Session
-
-from app.domain.models import Note
-from app.repositories.note_repo import NoteRepository
-
-
-class NoteService:
-    def __init__(self, repo: NoteRepository | None = None) -> None:
-        self.repo = repo or NoteRepository()
-
-    def create(self, session: Session, *, title: str, content: str = "") -> Note:
-        return self.repo.create(session, title=title, content=content)
-
-    def get(self, session: Session, note_id: int) -> Optional[Note]:
-        return self.repo.get(session, note_id)
-
-    def list(
-        self,
-        session: Session,
-        *,
-        q: Optional[str] = None,
-        sort: str = "id",
-        order: str = "desc",
-        offset: int = 0,
-        limit: int = 20,
-    ) -> Tuple[List[Note], int]:
-        return self.repo.list(
-            session,
-            q=q,
-            sort=sort,
-            order=order,
-            offset=offset,
-            limit=limit,
-        )
-
-    def update(
-        self,
-        session: Session,
-        obj: Note,
-        *,
-        title: Optional[str] = None,
-        content: Optional[str] = None,
-    ) -> Note:
-        return self.repo.update(session, obj, title=title, content=content)
-
-    def delete(self, session: Session, obj: Note) -> None:
-        return self.repo.delete(session, obj)
-"""
-
-        files["app/api/schemas.py"] = """from __future__ import annotations
-
-from datetime import datetime
-from typing import List, Optional
-from pydantic import BaseModel
-
-
-class NoteCreate(BaseModel):
-    title: str
-    content: str = ""
-
-
-class NoteUpdate(BaseModel):
-    title: Optional[str] = None
-    content: Optional[str] = None
-
-
-class NoteRead(BaseModel):
-    id: int
-    title: str
-    content: str
-    created_at: datetime
-
-
-class NoteListResponse(BaseModel):
-    items: List[NoteRead]
-    total: int
-    page: int
-    page_size: int
-"""
-
-        files["app/api/routers/notes.py"] = """from __future__ import annotations
-
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlmodel import Session
-
-from app.api.schemas import NoteCreate, NoteListResponse, NoteRead, NoteUpdate
-from app.db.session import get_session
-from app.services.note_service import NoteService
-
-router = APIRouter(prefix="/notes", tags=["notes"])
-
-
-def _session_dep() -> Session:
-    return get_session()
-
-
-@router.post("", response_model=NoteRead)
-def create_note(payload: NoteCreate, session: Session = Depends(_session_dep)):
-    svc = NoteService()
-    obj = svc.create(session, title=payload.title, content=payload.content)
-    return NoteRead.model_validate(obj, from_attributes=True)
-
-
-@router.get("", response_model=NoteListResponse)
-def list_notes(
-    session: Session = Depends(_session_dep),
-    q: str | None = Query(default=None),
-    sort: str = Query(default="id", pattern="^(id|created_at)$"),
-    order: str = Query(default="desc", pattern="^(asc|desc)$"),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=20, ge=1, le=100),
-):
-    svc = NoteService()
-    offset = (page - 1) * page_size
-    items, total = svc.list(
-        session,
-        q=q,
-        sort=sort,
-        order=order,
-        offset=offset,
-        limit=page_size,
-    )
-    return NoteListResponse(
-        items=[NoteRead.model_validate(x, from_attributes=True) for x in items],
-        total=total,
-        page=page,
-        page_size=page_size,
-    )
-
-
-@router.get("/{note_id}", response_model=NoteRead)
-def get_note(note_id: int, session: Session = Depends(_session_dep)):
-    svc = NoteService()
-    obj = svc.get(session, note_id)
-    if not obj:
-        raise HTTPException(status_code=404, detail="Note not found")
-    return NoteRead.model_validate(obj, from_attributes=True)
-
-
-@router.put("/{note_id}", response_model=NoteRead)
-def update_note(
-    note_id: int,
-    payload: NoteUpdate,
-    session: Session = Depends(_session_dep),
-):
-    svc = NoteService()
-    obj = svc.get(session, note_id)
-    if not obj:
-        raise HTTPException(status_code=404, detail="Note not found")
-    updated = svc.update(session, obj, title=payload.title, content=payload.content)
-    return NoteRead.model_validate(updated, from_attributes=True)
-
-
-@router.patch("/{note_id}", response_model=NoteRead)
-def patch_note(
-    note_id: int,
-    payload: NoteUpdate,
-    session: Session = Depends(_session_dep),
-):
-    svc = NoteService()
-    obj = svc.get(session, note_id)
-    if not obj:
-        raise HTTPException(status_code=404, detail="Note not found")
-    updated = svc.update(session, obj, title=payload.title, content=payload.content)
-    return NoteRead.model_validate(updated, from_attributes=True)
-
-
-@router.delete("/{note_id}")
-def delete_note(note_id: int, session: Session = Depends(_session_dep)):
-    svc = NoteService()
-    obj = svc.get(session, note_id)
-    if not obj:
-        raise HTTPException(status_code=404, detail="Note not found")
-    svc.delete(session, obj)
-    return {"status": "deleted"}
-"""
-
-        files["app/api/router.py"] = """from fastapi import APIRouter
-
-from app.api.routers.health import router as health_router
-from app.api.routers.notes import router as notes_router
-
-api_router = APIRouter()
-api_router.include_router(health_router)
-api_router.include_router(notes_router)
-"""
-
-        files["tests/test_notes.py"] = """from fastapi.testclient import TestClient
-from app.main import app
-from app.db.session import engine
-from sqlmodel import SQLModel
-from pathlib import Path
-
-
-def setup_function():
-    Path("./data").mkdir(parents=True, exist_ok=True)
-    SQLModel.metadata.drop_all(engine)
-    SQLModel.metadata.create_all(engine)
-
-
-def test_notes_crud_and_pagination():
-    client = TestClient(app)
-    for i in range(5):
-        r = client.post("/notes", json={"title": f"memo {i}", "content": f"c{i}"})
-        assert r.status_code == 200
-
-    r = client.get("/notes", params={"page": 1, "page_size": 2})
-    assert r.status_code == 200
-    data = r.json()
-    assert data["total"] == 5
-    assert len(data["items"]) == 2
-    assert data["page"] == 1
-    assert data["page_size"] == 2
-
-    first_id = data["items"][0]["id"]
-    r = client.get(f"/notes/{first_id}")
-    assert r.status_code == 200
-
-    r = client.put(f"/notes/{first_id}", json={"content": "updated"})
-    assert r.status_code == 200
-    assert r.json()["content"] == "updated"
-
-    r = client.delete(f"/notes/{first_id}")
-    assert r.status_code == 200
-
-    r = client.get("/notes", params={"q": "updated"})
-    assert r.status_code == 200
-    assert r.json()["total"] == 0
-"""
-
-        files.pop("frontend/app/ui/DefectsPage.tsx", None)
-        files.pop("frontend/app/ui/defects/page.tsx", None)
-
-    backend_prefixed: Dict[str, str] = {}
-    for path, content in files.items():
-        if path.startswith(("frontend/", "scripts/")) or path == "README.md":
-            backend_prefixed[path] = content
-            continue
-        backend_prefixed[f"backend/{path}"] = content
-
-    # Fullstack contract: no root launcher; runtime starts backend/app/main.py via cwd=backend.
-    backend_prefixed.pop("backend/main.py", None)
-
-    backend_prefixed["scripts/dev_backend.sh"] = """#!/usr/bin/env bash
+    files["scripts/dev.sh"] = """#!/usr/bin/env bash
 set -euo pipefail
-cd backend
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port ${APP_PORT:-${PORT:-8000}}
-"""
-    backend_prefixed["README.md"] = f"""# {project_name}
 
-## Backend setup
-```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-```
+(
+  cd backend
+  python -m uvicorn app.main:app --reload --host 127.0.0.1 --port "${BACKEND_PORT:-8000}"
+) &
+BACK_PID=$!
 
-## Backend run
-```bash
-cd backend
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port ${{APP_PORT:-${{PORT:-8000}}}}
-```
+(
+  cd frontend
+  npm run dev -- --hostname 127.0.0.1 --port "${FRONTEND_PORT:-3000}"
+) &
+FRONT_PID=$!
 
-## Frontend setup
-```bash
-cd frontend
-npm install
-cp -n .env.example .env.local
-```
-
-## Frontend run
-```bash
-npm run dev
-```
-
-## Tests
-```bash
-cd backend
-python -m pytest -q
-```
-
-## Environment
-- `APP_NAME` (default: {project_name})
-- `APP_PORT` (default: 8000)
-- `BACKEND_BASE_URL` (default: http://127.0.0.1:8000)
-- `DB_URL` (default: sqlite:///./data/app.db)
-- `CORS_ALLOW_ORIGINS` (comma-separated frontend origins)
-- `NEXT_PUBLIC_API_BASE_URL` (frontend -> backend base URL)
-- `NEXT_PUBLIC_FRONTEND_PORT` (frontend runtime port)
+trap 'kill "$BACK_PID" "$FRONT_PID"' EXIT
+wait
 """
 
-    return backend_prefixed
+    return files
