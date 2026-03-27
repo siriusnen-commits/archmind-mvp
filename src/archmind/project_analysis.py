@@ -4,7 +4,13 @@ import re
 from pathlib import Path
 from typing import Any
 
+from archmind.execution_history import load_recent_execution_events
+
 LOW_PRIORITY_MISSING_FIELDS = {"created_at", "updated_at"}
+SUGGESTION_PRIORITY_RANK = {"high": 3, "medium": 2, "low": 1, "none": 0}
+ESSENTIAL_FIELDS = {"title", "name", "content"}
+USEFUL_DOMAIN_FIELDS = {"description", "status", "priority"}
+LOW_VALUE_FIELDS = {"created_at", "updated_at", "timestamp", "deleted_at"}
 
 
 def _normalize_entity_name(value: Any) -> str:
@@ -405,6 +411,7 @@ def _compute_entity_crud_status(
 
     for entity in entities:
         resource = _entity_resource(entity)
+        entity_key = _normalize_entity_name(entity).lower()
         base = f"/{resource}" if resource else ""
         has_list = ("GET", base) in by_method_path if base else False
         has_create = ("POST", base) in by_method_path if base else False
@@ -446,6 +453,16 @@ def _compute_entity_crud_status(
                 missing_important_fields.append("title")
         elif missing_title:
             missing_important_fields.append("title")
+        if entity_key in {"note", "memo"} and "content" not in field_names and "description" not in field_names:
+            missing_important_fields.append("content")
+
+        medium_field_candidates: list[str] = []
+        if entity_key in {"defect", "bug", "issue", "ticket", "task", "reminder"}:
+            medium_field_candidates = ["description", "status", "priority"]
+        missing_useful_fields = [name for name in medium_field_candidates if name not in field_names]
+
+        low_field_candidates = ["created_at", "updated_at"]
+        missing_low_value_fields = [name for name in low_field_candidates if name not in field_names]
 
         status[entity] = {
             "resource": resource,
@@ -463,6 +480,8 @@ def _compute_entity_crud_status(
             "missing_api": missing_api,
             "missing_pages": missing_pages,
             "missing_important_fields": missing_important_fields,
+            "missing_useful_fields": missing_useful_fields,
+            "missing_low_value_fields": missing_low_value_fields,
         }
     return status
 
@@ -559,76 +578,145 @@ def _normalize_runtime_status(runtime_payload: dict[str, Any] | None) -> dict[st
 
 
 def _build_suggestions(
+    project_dir: Path,
     entities: list[str],
     entity_crud_status: dict[str, dict[str, Any]],
     placeholder_pages: list[str],
 ) -> tuple[list[dict[str, str]], dict[str, str]]:
-    suggestions: list[dict[str, str]] = []
+    recent_commands = _recent_suggested_or_executed_commands(project_dir, limit=80)
+    high: list[dict[str, str]] = []
+    medium: list[dict[str, str]] = []
+    low: list[dict[str, str]] = []
     added_field_suggestion = False
 
-    def add(kind: str, message: str, command: str = "") -> None:
-        if len(suggestions) >= 3:
+    def add(target: list[dict[str, str]], kind: str, message: str, command: str = "") -> None:
+        canonical_command = _canonicalize_suggestion_command(command) if command else ""
+        if command and not canonical_command:
             return
-        suggestions.append({"kind": kind, "message": message, "command": command})
+        if canonical_command.startswith("/add_field ") and canonical_command in recent_commands:
+            return
+        target.append({"kind": kind, "message": message, "command": canonical_command or command})
 
-    # Priority 1: placeholder pages
+    if not entities:
+        add(
+            high,
+            "missing_entity",
+            "No domain entities found. Add a core entity first.",
+            "/add_entity Task",
+        )
+
+    # High: placeholder pages first.
     if placeholder_pages:
         target = placeholder_pages[0]
         add(
+            high,
             "placeholder_page",
             f"Page {target} is still placeholder-level. Implement a usable UI flow.",
             f"/implement_page {target}",
         )
 
-    # Priority 2/3/4 per entity
+    # High/Medium/Low candidates per entity.
     for entity in entities:
         info = entity_crud_status.get(entity) if isinstance(entity_crud_status.get(entity), dict) else {}
         resource = str(info.get("resource") or "")
         missing_api = info.get("missing_api") if isinstance(info.get("missing_api"), list) else []
         missing_pages = info.get("missing_pages") if isinstance(info.get("missing_pages"), list) else []
-        missing_fields = info.get("missing_important_fields") if isinstance(info.get("missing_important_fields"), list) else []
+        missing_high_fields = (
+            info.get("missing_important_fields")
+            if isinstance(info.get("missing_important_fields"), list)
+            else []
+        )
+        missing_medium_fields = (
+            info.get("missing_useful_fields")
+            if isinstance(info.get("missing_useful_fields"), list)
+            else []
+        )
+        missing_low_fields = (
+            info.get("missing_low_value_fields")
+            if isinstance(info.get("missing_low_value_fields"), list)
+            else []
+        )
 
-        if missing_api and len(suggestions) < 3:
+        if missing_api:
             if "GET list" in missing_api:
                 add(
+                    high,
                     "missing_crud_api",
                     f"{entity} is missing list API coverage.",
                     f"/add_api GET /{resource}",
                 )
             elif "POST create" in missing_api:
                 add(
+                    high,
                     "missing_crud_api",
                     f"{entity} is missing create API coverage.",
                     f"/add_api POST /{resource}",
                 )
             else:
                 add(
+                    high,
                     "missing_crud_api",
                     f"{entity} has incomplete CRUD API coverage.",
                     "",
                 )
 
-        if missing_pages and len(suggestions) < 3:
+        if missing_pages:
             page_kind = str(missing_pages[0])
             add(
+                high,
                 "missing_page",
                 f"{entity} is missing {page_kind} page coverage.",
                 f"/add_page {resource}/{page_kind}",
             )
 
-        filtered_missing_fields = [
+        filtered_high_fields = [
             str(field).strip().lower()
-            for field in missing_fields
+            for field in missing_high_fields
             if str(field).strip().lower() not in LOW_PRIORITY_MISSING_FIELDS
         ]
-        if filtered_missing_fields and len(suggestions) < 3 and not added_field_suggestion:
-            field_name = str(filtered_missing_fields[0])
+        if filtered_high_fields and not added_field_suggestion:
+            field_name = str(filtered_high_fields[0])
             add(
+                high,
                 "missing_field",
                 f"{entity} is missing an important field: {field_name}",
                 f"/add_field {entity} {field_name}:string",
             )
             added_field_suggestion = True
+            continue
+
+        if missing_medium_fields and not added_field_suggestion:
+            field_name = str(missing_medium_fields[0]).strip().lower()
+            if field_name in USEFUL_DOMAIN_FIELDS:
+                add(
+                    medium,
+                    "missing_field",
+                    f"{entity} can benefit from a useful domain field: {field_name}",
+                    f"/add_field {entity} {field_name}:string",
+                )
+                added_field_suggestion = True
+                continue
+
+        if missing_low_fields and not added_field_suggestion:
+            field_name = str(missing_low_fields[0]).strip().lower()
+            if field_name in LOW_VALUE_FIELDS:
+                add(
+                    low,
+                    "missing_field",
+                    f"{entity} is missing metadata field: {field_name}",
+                    f"/add_field {entity} {field_name}:datetime",
+                )
+                added_field_suggestion = True
+
+    # Prefer HIGH > MEDIUM; LOW only appears when no higher-value work exists.
+    suggestions = _dedupe_suggestions(high)
+    if len(suggestions) < 3:
+        for item in _dedupe_suggestions(medium):
+            if len(suggestions) >= 3:
+                break
+            suggestions.append(item)
+    if not suggestions:
+        suggestions = _dedupe_suggestions(low)[:3]
 
     if not suggestions:
         suggestions.append(
@@ -639,8 +727,87 @@ def _build_suggestions(
             }
         )
 
-    next_action = suggestions[0]
-    return suggestions[:3], {"kind": str(next_action.get("kind") or "none"), "message": str(next_action.get("message") or ""), "command": str(next_action.get("command") or "")}
+    next_action = _select_next_action(suggestions)
+    return suggestions[:3], next_action
+
+
+def _dedupe_suggestions(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for row in rows:
+        kind = str(row.get("kind") or "").strip()
+        message = str(row.get("message") or "").strip()
+        command = str(row.get("command") or "").strip()
+        key = (kind, message, command)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"kind": kind, "message": message, "command": command})
+    return out
+
+
+def _suggestion_priority(row: dict[str, str] | None) -> str:
+    item = row if isinstance(row, dict) else {}
+    command = str(item.get("command") or "").strip()
+    kind = str(item.get("kind") or "").strip().lower()
+    message = str(item.get("message") or "").strip().lower()
+
+    if not command and (kind == "none" or message == "no immediate suggestions."):
+        return "none"
+
+    if command.startswith("/add_entity ") or command.startswith("/add_api ") or command.startswith("/add_page "):
+        return "high"
+    if command.startswith("/implement_page "):
+        return "high"
+    if command.startswith("/add_field "):
+        field_name = _extract_add_field_name(command)
+        if field_name in ESSENTIAL_FIELDS:
+            return "high"
+        if field_name in USEFUL_DOMAIN_FIELDS:
+            return "medium"
+        return "low"
+    if kind in {"missing_crud_api", "missing_page", "placeholder_page", "missing_entity"}:
+        return "high"
+    return "medium"
+
+
+def _extract_add_field_name(command: str) -> str:
+    text = str(command or "").strip()
+    if not text.startswith("/add_field "):
+        return ""
+    parts = text.split()
+    if len(parts) < 3:
+        return ""
+    expr = str(parts[2] or "").strip()
+    if not expr:
+        return ""
+    return expr.split(":", 1)[0].strip().lower()
+
+
+def _select_next_action(suggestions: list[dict[str, str]]) -> dict[str, str]:
+    for row in suggestions:
+        priority = _suggestion_priority(row)
+        if SUGGESTION_PRIORITY_RANK.get(priority, 0) >= SUGGESTION_PRIORITY_RANK["medium"]:
+            return {
+                "kind": str(row.get("kind") or "none"),
+                "message": str(row.get("message") or ""),
+                "command": str(row.get("command") or ""),
+            }
+    return {"kind": "none", "message": "No immediate suggestions.", "command": ""}
+
+
+def _recent_suggested_or_executed_commands(project_dir: Path, *, limit: int = 80) -> set[str]:
+    out: set[str] = set()
+    for event in load_recent_execution_events(project_dir, limit=limit):
+        if not isinstance(event, dict):
+            continue
+        raw_command = str(event.get("command") or "").strip()
+        if not raw_command:
+            continue
+        command = _canonicalize_suggestion_command(raw_command)
+        if command:
+            out.add(command)
+    return out
 
 
 def _canonicalize_suggestion_command(command: str) -> str:
@@ -742,7 +909,7 @@ def analyze_project(
     placeholder_pages = _detect_placeholder_pages(project_dir, pages)
     nav_visible_pages = _extract_nav_visible_pages(project_dir, pages)
     runtime_status = _normalize_runtime_status(runtime_payload if isinstance(runtime_payload, dict) else {})
-    suggestions, next_action = _build_suggestions(entities, entity_crud_status, placeholder_pages)
+    suggestions, next_action = _build_suggestions(project_dir, entities, entity_crud_status, placeholder_pages)
 
     # Step 1: backend safety filter (remove false "missing title")
     filtered: list[dict[str, str]] = []
@@ -782,11 +949,7 @@ def analyze_project(
     suggestions = canonicalize_analysis_suggestions(suggestions)
 
     # Step 3: next_action 결정
-    next_action = suggestions[0] if suggestions else {
-        "kind": "none",
-        "message": "No immediate suggestions.",
-        "command": "",
-    }
+    next_action = _select_next_action(suggestions)
 
     return {
         "project_name": str(project_name or project_dir.name),
