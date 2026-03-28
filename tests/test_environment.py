@@ -32,7 +32,7 @@ def test_bootstrap_creates_eslintrc_json(tmp_path: Path) -> None:
     target = frontend / ".eslintrc.json"
     assert target.exists()
     payload = json.loads(target.read_text(encoding="utf-8"))
-    assert payload["extends"] == ["next/core-web-vitals", "next/typescript"]
+    assert payload["extends"] == ["next/core-web-vitals"]
     assert "created frontend/.eslintrc.json" in actions
 
 

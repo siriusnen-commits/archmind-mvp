@@ -94,6 +94,7 @@ def test_fullstack_scaffolds_entities_and_pages_from_project_spec(tmp_path: Path
     navigation_file = project_dir / "frontend" / "app" / "_lib" / "navigation.ts"
     frontend_root = project_dir / "frontend" / "app" / "page.tsx"
     frontend_layout = project_dir / "frontend" / "app" / "layout.tsx"
+    frontend_eslint = project_dir / "frontend" / ".eslintrc.json"
 
     assert entry_router.exists()
     assert entry_model.exists()
@@ -101,6 +102,7 @@ def test_fullstack_scaffolds_entities_and_pages_from_project_spec(tmp_path: Path
     assert navigation_file.exists()
     assert frontend_root.exists()
     assert frontend_layout.exists()
+    assert frontend_eslint.exists()
 
     assert "title: str" in entry_model.read_text(encoding="utf-8")
     assert "content: str" in entry_model.read_text(encoding="utf-8")
@@ -111,6 +113,7 @@ def test_fullstack_scaffolds_entities_and_pages_from_project_spec(tmp_path: Path
     assert "This scaffold is domain-neutral." not in frontend_root.read_text(encoding="utf-8")
     assert 'from "./_lib/navigation"' in frontend_root.read_text(encoding="utf-8")
     assert "APP_NAV_LINKS.map" in frontend_layout.read_text(encoding="utf-8")
+    assert frontend_eslint.read_text(encoding="utf-8").strip() == '{\n  "extends": ["next/core-web-vitals"]\n}'
 
 
 def test_fullstack_spec_driven_crud_works_for_diary_entry(tmp_path: Path) -> None:
