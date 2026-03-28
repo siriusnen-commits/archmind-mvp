@@ -3728,7 +3728,7 @@ def _format_plan_message(plan: dict[str, Any]) -> str:
     if not phases:
         return "No plan suggestions available.\n\nNext:\n- /inspect\n- /next"
     lines = ["Development plan", ""]
-    step_no = 1
+    phase_no = 0
     for phase in phases:
         if not isinstance(phase, dict):
             continue
@@ -3736,14 +3736,15 @@ def _format_plan_message(plan: dict[str, Any]) -> str:
         steps = [str(x).strip() for x in (phase.get("steps") or []) if str(x).strip()]
         if not title or not steps:
             continue
-        lines.append(f"Phase {len([x for x in lines if str(x).startswith('Phase ')]) + 1} - {title}")
+        phase_no += 1
+        lines.append(f"Phase {phase_no} - {title}")
         for step in steps:
-            lines.append(f"{step_no}. {step}")
-            step_no += 1
+            lines.append(step)
         lines.append("")
-    if step_no == 1:
+    if phase_no == 0:
         return "No plan suggestions available.\n\nNext:\n- /inspect\n- /next"
-    lines += ["Next:", "- run suggested commands", "- /inspect"]
+    if lines and not lines[-1]:
+        lines.pop()
     return "\n".join(lines)
 
 

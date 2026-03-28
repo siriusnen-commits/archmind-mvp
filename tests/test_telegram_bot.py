@@ -6416,6 +6416,9 @@ def test_plan_command_from_idea_includes_phases() -> None:
     assert "Phase 2 - Core fields" in out
     assert "Phase 3 - APIs" in out
     assert "Phase 4 - Frontend" in out
+    assert "slash command:" not in out.lower()
+    assert "command:" not in out.lower()
+    assert any(line.startswith("/add_") for line in out.splitlines())
     reply_markup = msg.sent_kwargs[-1].get("reply_markup")
     assert reply_markup is not None
     buttons = [btn for row in getattr(reply_markup, "inline_keyboard", []) for btn in row]
@@ -6459,8 +6462,10 @@ def test_plan_command_from_current_project_works_and_limits_steps(tmp_path: Path
     asyncio.run(command_plan(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     out = msg.sent[-1]
     assert "Development plan" in out
-    numbered = [line for line in out.splitlines() if line.startswith(tuple(str(i) + "." for i in range(1, 20)))]
-    assert len(numbered) <= 15
+    commands = [line.strip() for line in out.splitlines() if line.strip().startswith("/add_")]
+    assert len(commands) <= 15
+    assert "slash command:" not in out.lower()
+    assert "command:" not in out.lower()
 
 
 def test_plan_command_saves_plan_execution_json_for_current_project(tmp_path: Path, monkeypatch) -> None:
