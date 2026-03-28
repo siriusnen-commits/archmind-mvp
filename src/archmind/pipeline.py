@@ -555,6 +555,14 @@ def _write_project_spec(
     try:
         out = project_dir / ".archmind" / "project_spec.json"
         out.parent.mkdir(parents=True, exist_ok=True)
+        existing_payload: dict[str, Any] = {}
+        if out.exists():
+            try:
+                parsed = json.loads(out.read_text(encoding="utf-8"))
+                if isinstance(parsed, dict):
+                    existing_payload = parsed
+            except Exception:
+                existing_payload = {}
         preferred_template = (
             selected_template
             or str(architecture_reasoning.get("recommended_template") or "").strip()
@@ -624,20 +632,73 @@ def _write_project_spec(
             if len(frontend_pages) >= 20:
                 break
 
+        existing_entities = (
+            existing_payload.get("entities")
+            if isinstance(existing_payload.get("entities"), list)
+            else []
+        )
+        if not entities and existing_entities:
+            entities = [item for item in existing_entities if isinstance(item, dict)][:10]
+
+        existing_api_endpoints = (
+            existing_payload.get("api_endpoints")
+            if isinstance(existing_payload.get("api_endpoints"), list)
+            else []
+        )
+        if not api_endpoints and existing_api_endpoints:
+            api_endpoints = [str(item).strip() for item in existing_api_endpoints if str(item).strip()][:20]
+
+        existing_frontend_pages = (
+            existing_payload.get("frontend_pages")
+            if isinstance(existing_payload.get("frontend_pages"), list)
+            else []
+        )
+        if not frontend_pages and existing_frontend_pages:
+            frontend_pages = [str(item).strip().strip("/") for item in existing_frontend_pages if str(item).strip()][:20]
+
+        existing_modules = (
+            existing_payload.get("modules")
+            if isinstance(existing_payload.get("modules"), list)
+            else []
+        )
+        modules = [str(item) for item in (architecture_reasoning.get("modules") or []) if str(item).strip()]
+        if not modules and existing_modules:
+            modules = [str(item) for item in existing_modules if str(item).strip()]
+
+        existing_domains = (
+            existing_payload.get("domains")
+            if isinstance(existing_payload.get("domains"), list)
+            else []
+        )
+        domains = [str(item) for item in (architecture_reasoning.get("domains") or []) if str(item).strip()]
+        if not domains and existing_domains:
+            domains = [str(item) for item in existing_domains if str(item).strip()]
+
+        existing_evolution = (
+            existing_payload.get("evolution")
+            if isinstance(existing_payload.get("evolution"), dict)
+            else {}
+        )
+        evolution = {
+            "version": int(existing_evolution.get("version") or 1),
+            "added_modules": existing_evolution.get("added_modules")
+            if isinstance(existing_evolution.get("added_modules"), list)
+            else [],
+            "history": existing_evolution.get("history")
+            if isinstance(existing_evolution.get("history"), list)
+            else [],
+        }
+
         payload = {
             "shape": str(architecture_reasoning.get("app_shape") or "unknown"),
-            "domains": [str(item) for item in (architecture_reasoning.get("domains") or []) if str(item).strip()],
+            "domains": domains,
             "template": preferred_template,
-            "modules": [str(item) for item in (architecture_reasoning.get("modules") or []) if str(item).strip()],
+            "modules": modules,
             "reason_summary": str(architecture_reasoning.get("reason_summary") or ""),
             "entities": entities,
             "api_endpoints": api_endpoints,
             "frontend_pages": frontend_pages,
-            "evolution": {
-                "version": 1,
-                "added_modules": [],
-                "history": [],
-            },
+            "evolution": evolution,
         }
         out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return out
