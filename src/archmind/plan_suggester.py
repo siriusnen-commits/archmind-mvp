@@ -94,12 +94,76 @@ def _has_auth_signal(idea: str, reasoning: dict[str, Any]) -> bool:
     )
 
 
+def _normalize_plan_step_command(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    text = raw
+    text = re.sub(r"^\s*(?:[-*]|\d+[.)])\s*", "", text).strip()
+    text = re.sub(r"^(?:slash\s*command|command|run)\s*:\s*", "", text, flags=re.IGNORECASE).strip()
+
+    command_match = re.search(r"/[a-z_][a-z0-9_]*(?:\s+\S+)*", text, flags=re.IGNORECASE)
+    if command_match:
+        text = command_match.group(0).strip()
+    elif re.match(r"^(?:add_entity|add_field|add_api|add_page|implement_page)\b", text, flags=re.IGNORECASE):
+        text = "/" + text
+    elif text.startswith("/"):
+        parts = [part for part in text.split() if part]
+        return " ".join(parts)
+    else:
+        return ""
+
+    parts = [part for part in text.split() if part]
+    if not parts:
+        return ""
+    command = parts[0].lower()
+    args = parts[1:]
+
+    if command == "/add_entity":
+        if not args:
+            return ""
+        return f"/add_entity {args[0]}"
+    if command == "/add_field":
+        if len(args) < 2:
+            return ""
+        return f"/add_field {args[0]} {args[1]}"
+    if command == "/add_api":
+        if len(args) < 2:
+            return ""
+        method = str(args[0]).upper().strip()
+        path = str(args[1]).strip()
+        if not path:
+            return ""
+        if not path.startswith("/"):
+            path = f"/{path}"
+        return f"/add_api {method} {path}"
+    if command == "/add_page":
+        if not args:
+            return ""
+        return f"/add_page {args[0]}"
+    if command == "/implement_page":
+        if not args:
+            return ""
+        return f"/implement_page {args[0]}"
+    return " ".join([command] + args)
+
+
 def _limit_steps(phases: list[dict[str, Any]], max_steps: int = 15) -> list[dict[str, Any]]:
     used = 0
     out: list[dict[str, Any]] = []
     for phase in phases:
         title = str(phase.get("title") or "").strip()
-        steps = [str(x).strip() for x in (phase.get("steps") or []) if str(x).strip()]
+        normalized_steps: list[str] = []
+        seen_steps: set[str] = set()
+        for raw_step in (phase.get("steps") or []):
+            step = _normalize_plan_step_command(raw_step)
+            if not step:
+                continue
+            if step in seen_steps:
+                continue
+            seen_steps.add(step)
+            normalized_steps.append(step)
+        steps = normalized_steps
         if not title or not steps:
             continue
         remain = max_steps - used
