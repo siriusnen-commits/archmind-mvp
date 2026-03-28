@@ -4849,12 +4849,12 @@ def test_add_page_updates_spec_and_generates_frontend_page(tmp_path: Path, monke
     out = msg.sent[-1]
     assert "Page added" in out
     assert "Page:\nreports/list" in out
-    assert "- frontend/app/reports/list/page.tsx" in out
+    assert "- frontend/app/reports/page.tsx" in out
 
     payload = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
     assert "reports/list" in (payload.get("frontend_pages") or [])
     assert payload.get("evolution", {}).get("history", [])[-1] == {"action": "add_page", "page": "reports/list"}
-    assert (project_dir / "frontend" / "app" / "reports" / "list" / "page.tsx").exists()
+    assert (project_dir / "frontend" / "app" / "reports" / "page.tsx").exists()
 
 
 def test_add_page_skips_frontend_scaffold_for_backend_only_and_prevents_duplicate(tmp_path: Path, monkeypatch) -> None:

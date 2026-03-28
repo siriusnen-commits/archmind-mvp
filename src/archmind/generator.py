@@ -698,9 +698,52 @@ def _canonicalize_page_path(raw_path: str) -> str:
     if len(normalized_parts) == 1:
         return f"{_pluralize_resource_name(normalized_parts[0])}/list"
     leaf = normalized_parts[-1]
-    if leaf in {"list", "detail"}:
+    if leaf in {"list", "detail", "new", "create", "add"}:
         normalized_parts[0] = _pluralize_resource_name(normalized_parts[0])
+        if leaf in {"create", "add"}:
+            normalized_parts[-1] = "new"
     return "/".join(normalized_parts)
+
+
+def _singularize_resource_name(value: str) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    if text.endswith("ies") and len(text) > 3:
+        return text[:-3] + "y"
+    if text.endswith("ses") and len(text) > 3:
+        return text[:-2]
+    if text.endswith("s") and len(text) > 1:
+        return text[:-1]
+    return text
+
+
+def _route_kind_from_segments(parts: list[str]) -> str:
+    if not parts:
+        return "root"
+    leaf = parts[-1]
+    if len(parts) == 1 or leaf == "list":
+        return "list"
+    if leaf == "new":
+        return "create"
+    if leaf == "detail" or "[id]" in parts:
+        return "detail"
+    return "other"
+
+
+def _frontend_route_from_page_rel(rel: str) -> str:
+    parts = [part for part in str(rel or "").split("/") if part]
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    leaf = parts[-1]
+    if leaf in {"list", "index"}:
+        return "/".join(parts[:-1]) or parts[0]
+    if leaf in {"detail", "details", "view", "show"}:
+        base = "/".join(parts[:-1]) or parts[0]
+        return f"{base}/[id]"
+    return "/".join(parts)
 
 
 def _write_if_missing(path: Path, content: str, generated: list[str], project_dir: Path) -> None:
@@ -799,12 +842,17 @@ def _nav_label_from_href(href: str) -> str:
     normalized = _canonicalize_nav_href(href).strip("/")
     if not normalized:
         return "Home"
-    parts = [part for part in normalized.split("/") if part and not part.startswith("[")]
-    if not parts:
-        return "Home"
+    parts = [part for part in normalized.split("/") if part]
+    kind = _route_kind_from_segments(parts)
+    if kind == "list":
+        return parts[0].replace("-", " ").replace("_", " ").title()
+    if kind == "create":
+        entity = _singularize_resource_name(parts[0]).replace("-", " ").replace("_", " ").title()
+        return f"New {entity}" if entity else "New"
+    if kind == "detail":
+        entity = _singularize_resource_name(parts[0]).replace("-", " ").replace("_", " ").title()
+        return f"{entity} Detail" if entity else "Detail"
     leaf = parts[-1]
-    if leaf in {"list", "home", "index"} and len(parts) > 1:
-        leaf = parts[-2]
     return leaf.replace("-", " ").replace("_", " ").title()
 
 
@@ -819,6 +867,10 @@ def _canonicalize_nav_href(href: str) -> str:
         return "/"
     if " " in text:
         return ""
+    rel = _canonicalize_page_path(text.strip("/"))
+    if rel:
+        route_rel = _frontend_route_from_page_rel(rel)
+        return "/" + route_rel if route_rel else ""
     parts = [part for part in text.strip("/").split("/") if part]
     normalized_parts: list[str] = []
     for part in parts:
@@ -852,14 +904,27 @@ def _discover_frontend_routes(app_root: Path) -> list[str]:
 def _render_frontend_navigation_file(hrefs: list[str]) -> str:
     unique: list[str] = []
     seen_canonical: set[str] = set()
+    seen_labels: set[str] = set()
+    has_non_root = any(_canonicalize_nav_href(item) not in {"", "/"} for item in hrefs)
     for href in hrefs:
         cleaned = _canonicalize_nav_href(href)
         if not cleaned:
             continue
+        if has_non_root and cleaned == "/":
+            continue
+        parts = [part for part in cleaned.strip("/").split("/") if part]
+        if _route_kind_from_segments(parts) == "detail":
+            continue
         if cleaned in seen_canonical:
             continue
+        label_key = _nav_label_from_href(cleaned).strip().lower()
+        if label_key in seen_labels:
+            continue
         seen_canonical.add(cleaned)
+        seen_labels.add(label_key)
         unique.append(cleaned)
+    if not unique:
+        unique = ["/"]
     lines = []
     for index, href in enumerate(unique):
         label = _nav_label_from_href(href)
@@ -1359,7 +1424,10 @@ def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
     rel = _canonicalize_page_path(page_path)
     if not rel or " " in rel:
         return []
-    target = app_root / rel / "page.tsx"
+    route_rel = _frontend_route_from_page_rel(rel)
+    if not route_rel:
+        return []
+    target = app_root / route_rel / "page.tsx"
     segments = [seg for seg in rel.split("/") if seg]
     if not segments:
         return []
@@ -1370,38 +1438,50 @@ def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
     _ensure_frontend_api_base_helper(app_root, generated, project_dir)
     _ensure_frontend_navigation_helper(app_root, generated, project_dir)
     _ensure_frontend_navigation_shell_upgrade(app_root, generated, project_dir)
-    leaf = segments[-1].lower()
-    entity_path = "/".join(segments[:-1]).strip("/")
+    route_kind = _route_kind_from_segments(segments)
+    entity_path = "/".join(segments[:-1]).strip("/") if len(segments) > 1 else (segments[0] if segments else "")
     helper_import = _api_base_helper_import_for_page(app_root, target)
-    if entity_path and leaf == "list":
+    if entity_path and route_kind == "list":
         _write_if_missing(
             target,
             _render_frontend_entity_list_page(
                 component_name=comp_name,
                 title=title,
                 entity_path=entity_path,
-                detail_link_mode="query",
-                detail_href_base=f"/{entity_path}/detail",
                 api_helper_import=helper_import,
             ),
             generated,
             project_dir,
         )
-        _register_frontend_nav_link(app_root, f"/{rel}", generated, project_dir)
+        _register_frontend_nav_link(app_root, f"/{route_rel}", generated, project_dir)
         return generated
-    if entity_path and leaf == "detail":
+    if entity_path and route_kind == "detail":
         _write_if_missing(
             target,
             _render_frontend_entity_detail_page(
                 component_name=comp_name,
                 title=title,
                 entity_path=entity_path,
-                id_mode="query",
                 api_helper_import=helper_import,
             ),
             generated,
             project_dir,
         )
+        return generated
+    if entity_path and route_kind == "create":
+        singular = _singularize_resource_name(entity_path).replace("-", " ").replace("_", " ").title()
+        _write_if_missing(
+            target,
+            _render_generic_page_scaffold(
+                component_name=comp_name,
+                title=f"New {singular}" if singular else title,
+                rel=route_rel,
+                api_helper_import=helper_import,
+            ),
+            generated,
+            project_dir,
+        )
+        _register_frontend_nav_link(app_root, f"/{route_rel}", generated, project_dir)
         return generated
 
     _write_if_missing(
@@ -1419,7 +1499,7 @@ def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
         + "</h1>\n"
         '      <p className="text-xs text-slate-400">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>\n'
         "      <p>Page placeholder for "
-        + rel
+        + route_rel
         + "</p>\n"
         "    </section>\n"
         "  );\n"
@@ -1427,7 +1507,7 @@ def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
         generated,
         project_dir,
     )
-    _register_frontend_nav_link(app_root, f"/{rel}", generated, project_dir)
+    _register_frontend_nav_link(app_root, f"/{route_rel}", generated, project_dir)
     return generated
 
 
@@ -1502,30 +1582,27 @@ def _render_implemented_page_content(app_root: Path, target: Path, rel: str) -> 
     segments = [seg for seg in rel.split("/") if seg]
     title = " ".join(seg.replace("-", " ").replace("_", " ").title() for seg in segments)
     comp_name = "".join(seg.replace("-", " ").replace("_", " ").title().replace(" ", "") for seg in segments) + "Page"
-    leaf = segments[-1].lower() if segments else ""
-    entity_path = "/".join(segments[:-1]).strip("/")
+    route_kind = _route_kind_from_segments(segments)
+    entity_path = "/".join(segments[:-1]).strip("/") if len(segments) > 1 else (segments[0] if segments else "")
     helper_import = _api_base_helper_import_for_page(app_root, target)
-    if entity_path and leaf == "list":
+    if entity_path and route_kind == "list":
         return _render_frontend_entity_list_page(
             component_name=comp_name,
             title=title,
             entity_path=entity_path,
-            detail_link_mode="query",
-            detail_href_base=f"/{entity_path}/detail",
             api_helper_import=helper_import,
         )
-    if entity_path and leaf == "detail":
+    if entity_path and route_kind == "detail":
         return _render_frontend_entity_detail_page(
             component_name=comp_name,
             title=title,
             entity_path=entity_path,
-            id_mode="query",
             api_helper_import=helper_import,
         )
     return _render_generic_page_scaffold(
         component_name=comp_name,
         title=title,
-        rel=rel,
+        rel=_frontend_route_from_page_rel(rel) or rel,
         api_helper_import=helper_import,
     )
 
@@ -1553,7 +1630,12 @@ def implement_page_scaffold(project_dir: Path, page_path: str) -> dict[str, Any]
             "changed_files": [],
         }
 
-    target = app_root / rel / "page.tsx"
+    route_rel = _frontend_route_from_page_rel(rel)
+    targets: list[Path] = []
+    if route_rel:
+        targets.append(app_root / route_rel / "page.tsx")
+    targets.append(app_root / rel / "page.tsx")
+    target = next((candidate for candidate in targets if candidate.exists()), targets[0] if targets else app_root / rel / "page.tsx")
     if not target.exists():
         return {
             "ok": False,
@@ -1581,7 +1663,7 @@ def implement_page_scaffold(project_dir: Path, page_path: str) -> dict[str, Any]
     _ensure_frontend_navigation_shell_upgrade(app_root, changed, project_dir)
     content = _render_implemented_page_content(app_root, target, rel)
     _write_if_changed(target, content, changed, project_dir)
-    _register_frontend_nav_link(app_root, f"/{rel}", changed, project_dir)
+    _register_frontend_nav_link(app_root, f"/{route_rel or rel}", changed, project_dir)
     return {
         "ok": True,
         "status": "implemented",
