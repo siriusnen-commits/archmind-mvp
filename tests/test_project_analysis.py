@@ -60,8 +60,14 @@ def test_project_analysis_extracts_entities_fields_apis_pages_and_crud(tmp_path:
 def test_project_analysis_detects_placeholder_pages_and_suggestions_priority(tmp_path: Path) -> None:
     project_dir = tmp_path / "placeholder-app"
     spec = {
-        "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}]}],
-        "api_endpoints": ["GET /notes", "POST /notes"],
+        "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}, {"name": "content", "type": "string"}]}],
+        "api_endpoints": [
+            "GET /notes",
+            "POST /notes",
+            "GET /notes/{id}",
+            "PUT /notes/{id}",
+            "DELETE /notes/{id}",
+        ],
         "frontend_pages": ["notes/list", "notes/detail"],
     }
     _write(
@@ -73,10 +79,8 @@ def test_project_analysis_detects_placeholder_pages_and_suggestions_priority(tmp
 
     assert "notes/list" in out["placeholder_pages"]
     assert len(out["suggestions"]) >= 1
-    assert out["suggestions"][0]["kind"] == "placeholder_page"
-    assert out["next_action"]["kind"] == "placeholder_page"
-    assert out["suggestions"][0]["command"] == "/implement_page notes/list"
-    assert out["next_action"]["command"] == "/implement_page notes/list"
+    assert any(item.get("kind") == "placeholder_page" for item in out["suggestions"])
+    assert any(item.get("command") == "/implement_page notes/list" for item in out["suggestions"])
 
 
 def test_project_analysis_treats_page_with_real_flow_signals_as_usable(tmp_path: Path) -> None:
@@ -102,7 +106,7 @@ export default function NotesPage() {
     assert all(s.get("kind") != "placeholder_page" for s in out["suggestions"])
 
 
-def test_project_analysis_next_action_prioritizes_missing_crud_then_pages_then_fields(tmp_path: Path) -> None:
+def test_project_analysis_next_action_prioritizes_missing_field_then_crud_then_pages(tmp_path: Path) -> None:
     project_dir = tmp_path / "priority-app"
     spec = {
         "entities": [{"name": "Reminder", "fields": []}],
@@ -112,8 +116,22 @@ def test_project_analysis_next_action_prioritizes_missing_crud_then_pages_then_f
 
     out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
 
+    assert out["next_action"]["kind"] == "missing_field"
+    assert out["next_action"]["command"] == "/add_field Reminder title:string"
+
+
+def test_project_analysis_incomplete_crud_returns_concrete_add_api_command(tmp_path: Path) -> None:
+    project_dir = tmp_path / "crud-concrete-action"
+    spec = {
+        "entities": [{"name": "Entry", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": ["GET /entries", "POST /entries"],
+        "frontend_pages": ["entries/list", "entries/new", "entries/detail"],
+    }
+
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
     assert out["next_action"]["kind"] == "missing_crud_api"
-    assert "create API" in out["next_action"]["message"] or "CRUD API" in out["next_action"]["message"]
+    assert out["next_action"]["command"] == "/add_api GET /entries/{id}"
+    assert out["next_action"]["message"] == "Entry is missing detail API coverage."
 
 
 def test_project_analysis_uses_model_field_inference_to_avoid_false_missing_title(tmp_path: Path) -> None:
@@ -279,7 +297,13 @@ def test_project_analysis_canonicalizes_noncanonical_page_path_in_suggestions(tm
     project_dir = tmp_path / "task-placeholder-app"
     spec = {
         "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}],
-        "api_endpoints": ["GET /task", "POST /task"],
+        "api_endpoints": [
+            "GET /task",
+            "POST /task",
+            "GET /task/{id}",
+            "PUT /task/{id}",
+            "DELETE /task/{id}",
+        ],
         "frontend_pages": ["task/lists"],
     }
     _write(
@@ -289,8 +313,9 @@ def test_project_analysis_canonicalizes_noncanonical_page_path_in_suggestions(tm
 
     out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
     assert out["pages"] == ["tasks/list"]
-    assert out["suggestions"][0]["command"] == "/implement_page tasks/list"
-    assert "task/lists" not in out["suggestions"][0]["command"]
+    assert out["next_action"]["command"] == "/add_page tasks/detail"
+    assert any(item.get("command") == "/implement_page tasks/list" for item in out["suggestions"])
+    assert "task/lists" not in out["next_action"]["command"]
 
 
 def test_project_analysis_missing_page_still_suggests_add_page(tmp_path: Path) -> None:
@@ -346,8 +371,9 @@ def test_project_analysis_detects_placeholder_existing_custom_page_as_implement_
 
     out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
     assert "songs/favorite" in out["placeholder_pages"]
-    assert out["next_action"]["kind"] == "placeholder_page"
-    assert out["next_action"]["command"] == "/implement_page songs/favorite"
+    assert any(row.get("kind") == "placeholder_page" for row in out["suggestions"])
+    assert any(row.get("command") == "/implement_page songs/favorite" for row in out["suggestions"])
+    assert out["next_action"]["kind"] == "missing_page"
     assert not any(row.get("command") == "/add_page songs/favorite" for row in out["suggestions"])
 
 
@@ -423,6 +449,23 @@ def test_project_analysis_prefers_high_priority_over_medium_field_suggestions(tm
     assert any("useful domain field" in str(item.get("message") or "") for item in out["suggestions"])
     assert out["next_action"]["kind"] == "missing_crud_api"
     assert str(out["next_action"]["command"] or "").startswith("/add_api ")
+
+
+def test_project_analysis_deterministic_priority_order_for_actionable_next_step(tmp_path: Path) -> None:
+    project_dir = tmp_path / "priority-order-actionable"
+    spec = {
+        "entities": [{"name": "Task", "fields": []}],
+        "api_endpoints": ["GET /tasks", "POST /tasks"],
+        "frontend_pages": [],
+    }
+    _write(
+        project_dir / "frontend" / "app" / "tasks" / "page.tsx",
+        "export default function Page() { return <p>Page placeholder for tasks/list</p>; }",
+    )
+
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert out["next_action"]["kind"] == "missing_field"
+    assert out["next_action"]["command"] == "/add_field Task title:string"
 
 
 def test_project_analysis_suppresses_repeated_add_field_suggestion_from_history(tmp_path: Path) -> None:
