@@ -531,6 +531,18 @@ def test_apply_page_scaffold_generic_page_uses_shared_api_base_helper(tmp_path: 
     assert 'API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}' in page_text
 
 
+def test_apply_page_scaffold_sanitizes_component_name_for_numeric_segments(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_demo"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    generated = apply_page_scaffold(project_dir, "2026/reports/list")
+    assert "frontend/app/2026s/reports/page.tsx" in generated
+    page_text = (project_dir / "frontend" / "app" / "2026s" / "reports" / "page.tsx").read_text(encoding="utf-8")
+    assert "export default function P2026sReportsListPage()" in page_text
+    assert "export default function 2026sReportsListPage()" not in page_text
+
+
 def test_implement_page_scaffold_upgrades_placeholder_list_page(tmp_path: Path) -> None:
     project_dir = tmp_path / "fullstack_demo"
     (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)

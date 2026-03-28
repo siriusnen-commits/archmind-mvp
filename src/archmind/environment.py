@@ -147,7 +147,7 @@ def _bootstrap_frontend_eslint(project_dir: Path) -> list[str]:
     target = frontend_dir / ".eslintrc.json"
     if target.exists():
         return []
-    payload = {"extends": ["next/core-web-vitals", "next/typescript"]}
+    payload = {"extends": ["next/core-web-vitals"]}
     target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return ["created frontend/.eslintrc.json"]
 

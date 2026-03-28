@@ -632,10 +632,27 @@ def _entity_identity(entity_name: str) -> tuple[str, str, str]:
     safe_name = re.sub(r"[^a-zA-Z0-9_]", "", str(entity_name or "").strip())
     if not safe_name:
         return "", "", ""
+    if safe_name[0].isdigit():
+        safe_name = f"entity_{safe_name}"
     class_name = safe_name[0].upper() + safe_name[1:]
     slug = re.sub(r"(?<!^)(?=[A-Z])", "_", class_name).lower()
     plural = _pluralize_resource_name(slug)
     return class_name, slug, plural
+
+
+def _safe_component_name(parts: list[str], suffix: str = "Page") -> str:
+    normalized: list[str] = []
+    for raw in parts:
+        text = re.sub(r"[^a-zA-Z0-9]", " ", str(raw or ""))
+        tokens = [token for token in text.split() if token]
+        for token in tokens:
+            normalized.append(token[:1].upper() + token[1:])
+    name = "".join(normalized) or "Generated"
+    if name[0].isdigit():
+        name = f"P{name}"
+    if suffix and not name.endswith(suffix):
+        name = f"{name}{suffix}"
+    return name
 
 
 def _pluralize_resource_name(value: str) -> str:
@@ -1432,7 +1449,7 @@ def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
     if not segments:
         return []
     title = " ".join(seg.replace("-", " ").replace("_", " ").title() for seg in segments)
-    comp_name = "".join(seg.replace("-", " ").replace("_", " ").title().replace(" ", "") for seg in segments) + "Page"
+    comp_name = _safe_component_name(segments)
 
     generated: list[str] = []
     _ensure_frontend_api_base_helper(app_root, generated, project_dir)
@@ -1581,7 +1598,7 @@ def _render_generic_page_scaffold(
 def _render_implemented_page_content(app_root: Path, target: Path, rel: str) -> str:
     segments = [seg for seg in rel.split("/") if seg]
     title = " ".join(seg.replace("-", " ").replace("_", " ").title() for seg in segments)
-    comp_name = "".join(seg.replace("-", " ").replace("_", " ").title().replace(" ", "") for seg in segments) + "Page"
+    comp_name = _safe_component_name(segments)
     route_kind = _route_kind_from_segments(segments)
     entity_path = "/".join(segments[:-1]).strip("/") if len(segments) > 1 else (segments[0] if segments else "")
     helper_import = _api_base_helper_import_for_page(app_root, target)
