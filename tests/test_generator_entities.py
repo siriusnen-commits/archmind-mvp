@@ -139,6 +139,31 @@ def test_generate_project_fullstack_ddd_applies_project_spec_entities(tmp_path: 
     assert "defect" not in frontend_text
 
 
+def test_generate_project_fullstack_ddd_normalizes_and_applies_multi_entity_seed(tmp_path: Path) -> None:
+    opt = GenerateOptions(out=tmp_path, force=False, name="diary_entities_multi", template="fullstack-ddd")
+    setattr(
+        opt,
+        "project_spec",
+        {
+            "entities": [
+                {"name": "Entry", "fields": [{"name": "title", "type": "string"}]},
+                "Tag",
+            ],
+            "api_endpoints": ["GET /entries", {"method": "GET", "path": "/tags"}],
+            "frontend_pages": ["entries/list", {"path": "tags/list"}],
+        },
+    )
+
+    project_dir = Path(generate_project("personal diary webapp", opt))
+    assert (project_dir / "backend" / "app" / "routers" / "entry.py").exists()
+    assert (project_dir / "backend" / "app" / "routers" / "tag.py").exists()
+    assert (project_dir / "frontend" / "app" / "entries" / "page.tsx").exists()
+    assert (project_dir / "frontend" / "app" / "tags" / "page.tsx").exists()
+    navigation = (project_dir / "frontend" / "app" / "_lib" / "navigation.ts").read_text(encoding="utf-8")
+    assert 'href: "/entries"' in navigation
+    assert 'href: "/tags"' in navigation
+
+
 def test_apply_entity_scaffold_is_idempotent_and_does_not_overwrite_existing_files(tmp_path: Path) -> None:
     project_dir = tmp_path / "backend_demo"
     (project_dir / "app" / "models").mkdir(parents=True, exist_ok=True)

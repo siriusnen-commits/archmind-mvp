@@ -524,6 +524,63 @@ def test_pipeline_fullstack_seed_spec_applies_to_generated_scaffold(tmp_path: Pa
     assert str(next_action.get("command") or "").strip() != "/add_entity Task"
 
 
+def test_pipeline_fullstack_seed_spec_projects_all_entities_and_pages(tmp_path: Path, monkeypatch) -> None:
+    diary_spec = {
+        "entities": [
+            {
+                "name": "Entry",
+                "fields": [
+                    {"name": "title", "type": "string"},
+                    {"name": "content", "type": "string"},
+                ],
+            },
+            "Tag",
+        ],
+        "api_endpoints": ["GET /entries", "POST /entries", {"method": "GET", "path": "/tags"}],
+        "frontend_pages": ["entries/list", {"path": "tags/list"}, "entry/new"],
+    }
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_seed_scaffold)
+    monkeypatch.setattr("archmind.pipeline.suggest_project_spec", lambda *_a, **_k: diary_spec)
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "my diary app with entries and tags",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "diary_seed_multi_demo",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+
+    project_dir = tmp_path / "diary_seed_multi_demo"
+    assert (project_dir / "backend" / "app" / "routers" / "entry.py").exists()
+    assert (project_dir / "backend" / "app" / "routers" / "tag.py").exists()
+    assert (project_dir / "frontend" / "app" / "entries" / "page.tsx").exists()
+    assert (project_dir / "frontend" / "app" / "tags" / "page.tsx").exists()
+    assert (project_dir / "frontend" / "app" / "entries" / "new" / "page.tsx").exists()
+
+    nav_text = (project_dir / "frontend" / "app" / "_lib" / "navigation.ts").read_text(encoding="utf-8")
+    assert 'href: "/entries"' in nav_text
+    assert 'href: "/tags"' in nav_text
+    assert 'href: "/entries/new"' in nav_text
+
+    spec_payload = json.loads((project_dir / ".archmind" / "project_spec.json").read_text(encoding="utf-8"))
+    assert len(spec_payload.get("entities") or []) >= 2
+    assert len(spec_payload.get("api_endpoints") or []) >= 3
+    assert len(spec_payload.get("frontend_pages") or []) >= 3
+
+    detail = build_project_detail(project_dir)
+    assert detail.spec_summary.entities >= 2
+    assert detail.spec_summary.pages >= 3
+
+
 def test_pipeline_continue_does_not_erase_persisted_spec(tmp_path: Path, monkeypatch) -> None:
     diary_spec = {
         "entities": [

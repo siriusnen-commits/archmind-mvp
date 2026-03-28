@@ -116,6 +116,40 @@ def test_fullstack_scaffolds_entities_and_pages_from_project_spec(tmp_path: Path
     assert frontend_eslint.read_text(encoding="utf-8").strip() == '{\n  "extends": ["next/core-web-vitals"]\n}'
 
 
+def test_fullstack_scaffolds_all_entities_and_pages_from_multi_entity_spec(tmp_path: Path) -> None:
+    spec = {
+        "entities": [
+            {
+                "name": "Entry",
+                "fields": [
+                    {"name": "title", "type": "string"},
+                    {"name": "content", "type": "string"},
+                ],
+            },
+            {
+                "name": "Tag",
+                "fields": [
+                    {"name": "name", "type": "string"},
+                ],
+            },
+        ],
+        "api_endpoints": ["GET /entries", "POST /entries", "GET /tags", "POST /tags"],
+        "frontend_pages": ["entries/list", "entries/new", "tags/list"],
+    }
+    project_dir = _generate_fullstack(tmp_path, name="diary_spec_multi", spec=spec)
+
+    assert (project_dir / "backend" / "app" / "routers" / "entry.py").exists()
+    assert (project_dir / "backend" / "app" / "routers" / "tag.py").exists()
+    assert (project_dir / "frontend" / "app" / "entries" / "page.tsx").exists()
+    assert (project_dir / "frontend" / "app" / "entries" / "new" / "page.tsx").exists()
+    assert (project_dir / "frontend" / "app" / "tags" / "page.tsx").exists()
+
+    nav_text = (project_dir / "frontend" / "app" / "_lib" / "navigation.ts").read_text(encoding="utf-8")
+    assert 'href: "/entries"' in nav_text
+    assert 'href: "/tags"' in nav_text
+    assert 'href: "/entries/new"' in nav_text
+
+
 def test_fullstack_spec_driven_crud_works_for_diary_entry(tmp_path: Path) -> None:
     spec = {
         "entities": [

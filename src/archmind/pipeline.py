@@ -130,11 +130,13 @@ def _resolve_project_dir(
     project_spec_seed: Optional[dict[str, Any]] = None,
 ) -> Optional[Path]:
     if opts.idea:
+        from archmind.generator import normalize_project_spec_seed  # type: ignore
+
         opt_kwargs = _build_generate_options_kwargs(opts)
         opt = _make_generate_options(opt_kwargs)
         setattr(opt, "modules", list(modules or []))
         if isinstance(project_spec_seed, dict) and project_spec_seed:
-            setattr(opt, "project_spec", dict(project_spec_seed))
+            setattr(opt, "project_spec", normalize_project_spec_seed(project_spec_seed))
         gen_entry = _resolve_generator_entry()
 
         # positional-first call attempt
@@ -553,6 +555,8 @@ def _write_project_spec(
     suggested_spec: dict[str, Any] | None = None,
 ) -> Optional[Path]:
     try:
+        from archmind.generator import normalize_project_spec_seed  # type: ignore
+
         out = project_dir / ".archmind" / "project_spec.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         existing_payload: dict[str, Any] = {}
@@ -569,7 +573,7 @@ def _write_project_spec(
             or effective_template
             or "fastapi"
         )
-        suggestion = suggested_spec if isinstance(suggested_spec, dict) else {}
+        suggestion = normalize_project_spec_seed(suggested_spec if isinstance(suggested_spec, dict) else {})
         raw_entities = suggestion.get("entities") if isinstance(suggestion.get("entities"), list) else []
         entities: list[dict[str, Any]] = []
         seen_entities: set[str] = set()
@@ -637,24 +641,62 @@ def _write_project_spec(
             if isinstance(existing_payload.get("entities"), list)
             else []
         )
-        if not entities and existing_entities:
-            entities = [item for item in existing_entities if isinstance(item, dict)][:10]
+        for item in existing_entities:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            key = name.lower()
+            if not name or key in seen_entities:
+                continue
+            seen_entities.add(key)
+            fields_raw = item.get("fields") if isinstance(item.get("fields"), list) else []
+            fields: list[dict[str, str]] = []
+            seen_fields: set[str] = set()
+            for field in fields_raw:
+                if not isinstance(field, dict):
+                    continue
+                field_name = str(field.get("name") or "").strip()
+                field_type = str(field.get("type") or "").strip().lower()
+                if not field_name or not field_type:
+                    continue
+                field_key = field_name.lower()
+                if field_key in seen_fields:
+                    continue
+                seen_fields.add(field_key)
+                fields.append({"name": field_name, "type": field_type})
+            entities.append({"name": name, "fields": fields})
+            if len(entities) >= 10:
+                break
 
         existing_api_endpoints = (
             existing_payload.get("api_endpoints")
             if isinstance(existing_payload.get("api_endpoints"), list)
             else []
         )
-        if not api_endpoints and existing_api_endpoints:
-            api_endpoints = [str(item).strip() for item in existing_api_endpoints if str(item).strip()][:20]
+        for item in existing_api_endpoints:
+            text = str(item).strip()
+            key = text.lower()
+            if not text or key in seen_api:
+                continue
+            seen_api.add(key)
+            api_endpoints.append(text)
+            if len(api_endpoints) >= 20:
+                break
 
         existing_frontend_pages = (
             existing_payload.get("frontend_pages")
             if isinstance(existing_payload.get("frontend_pages"), list)
             else []
         )
-        if not frontend_pages and existing_frontend_pages:
-            frontend_pages = [str(item).strip().strip("/") for item in existing_frontend_pages if str(item).strip()][:20]
+        for item in existing_frontend_pages:
+            page = str(item).strip().strip("/")
+            key = page.lower()
+            if not page or key in seen_pages:
+                continue
+            seen_pages.add(key)
+            frontend_pages.append(page)
+            if len(frontend_pages) >= 20:
+                break
 
         existing_modules = (
             existing_payload.get("modules")
