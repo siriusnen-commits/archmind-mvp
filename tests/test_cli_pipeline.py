@@ -5,6 +5,13 @@ from pathlib import Path
 import pytest
 
 from archmind.cli import main
+from archmind.generator import (
+    apply_api_scaffold,
+    apply_entity_fields_to_scaffold,
+    apply_entity_scaffold,
+    apply_frontend_page_scaffold,
+    apply_page_scaffold,
+)
 from archmind.project_analysis import analyze_project
 from archmind.project_query import build_project_detail
 import json
@@ -40,6 +47,43 @@ def _fake_generate_project(idea: str, opt) -> Path:
     else:
         project_dir.joinpath("pytest.ini").write_text("[pytest]\naddopts = -q\n", encoding="utf-8")
         project_dir.joinpath("test_ok.py").write_text("def test_ok():\n    assert True\n", encoding="utf-8")
+    return project_dir
+
+
+def _fake_generate_project_with_seed_scaffold(idea: str, opt) -> Path:
+    del idea
+    project_dir = _fake_generate_project("demo", opt)
+    spec = getattr(opt, "project_spec", None)
+    if not isinstance(spec, dict):
+        return project_dir
+
+    entities = spec.get("entities") if isinstance(spec.get("entities"), list) else []
+    for raw in entities:
+        if not isinstance(raw, dict):
+            continue
+        entity_name = str(raw.get("name") or "").strip()
+        if not entity_name:
+            continue
+        apply_entity_scaffold(project_dir, entity_name)
+        fields = raw.get("fields")
+        if isinstance(fields, list):
+            apply_entity_fields_to_scaffold(project_dir, entity_name, fields)
+        apply_frontend_page_scaffold(project_dir, entity_name)
+
+    api_endpoints = spec.get("api_endpoints") if isinstance(spec.get("api_endpoints"), list) else []
+    for endpoint in api_endpoints:
+        text = str(endpoint or "").strip()
+        parts = text.split(maxsplit=1)
+        if len(parts) != 2:
+            continue
+        method = str(parts[0]).upper().strip()
+        path = str(parts[1]).strip()
+        if method in {"GET", "POST", "PUT", "PATCH", "DELETE"} and path:
+            apply_api_scaffold(project_dir, method, path)
+
+    frontend_pages = spec.get("frontend_pages") if isinstance(spec.get("frontend_pages"), list) else []
+    for page in frontend_pages:
+        apply_page_scaffold(project_dir, str(page or ""))
     return project_dir
 
 
@@ -415,6 +459,69 @@ def test_pipeline_generated_project_spec_is_visible_to_inspect_and_next(tmp_path
     next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
     assert str(next_action.get("kind") or "").strip().lower() != "none"
 
+
+def test_pipeline_fullstack_seed_spec_applies_to_generated_scaffold(tmp_path: Path, monkeypatch) -> None:
+    diary_spec = {
+        "entities": [
+            {
+                "name": "Entry",
+                "fields": [
+                    {"name": "title", "type": "string"},
+                    {"name": "content", "type": "string"},
+                ],
+            }
+        ],
+        "api_endpoints": ["GET /entries", "POST /entries"],
+        "frontend_pages": ["entries/list"],
+    }
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_seed_scaffold)
+    monkeypatch.setattr("archmind.pipeline.suggest_project_spec", lambda *_a, **_k: diary_spec)
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "my diary app with entry title and content",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "diary_seed_demo",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+
+    project_dir = tmp_path / "diary_seed_demo"
+    assert (project_dir / "backend" / "app" / "routers" / "entry.py").exists()
+    assert (project_dir / "frontend" / "app" / "entries" / "page.tsx").exists()
+    merged = "\n".join(
+        [
+            (project_dir / "backend" / "app" / "main.py").read_text(encoding="utf-8").lower(),
+            (project_dir / "frontend" / "app" / "entries" / "page.tsx").read_text(encoding="utf-8").lower(),
+        ]
+    )
+    assert "defect intake" not in merged
+    assert "create note" not in merged
+
+    spec_payload = json.loads((project_dir / ".archmind" / "project_spec.json").read_text(encoding="utf-8"))
+    assert len(spec_payload.get("entities") or []) >= 1
+    assert len(spec_payload.get("api_endpoints") or []) >= 1
+    assert len(spec_payload.get("frontend_pages") or []) >= 1
+
+    detail = build_project_detail(project_dir)
+    assert detail.spec_summary.entities >= 1
+    assert detail.spec_summary.apis >= 1
+    assert detail.spec_summary.pages >= 1
+
+    analysis = analyze_project(project_dir, spec_payload=spec_payload, runtime_payload={})
+    suggestions = analysis.get("suggestions") if isinstance(analysis.get("suggestions"), list) else []
+    commands = {str(item.get("command") or "").strip() for item in suggestions if isinstance(item, dict)}
+    assert "/add_entity Task" not in commands
+    next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
+    assert str(next_action.get("command") or "").strip() != "/add_entity Task"
 
 def test_pipeline_cli_type_keeps_fallback_metadata(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project)
