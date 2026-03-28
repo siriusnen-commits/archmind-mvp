@@ -434,21 +434,59 @@ def _compute_entity_crud_status(
     pages: list[str],
 ) -> dict[str, dict[str, Any]]:
     by_method_path = {(str(item.get("method") or "").strip().upper(), str(item.get("path") or "").strip()) for item in apis}
+    resource_api_presence: dict[str, dict[str, bool]] = {}
+    for method, path in by_method_path:
+        parts = [part for part in str(path).split("/") if part]
+        if not parts:
+            continue
+        resource = str(parts[0] or "").strip().lower()
+        if not resource:
+            continue
+        bucket = resource_api_presence.setdefault(
+            resource,
+            {"list": False, "create": False, "detail": False, "update": False, "delete": False},
+        )
+        if len(parts) == 1:
+            if method == "GET":
+                bucket["list"] = True
+            elif method == "POST":
+                bucket["create"] = True
+            continue
+        if len(parts) == 2 and parts[1] == "{id}":
+            if method == "GET":
+                bucket["detail"] = True
+            elif method in {"PATCH", "PUT"}:
+                bucket["update"] = True
+            elif method == "DELETE":
+                bucket["delete"] = True
     page_set = {str(page) for page in pages}
+    canonical_resources = sorted(resource_api_presence.keys())
     status: dict[str, dict[str, Any]] = {}
 
-    for entity in entities:
-        resource = _entity_resource(entity)
+    for idx, entity in enumerate(entities):
+        inferred_resource = _entity_resource(entity)
+        resource = ""
+        if inferred_resource and inferred_resource in resource_api_presence:
+            resource = inferred_resource
+        elif len(canonical_resources) == 1:
+            resource = canonical_resources[0]
+        elif inferred_resource and any(page.startswith(f"{inferred_resource}/") for page in page_set):
+            resource = inferred_resource
+        elif idx < len(canonical_resources):
+            resource = canonical_resources[idx]
+        elif inferred_resource:
+            resource = inferred_resource
+
+        presence = resource_api_presence.get(
+            resource,
+            {"list": False, "create": False, "detail": False, "update": False, "delete": False},
+        )
         entity_key = _normalize_entity_name(entity).lower()
-        base = f"/{resource}" if resource else ""
-        detail_path = f"{base}/{{id}}" if base else ""
-        has_list = ("GET", base) in by_method_path if base else False
-        has_create = ("POST", base) in by_method_path if base else False
-        has_detail = ("GET", detail_path) in by_method_path if detail_path else False
-        has_update = (
-            ("PATCH", detail_path) in by_method_path or ("PUT", detail_path) in by_method_path
-        ) if detail_path else False
-        has_delete = ("DELETE", detail_path) in by_method_path if detail_path else False
+        has_list = bool(presence.get("list"))
+        has_create = bool(presence.get("create"))
+        has_detail = bool(presence.get("detail"))
+        has_update = bool(presence.get("update"))
+        has_delete = bool(presence.get("delete"))
 
         page_list = f"{resource}/list" in page_set if resource else False
         page_detail = f"{resource}/detail" in page_set if resource else False

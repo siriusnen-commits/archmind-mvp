@@ -5521,6 +5521,49 @@ def test_inspect_and_next_use_consistent_canonical_api_list_for_crud(tmp_path: P
     assert "missing update API coverage" not in next_out
 
 
+@pytest.mark.parametrize("detail_path", ["/bookmarks/:id", "/bookmarks/{bookmark_id}", "/bookmarks/[id]"])
+def test_next_does_not_false_positive_bookmark_detail_when_canonical_detail_exists(
+    tmp_path: Path,
+    monkeypatch,
+    detail_path: str,
+) -> None:
+    project_dir = tmp_path / "inspect-next-bookmarks-variant"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "domains": ["bookmarks"],
+                "template": "fastapi",
+                "modules": [],
+                "entities": [{"name": "Bookmark", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": [
+                    "GET /bookmarks",
+                    "POST /bookmarks",
+                    f"GET {detail_path}",
+                    "PATCH /bookmarks/{id}",
+                    "DELETE /bookmarks/{id}",
+                ],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    inspect_msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=inspect_msg, effective_chat=DummyChat()), DummyContext()))
+    inspect_out = inspect_msg.sent[-1]
+    assert "GET /bookmarks/{id}" in inspect_out
+
+    next_msg = DummyMessage()
+    asyncio.run(command_next(DummyUpdate(message=next_msg, effective_chat=DummyChat()), DummyContext()))
+    next_out = next_msg.sent[-1]
+    assert "missing detail API coverage" not in next_out
+    assert "Command: /add_api GET /bookmarks/{id}" not in next_out
+
+
 @pytest.mark.parametrize(
     ("entity_name", "resource"),
     [

@@ -619,6 +619,33 @@ def test_project_analysis_canonicalizes_colon_id_path_for_detail_coverage(tmp_pa
     assert out["entity_crud_status"]["Entry"]["api"]["detail"] is True
 
 
+@pytest.mark.parametrize(
+    "raw_path",
+    [
+        "/bookmarks/:id",
+        "/bookmarks/{bookmark_id}",
+        "/bookmarks/[id]",
+    ],
+)
+def test_project_analysis_canonicalizes_detail_path_variants_for_crud(raw_path: str, tmp_path: Path) -> None:
+    project_dir = tmp_path / "bookmarks-detail-variants"
+    spec = {
+        "entities": [{"name": "Bookmark", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": [
+            "GET /bookmarks",
+            "POST /bookmarks",
+            f"GET {raw_path}",
+            "PATCH /bookmarks/{id}",
+            "DELETE /bookmarks/{id}",
+        ],
+        "frontend_pages": [],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert any(item.get("method") == "GET" and item.get("path") == "/bookmarks/{id}" for item in out["apis"])
+    assert out["entity_crud_status"]["Bookmark"]["api"]["detail"] is True
+    assert str(out["next_action"]["command"] or "").strip() != "/add_api GET /bookmarks/{id}"
+
+
 def test_project_analysis_handles_spaced_entity_name_without_false_missing_crud(tmp_path: Path) -> None:
     project_dir = tmp_path / "entry-item-full-crud"
     spec = {
