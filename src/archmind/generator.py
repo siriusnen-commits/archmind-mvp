@@ -2504,15 +2504,122 @@ def validate_generated_project_structure(
     }
 
 
-def _normalize_spec_seed(raw: Any) -> dict[str, Any]:
+def _normalize_entity_seed_item(raw: Any) -> dict[str, Any] | None:
+    if isinstance(raw, str):
+        name = str(raw).strip()
+        if name:
+            return {"name": name, "fields": []}
+        return None
+    if not isinstance(raw, dict):
+        return None
+
+    name = str(raw.get("name") or raw.get("entity") or raw.get("entity_name") or "").strip()
+    if not name:
+        return None
+
+    fields_raw = raw.get("fields")
+    fields: list[dict[str, str]] = []
+    seen_fields: set[str] = set()
+    if isinstance(fields_raw, list):
+        for field in fields_raw:
+            if isinstance(field, str):
+                field_name = str(field).strip()
+                field_type = "string"
+            elif isinstance(field, dict):
+                field_name = str(field.get("name") or field.get("field") or "").strip()
+                field_type = str(field.get("type") or "string").strip().lower() or "string"
+            else:
+                continue
+            if not field_name:
+                continue
+            key = field_name.lower()
+            if key in seen_fields:
+                continue
+            seen_fields.add(key)
+            fields.append({"name": field_name, "type": field_type})
+    return {"name": name, "fields": fields}
+
+
+def _normalize_api_seed_item(raw: Any) -> str:
+    if isinstance(raw, str):
+        return str(raw).strip()
+    if not isinstance(raw, dict):
+        return ""
+    endpoint = str(raw.get("endpoint") or "").strip()
+    if endpoint:
+        return endpoint
+    method = str(raw.get("method") or raw.get("http_method") or "").strip().upper()
+    path = str(raw.get("path") or raw.get("route") or "").strip()
+    if not method or not path:
+        return ""
+    return f"{method} {path}"
+
+
+def _normalize_page_seed_item(raw: Any) -> str:
+    if isinstance(raw, str):
+        return str(raw).strip().strip("/")
+    if not isinstance(raw, dict):
+        return ""
+    page = str(raw.get("path") or raw.get("page") or raw.get("route") or "").strip().strip("/")
+    return page
+
+
+def normalize_project_spec_seed(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
+
     payload: dict[str, Any] = {}
-    for key in ("entities", "api_endpoints", "frontend_pages"):
-        value = raw.get(key)
-        if isinstance(value, list):
-            payload[key] = value
+
+    entities_raw = raw.get("entities") if isinstance(raw.get("entities"), list) else []
+    entities: list[dict[str, Any]] = []
+    seen_entities: set[str] = set()
+    for item in entities_raw:
+        normalized = _normalize_entity_seed_item(item)
+        if not normalized:
+            continue
+        key = str(normalized.get("name") or "").strip().lower()
+        if not key or key in seen_entities:
+            continue
+        seen_entities.add(key)
+        entities.append(normalized)
+    if entities:
+        payload["entities"] = entities
+
+    api_raw = raw.get("api_endpoints") if isinstance(raw.get("api_endpoints"), list) else []
+    api_endpoints: list[str] = []
+    seen_api: set[str] = set()
+    for item in api_raw:
+        endpoint = _normalize_api_seed_item(item)
+        if not endpoint:
+            continue
+        key = endpoint.lower()
+        if key in seen_api:
+            continue
+        seen_api.add(key)
+        api_endpoints.append(endpoint)
+    if api_endpoints:
+        payload["api_endpoints"] = api_endpoints
+
+    pages_raw = raw.get("frontend_pages") if isinstance(raw.get("frontend_pages"), list) else []
+    frontend_pages: list[str] = []
+    seen_pages: set[str] = set()
+    for item in pages_raw:
+        page = _normalize_page_seed_item(item)
+        if not page:
+            continue
+        key = page.lower()
+        if key in seen_pages:
+            continue
+        seen_pages.add(key)
+        frontend_pages.append(page)
+    if frontend_pages:
+        payload["frontend_pages"] = frontend_pages
+
     return payload
+
+
+def _normalize_spec_seed(raw: Any) -> dict[str, Any]:
+    return normalize_project_spec_seed(raw)
 
 
 def _parse_api_endpoint_hint(raw: str) -> tuple[str, str]:
