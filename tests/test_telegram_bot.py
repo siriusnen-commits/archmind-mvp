@@ -5475,6 +5475,60 @@ def test_inspect_and_next_use_consistent_canonical_api_list_for_crud(tmp_path: P
     assert "missing update API coverage" not in next_out
 
 
+@pytest.mark.parametrize(
+    ("entity_name", "resource"),
+    [
+        ("Task", "tasks"),
+        ("Board", "boards"),
+        ("Bookmark", "bookmarks"),
+        ("Recipe", "recipes"),
+    ],
+)
+def test_inspect_and_next_stay_consistent_for_common_resources(
+    tmp_path: Path,
+    monkeypatch,
+    entity_name: str,
+    resource: str,
+) -> None:
+    project_dir = tmp_path / f"inspect-next-{resource}"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "domains": [resource],
+                "template": "fastapi",
+                "modules": [],
+                "entities": [{"name": entity_name, "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": [
+                    f"GET /{resource}",
+                    f"POST /{resource}",
+                    f"GET /{resource}/{{id}}",
+                    f"PATCH /{resource}/{{id}}",
+                    f"DELETE /{resource}/{{id}}",
+                ],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    inspect_msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=inspect_msg, effective_chat=DummyChat()), DummyContext()))
+    inspect_out = inspect_msg.sent[-1]
+    assert f"GET /{resource}/{{id}}" in inspect_out
+    assert f"PATCH /{resource}/{{id}}" in inspect_out
+    assert f"DELETE /{resource}/{{id}}" in inspect_out
+
+    next_msg = DummyMessage()
+    asyncio.run(command_next(DummyUpdate(message=next_msg, effective_chat=DummyChat()), DummyContext()))
+    next_out = next_msg.sent[-1]
+    assert "missing detail API coverage" not in next_out
+    assert f"Command: /add_api GET /{resource}/{{id}}" not in next_out
+
+
 def test_next_command_recommends_add_page_when_api_exists_without_pages(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "next_missing_pages"
     archmind = project_dir / ".archmind"
