@@ -58,3 +58,33 @@ def test_build_architecture_design_keeps_frontend_empty_for_backend_only() -> No
 
     assert out["frontend_pages"] == []
     assert out["api_endpoints"] == ["GET /defects", "POST /defects"]
+
+
+def test_build_architecture_design_diary_keeps_conventions_and_avoids_unjustified_user() -> None:
+    idea = "personal diary app"
+    reasoning = {
+        "app_shape": "fullstack",
+        "recommended_template": "fullstack-ddd",
+        "modules": ["db"],
+        "domains": ["entries"],
+        "frontend_needed": True,
+        "auth_needed": False,
+        "reason_summary": "fullstack diary app with persistence",
+    }
+    suggestion = {
+        "entities": [
+            {"name": "Entry", "fields": [{"name": "title", "type": "string"}]},
+            {"name": "User", "fields": [{"name": "email", "type": "string"}]},
+        ],
+        "api_endpoints": ["get /entry", "POST /entry"],
+        "frontend_pages": ["entry/list", "entry/create"],
+    }
+    out = build_architecture_design(idea, reasoning, suggestion)
+
+    names = [str(entity.get("name")) for entity in (out.get("entities") or []) if isinstance(entity, dict)]
+    assert "Entry" in names
+    assert "User" not in names
+    assert "GET /entries" in (out.get("api_endpoints") or [])
+    assert "POST /entries" in (out.get("api_endpoints") or [])
+    assert "entries/list" in (out.get("frontend_pages") or [])
+    assert "entries/new" in (out.get("frontend_pages") or [])
