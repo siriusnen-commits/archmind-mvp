@@ -302,7 +302,7 @@ def test_apply_page_scaffold_updates_navigation_with_new_explicit_page(tmp_path:
     apply_page_scaffold(project_dir, "reports/list")
 
     nav_text = (project_dir / "frontend" / "app" / "_lib" / "navigation.ts").read_text(encoding="utf-8")
-    assert 'href: "/reports/list"' in nav_text
+    assert 'href: "/reports"' in nav_text
 
 
 def test_apply_page_scaffold_normalizes_single_segment_and_dedupes_navigation(tmp_path: Path) -> None:
@@ -314,10 +314,29 @@ def test_apply_page_scaffold_normalizes_single_segment_and_dedupes_navigation(tm
     first = apply_page_scaffold(project_dir, "Tests")
     second = apply_page_scaffold(project_dir, "/tests/list/")
 
-    assert "frontend/app/tests/list/page.tsx" in first
+    assert "frontend/app/tests/page.tsx" in first
     assert second == []
     nav_text = (project_dir / "frontend" / "app" / "_lib" / "navigation.ts").read_text(encoding="utf-8")
-    assert nav_text.count('href: "/tests/list"') == 1
+    assert nav_text.count('href: "/tests"') == 1
+
+
+def test_apply_page_scaffold_navigation_uses_canonical_routes_without_duplicates(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_demo"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / "frontend" / "app" / "layout.tsx").write_text("export default function Layout(){return null}\n", encoding="utf-8")
+
+    apply_page_scaffold(project_dir, "entries/list")
+    apply_page_scaffold(project_dir, "entries/detail")
+    apply_page_scaffold(project_dir, "entries/new")
+
+    nav_text = (project_dir / "frontend" / "app" / "_lib" / "navigation.ts").read_text(encoding="utf-8")
+    assert 'href: "/entries"' in nav_text
+    assert 'label: "Entries"' in nav_text
+    assert 'href: "/entries/new"' in nav_text
+    assert 'label: "New Entry"' in nav_text
+    assert 'href: "/entries/[id]"' not in nav_text
+    assert nav_text.count('label: "Entries"') == 1
 
 
 def test_apply_page_scaffold_backfills_legacy_memo_shell_and_surfaces_new_pages(tmp_path: Path) -> None:
@@ -362,7 +381,7 @@ def test_apply_page_scaffold_backfills_legacy_memo_shell_and_surfaces_new_pages(
     layout_text = (app_dir / "layout.tsx").read_text(encoding="utf-8")
     root_text = (app_dir / "page.tsx").read_text(encoding="utf-8")
     assert 'href: "/notes"' in nav_text
-    assert 'href: "/reminders/list"' in nav_text
+    assert 'href: "/reminders"' in nav_text
     assert "APP_NAV_LINKS.map" in layout_text
     assert 'from "./_lib/navigation"' in root_text
     assert "router.replace(primaryHref)" in root_text
@@ -414,7 +433,7 @@ def test_apply_page_scaffold_upgrades_fullstack_template_shell_to_navigation_hom
     assert "This scaffold is domain-neutral." not in root_text
     assert 'from "./_lib/navigation"' in root_text
     assert "APP_NAV_LINKS.map" in layout_text
-    assert 'href: "/entries/list"' in nav_text
+    assert 'href: "/entries"' in nav_text
 
 
 def test_apply_frontend_page_scaffold_is_idempotent_and_skips_backend_only(tmp_path: Path) -> None:
@@ -472,13 +491,13 @@ def test_apply_page_scaffold_creates_explicit_page_and_is_idempotent(tmp_path: P
     first = apply_page_scaffold(project_dir, "reports/list")
     second = apply_page_scaffold(project_dir, "reports/list")
     assert "frontend/app/_lib/apiBase.ts" in first
-    assert "frontend/app/reports/list/page.tsx" in first
+    assert "frontend/app/reports/page.tsx" in first
     assert second == []
-    page_text = (project_dir / "frontend" / "app" / "reports" / "list" / "page.tsx").read_text(encoding="utf-8")
+    page_text = (project_dir / "frontend" / "app" / "reports" / "page.tsx").read_text(encoding="utf-8")
     assert "Loading..." in page_text
     assert "No items found." in page_text
     assert "fetch(`${apiBaseUrl}/reports`" in page_text
-    assert 'from "../../_lib/apiBase"' in page_text
+    assert 'from "../_lib/apiBase"' in page_text
     assert "placeholder" not in page_text.lower()
 
 
@@ -489,8 +508,8 @@ def test_apply_page_scaffold_detail_generates_non_placeholder_page(tmp_path: Pat
 
     generated = apply_page_scaffold(project_dir, "notes/detail")
     assert "frontend/app/_lib/apiBase.ts" in generated
-    assert "frontend/app/notes/detail/page.tsx" in generated
-    page_text = (project_dir / "frontend" / "app" / "notes" / "detail" / "page.tsx").read_text(encoding="utf-8")
+    assert "frontend/app/notes/[id]/page.tsx" in generated
+    page_text = (project_dir / "frontend" / "app" / "notes" / "[id]" / "page.tsx").read_text(encoding="utf-8")
     assert "Missing item id." in page_text
     assert "Item not found." in page_text
     assert "fetch(`${apiBaseUrl}/notes/${id}`" in page_text
@@ -516,12 +535,12 @@ def test_implement_page_scaffold_upgrades_placeholder_list_page(tmp_path: Path) 
     project_dir = tmp_path / "fullstack_demo"
     (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
     (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
-    target = project_dir / "frontend" / "app" / "tasks" / "list" / "page.tsx"
+    target = project_dir / "frontend" / "app" / "tasks" / "page.tsx"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         '"use client";\n'
         "export default function TasksListPage(){\n"
-        "  return <p>Page placeholder for tasks/list</p>;\n"
+        "  return <p>Page placeholder for tasks</p>;\n"
         "}\n",
         encoding="utf-8",
     )
@@ -532,8 +551,8 @@ def test_implement_page_scaffold_upgrades_placeholder_list_page(tmp_path: Path) 
     assert result["page_path"] == "tasks/list"
     assert "Implemented page: tasks/list" in str(result["detail"])
 
-    page_text = (project_dir / "frontend" / "app" / "tasks" / "list" / "page.tsx").read_text(encoding="utf-8")
-    assert "Page placeholder for tasks/list" not in page_text
+    page_text = (project_dir / "frontend" / "app" / "tasks" / "page.tsx").read_text(encoding="utf-8")
+    assert "Page placeholder for tasks" not in page_text
     assert "fetch(`${apiBaseUrl}/tasks`" in page_text
     assert "No items found." in page_text
 
@@ -542,12 +561,12 @@ def test_implement_page_scaffold_upgrades_placeholder_detail_page(tmp_path: Path
     project_dir = tmp_path / "fullstack_demo"
     (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
     (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
-    target = project_dir / "frontend" / "app" / "tasks" / "detail" / "page.tsx"
+    target = project_dir / "frontend" / "app" / "tasks" / "[id]" / "page.tsx"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         '"use client";\n'
         "export default function TasksDetailPage(){\n"
-        "  return <p>Page placeholder for tasks/detail</p>;\n"
+        "  return <p>Page placeholder for tasks/[id]</p>;\n"
         "}\n",
         encoding="utf-8",
     )
@@ -557,8 +576,8 @@ def test_implement_page_scaffold_upgrades_placeholder_detail_page(tmp_path: Path
     assert result["status"] == "implemented"
     assert result["page_path"] == "tasks/detail"
 
-    page_text = (project_dir / "frontend" / "app" / "tasks" / "detail" / "page.tsx").read_text(encoding="utf-8")
-    assert "Page placeholder for tasks/detail" not in page_text
+    page_text = (project_dir / "frontend" / "app" / "tasks" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+    assert "Page placeholder for tasks/[id]" not in page_text
     assert "Missing item id." in page_text
     assert "Item not found." in page_text
 
