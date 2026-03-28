@@ -75,3 +75,35 @@ def test_suggest_project_spec_bookmark_infers_primary_resource_with_plural_conve
     assert "GET /bookmarks" in out["api_endpoints"]
     assert "bookmarks/list" in out["frontend_pages"]
     assert "bookmarks/new" in out["frontend_pages"]
+
+
+def test_suggest_project_spec_kanban_infers_board_and_card_with_relation_field() -> None:
+    out = suggest_project_spec("kanban board app with boards and cards", {"domains": [], "frontend_needed": True})
+    entities = out.get("entities") if isinstance(out.get("entities"), list) else []
+    names = [str(entity.get("name") or "") for entity in entities if isinstance(entity, dict)]
+    assert "Board" in names
+    assert "Card" in names
+    card = next(entity for entity in entities if isinstance(entity, dict) and str(entity.get("name") or "") == "Card")
+    card_fields = card.get("fields") if isinstance(card.get("fields"), list) else []
+    field_names = {str(field.get("name") or "") for field in card_fields if isinstance(field, dict)}
+    assert "board_id" in field_names
+    assert "GET /cards" in out["api_endpoints"]
+    assert "cards/list" in out["frontend_pages"]
+
+
+def test_suggest_project_spec_diary_tags_preserves_entry_and_tag() -> None:
+    out = suggest_project_spec("diary app with entries and tags", {"domains": [], "frontend_needed": True})
+    names = [entity["name"] for entity in out["entities"]]
+    assert "Entry" in names
+    assert "Tag" in names
+    assert "GET /entries" in out["api_endpoints"]
+    assert "GET /tags" in out["api_endpoints"]
+
+
+def test_suggest_project_spec_bookmark_category_preserves_both_entities() -> None:
+    out = suggest_project_spec("bookmark manager with categories", {"domains": [], "frontend_needed": True})
+    names = [entity["name"] for entity in out["entities"]]
+    assert "Bookmark" in names
+    assert "Category" in names
+    assert "GET /bookmarks" in out["api_endpoints"]
+    assert "GET /categories" in out["api_endpoints"]

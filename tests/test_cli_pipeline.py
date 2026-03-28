@@ -645,6 +645,89 @@ def test_pipeline_fullstack_seed_spec_projects_all_entities_and_pages(tmp_path: 
     assert detail.spec_summary.pages >= 3
 
 
+@pytest.mark.parametrize(
+    ("idea", "project_name", "required_entities", "relation_entity", "relation_field", "required_resources"),
+    [
+        (
+            "kanban board app with boards and cards",
+            "kanban_multi_entity_demo",
+            {"Board", "Card"},
+            "Card",
+            "board_id",
+            {"boards", "cards"},
+        ),
+        (
+            "diary app with entries and tags",
+            "diary_tag_multi_entity_demo",
+            {"Entry", "Tag"},
+            "Tag",
+            "entry_id",
+            {"entries", "tags"},
+        ),
+        (
+            "bookmark manager with categories",
+            "bookmark_category_multi_entity_demo",
+            {"Bookmark", "Category"},
+            "",
+            "",
+            {"bookmarks", "categories"},
+        ),
+    ],
+)
+def test_pipeline_idea_preserves_multi_entity_projection_in_canonical_inspect(
+    tmp_path: Path,
+    monkeypatch,
+    idea: str,
+    project_name: str,
+    required_entities: set[str],
+    relation_entity: str,
+    relation_field: str,
+    required_resources: set[str],
+) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_seed_scaffold)
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            idea,
+            "--out",
+            str(tmp_path),
+            "--name",
+            project_name,
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+
+    project_dir = tmp_path / project_name
+    detail = build_project_detail(project_dir)
+    analysis = detail.analysis if isinstance(detail.analysis, dict) else {}
+
+    entities = {str(x) for x in (analysis.get("entities") or []) if str(x).strip()}
+    assert required_entities.issubset(entities)
+    assert detail.spec_summary.entities >= len(required_entities)
+
+    fields_by_entity = analysis.get("fields_by_entity") if isinstance(analysis.get("fields_by_entity"), dict) else {}
+    if relation_entity and relation_field:
+        rows = fields_by_entity.get(relation_entity) if isinstance(fields_by_entity.get(relation_entity), list) else []
+        field_names = {str(item.get("name") or "").strip() for item in rows if isinstance(item, dict)}
+        assert relation_field in field_names
+
+    apis = analysis.get("apis") if isinstance(analysis.get("apis"), list) else []
+    resources_in_api = {
+        str(item.get("path") or "").strip().split("/", 2)[1]
+        for item in apis
+        if isinstance(item, dict) and str(item.get("path") or "").strip().startswith("/") and len(str(item.get("path") or "").strip().split("/")) >= 2
+    }
+    pages = {str(x) for x in (analysis.get("pages") or []) if str(x).strip()}
+    resources_in_pages = {page.split("/", 1)[0] for page in pages if "/" in page}
+    assert required_resources.issubset(resources_in_api | resources_in_pages)
+
+
 def test_pipeline_continue_does_not_erase_persisted_spec(tmp_path: Path, monkeypatch) -> None:
     diary_spec = {
         "entities": [

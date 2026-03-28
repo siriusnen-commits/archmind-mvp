@@ -119,6 +119,9 @@ def _normalize_plan_step_command(value: Any) -> str:
     command = parts[0].lower()
     args = parts[1:]
 
+    if command in {"/inspect", "/next", "/improve"} and not args:
+        return command
+
     if command == "/add_entity":
         if not args:
             return ""
@@ -130,22 +133,41 @@ def _normalize_plan_step_command(value: Any) -> str:
     if command == "/add_api":
         if len(args) < 2:
             return ""
-        method = str(args[0]).upper().strip()
-        path = str(args[1]).strip()
-        if not path:
+        normalized_endpoint = _normalize_api_endpoint(f"{args[0]} {args[1]}")
+        if not normalized_endpoint:
             return ""
-        if not path.startswith("/"):
-            path = f"/{path}"
-        return f"/add_api {method} {path}"
+        return f"/add_api {normalized_endpoint}"
     if command == "/add_page":
         if not args:
             return ""
-        return f"/add_page {args[0]}"
+        raw_page = str(args[0]).strip().replace("\\", "/").strip("/")
+        if not raw_page:
+            return ""
+        page_parts = [part for part in raw_page.split("/") if part]
+        if len(page_parts) == 1 and page_parts[0].lower() in {"list", "new", "detail", "home", "index", "create", "show", "view", "item"}:
+            return ""
+        normalized_page = _normalize_page_path(raw_page)
+        if not normalized_page:
+            return ""
+        if raw_page.lower() == "dashboard/home":
+            return "/add_page dashboard/home"
+        return f"/add_page {normalized_page}"
     if command == "/implement_page":
         if not args:
             return ""
-        return f"/implement_page {args[0]}"
-    return " ".join([command] + args)
+        raw_page = str(args[0]).strip().replace("\\", "/").strip("/")
+        if not raw_page:
+            return ""
+        page_parts = [part for part in raw_page.split("/") if part]
+        if len(page_parts) == 1 and page_parts[0].lower() in {"list", "new", "detail", "home", "index", "create", "show", "view", "item"}:
+            return ""
+        normalized_page = _normalize_page_path(raw_page)
+        if not normalized_page:
+            return ""
+        if raw_page.lower() == "dashboard/home":
+            return "/implement_page dashboard/home"
+        return f"/implement_page {normalized_page}"
+    return ""
 
 
 def _limit_steps(phases: list[dict[str, Any]], max_steps: int = 15) -> list[dict[str, Any]]:
