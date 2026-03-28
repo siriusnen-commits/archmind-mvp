@@ -393,19 +393,33 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
         backend_url, frontend_url, backend_urls, frontend_urls = _runtime_urls_for_display(status, runtime_payload, state_payload)
         backend_runtime = snapshot.get("backend") if isinstance(snapshot.get("backend"), dict) else {}
         frontend_runtime = snapshot.get("frontend") if isinstance(snapshot.get("frontend"), dict) else {}
-        progression = analyze_spec_progression(spec if isinstance(spec, dict) else {})
+        analysis = analyze_project(
+            project_dir,
+            project_name=project_dir.name,
+            spec_payload=spec if isinstance(spec, dict) else {},
+            runtime_payload=runtime_payload if isinstance(runtime_payload, dict) else {},
+        )
+        canonical_api_endpoints = [
+            f"{str(item.get('method') or '').strip().upper()} {str(item.get('path') or '').strip()}"
+            for item in (analysis.get("apis") or [])
+            if isinstance(item, dict) and str(item.get("method") or "").strip() and str(item.get("path") or "").strip()
+        ]
+        canonical_pages = [str(x) for x in (analysis.get("pages") or []) if str(x).strip()]
+        progression = analyze_spec_progression(
+            {
+                "shape": str(spec.get("shape") or state_payload.get("architecture_app_shape") or "unknown").strip() or "unknown",
+                "modules": spec.get("modules") if isinstance(spec.get("modules"), list) else [],
+                "entities": spec.get("entities") if isinstance(spec.get("entities"), list) else [],
+                "api_endpoints": canonical_api_endpoints,
+                "frontend_pages": canonical_pages,
+            }
+        )
         evolution = spec.get("evolution") if isinstance(spec.get("evolution"), dict) else {}
         history = evolution.get("history") if isinstance(evolution.get("history"), list) else []
         repository = resolve_repository_metadata(
             project_dir,
             state_payload=state_payload if isinstance(state_payload, dict) else {},
             result_payload=result_payload if isinstance(result_payload, dict) else {},
-        )
-        analysis = analyze_project(
-            project_dir,
-            project_name=project_dir.name,
-            spec_payload=spec if isinstance(spec, dict) else {},
-            runtime_payload=runtime_payload if isinstance(runtime_payload, dict) else {},
         )
         recent_runs_raw = load_recent_execution_events(project_dir, limit=10)
         recent_runs: list[dict[str, Any]] = []

@@ -537,3 +537,81 @@ def test_project_analysis_does_not_fallback_to_task_when_entry_exists(tmp_path: 
 
     assert "/add_entity Task" not in commands
     assert str(out["next_action"]["command"] or "").strip() != "/add_entity Task"
+
+
+def test_project_analysis_full_crud_does_not_emit_missing_crud_api(tmp_path: Path) -> None:
+    project_dir = tmp_path / "entries-full-crud"
+    spec = {
+        "entities": [{"name": "Entry", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": [
+            "GET /entries",
+            "POST /entries",
+            "GET /entries/{id}",
+            "PATCH /entries/{id}",
+            "DELETE /entries/{id}",
+        ],
+        "frontend_pages": ["entries/list", "entries/detail"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert out["entity_crud_status"]["Entry"]["api"]["detail"] is True
+    assert out["entity_crud_status"]["Entry"]["api"]["update"] is True
+    assert out["next_action"]["kind"] != "missing_crud_api"
+    assert str(out["next_action"]["command"] or "").strip() != "/add_api GET /entries/{id}"
+
+
+def test_project_analysis_missing_detail_emits_get_detail_command(tmp_path: Path) -> None:
+    project_dir = tmp_path / "entries-missing-detail"
+    spec = {
+        "entities": [{"name": "Entry", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": ["GET /entries", "POST /entries"],
+        "frontend_pages": ["entries/list", "entries/detail"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert out["next_action"]["kind"] == "missing_crud_api"
+    assert out["next_action"]["command"] == "/add_api GET /entries/{id}"
+
+
+def test_project_analysis_patch_satisfies_update_coverage(tmp_path: Path) -> None:
+    project_dir = tmp_path / "entries-patch-update"
+    spec = {
+        "entities": [{"name": "Entry", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": [
+            "GET /entries",
+            "POST /entries",
+            "GET /entries/{id}",
+            "PATCH /entries/{id}",
+            "DELETE /entries/{id}",
+        ],
+        "frontend_pages": ["entries/list", "entries/detail"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert out["entity_crud_status"]["Entry"]["api"]["update"] is True
+
+
+def test_project_analysis_put_satisfies_update_coverage(tmp_path: Path) -> None:
+    project_dir = tmp_path / "entries-put-update"
+    spec = {
+        "entities": [{"name": "Entry", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": [
+            "GET /entries",
+            "POST /entries",
+            "GET /entries/{id}",
+            "PUT /entries/{id}",
+            "DELETE /entries/{id}",
+        ],
+        "frontend_pages": ["entries/list", "entries/detail"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert out["entity_crud_status"]["Entry"]["api"]["update"] is True
+
+
+def test_project_analysis_canonicalizes_colon_id_path_for_detail_coverage(tmp_path: Path) -> None:
+    project_dir = tmp_path / "entries-colon-id"
+    spec = {
+        "entities": [{"name": "Entry", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": ["GET /entries/:id"],
+        "frontend_pages": [],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert any(item.get("method") == "GET" and item.get("path") == "/entries/{id}" for item in out["apis"])
+    assert out["entity_crud_status"]["Entry"]["api"]["detail"] is True
