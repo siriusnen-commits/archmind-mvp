@@ -3622,12 +3622,9 @@ async def command_suggest(update: Any, context: Any) -> None:
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 
 
-def _build_project_analysis(project_path: Path, *, use_canonical_spec: bool = True) -> dict[str, Any]:
+def _build_project_analysis_snapshot(project_path: Path, *, use_canonical_spec: bool = True) -> dict[str, Any]:
     if use_canonical_spec:
-        try:
-            spec_payload, _ = _read_or_init_project_spec(project_path)
-        except Exception:
-            spec_payload = _load_json(project_path / ".archmind" / "project_spec.json") or {}
+        spec_payload, _ = _read_or_init_project_spec(project_path)
     else:
         spec_payload = _load_json(project_path / ".archmind" / "project_spec.json") or {}
     try:
@@ -3636,12 +3633,23 @@ def _build_project_analysis(project_path: Path, *, use_canonical_spec: bool = Tr
         runtime_payload = get_local_runtime_status(project_path)
     except Exception:
         runtime_payload = {}
-    return analyze_project(
+    analysis = analyze_project(
         project_path,
         project_name=project_path.name,
         spec_payload=spec_payload if isinstance(spec_payload, dict) else {},
         runtime_payload=runtime_payload if isinstance(runtime_payload, dict) else {},
     )
+    return {
+        "spec_payload": spec_payload if isinstance(spec_payload, dict) else {},
+        "runtime_payload": runtime_payload if isinstance(runtime_payload, dict) else {},
+        "analysis": analysis if isinstance(analysis, dict) else {},
+    }
+
+
+def _build_project_analysis(project_path: Path, *, use_canonical_spec: bool = True) -> dict[str, Any]:
+    snapshot = _build_project_analysis_snapshot(project_path, use_canonical_spec=use_canonical_spec)
+    analysis = snapshot.get("analysis")
+    return analysis if isinstance(analysis, dict) else {}
 
 
 async def command_design(update: Any, context: Any) -> None:
@@ -4098,23 +4106,11 @@ async def command_inspect(update: Any, context: Any) -> None:
         return
 
     archmind_dir = project_path / ".archmind"
-    raw_spec = _load_json(archmind_dir / "project_spec.json") or {}
-    spec, _ = _read_or_init_project_spec(project_path)
+    snapshot = _build_project_analysis_snapshot(project_path, use_canonical_spec=True)
+    spec = snapshot.get("spec_payload") if isinstance(snapshot.get("spec_payload"), dict) else {}
+    analysis = snapshot.get("analysis") if isinstance(snapshot.get("analysis"), dict) else {}
     reasoning = _load_json(archmind_dir / "architecture_reasoning.json") or {}
     state = load_state(project_path) or {}
-
-    try:
-        from archmind.deploy import get_local_runtime_status
-
-        runtime_payload = get_local_runtime_status(project_path)
-    except Exception:
-        runtime_payload = {}
-    analysis = analyze_project(
-        project_path,
-        project_name=project_path.name,
-        spec_payload=spec if isinstance(spec, dict) else {},
-        runtime_payload=runtime_payload if isinstance(runtime_payload, dict) else {},
-    )
 
     shape = str(spec.get("shape") or reasoning.get("app_shape") or "unknown").strip() or "unknown"
     template = str(spec.get("template") or reasoning.get("recommended_template") or "unknown").strip() or "unknown"

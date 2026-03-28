@@ -5616,6 +5616,80 @@ def test_inspect_and_next_stay_consistent_for_seed_to_expanded_common_resources(
     assert f"Command: /add_api GET /{resource}/{{id}}" not in next_out
 
 
+@pytest.mark.parametrize(
+    ("entity_name", "resource"),
+    [
+        ("Task", "tasks"),
+        ("Board", "boards"),
+        ("Entry", "entries"),
+        ("Bookmark", "bookmarks"),
+        ("Recipe", "recipes"),
+    ],
+)
+def test_inspect_and_next_use_identical_canonical_spec_snapshot_for_analysis(
+    tmp_path: Path,
+    monkeypatch,
+    entity_name: str,
+    resource: str,
+) -> None:
+    project_dir = tmp_path / f"inspect-next-snapshot-{resource}"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "domains": [resource],
+                "template": "fastapi",
+                "modules": [],
+                "entities": [{"name": entity_name, "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": [
+                    f"GET /{resource}",
+                    f"POST /{resource}",
+                ],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    real_analyze_project = telegram_bot.analyze_project
+    seen_specs: list[dict[str, object]] = []
+    seen_api_sets: list[set[tuple[str, str]]] = []
+
+    def tracking_analyze_project(*args, **kwargs):
+        spec_payload = kwargs.get("spec_payload") if isinstance(kwargs.get("spec_payload"), dict) else {}
+        seen_specs.append(json.loads(json.dumps(spec_payload)))
+        result = real_analyze_project(*args, **kwargs)
+        apis = result.get("apis") if isinstance(result.get("apis"), list) else []
+        api_set = {
+            (str(item.get("method") or "").strip().upper(), str(item.get("path") or "").strip())
+            for item in apis
+            if isinstance(item, dict)
+        }
+        seen_api_sets.append(api_set)
+        return result
+
+    monkeypatch.setattr("archmind.telegram_bot.analyze_project", tracking_analyze_project)
+
+    inspect_msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=inspect_msg, effective_chat=DummyChat()), DummyContext()))
+    inspect_out = inspect_msg.sent[-1]
+    assert f"GET /{resource}/{{id}}" in inspect_out
+
+    next_msg = DummyMessage()
+    asyncio.run(command_next(DummyUpdate(message=next_msg, effective_chat=DummyChat()), DummyContext()))
+    next_out = next_msg.sent[-1]
+    assert f"Command: /add_api GET /{resource}/{{id}}" not in next_out
+
+    assert len(seen_specs) == 2
+    assert seen_specs[0] == seen_specs[1]
+    assert len(seen_api_sets) == 2
+    assert seen_api_sets[0] == seen_api_sets[1]
+    assert ("GET", f"/{resource}/{{id}}") in seen_api_sets[0]
+
+
 def test_next_command_recommends_add_page_when_api_exists_without_pages(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "next_missing_pages"
     archmind = project_dir / ".archmind"
