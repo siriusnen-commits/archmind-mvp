@@ -463,19 +463,76 @@ def _compute_entity_crud_status(
     canonical_resources = sorted(resource_api_presence.keys())
     status: dict[str, dict[str, Any]] = {}
 
-    for idx, entity in enumerate(entities):
-        inferred_resource = _entity_resource(entity)
-        resource = ""
+    def _singularize_resource_name(value: str) -> str:
+        raw = str(value or "").strip().lower()
+        if not raw:
+            return ""
+        if raw.endswith("ies") and len(raw) > 3:
+            return f"{raw[:-3]}y"
+        if raw.endswith("es") and len(raw) > 2 and raw[:-2].endswith(("s", "x", "z", "ch", "sh")):
+            return raw[:-2]
+        if raw.endswith("s") and len(raw) > 1:
+            return raw[:-1]
+        return raw
+
+    def _entity_resource_aliases(entity_name: str) -> set[str]:
+        slug = _entity_slug(entity_name)
+        if not slug:
+            return set()
+        tokens = [part for part in slug.split("_") if part]
+        aliases = {slug}
+        aliases.update(tokens)
+        if tokens:
+            aliases.add(tokens[0])
+            aliases.add(tokens[-1])
+        return {item for item in aliases if item}
+
+    def _resolve_resource_for_entity(entity_name: str, entity_index: int) -> str:
+        inferred_resource = _entity_resource(entity_name)
         if inferred_resource and inferred_resource in resource_api_presence:
-            resource = inferred_resource
-        elif len(canonical_resources) == 1:
-            resource = canonical_resources[0]
-        elif inferred_resource and any(page.startswith(f"{inferred_resource}/") for page in page_set):
-            resource = inferred_resource
-        elif idx < len(canonical_resources):
-            resource = canonical_resources[idx]
-        elif inferred_resource:
-            resource = inferred_resource
+            return inferred_resource
+        if not canonical_resources:
+            return inferred_resource
+
+        inferred_singular = _singularize_resource_name(inferred_resource)
+        aliases = _entity_resource_aliases(entity_name)
+        alias_singular = {_singularize_resource_name(item) for item in aliases if item}
+
+        best_resource = ""
+        best_score = -1
+        for resource in canonical_resources:
+            score = 0
+            resource_singular = _singularize_resource_name(resource)
+            if inferred_resource and resource == inferred_resource:
+                score += 100
+            if inferred_singular and resource_singular == inferred_singular:
+                score += 90
+            if resource in aliases:
+                score += 80
+            if resource_singular in alias_singular:
+                score += 70
+            if resource_singular and any(resource_singular == token for token in aliases):
+                score += 60
+            if resource_singular and any(token and token in resource_singular for token in alias_singular):
+                score += 30
+            if inferred_resource and any(page.startswith(f"{inferred_resource}/") for page in page_set) and resource == inferred_resource:
+                score += 40
+            if score > best_score:
+                best_score = score
+                best_resource = resource
+
+        if best_score > 0:
+            return best_resource
+        if inferred_resource and any(page.startswith(f"{inferred_resource}/") for page in page_set):
+            return inferred_resource
+        if len(canonical_resources) == 1:
+            return canonical_resources[0]
+        if entity_index < len(canonical_resources):
+            return canonical_resources[entity_index]
+        return inferred_resource
+
+    for idx, entity in enumerate(entities):
+        resource = _resolve_resource_for_entity(entity, idx)
 
         presence = resource_api_presence.get(
             resource,
