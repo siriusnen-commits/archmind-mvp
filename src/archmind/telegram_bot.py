@@ -3622,8 +3622,14 @@ async def command_suggest(update: Any, context: Any) -> None:
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 
 
-def _build_project_analysis(project_path: Path) -> dict[str, Any]:
-    spec_payload = _load_json(project_path / ".archmind" / "project_spec.json") or {}
+def _build_project_analysis(project_path: Path, *, use_canonical_spec: bool = True) -> dict[str, Any]:
+    if use_canonical_spec:
+        try:
+            spec_payload, _ = _read_or_init_project_spec(project_path)
+        except Exception:
+            spec_payload = _load_json(project_path / ".archmind" / "project_spec.json") or {}
+    else:
+        spec_payload = _load_json(project_path / ".archmind" / "project_spec.json") or {}
     try:
         from archmind.deploy import get_local_runtime_status
 
@@ -6175,7 +6181,7 @@ async def command_next(update: Any, context: Any) -> None:
         await update.message.reply_text(_no_active_project_guidance())
         return
 
-    analysis = _build_project_analysis(project_path)
+    analysis = _build_project_analysis(project_path, use_canonical_spec=True)
     next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
     message = str(next_action.get("message") or "").strip()
     command = str(next_action.get("command") or "").strip()
@@ -6278,7 +6284,7 @@ async def command_auto(update: Any, context: Any) -> None:
     run_id = f"auto-{int(time.time() * 1000)}-{project_path.name}"
 
     for idx in range(1, max_steps + 1):
-        analysis = _build_project_analysis(project_path)
+        analysis = _build_project_analysis(project_path, use_canonical_spec=True)
         kind, message, raw_command = _extract_next_action(analysis)
         priority = classify_auto_action_priority({"kind": kind, "message": message, "command": raw_command})
         normalized_command = _normalize_recommended_command(raw_command)
