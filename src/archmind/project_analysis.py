@@ -43,7 +43,9 @@ def _entity_slug(entity_name: str) -> str:
     value = str(entity_name or "").strip()
     if not value:
         return ""
-    return re.sub(r"(?<!^)(?=[A-Z])", "_", value).lower()
+    snake = re.sub(r"(?<!^)(?=[A-Z])", "_", value)
+    normalized = re.sub(r"[^a-z0-9_]+", "_", snake.lower()).strip("_")
+    return re.sub(r"_+", "_", normalized)
 
 
 def _entity_resource(entity_name: str) -> str:
