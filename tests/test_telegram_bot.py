@@ -1031,7 +1031,7 @@ def test_logs_frontend_uses_runtime_service_log_path(monkeypatch, tmp_path: Path
 
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "services": {
                 "backend": {"status": "NOT RUNNING", "log_path": "", "url": ""},
                 "frontend": {"status": "RUNNING", "log_path": str(frontend_log), "url": "http://127.0.0.1:3000"},
@@ -1216,7 +1216,7 @@ def test_retry_done_status_is_blocked_with_message(monkeypatch, tmp_path: Path) 
     project_dir.mkdir(parents=True, exist_ok=True)
     _mark_archmind_project(project_dir)
     monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project_dir)
-    monkeypatch.setattr("archmind.telegram_bot._status_from_sources", lambda _p: "DONE")
+    monkeypatch.setattr("archmind.telegram_bot._status_from_sources", lambda _p, **_kwargs: "DONE")
     msg = DummyMessage()
     update = DummyUpdate(message=msg, effective_chat=DummyChat())
     ctx = DummyContext(application=None)
@@ -1252,7 +1252,7 @@ def test_retry_sets_retrying_state_on_start(monkeypatch, tmp_path: Path) -> None
     project_dir.mkdir(parents=True, exist_ok=True)
     _mark_archmind_project(project_dir)
     monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: project_dir)
-    monkeypatch.setattr("archmind.telegram_bot._status_from_sources", lambda _p: "NOT_DONE")
+    monkeypatch.setattr("archmind.telegram_bot._status_from_sources", lambda _p, **_kwargs: "NOT_DONE")
     states: list[str] = []
 
     def fake_set_agent_state(project_dir_arg, state, **kwargs):  # type: ignore[no-untyped-def]
@@ -1603,7 +1603,7 @@ def test_use_by_index_works(monkeypatch, tmp_path: Path) -> None:
 
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
@@ -1655,7 +1655,7 @@ def test_use_by_project_name_works(monkeypatch, tmp_path: Path) -> None:
     )
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "RUNNING", "pid": 12001, "url": "http://127.0.0.1:8011"},
             "frontend": {"status": "RUNNING", "pid": 13001, "url": "http://127.0.0.1:3011"},
         },
@@ -1702,7 +1702,7 @@ def test_use_summary_shows_backend_running_frontend_stopped(monkeypatch, tmp_pat
     (arch / "state.json").write_text(json.dumps({"last_status": "DONE"}), encoding="utf-8")
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "RUNNING", "pid": 22001, "url": "http://127.0.0.1:8050"},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
@@ -1741,7 +1741,7 @@ def test_current_shows_selected_project(monkeypatch, tmp_path: Path) -> None:
     )
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "RUNNING", "pid": 22001, "url": "http://127.0.0.1:8050"},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
@@ -1778,7 +1778,7 @@ def test_current_uses_persisted_selection_when_in_memory_current_is_missing(monk
     monkeypatch.setattr("archmind.telegram_bot.get_validated_current_project", lambda: project)
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "STOPPED", "pid": None, "url": ""},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
@@ -1928,7 +1928,7 @@ def test_current_shows_frontend_url_when_frontend_running(monkeypatch, tmp_path:
     )
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "RUNNING", "pid": 22001, "url": "http://127.0.0.1:8050"},
             "frontend": {"status": "RUNNING", "pid": 22002, "url": "http://127.0.0.1:3000"},
         },
@@ -1955,7 +1955,7 @@ def test_current_shows_external_urls_when_runtime_running(monkeypatch, tmp_path:
     )
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "RUNNING", "pid": 22001, "url": "http://127.0.0.1:8050"},
             "frontend": {"status": "RUNNING", "pid": 22002, "url": "http://127.0.0.1:3000"},
         },
@@ -2077,7 +2077,7 @@ def test_current_status_is_stopped_after_stop_state(monkeypatch, tmp_path: Path)
     )
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
@@ -2109,7 +2109,7 @@ def test_current_status_is_running_after_successful_run_all(monkeypatch, tmp_pat
     )
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "RUNNING", "pid": 22001, "url": "http://127.0.0.1:8050"},
             "frontend": {"status": "RUNNING", "pid": 22002, "url": "http://127.0.0.1:3000"},
         },
@@ -2142,7 +2142,7 @@ def test_current_status_is_fail_after_runtime_run_failure(monkeypatch, tmp_path:
     )
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
@@ -2184,7 +2184,7 @@ def test_projects_type_fallback_from_template_and_shape(monkeypatch, tmp_path: P
 
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
@@ -2214,7 +2214,7 @@ def test_current_type_fallback_uses_template_when_project_type_unknown(monkeypat
     )
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
@@ -2254,7 +2254,7 @@ def test_fix_continue_retry_use_current_project_when_set(monkeypatch, tmp_path: 
     other.mkdir(parents=True, exist_ok=True)
     set_current_project(current)
     monkeypatch.setattr("archmind.telegram_bot.load_last_project_path", lambda: other)
-    monkeypatch.setattr("archmind.telegram_bot._status_from_sources", lambda _p: "NOT_DONE")
+    monkeypatch.setattr("archmind.telegram_bot._status_from_sources", lambda _p, **_kwargs: "NOT_DONE")
 
     used: list[Path] = []
 
@@ -2675,7 +2675,7 @@ def test_suggest_command_outputs_suggestion_list(tmp_path: Path, monkeypatch) ->
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
     monkeypatch.setattr(
         "archmind.telegram_bot._build_project_analysis",
-        lambda _project: {
+        lambda _project, **_kwargs: {
             "suggestions": [
                 {"kind": "api", "message": "Add update endpoint for Task.", "command": "/add_api PUT /tasks/{id}"},
                 {"kind": "page", "message": "Add detail page for Task.", "command": "/add_page tasks/detail"},
@@ -2704,7 +2704,7 @@ def test_suggest_command_canonicalizes_and_filters_malformed_commands(tmp_path: 
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
     monkeypatch.setattr(
         "archmind.telegram_bot._build_project_analysis",
-        lambda _project: {
+        lambda _project, **_kwargs: {
             "suggestions": [
                 {
                     "kind": "placeholder_page",
@@ -2740,7 +2740,7 @@ def test_next_command_outputs_implement_page_for_existing_placeholder_page(tmp_p
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
     monkeypatch.setattr(
         "archmind.telegram_bot._build_project_analysis",
-        lambda _project: {
+        lambda _project, **_kwargs: {
             "next_action": {
                 "kind": "placeholder_page",
                 "message": "Page tasks/list is still placeholder-level. Implement a usable UI flow.",
@@ -2890,7 +2890,7 @@ def test_inspect_command_summarizes_project_spec_reasoning_and_state(tmp_path: P
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "RUNNING", "pid": 12001, "url": "http://127.0.0.1:8011"},
             "frontend": {"status": "RUNNING", "pid": 13001, "url": "http://127.0.0.1:3011"},
         },
@@ -3341,7 +3341,7 @@ def test_inspect_command_prefers_live_runtime_over_stale_fail_state(tmp_path: Pa
     )
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "RUNNING", "pid": 45127, "url": "http://127.0.0.1:8000"},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
@@ -3375,7 +3375,7 @@ def test_inspect_and_running_show_consistent_runtime_for_current_project(tmp_pat
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "project_dir": project_dir,
             "project_name": project_dir.name,
             "backend": {"status": "RUNNING", "pid": 55123, "url": "http://127.0.0.1:8000"},
@@ -3427,7 +3427,7 @@ def test_inspect_command_shows_fail_only_when_not_running_with_unresolved_failur
     )
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
@@ -3459,7 +3459,7 @@ def test_inspect_command_shows_runtime_status_and_backend_runtime_info_together(
     )
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "RUNNING", "pid": 42001, "url": "http://127.0.0.1:8010"},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
@@ -3497,7 +3497,7 @@ def test_inspect_command_separates_runtime_url_from_deploy_state(tmp_path: Path,
     )
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "RUNNING", "pid": 77123, "url": "http://127.0.0.1:8000"},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
@@ -3537,7 +3537,7 @@ def test_inspect_command_labels_stale_frontend_url_as_last_known_when_not_runnin
     )
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "RUNNING", "pid": 88001, "url": "http://127.0.0.1:8011"},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": "http://127.0.0.1:3011"},
         },
@@ -3913,7 +3913,7 @@ def test_improve_command_suppresses_cors_only_env_hint_when_runtime_healthy(tmp_
     )
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "RUNNING", "pid": 22001, "url": "http://127.0.0.1:8000"},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
@@ -3982,7 +3982,7 @@ def test_improve_command_suppresses_env_repair_when_runtime_services_are_healthy
     )
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "RUNNING", "pid": 32001, "url": "http://127.0.0.1:8017"},
             "frontend": {"status": "RUNNING", "pid": 32002, "url": "http://127.0.0.1:3017"},
         },
@@ -4729,7 +4729,7 @@ def test_add_field_auto_restart_skipped_when_backend_not_running(tmp_path: Path,
 
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {"backend": {"status": "NOT RUNNING", "url": ""}, "frontend": {"status": "NOT RUNNING", "url": ""}},
+        lambda _p, **_kwargs: {"backend": {"status": "NOT RUNNING", "url": ""}, "frontend": {"status": "NOT RUNNING", "url": ""}},
     )
 
     def fake_restart(_p):  # type: ignore[no-untyped-def]
@@ -5162,7 +5162,7 @@ def test_suggest_command_no_suggestions_shows_guidance(tmp_path: Path, monkeypat
     project_dir = tmp_path / "task_tracker"
     project_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
-    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _project: {"suggestions": []})
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _project, **_kwargs: {"suggestions": []})
 
     msg = DummyMessage()
     update = DummyUpdate(message=msg, effective_chat=DummyChat())
@@ -5400,7 +5400,7 @@ def test_next_command_recommends_add_field_for_entity_without_fields(tmp_path: P
         assert f"Command: {expected_command}" in out
 
 
-def test_next_command_prioritizes_missing_api_before_pages_for_entity(tmp_path: Path, monkeypatch) -> None:
+def test_next_command_uses_canonical_expanded_spec_for_entity_seed(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "task_tracker"
     archmind = project_dir / ".archmind"
     archmind.mkdir(parents=True, exist_ok=True)
@@ -5423,12 +5423,11 @@ def test_next_command_prioritizes_missing_api_before_pages_for_entity(tmp_path: 
     msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     out = msg.sent[-1]
-    assert "/add_api GET /tasks/{id}" in out
-    assert "/add_page tasks/list" not in out
-    assert "Command: /add_api GET /tasks/{id}" in out
+    assert "Command: /add_api GET /tasks/{id}" not in out
+    assert "Command: /add_field Task description:string" in out
 
 
-def test_next_command_recommends_add_api_when_entity_exists_without_apis(tmp_path: Path, monkeypatch) -> None:
+def test_next_command_does_not_report_missing_crud_for_backend_seed_after_expansion(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "next_missing_api"
     archmind = project_dir / ".archmind"
     archmind.mkdir(parents=True, exist_ok=True)
@@ -5450,10 +5449,11 @@ def test_next_command_recommends_add_api_when_entity_exists_without_apis(tmp_pat
     msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     out = msg.sent[-1]
-    assert "/add_api GET /notes/{id}" in out
+    assert "No immediate next action." in out
+    assert "Command: /add_api GET /notes/{id}" not in out
 
 
-def test_next_command_diary_crud_gap_is_actionable_not_diagnosis_only(tmp_path: Path, monkeypatch) -> None:
+def test_next_command_diary_seed_does_not_false_positive_missing_detail_api(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "next_diary_crud_gap"
     archmind = project_dir / ".archmind"
     archmind.mkdir(parents=True, exist_ok=True)
@@ -5476,7 +5476,8 @@ def test_next_command_diary_crud_gap_is_actionable_not_diagnosis_only(tmp_path: 
     asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     out = msg.sent[-1]
     assert "incomplete CRUD API coverage" not in out
-    assert "Command: /add_api GET /entries/{id}" in out
+    assert "Command: /add_api GET /entries/{id}" not in out
+    assert "No immediate next action." in out
 
 
 def test_inspect_and_next_use_consistent_canonical_api_list_for_crud(tmp_path: Path, monkeypatch) -> None:
@@ -5525,11 +5526,12 @@ def test_inspect_and_next_use_consistent_canonical_api_list_for_crud(tmp_path: P
     [
         ("Task", "tasks"),
         ("Board", "boards"),
+        ("Entry", "entries"),
         ("Bookmark", "bookmarks"),
         ("Recipe", "recipes"),
     ],
 )
-def test_inspect_and_next_stay_consistent_for_common_resources(
+def test_inspect_and_next_stay_consistent_for_seed_to_expanded_common_resources(
     tmp_path: Path,
     monkeypatch,
     entity_name: str,
@@ -5549,9 +5551,6 @@ def test_inspect_and_next_stay_consistent_for_common_resources(
                 "api_endpoints": [
                     f"GET /{resource}",
                     f"POST /{resource}",
-                    f"GET /{resource}/{{id}}",
-                    f"PATCH /{resource}/{{id}}",
-                    f"DELETE /{resource}/{{id}}",
                 ],
                 "frontend_pages": [],
             }
@@ -5700,7 +5699,7 @@ def test_next_command_uses_single_analysis_next_action_only(tmp_path: Path, monk
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
     monkeypatch.setattr(
         "archmind.telegram_bot._build_project_analysis",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "suggestions": [
                 {"kind": "missing_crud_api", "message": "s1", "command": "/add_api GET /tasks"},
                 {"kind": "missing_page", "message": "s2", "command": "/add_page tasks/list"},
@@ -5853,7 +5852,7 @@ def test_next_command_omits_command_line_when_next_action_command_is_empty(tmp_p
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
     monkeypatch.setattr(
         "archmind.telegram_bot._build_project_analysis",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""},
             "suggestions": [],
         },
@@ -5880,7 +5879,7 @@ def test_auto_command_stops_when_no_immediate_next_action(tmp_path: Path, monkey
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
     monkeypatch.setattr(
         "archmind.telegram_bot._build_project_analysis",
-        lambda _p: {"next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""}},
+        lambda _p, **_kwargs: {"next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""}},
     )
     msg = DummyMessage()
     asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
@@ -5909,7 +5908,7 @@ def test_auto_command_executes_valid_next_actions(tmp_path: Path, monkeypatch) -
             {"next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""}},
         ]
     )
-    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p: next(sequence))
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p, **_kwargs: next(sequence))
     executed_commands: list[str] = []
 
     def _fake_execute(command: str, _project_name: str, **_kwargs: Any) -> dict[str, object]:
@@ -5936,7 +5935,7 @@ def test_auto_command_stops_on_repeated_command(tmp_path: Path, monkeypatch) -> 
             {"next_action": {"kind": "missing_page", "message": "implement again", "command": "/implement_page tasks/list"}},
         ]
     )
-    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p: next(sequence))
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p, **_kwargs: next(sequence))
     calls = {"count": 0}
 
     def _fake_execute(command: str, _project_name: str, **_kwargs: Any) -> dict[str, Any]:
@@ -5958,7 +5957,7 @@ def test_auto_command_stops_on_command_failure(tmp_path: Path, monkeypatch) -> N
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
     monkeypatch.setattr(
         "archmind.telegram_bot._build_project_analysis",
-        lambda _p: {"next_action": {"kind": "missing_field", "message": "add field", "command": "/add_field Task title:string"}},
+        lambda _p, **_kwargs: {"next_action": {"kind": "missing_field", "message": "add field", "command": "/add_field Task title:string"}},
     )
     monkeypatch.setattr(
         "archmind.telegram_bot.execute_command",
@@ -5983,7 +5982,7 @@ def test_auto_command_respects_max_step_cap_and_allowed_commands(tmp_path: Path,
             {"next_action": {"kind": "k3", "message": "m3", "command": "/run all"}},
         ]
     )
-    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p: next(sequence))
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p, **_kwargs: next(sequence))
     executed: list[str] = []
     monkeypatch.setattr(
         "archmind.telegram_bot.execute_command",
@@ -6004,7 +6003,7 @@ def test_auto_command_stops_on_low_priority_next_action(tmp_path: Path, monkeypa
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
     monkeypatch.setattr(
         "archmind.telegram_bot._build_project_analysis",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "next_action": {
                 "kind": "missing_field",
                 "message": "Task is missing an important field: created_at",
@@ -6036,7 +6035,7 @@ def test_auto_command_stops_on_repeated_low_value_pattern(tmp_path: Path, monkey
             {"next_action": {"kind": "missing_page", "message": "Reminder is missing list page coverage.", "command": "/add_page reminders/list"}},
         ]
     )
-    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p: next(sequence))
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p, **_kwargs: next(sequence))
     executed: list[str] = []
     monkeypatch.setattr(
         "archmind.telegram_bot.execute_command",
@@ -6050,7 +6049,7 @@ def test_auto_command_stops_on_repeated_low_value_pattern(tmp_path: Path, monkey
     assert "- Stopped: repeated low-value pattern" in out
 
 
-def test_auto_command_prioritizes_missing_page_before_placeholder_implementation(tmp_path: Path, monkeypatch) -> None:
+def test_auto_command_uses_canonical_pages_before_placeholder_implementation(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "auto_existing_placeholder_page"
     archmind = project_dir / ".archmind"
     archmind.mkdir(parents=True, exist_ok=True)
@@ -6089,9 +6088,10 @@ def test_auto_command_prioritizes_missing_page_before_placeholder_implementation
     msg = DummyMessage()
     asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext(args=["1"])))
     out = msg.sent[-1]
-    assert executed == ["/add_page songs/list"]
-    assert "- Next: /add_page songs/list" in out
-    assert "/implement_page songs/favorite" not in out
+    assert executed == ["/implement_page songs/favorite"]
+    assert "- Next: /implement_page songs/favorite" in out
+
+
 def test_improve_suggestion_button_dispatches_add_field_command(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "improve_button_dispatch_add_field"
     archmind = project_dir / ".archmind"
@@ -7107,7 +7107,7 @@ def test_run_all_fullstack_runs_backend_and_frontend(monkeypatch, tmp_path: Path
 
     monkeypatch.setattr(
         "archmind.runtime_orchestrator.run_all_local_services",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "ok": True,
             "target": "local",
             "mode": "real",
@@ -7167,7 +7167,7 @@ def test_run_all_backend_only_skips_frontend(monkeypatch, tmp_path: Path) -> Non
     set_current_project(project)
     monkeypatch.setattr(
         "archmind.runtime_orchestrator.run_all_local_services",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "ok": True,
             "target": "local",
             "mode": "real",
@@ -7202,14 +7202,14 @@ def test_run_backend_success_message_and_running_integration(monkeypatch, tmp_pa
 
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
     )
     monkeypatch.setattr(
         "archmind.deploy.run_backend_local_with_health",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "ok": True,
             "target": "local",
             "mode": "real",
@@ -7249,14 +7249,14 @@ def test_run_backend_failure_message(monkeypatch, tmp_path: Path) -> None:
 
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
     )
     monkeypatch.setattr(
         "archmind.deploy.run_backend_local_with_health",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "ok": False,
             "target": "local",
             "mode": "real",
@@ -7291,14 +7291,14 @@ def test_run_backend_success_message_after_auto_fix(monkeypatch, tmp_path: Path)
 
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
     )
     monkeypatch.setattr(
         "archmind.deploy.run_backend_local_with_health",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "ok": True,
             "target": "local",
             "mode": "real",
@@ -7337,14 +7337,14 @@ def test_run_backend_failure_message_includes_auto_fix_attempts(monkeypatch, tmp
 
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
     )
     monkeypatch.setattr(
         "archmind.deploy.run_backend_local_with_health",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "ok": False,
             "target": "local",
             "mode": "real",
@@ -7381,14 +7381,14 @@ def test_run_backend_message_includes_preflight_status(monkeypatch, tmp_path: Pa
 
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
     )
     monkeypatch.setattr(
         "archmind.deploy.run_backend_local_with_health",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "ok": True,
             "target": "local",
             "mode": "real",
@@ -7426,7 +7426,7 @@ def test_run_backend_skips_when_already_running(monkeypatch, tmp_path: Path) -> 
     set_current_project(project)
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "RUNNING", "pid": 9999, "url": "http://127.0.0.1:8128"},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
@@ -7483,7 +7483,7 @@ def test_stop_local_stops_services_and_prints_status(monkeypatch, tmp_path: Path
 
     monkeypatch.setattr(
         "archmind.deploy.stop_local_services",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "ok": True,
             "target": "local",
             "backend": {"status": "STOPPED", "pid": 12001, "detail": ""},
@@ -7510,7 +7510,7 @@ def test_stop_local_when_not_running(monkeypatch, tmp_path: Path) -> None:
 
     monkeypatch.setattr(
         "archmind.deploy.stop_local_services",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "ok": True,
             "target": "local",
             "backend": {"status": "NOT RUNNING", "pid": None, "detail": ""},
@@ -7557,7 +7557,7 @@ def test_stop_local_includes_warning_section_when_present(monkeypatch, tmp_path:
 
     monkeypatch.setattr(
         "archmind.deploy.stop_local_services",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "ok": True,
             "target": "local",
             "warnings": ["backend process lingered briefly but service is down"],
@@ -7589,7 +7589,7 @@ def test_restart_local_restarts_services_and_displays_urls(monkeypatch, tmp_path
     set_current_project(project)
     monkeypatch.setattr(
         "archmind.deploy.restart_local_services",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "ok": True,
             "target": "local",
             "backend": {"status": "RESTARTED", "url": "http://127.0.0.1:8011", "detail": ""},
@@ -7598,7 +7598,7 @@ def test_restart_local_restarts_services_and_displays_urls(monkeypatch, tmp_path
     )
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "RUNNING", "url": "http://127.0.0.1:8011"},
             "frontend": {"status": "RUNNING", "url": "http://127.0.0.1:3011"},
         },
@@ -7625,7 +7625,7 @@ def test_restart_local_when_not_running(monkeypatch, tmp_path: Path) -> None:
     set_current_project(project)
     monkeypatch.setattr(
         "archmind.deploy.restart_local_services",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "ok": True,
             "target": "local",
             "backend": {"status": "NOT RUNNING", "url": "", "detail": ""},
@@ -7634,7 +7634,7 @@ def test_restart_local_when_not_running(monkeypatch, tmp_path: Path) -> None:
     )
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "NOT RUNNING", "url": ""},
             "frontend": {"status": "NOT RUNNING", "url": ""},
         },
@@ -7655,7 +7655,7 @@ def test_restart_local_shows_preflight_db_init_skip_without_failure(monkeypatch,
     set_current_project(project)
     monkeypatch.setattr(
         "archmind.deploy.restart_local_services",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "ok": True,
             "target": "local",
             "backend": {"status": "RESTARTED", "url": "http://127.0.0.1:8012", "detail": "local backend started"},
@@ -7671,7 +7671,7 @@ def test_restart_local_shows_preflight_db_init_skip_without_failure(monkeypatch,
     )
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "RUNNING", "url": "http://127.0.0.1:8012"},
             "frontend": {"status": "NOT RUNNING", "url": ""},
         },
@@ -8072,7 +8072,7 @@ def test_watch_pipeline_and_notify_appends_auto_run_result(monkeypatch, tmp_path
     app = DummyApp()
     monkeypatch.setattr("archmind.telegram_bot._wait_for_latest_artifacts", lambda *_a, **_k: None)
     monkeypatch.setattr("archmind.telegram_bot.build_completion_message", lambda *_a, **_k: "Project created")
-    monkeypatch.setattr("archmind.telegram_bot._auto_run_backend_after_idea_local", lambda _p: "Backend:\nRUNNING")
+    monkeypatch.setattr("archmind.telegram_bot._auto_run_backend_after_idea_local", lambda _p, **_kwargs: "Backend:\nRUNNING")
 
     asyncio.run(
         watch_pipeline_and_notify(
@@ -8123,10 +8123,10 @@ def test_idea_local_sets_auto_run_backend_flag_for_watcher(monkeypatch, tmp_path
 def test_auto_run_backend_after_idea_local_detect_ok_runs_backend(monkeypatch, tmp_path: Path) -> None:
     project_dir = tmp_path / "idea_local_autorun_ok"
     project_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr("archmind.telegram_bot.load_state", lambda _p: {"effective_template": "fastapi"})
+    monkeypatch.setattr("archmind.telegram_bot.load_state", lambda _p, **_kwargs: {"effective_template": "fastapi"})
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
@@ -8137,7 +8137,7 @@ def test_auto_run_backend_after_idea_local_detect_ok_runs_backend(monkeypatch, t
     )
     monkeypatch.setattr(
         "archmind.deploy.run_backend_local_with_health",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "ok": True,
             "status": "SUCCESS",
             "url": "http://127.0.0.1:8131",
@@ -8155,10 +8155,10 @@ def test_auto_run_backend_after_idea_local_detect_ok_runs_backend(monkeypatch, t
 def test_auto_run_backend_after_idea_local_detect_fail_skips(monkeypatch, tmp_path: Path) -> None:
     project_dir = tmp_path / "idea_local_autorun_skip"
     project_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr("archmind.telegram_bot.load_state", lambda _p: {"effective_template": "fastapi"})
+    monkeypatch.setattr("archmind.telegram_bot.load_state", lambda _p, **_kwargs: {"effective_template": "fastapi"})
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
@@ -8170,7 +8170,7 @@ def test_auto_run_backend_after_idea_local_detect_fail_skips(monkeypatch, tmp_pa
     called = {"run": 0}
     monkeypatch.setattr(
         "archmind.deploy.run_backend_local_with_health",
-        lambda _p: called.__setitem__("run", called["run"] + 1) or {"status": "SUCCESS"},
+        lambda _p, **_kwargs: called.__setitem__("run", called["run"] + 1) or {"status": "SUCCESS"},
     )
     out = telegram_bot._auto_run_backend_after_idea_local(project_dir)
     assert called["run"] == 0
@@ -8181,10 +8181,10 @@ def test_auto_run_backend_after_idea_local_detect_fail_skips(monkeypatch, tmp_pa
 def test_auto_run_backend_after_idea_local_fail_response(monkeypatch, tmp_path: Path) -> None:
     project_dir = tmp_path / "idea_local_autorun_fail"
     project_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr("archmind.telegram_bot.load_state", lambda _p: {"effective_template": "fastapi"})
+    monkeypatch.setattr("archmind.telegram_bot.load_state", lambda _p, **_kwargs: {"effective_template": "fastapi"})
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
@@ -8195,7 +8195,7 @@ def test_auto_run_backend_after_idea_local_fail_response(monkeypatch, tmp_path: 
     )
     monkeypatch.setattr(
         "archmind.deploy.run_backend_local_with_health",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "ok": False,
             "status": "FAIL",
             "url": "",
@@ -8217,10 +8217,10 @@ def test_auto_run_backend_after_idea_local_injects_runtime_env_defaults(monkeypa
     (project_dir / "backend" / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
     (project_dir / "backend" / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
     (project_dir / "frontend").mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr("archmind.telegram_bot.load_state", lambda _p: {"effective_template": "fullstack-ddd"})
+    monkeypatch.setattr("archmind.telegram_bot.load_state", lambda _p, **_kwargs: {"effective_template": "fullstack-ddd"})
     monkeypatch.setattr(
         "archmind.deploy.get_local_runtime_status",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
             "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
         },
@@ -8232,7 +8232,7 @@ def test_auto_run_backend_after_idea_local_injects_runtime_env_defaults(monkeypa
     )
     monkeypatch.setattr(
         "archmind.deploy.run_backend_local_with_health",
-        lambda _p: {
+        lambda _p, **_kwargs: {
             "ok": True,
             "status": "SUCCESS",
             "url": "http://127.0.0.1:8131",

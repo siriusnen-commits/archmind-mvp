@@ -596,8 +596,11 @@ def add_project_page(project_dir: Path, page_path: str) -> dict[str, Any]:
 
 
 def build_project_analysis(project_dir: Path) -> dict[str, Any]:
-    archmind_dir = project_dir / ".archmind"
-    spec_payload = _load_json(archmind_dir / "project_spec.json") or {}
+    try:
+        spec_payload, _ = _read_or_init_project_spec(project_dir)
+    except Exception:
+        archmind_dir = project_dir / ".archmind"
+        spec_payload = _load_json(archmind_dir / "project_spec.json") or {}
     runtime_payload = get_local_runtime_status(project_dir)
     return analyze_project(
         project_dir,
