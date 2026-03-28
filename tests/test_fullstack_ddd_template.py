@@ -92,17 +92,25 @@ def test_fullstack_scaffolds_entities_and_pages_from_project_spec(tmp_path: Path
     entry_model = project_dir / "backend" / "app" / "models" / "entry.py"
     frontend_entries = project_dir / "frontend" / "app" / "entries" / "page.tsx"
     navigation_file = project_dir / "frontend" / "app" / "_lib" / "navigation.ts"
+    frontend_root = project_dir / "frontend" / "app" / "page.tsx"
+    frontend_layout = project_dir / "frontend" / "app" / "layout.tsx"
 
     assert entry_router.exists()
     assert entry_model.exists()
     assert frontend_entries.exists()
     assert navigation_file.exists()
+    assert frontend_root.exists()
+    assert frontend_layout.exists()
 
     assert "title: str" in entry_model.read_text(encoding="utf-8")
     assert "content: str" in entry_model.read_text(encoding="utf-8")
     assert "from app.routers.entry import router as entry_router" in main_file.read_text(encoding="utf-8")
     assert 'fetch(`${apiBaseUrl}/entries`' in frontend_entries.read_text(encoding="utf-8")
     assert 'href: "/entries"' in navigation_file.read_text(encoding="utf-8")
+    assert "ArchMind Fullstack Workspace" not in frontend_root.read_text(encoding="utf-8")
+    assert "This scaffold is domain-neutral." not in frontend_root.read_text(encoding="utf-8")
+    assert 'from "./_lib/navigation"' in frontend_root.read_text(encoding="utf-8")
+    assert "APP_NAV_LINKS.map" in frontend_layout.read_text(encoding="utf-8")
 
 
 def test_fullstack_spec_driven_crud_works_for_diary_entry(tmp_path: Path) -> None:
