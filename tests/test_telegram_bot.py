@@ -3469,6 +3469,44 @@ def test_inspect_command_separates_runtime_url_from_deploy_state(tmp_path: Path,
     assert "Target: railway" in out
 
 
+def test_inspect_command_labels_stale_frontend_url_as_last_known_when_not_running(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect_stale_frontend_url"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps({"shape": "fullstack", "template": "fullstack-ddd", "modules": [], "entities": [], "api_endpoints": [], "frontend_pages": []}),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "frontend_smoke_status": "SUCCESS",
+                "frontend_smoke_url": "http://127.0.0.1:3011",
+                "runtime": {"frontend_url": "http://127.0.0.1:3011", "frontend_status": "STOPPED"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p: {
+            "backend": {"status": "RUNNING", "pid": 88001, "url": "http://127.0.0.1:8011"},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": "http://127.0.0.1:3011"},
+        },
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Frontend: NOT RUNNING" in out
+    assert "\nFrontend URL:\n" not in out
+    assert "Last Frontend URL:" in out
+    assert "http://127.0.0.1:3011" in out
+
+
 def test_improve_command_without_project_shows_guidance(monkeypatch) -> None:
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: None)
     msg = DummyMessage()

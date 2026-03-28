@@ -46,6 +46,7 @@ from archmind.next_suggester import analyze_spec_progression, suggest_next_comma
 from archmind.plan_suggester import build_plan_from_project_spec, build_plan_from_suggestion
 from archmind.project_type import detect_project_type, normalize_project_type
 from archmind.project_analysis import analyze_project, canonicalize_analysis_suggestions
+from archmind.runtime_status import build_runtime_snapshot
 from archmind.execution_history import append_execution_event, load_recent_execution_events
 from archmind.design_suggester import build_architecture_design
 from archmind.spec_suggester import suggest_project_spec
@@ -4010,30 +4011,34 @@ async def command_current(update: Any, context: Any) -> None:
     status = "STOPPED"
     project_type = _resolve_project_type(state_payload, project_path)
     template = str(state_payload.get("effective_template") or "unknown").strip() or "unknown"
-    runtime_backend = "STOPPED"
+    runtime_backend = "NOT RUNNING"
     runtime_frontend = "NOT RUNNING"
     backend_url = str(state_payload.get("backend_deploy_url") or "").strip()
     frontend_url = str(state_payload.get("frontend_deploy_url") or "").strip()
+    backend_last_known_url = backend_url
+    frontend_last_known_url = frontend_url
     try:
         from archmind.deploy import get_local_runtime_status
 
         runtime_payload = get_local_runtime_status(project_path)
-        backend = runtime_payload.get("backend") if isinstance(runtime_payload, dict) else {}
-        frontend = runtime_payload.get("frontend") if isinstance(runtime_payload, dict) else {}
-        if isinstance(backend, dict):
-            runtime_backend = "RUNNING" if str(backend.get("status") or "").strip().upper() == "RUNNING" else "STOPPED"
-            backend_url = str(backend.get("url") or backend_url).strip()
-        if isinstance(frontend, dict):
-            runtime_frontend = (
-                "RUNNING" if str(frontend.get("status") or "").strip().upper() == "RUNNING" else "NOT RUNNING"
-            )
-            frontend_url = str(frontend.get("url") or frontend_url).strip()
+        snapshot = build_runtime_snapshot(runtime_payload if isinstance(runtime_payload, dict) else {}, state_payload)
+        backend = snapshot.get("backend") if isinstance(snapshot.get("backend"), dict) else {}
+        frontend = snapshot.get("frontend") if isinstance(snapshot.get("frontend"), dict) else {}
+        runtime_backend = str(backend.get("status") or "NOT RUNNING").strip().upper() or "NOT RUNNING"
+        runtime_frontend = str(frontend.get("status") or "NOT RUNNING").strip().upper() or "NOT RUNNING"
+        backend_url = str(backend.get("url") or "").strip()
+        frontend_url = str(frontend.get("url") or "").strip()
+        backend_last_known_url = str(backend.get("last_known_url") or backend_last_known_url).strip()
+        frontend_last_known_url = str(frontend.get("last_known_url") or frontend_last_known_url).strip()
     except Exception:
         runtime_payload = {}
-        if state_payload.get("backend_pid") is not None:
-            runtime_backend = "RUNNING"
-        if state_payload.get("frontend_pid") is not None:
-            runtime_frontend = "RUNNING"
+        snapshot = build_runtime_snapshot({}, state_payload)
+        backend = snapshot.get("backend") if isinstance(snapshot.get("backend"), dict) else {}
+        frontend = snapshot.get("frontend") if isinstance(snapshot.get("frontend"), dict) else {}
+        runtime_backend = str(backend.get("status") or runtime_backend).strip().upper() or "NOT RUNNING"
+        runtime_frontend = str(frontend.get("status") or runtime_frontend).strip().upper() or "NOT RUNNING"
+        backend_last_known_url = str(backend.get("last_known_url") or backend_last_known_url).strip()
+        frontend_last_known_url = str(frontend.get("last_known_url") or frontend_last_known_url).strip()
 
     status = _project_runtime_status(project_path, state_payload, result_payload, runtime_payload)
 
@@ -4047,12 +4052,16 @@ async def command_current(update: Any, context: Any) -> None:
         external_backend_url = _external_url_for(backend_url, external_ip)
         if runtime_backend == "RUNNING" and external_backend_url:
             runtime_lines.append(f"External URL: {external_backend_url}")
+    elif backend_last_known_url:
+        runtime_lines.append(f"Last Backend URL: {backend_last_known_url}")
     runtime_lines.append(f"Frontend: {runtime_frontend}")
     if runtime_frontend == "RUNNING" and frontend_url:
         runtime_lines.append(f"Frontend URL: {frontend_url}")
         external_frontend_url = _external_url_for(frontend_url, external_ip)
         if external_frontend_url:
             runtime_lines.append(f"External URL: {external_frontend_url}")
+    elif frontend_last_known_url:
+        runtime_lines.append(f"Last Frontend URL: {frontend_last_known_url}")
 
     message = (
         "Current project\n\n"
@@ -4193,6 +4202,7 @@ async def command_inspect(update: Any, context: Any) -> None:
     runtime_failure_class = str(runtime_ctx.get("failure_class") or "").strip()
     api_base_url = _read_frontend_api_base_url(project_path)
 
+    live_runtime: dict[str, Any] = {}
     try:
         from archmind.deploy import get_local_runtime_status
 
@@ -4223,8 +4233,16 @@ async def command_inspect(update: Any, context: Any) -> None:
     except Exception:
         pass
 
-    runtime_backend = str(backend_service.get("status") or runtime_block.get("backend_status") or "").strip().upper()
-    runtime_frontend = str(frontend_service.get("status") or runtime_block.get("frontend_status") or "").strip().upper()
+    runtime_snapshot = build_runtime_snapshot(live_runtime if isinstance(live_runtime, dict) else {}, state)
+    runtime_backend_payload = runtime_snapshot.get("backend") if isinstance(runtime_snapshot.get("backend"), dict) else {}
+    runtime_frontend_payload = runtime_snapshot.get("frontend") if isinstance(runtime_snapshot.get("frontend"), dict) else {}
+
+    runtime_backend = str(
+        runtime_backend_payload.get("status") or backend_service.get("status") or runtime_block.get("backend_status") or ""
+    ).strip().upper()
+    runtime_frontend = str(
+        runtime_frontend_payload.get("status") or frontend_service.get("status") or runtime_block.get("frontend_status") or ""
+    ).strip().upper()
     if not runtime_backend:
         runtime_backend = "NOT RUNNING"
     if not runtime_frontend:
@@ -4232,10 +4250,12 @@ async def command_inspect(update: Any, context: Any) -> None:
     state_backend_status = str(runtime_block.get("backend_status") or "").strip().upper()
     if runtime_backend in {"NOT RUNNING", "STOPPED"} and runtime_failure_class and state_backend_status in {"FAIL", "FAILED", "WARNING"}:
         runtime_backend = "FAIL"
-    backend_pid = backend_service.get("pid") or runtime_block.get("backend_pid") or state.get("backend_pid")
-    frontend_pid = frontend_service.get("pid") or runtime_block.get("frontend_pid") or state.get("frontend_pid")
-    backend_url = str(backend_service.get("url") or runtime_block.get("backend_url") or state.get("backend_deploy_url") or "").strip()
-    frontend_url = str(frontend_service.get("url") or runtime_block.get("frontend_url") or state.get("frontend_deploy_url") or "").strip()
+    backend_pid = runtime_backend_payload.get("pid") or backend_service.get("pid") or runtime_block.get("backend_pid") or state.get("backend_pid")
+    frontend_pid = runtime_frontend_payload.get("pid") or frontend_service.get("pid") or runtime_block.get("frontend_pid") or state.get("frontend_pid")
+    backend_url = str(runtime_backend_payload.get("url") or "").strip()
+    frontend_url = str(runtime_frontend_payload.get("url") or "").strip()
+    backend_last_known_url = str(runtime_backend_payload.get("last_known_url") or "").strip()
+    frontend_last_known_url = str(runtime_frontend_payload.get("last_known_url") or "").strip()
 
     if runtime_backend == "RUNNING":
         runtime_failure_class = ""
@@ -4250,8 +4270,12 @@ async def command_inspect(update: Any, context: Any) -> None:
 
     if backend_url:
         lines += ["", "Backend URL:", backend_url]
+    elif backend_last_known_url:
+        lines += ["", "Last Backend URL:", backend_last_known_url]
     if frontend_url:
         lines += ["", "Frontend URL:", frontend_url]
+    elif frontend_last_known_url:
+        lines += ["", "Last Frontend URL:", frontend_last_known_url]
     if api_base_url:
         lines += ["", "API Base URL:", api_base_url]
     if backend_entry or backend_run_mode:
