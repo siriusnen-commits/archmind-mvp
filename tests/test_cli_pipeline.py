@@ -13,7 +13,7 @@ from archmind.generator import (
     apply_page_scaffold,
 )
 from archmind.project_analysis import analyze_project
-from archmind.project_query import build_project_detail
+from archmind.project_query import build_project_analysis, build_project_detail
 import json
 import subprocess
 import sys
@@ -458,6 +458,70 @@ def test_pipeline_generated_project_spec_is_visible_to_inspect_and_next(tmp_path
     analysis = analyze_project(project_dir, spec_payload=spec_payload, runtime_payload={})
     next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
     assert str(next_action.get("kind") or "").strip().lower() != "none"
+
+
+def test_pipeline_diary_spec_keeps_inspect_and_next_api_source_consistent(tmp_path: Path, monkeypatch) -> None:
+    diary_spec = {
+        "entities": [
+            {
+                "name": "Entry",
+                "fields": [
+                    {"name": "title", "type": "string"},
+                    {"name": "content", "type": "string"},
+                ],
+            }
+        ],
+        "api_endpoints": [
+            "GET /entries",
+            "POST /entries",
+            "GET /entries/{entry_id}",
+            "PATCH /entries/:id",
+            "DELETE /entries/[id]",
+        ],
+        "frontend_pages": ["entries/list", "entries/detail"],
+    }
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_seed_scaffold)
+    monkeypatch.setattr("archmind.pipeline.suggest_project_spec", lambda *_a, **_k: diary_spec)
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "personal diary webapp with entries",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "diary_runtime_consistency_demo",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+
+    project_dir = tmp_path / "diary_runtime_consistency_demo"
+    detail = build_project_detail(project_dir)
+    detail_analysis = detail.analysis if isinstance(detail.analysis, dict) else {}
+    analysis = build_project_analysis(project_dir)
+
+    inspect_api_set = {
+        f"{str(item.get('method') or '').strip().upper()} {str(item.get('path') or '').strip()}"
+        for item in (detail_analysis.get("apis") or [])
+        if isinstance(item, dict) and str(item.get("method") or "").strip() and str(item.get("path") or "").strip()
+    }
+    next_api_set = {
+        f"{str(item.get('method') or '').strip().upper()} {str(item.get('path') or '').strip()}"
+        for item in (analysis.get("apis") or [])
+        if isinstance(item, dict) and str(item.get("method") or "").strip() and str(item.get("path") or "").strip()
+    }
+
+    assert inspect_api_set == next_api_set
+    assert "GET /entries/{id}" in inspect_api_set
+    assert "PATCH /entries/{id}" in inspect_api_set
+    assert "DELETE /entries/{id}" in inspect_api_set
+    next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
+    assert str(next_action.get("command") or "").strip() != "/add_api GET /entries/{id}"
 
 
 def test_pipeline_fullstack_seed_spec_applies_to_generated_scaffold(tmp_path: Path, monkeypatch) -> None:

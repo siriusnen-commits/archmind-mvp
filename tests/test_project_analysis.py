@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from archmind.project_analysis import analyze_project
 
 
@@ -615,3 +617,55 @@ def test_project_analysis_canonicalizes_colon_id_path_for_detail_coverage(tmp_pa
     out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
     assert any(item.get("method") == "GET" and item.get("path") == "/entries/{id}" for item in out["apis"])
     assert out["entity_crud_status"]["Entry"]["api"]["detail"] is True
+
+
+def test_project_analysis_handles_spaced_entity_name_without_false_missing_crud(tmp_path: Path) -> None:
+    project_dir = tmp_path / "entry-item-full-crud"
+    spec = {
+        "entities": [{"name": "Entry Item", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": [
+            "GET /entry_items",
+            "POST /entry_items",
+            "GET /entry_items/{id}",
+            "PATCH /entry_items/{id}",
+            "DELETE /entry_items/{id}",
+        ],
+        "frontend_pages": [],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    api_status = out["entity_crud_status"]["Entry Item"]["api"]
+    assert api_status["detail"] is True
+    assert api_status["update"] is True
+    assert out["next_action"]["command"] != "/add_api GET /entry_items/{id}"
+
+
+@pytest.mark.parametrize(
+    ("entity_name", "resource"),
+    [
+        ("Task", "tasks"),
+        ("Board", "boards"),
+        ("Bookmark", "bookmarks"),
+        ("Recipe", "recipes"),
+    ],
+)
+def test_project_analysis_crud_consistency_for_common_resource_styles(
+    tmp_path: Path,
+    entity_name: str,
+    resource: str,
+) -> None:
+    project_dir = tmp_path / f"{resource}-full-crud"
+    spec = {
+        "entities": [{"name": entity_name, "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": [
+            f"GET /{resource}",
+            f"POST /{resource}",
+            f"GET /{resource}/{{id}}",
+            f"PATCH /{resource}/{{id}}",
+            f"DELETE /{resource}/{{id}}",
+        ],
+        "frontend_pages": [],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert out["entity_crud_status"][entity_name]["api"]["detail"] is True
+    assert out["entity_crud_status"][entity_name]["api"]["update"] is True
+    assert str(out["next_action"]["command"] or "").strip() != f"/add_api GET /{resource}/{{id}}"
