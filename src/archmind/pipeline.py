@@ -124,11 +124,17 @@ def _make_generate_options(opt_kwargs: dict[str, Any]):
     return GenerateOptions(**filtered)
 
 
-def _resolve_project_dir(opts: PipelineOptions, modules: Optional[list[str]] = None) -> Optional[Path]:
+def _resolve_project_dir(
+    opts: PipelineOptions,
+    modules: Optional[list[str]] = None,
+    project_spec_seed: Optional[dict[str, Any]] = None,
+) -> Optional[Path]:
     if opts.idea:
         opt_kwargs = _build_generate_options_kwargs(opts)
         opt = _make_generate_options(opt_kwargs)
         setattr(opt, "modules", list(modules or []))
+        if isinstance(project_spec_seed, dict) and project_spec_seed:
+            setattr(opt, "project_spec", dict(project_spec_seed))
         gen_entry = _resolve_generator_entry()
 
         # positional-first call attempt
@@ -710,8 +716,19 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         fallback_template = resolve_default_template()
         effective_template = opts.template or fallback_template or "fastapi"
 
+    project_spec_seed: dict[str, Any] = {}
+    if architecture_reasoning and normalized_idea:
+        try:
+            project_spec_seed = suggest_project_spec(normalized_idea, architecture_reasoning)
+        except Exception as exc:
+            print(f"[WARN] project spec suggestion failed: {exc}", file=sys.stderr)
+
     try:
-        project_dir = _resolve_project_dir(opts, modules=list(architecture_reasoning.get("modules") or []))
+        project_dir = _resolve_project_dir(
+            opts,
+            modules=list(architecture_reasoning.get("modules") or []),
+            project_spec_seed=project_spec_seed,
+        )
     except Exception as exc:
         append_failure_memory(
             _failure_memory_path(opts),
@@ -807,19 +824,9 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
 
     reasoning_path: Optional[Path] = None
     project_spec_path: Optional[Path] = None
-    project_spec_seed: dict[str, Any] = {}
     if architecture_reasoning:
         architecture_reasoning["selected_template"] = selected_template
         architecture_reasoning["effective_template"] = effective_template
-        if normalized_idea:
-            try:
-                project_spec_seed = suggest_project_spec(
-                    normalized_idea,
-                    architecture_reasoning,
-                    provider_project_dir=project_dir,
-                )
-            except Exception as exc:
-                print(f"[WARN] project spec suggestion failed: {exc}", file=sys.stderr)
         reasoning_path = _write_architecture_reasoning(project_dir, architecture_reasoning)
         project_spec_path = _write_project_spec(
             project_dir,

@@ -454,3 +454,23 @@ def test_project_analysis_suggests_add_entity_when_none_exists(tmp_path: Path) -
     }
     out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
     assert out["next_action"]["command"] == "/add_entity Task"
+
+
+def test_project_analysis_does_not_fallback_to_task_when_entry_exists(tmp_path: Path) -> None:
+    project_dir = tmp_path / "diary-with-entry"
+    spec = {
+        "entities": [
+            {
+                "name": "Entry",
+                "fields": [{"name": "title", "type": "string"}, {"name": "content", "type": "string"}],
+            }
+        ],
+        "api_endpoints": ["GET /entries", "POST /entries"],
+        "frontend_pages": ["entries/list"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    suggestions = out.get("suggestions") if isinstance(out.get("suggestions"), list) else []
+    commands = {str(item.get("command") or "").strip() for item in suggestions if isinstance(item, dict)}
+
+    assert "/add_entity Task" not in commands
+    assert str(out["next_action"]["command"] or "").strip() != "/add_entity Task"
