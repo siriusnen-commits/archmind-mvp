@@ -6115,9 +6115,30 @@ def test_auto_command_executes_valid_next_actions(tmp_path: Path, monkeypatch) -
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
     sequence = iter(
         [
-            {"next_action": {"kind": "missing_api", "message": "add list api", "command": "/add_api GET /tasks"}},
-            {"next_action": {"kind": "missing_page", "message": "add list page", "command": "/add_page tasks/list"}},
-            {"next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""}},
+            {
+                "next_action": {"kind": "missing_api", "message": "add list api", "command": "/add_api GET /tasks"},
+                "entities": ["Task"],
+                "fields_by_entity": {"Task": [{"name": "title", "type": "string"}]},
+                "apis": [],
+                "pages": [],
+                "placeholder_pages": [],
+            },
+            {
+                "next_action": {"kind": "missing_page", "message": "add list page", "command": "/add_page tasks/list"},
+                "entities": ["Task"],
+                "fields_by_entity": {"Task": [{"name": "title", "type": "string"}]},
+                "apis": [{"method": "GET", "path": "/tasks"}],
+                "pages": [],
+                "placeholder_pages": [],
+            },
+            {
+                "next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""},
+                "entities": ["Task"],
+                "fields_by_entity": {"Task": [{"name": "title", "type": "string"}]},
+                "apis": [{"method": "GET", "path": "/tasks"}],
+                "pages": ["tasks/list"],
+                "placeholder_pages": [],
+            },
         ]
     )
     monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p, **_kwargs: next(sequence))
@@ -6134,6 +6155,8 @@ def test_auto_command_executes_valid_next_actions(tmp_path: Path, monkeypatch) -
     assert executed_commands == ["/add_api GET /tasks", "/add_page tasks/list"]
     assert "- Result: OK" in out
     assert "- Executed: 2" in out
+    assert "- Commands: /add_api GET /tasks, /add_page tasks/list" in out
+    assert "- Progress made: yes" in out
     assert "- Stopped: no immediate next action" in out
 
 
@@ -6143,8 +6166,22 @@ def test_auto_command_stops_on_repeated_command(tmp_path: Path, monkeypatch) -> 
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
     sequence = iter(
         [
-            {"next_action": {"kind": "missing_page", "message": "implement", "command": "/implement_page tasks/list"}},
-            {"next_action": {"kind": "missing_page", "message": "implement again", "command": "/implement_page tasks/list"}},
+            {
+                "next_action": {"kind": "missing_crud_api", "message": "add detail", "command": "/add_api GET /tasks/{id}"},
+                "entities": ["Task"],
+                "fields_by_entity": {"Task": [{"name": "title", "type": "string"}]},
+                "apis": [{"method": "GET", "path": "/tasks"}],
+                "pages": [],
+                "placeholder_pages": [],
+            },
+            {
+                "next_action": {"kind": "missing_crud_api", "message": "add detail again", "command": "/add_api GET /tasks/{id}"},
+                "entities": ["Task", "Board"],
+                "fields_by_entity": {"Task": [{"name": "title", "type": "string"}]},
+                "apis": [{"method": "GET", "path": "/tasks"}],
+                "pages": [],
+                "placeholder_pages": [],
+            },
         ]
     )
     monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p, **_kwargs: next(sequence))
@@ -6189,9 +6226,30 @@ def test_auto_command_respects_max_step_cap_and_allowed_commands(tmp_path: Path,
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
     sequence = iter(
         [
-            {"next_action": {"kind": "k1", "message": "m1", "command": "/add_api GET /tasks"}},
-            {"next_action": {"kind": "k2", "message": "m2", "command": "/add_page tasks/list"}},
-            {"next_action": {"kind": "k3", "message": "m3", "command": "/run all"}},
+            {
+                "next_action": {"kind": "k1", "message": "m1", "command": "/add_api GET /tasks"},
+                "entities": ["Task"],
+                "fields_by_entity": {"Task": [{"name": "title", "type": "string"}]},
+                "apis": [],
+                "pages": [],
+                "placeholder_pages": [],
+            },
+            {
+                "next_action": {"kind": "k2", "message": "m2", "command": "/add_page tasks/list"},
+                "entities": ["Task"],
+                "fields_by_entity": {"Task": [{"name": "title", "type": "string"}]},
+                "apis": [{"method": "GET", "path": "/tasks"}],
+                "pages": [],
+                "placeholder_pages": [],
+            },
+            {
+                "next_action": {"kind": "k3", "message": "m3", "command": "/run all"},
+                "entities": ["Task"],
+                "fields_by_entity": {"Task": [{"name": "title", "type": "string"}]},
+                "apis": [{"method": "GET", "path": "/tasks"}],
+                "pages": ["tasks/list"],
+                "placeholder_pages": [],
+            },
         ]
     )
     monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p, **_kwargs: next(sequence))
@@ -6236,15 +6294,14 @@ def test_auto_command_stops_on_low_priority_next_action(tmp_path: Path, monkeypa
     assert "- Stopped: low-priority next action" in out
 
 
-def test_auto_command_stops_on_repeated_low_value_pattern(tmp_path: Path, monkeypatch) -> None:
-    project_dir = tmp_path / "auto_repeated_weak_pattern"
+def test_auto_command_stops_when_command_makes_no_material_state_change(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "auto_no_material_change"
     project_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
     sequence = iter(
         [
             {"next_action": {"kind": "missing_field", "message": "Task is missing an important field: title", "command": "/add_field Task title:string"}},
-            {"next_action": {"kind": "missing_field", "message": "Reminder is missing an important field: title", "command": "/add_field Reminder title:string"}},
-            {"next_action": {"kind": "missing_page", "message": "Reminder is missing list page coverage.", "command": "/add_page reminders/list"}},
+            {"next_action": {"kind": "missing_field", "message": "Task is missing an important field: title", "command": "/add_field Task title:string"}},
         ]
     )
     monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p, **_kwargs: next(sequence))
@@ -6254,11 +6311,94 @@ def test_auto_command_stops_on_repeated_low_value_pattern(tmp_path: Path, monkey
         lambda cmd, _p, **_kwargs: (executed.append(cmd) or {"ok": True, "message": "ok"}),
     )
     msg = DummyMessage()
-    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext(args=["3"])))
+    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext(args=["2"])))
     out = msg.sent[-1]
     assert executed == ["/add_field Task title:string"]
-    assert "- Result: STOP (repeated low-value pattern)" in out
-    assert "- Stopped: repeated low-value pattern" in out
+    assert "- Result: STOP (no material state change)" in out
+    assert "- Stopped: no material state change after command" in out
+
+
+def test_auto_command_reanalyzes_after_each_successful_step(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "auto_reanalyze_per_step"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    calls = {"count": 0}
+    sequence = [
+        {
+            "next_action": {"kind": "missing_crud_api", "message": "add api", "command": "/add_api GET /tasks"},
+            "entities": ["Task"],
+            "fields_by_entity": {"Task": [{"name": "title", "type": "string"}]},
+            "apis": [],
+            "pages": [],
+            "placeholder_pages": [],
+        },
+        {
+            "next_action": {"kind": "missing_page", "message": "add page", "command": "/add_page tasks/list"},
+            "entities": ["Task"],
+            "fields_by_entity": {"Task": [{"name": "title", "type": "string"}]},
+            "apis": [{"method": "GET", "path": "/tasks"}],
+            "pages": [],
+            "placeholder_pages": [],
+        },
+        {
+            "next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""},
+            "entities": ["Task"],
+            "fields_by_entity": {"Task": [{"name": "title", "type": "string"}]},
+            "apis": [{"method": "GET", "path": "/tasks"}],
+            "pages": ["tasks/list"],
+            "placeholder_pages": [],
+        },
+    ]
+
+    def _fake_analysis(_p, **_kwargs):
+        idx = min(calls["count"], len(sequence) - 1)
+        calls["count"] += 1
+        return sequence[idx]
+
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", _fake_analysis)
+    monkeypatch.setattr("archmind.telegram_bot.execute_command", lambda _c, _p, **_kwargs: {"ok": True, "message": "ok"})
+
+    msg = DummyMessage()
+    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext(args=["3"])))
+    out = msg.sent[-1]
+    assert "- Executed: 2" in out
+    # initial analysis + post-step reanalysis x2
+    assert calls["count"] >= 3
+
+
+def test_auto_command_stops_when_next_command_is_already_satisfied(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "auto_already_satisfied"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.telegram_bot._build_project_analysis",
+        lambda _p, **_kwargs: {
+            "next_action": {"kind": "missing_crud_api", "message": "Task is missing detail API coverage.", "command": "/add_api GET /tasks/{id}"},
+            "apis": [
+                {"method": "GET", "path": "/tasks"},
+                {"method": "POST", "path": "/tasks"},
+                {"method": "GET", "path": "/tasks/{id}"},
+                {"method": "PATCH", "path": "/tasks/{id}"},
+                {"method": "DELETE", "path": "/tasks/{id}"},
+            ],
+            "pages": [],
+            "placeholder_pages": [],
+            "fields_by_entity": {},
+            "entities": ["Task"],
+        },
+    )
+    executed: list[str] = []
+    monkeypatch.setattr(
+        "archmind.telegram_bot.execute_command",
+        lambda cmd, _p, **_kwargs: (executed.append(cmd) or {"ok": True, "message": "ok"}),
+    )
+    msg = DummyMessage()
+    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext(args=["1"])))
+    out = msg.sent[-1]
+    assert executed == []
+    assert "- Result: STOP (already satisfied in canonical state)" in out
+    assert "- Stopped: already satisfied command" in out
 
 
 def test_auto_command_uses_canonical_pages_before_placeholder_implementation(tmp_path: Path, monkeypatch) -> None:

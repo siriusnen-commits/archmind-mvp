@@ -6200,6 +6200,9 @@ async def command_next(update: Any, context: Any) -> None:
 
 
 AUTO_ALLOWED_COMMANDS = {"/add_field", "/add_api", "/add_page", "/implement_page"}
+AUTO_HIGH_VALUE_FIELDS = {"title", "name", "content"}
+AUTO_USEFUL_FIELDS = {"description", "status", "priority"}
+AUTO_LOW_VALUE_FIELDS = {"created_at", "updated_at", "timestamp", "deleted_at"}
 
 
 def _parse_auto_max_steps(args: list[str]) -> int:
@@ -6243,20 +6246,104 @@ def classify_auto_action_priority(next_action: dict[str, Any] | None) -> str:
     if kind == "none" or not message or message == "no immediate suggestions.":
         return "none"
 
+    if kind == "missing_entity":
+        return "high"
+
+    if kind in {"missing_crud_api", "missing_page", "placeholder_page"}:
+        return "high"
+
     if command.startswith("/add_field "):
         field_name = _extract_add_field_name(command)
-        # High-signal text identifiers are still worth auto execution.
-        if field_name in {"title", "name"}:
+        if field_name in AUTO_HIGH_VALUE_FIELDS:
             return "high"
-        return "low"
-
-    if kind in {"placeholder_page", "missing_crud_api", "missing_page"}:
-        return "high"
+        if field_name in AUTO_USEFUL_FIELDS:
+            return "medium"
+        if field_name in AUTO_LOW_VALUE_FIELDS:
+            return "low"
+        return "medium"
 
     if "polish" in message or "optional" in message:
         return "low"
 
     return "high"
+
+
+def _analysis_progress_signature(analysis: dict[str, Any]) -> tuple[Any, ...]:
+    entities = tuple(str(x).strip() for x in (analysis.get("entities") or []) if str(x).strip())
+    apis = tuple(
+        sorted(
+            {
+                (
+                    str(item.get("method") or "").strip().upper(),
+                    str(item.get("path") or "").strip(),
+                )
+                for item in (analysis.get("apis") or [])
+                if isinstance(item, dict)
+            }
+        )
+    )
+    pages = tuple(sorted(str(x).strip() for x in (analysis.get("pages") or []) if str(x).strip()))
+    placeholders = tuple(
+        sorted(str(x).strip() for x in (analysis.get("placeholder_pages") or []) if str(x).strip())
+    )
+    return entities, apis, pages, placeholders
+
+
+def _auto_command_already_satisfied(analysis: dict[str, Any], normalized_command: str) -> bool:
+    cmd, args = _parse_command_string(normalized_command)
+    if cmd == "/add_api" and len(args) >= 2:
+        method = str(args[0] or "").strip().upper()
+        path = _normalize_api_path(str(args[1] or "").strip())
+        if not method or not path:
+            return False
+        existing = {
+            (
+                str(item.get("method") or "").strip().upper(),
+                str(item.get("path") or "").strip(),
+            )
+            for item in (analysis.get("apis") or [])
+            if isinstance(item, dict)
+        }
+        return (method, path) in existing
+    if cmd == "/add_page" and args:
+        page = _normalize_frontend_page_path(str(args[0] or "").strip())
+        existing_pages = {str(x).strip() for x in (analysis.get("pages") or []) if str(x).strip()}
+        return bool(page and page in existing_pages)
+    if cmd == "/implement_page" and args:
+        page = _normalize_frontend_page_path(str(args[0] or "").strip())
+        placeholders = {str(x).strip() for x in (analysis.get("placeholder_pages") or []) if str(x).strip()}
+        return bool(page and page not in placeholders)
+    if cmd == "/add_field" and len(args) >= 2:
+        entity_name = _normalize_entity_name(args[0])
+        field_expr = str(args[1] or "").strip()
+        field_name = field_expr.split(":", 1)[0].strip().lower()
+        fields_by_entity = analysis.get("fields_by_entity") if isinstance(analysis.get("fields_by_entity"), dict) else {}
+        target_rows = []
+        if entity_name in fields_by_entity and isinstance(fields_by_entity.get(entity_name), list):
+            target_rows = fields_by_entity.get(entity_name) or []
+        else:
+            for key, rows in fields_by_entity.items():
+                if str(key).strip().lower() == str(entity_name).strip().lower() and isinstance(rows, list):
+                    target_rows = rows
+                    break
+        existing_fields = {str(item.get("name") or "").strip().lower() for item in target_rows if isinstance(item, dict)}
+        return bool(field_name and field_name in existing_fields)
+    return False
+
+
+def _auto_analysis_brief(analysis: dict[str, Any]) -> str:
+    entities = len([x for x in (analysis.get("entities") or []) if str(x).strip()])
+    apis = len(
+        [
+            item
+            for item in (analysis.get("apis") or [])
+            if isinstance(item, dict)
+            and str(item.get("method") or "").strip()
+            and str(item.get("path") or "").strip()
+        ]
+    )
+    pages = len([x for x in (analysis.get("pages") or []) if str(x).strip()])
+    return f"entities={entities}, apis={apis}, pages={pages}"
 
 
 async def command_auto(update: Any, context: Any) -> None:
@@ -6274,16 +6361,19 @@ async def command_auto(update: Any, context: Any) -> None:
         "",
     ]
     seen_commands: set[str] = set()
-    weak_pattern_counts: dict[str, int] = {}
+    seen_command_states: set[tuple[str, tuple[Any, ...]]] = set()
+    executed_commands: list[str] = []
     executed = 0
     stop_reason = "max step count reached"
+    progress_made = False
     run_id = f"auto-{int(time.time() * 1000)}-{project_path.name}"
+    analysis = _build_project_analysis(project_path, use_canonical_spec=True)
 
     for idx in range(1, max_steps + 1):
-        analysis = _build_project_analysis(project_path, use_canonical_spec=True)
         kind, message, raw_command = _extract_next_action(analysis)
         priority = classify_auto_action_priority({"kind": kind, "message": message, "command": raw_command})
         normalized_command = _normalize_recommended_command(raw_command)
+        state_signature = _analysis_progress_signature(analysis)
 
         lines.append(f"Step {idx}")
         if priority == "none":
@@ -6337,27 +6427,6 @@ async def command_auto(update: Any, context: Any) -> None:
             )
             break
 
-        weak_pattern_key = ""
-        if normalized_command.startswith("/add_field "):
-            weak_pattern_key = "add_field"
-        if weak_pattern_key:
-            weak_pattern_counts[weak_pattern_key] = weak_pattern_counts.get(weak_pattern_key, 0) + 1
-            if weak_pattern_counts[weak_pattern_key] >= 2:
-                lines.append("- Result: STOP (repeated low-value pattern)")
-                stop_reason = "repeated low-value pattern"
-                append_execution_event(
-                    project_path,
-                    project_name=project_path.name,
-                    source="telegram-auto",
-                    command=normalized_command,
-                    status="stop",
-                    message="Repeated low-value action pattern.",
-                    run_id=run_id,
-                    step_no=idx,
-                    stop_reason=stop_reason,
-                )
-                break
-
         if priority == "low":
             lines.append("- Result: STOP (low-priority next action)")
             stop_reason = "low-priority next action"
@@ -6373,6 +6442,40 @@ async def command_auto(update: Any, context: Any) -> None:
                 stop_reason=stop_reason,
             )
             break
+
+        if _auto_command_already_satisfied(analysis, normalized_command):
+            lines.append("- Result: STOP (already satisfied in canonical state)")
+            stop_reason = "already satisfied command"
+            append_execution_event(
+                project_path,
+                project_name=project_path.name,
+                source="telegram-auto",
+                command=normalized_command,
+                status="stop",
+                message="Command already satisfied by canonical project state.",
+                run_id=run_id,
+                step_no=idx,
+                stop_reason=stop_reason,
+            )
+            break
+
+        state_key = (normalized_command, state_signature)
+        if state_key in seen_command_states:
+            lines.append("- Result: STOP (repeated command without state change)")
+            stop_reason = "repeated command without state change"
+            append_execution_event(
+                project_path,
+                project_name=project_path.name,
+                source="telegram-auto",
+                command=normalized_command,
+                status="stop",
+                message="Repeated command without material state change.",
+                run_id=run_id,
+                step_no=idx,
+                stop_reason=stop_reason,
+            )
+            break
+        seen_command_states.add(state_key)
 
         if normalized_command in seen_commands:
             lines.append("- Result: STOP (repeated-command protection)")
@@ -6402,6 +6505,27 @@ async def command_auto(update: Any, context: Any) -> None:
         if ok:
             lines.append("- Result: OK")
             executed += 1
+            executed_commands.append(normalized_command)
+            next_analysis = _build_project_analysis(project_path, use_canonical_spec=True)
+            if _analysis_progress_signature(next_analysis) != state_signature:
+                progress_made = True
+            else:
+                lines.append("- Result: STOP (no material state change)")
+                stop_reason = "no material state change after command"
+                append_execution_event(
+                    project_path,
+                    project_name=project_path.name,
+                    source="telegram-auto",
+                    command=normalized_command,
+                    status="stop",
+                    message="No material state change after command execution.",
+                    run_id=run_id,
+                    step_no=idx,
+                    stop_reason=stop_reason,
+                )
+                analysis = next_analysis
+                break
+            analysis = next_analysis
         else:
             detail = str(
                 result.get("error")
@@ -6424,14 +6548,21 @@ async def command_auto(update: Any, context: Any) -> None:
             )
             break
         lines.append("")
+    else:
+        stop_reason = "iteration budget reached"
 
     if lines and lines[-1] == "":
         lines.pop()
+    command_lines = ", ".join(executed_commands) if executed_commands else "(none)"
+    progress_text = "yes" if progress_made else "no"
     lines.extend([
         "",
         "Summary",
         f"- Executed: {executed}",
+        f"- Commands: {command_lines}",
         f"- Stopped: {stop_reason}",
+        f"- Progress made: {progress_text}",
+        f"- Current: {_auto_analysis_brief(analysis)}",
     ])
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 
