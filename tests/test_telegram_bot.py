@@ -2912,8 +2912,13 @@ def test_inspect_command_summarizes_project_spec_reasoning_and_state(tmp_path: P
     assert "Entity Fields:" in out
     assert "- Task" in out
     assert "  - title:string" in out
-    assert "- APIs: 0" in out
-    assert "\nAPIs:\n" not in out
+    assert "- APIs: 5" in out
+    assert "\nAPIs:\n" in out
+    assert "- GET /tasks" in out
+    assert "- POST /tasks" in out
+    assert "- GET /tasks/{id}" in out
+    assert "- PATCH /tasks/{id}" in out
+    assert "- DELETE /tasks/{id}" in out
     assert "Pages:" in out
     assert "- tasks/list" in out
     assert "- tasks/detail" in out
@@ -2972,9 +2977,49 @@ def test_inspect_command_truncates_entity_api_and_page_lists(tmp_path: Path, mon
     out = msg.sent[-1]
 
     assert "Task(f0:string, f1:string, f2:string, f3:string, f4:string, ... +2 more)" in out
-    assert "more endpoints" not in out
+    assert "more endpoints" in out
     assert "more pages" in out
     assert "History count: 3" in out
+
+
+def test_inspect_summary_counts_match_canonical_detail_lists(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect_summary_consistency"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend").mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "domains": ["diary"],
+                "modules": [],
+                "entities": [{"name": "Entry", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": ["GET /entries", "POST /entries"],
+                "frontend_pages": ["entries/list", "entries/new"],
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+
+    assert "- APIs: 5" in out
+    assert "- Pages: 3" in out
+    assert "- GET /entries" in out
+    assert "- POST /entries" in out
+    assert "- GET /entries/{id}" in out
+    assert "- PATCH /entries/{id}" in out
+    assert "- DELETE /entries/{id}" in out
+    assert "- entries/list" in out
+    assert "- entries/new" in out
+    assert "- entries/detail" in out
 
 
 def test_inspect_command_shows_recent_evolution_entries(tmp_path: Path, monkeypatch) -> None:

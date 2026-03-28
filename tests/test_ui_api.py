@@ -202,6 +202,38 @@ def test_ui_project_detail_response_shape(monkeypatch, tmp_path: Path) -> None:
     assert payload["spec_summary"]["stage"].startswith("Stage")
 
 
+def test_ui_project_detail_summary_counts_match_analysis_lists(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "summary-consistent")
+    archmind_dir = project_dir / ".archmind"
+    (archmind_dir / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "project_name": "summary-consistent",
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "entities": [{"name": "Entry", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": ["GET /entries", "POST /entries"],
+                "frontend_pages": ["entries/list", "entries/new"],
+                "evolution": {"version": 1, "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.get("/ui/projects/summary-consistent")
+    assert response.status_code == 200
+    payload = response.json()
+    analysis = payload["analysis"]
+    assert payload["spec_summary"]["entities"] == len(analysis["entities"])
+    assert payload["spec_summary"]["apis"] == len(analysis["apis"])
+    assert payload["spec_summary"]["pages"] == len(analysis["pages"])
+    assert payload["spec_summary"]["apis"] == 5
+    assert payload["spec_summary"]["pages"] == 3
+
+
 def test_ui_project_detail_does_not_expose_stale_runtime_url_as_running(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     _make_project(projects_root, "stale-runtime")

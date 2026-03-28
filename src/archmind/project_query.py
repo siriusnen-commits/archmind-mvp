@@ -17,6 +17,7 @@ from archmind.state import load_provider_mode, load_state, set_provider_mode, up
 from archmind.telegram_bot import (
     _load_json,
     _project_runtime_status,
+    _read_or_init_project_spec,
     _repository_summary_from_state,
     _resolve_project_type,
     add_api_to_project,
@@ -385,7 +386,7 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
     try:
         archmind_dir = project_dir / ".archmind"
         state_payload = load_state(project_dir) or {}
-        spec = _load_json(archmind_dir / "project_spec.json") or {}
+        spec, _ = _read_or_init_project_spec(project_dir)
         result_payload = _load_json(archmind_dir / "result.json") or {}
         runtime_payload = get_local_runtime_status(project_dir)
         status = _project_runtime_status(project_dir, state_payload, result_payload, runtime_payload)
@@ -399,6 +400,17 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
             spec_payload=spec if isinstance(spec, dict) else {},
             runtime_payload=runtime_payload if isinstance(runtime_payload, dict) else {},
         )
+        canonical_entities = [str(x) for x in (analysis.get("entities") or []) if str(x).strip()]
+        canonical_fields_by_entity = analysis.get("fields_by_entity") if isinstance(analysis.get("fields_by_entity"), dict) else {}
+        canonical_entity_rows: list[dict[str, Any]] = []
+        for entity_name in canonical_entities:
+            fields = canonical_fields_by_entity.get(entity_name) if isinstance(canonical_fields_by_entity, dict) else []
+            canonical_entity_rows.append(
+                {
+                    "name": entity_name,
+                    "fields": fields if isinstance(fields, list) else [],
+                }
+            )
         canonical_api_endpoints = [
             f"{str(item.get('method') or '').strip().upper()} {str(item.get('path') or '').strip()}"
             for item in (analysis.get("apis") or [])
@@ -409,7 +421,7 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
             {
                 "shape": str(spec.get("shape") or state_payload.get("architecture_app_shape") or "unknown").strip() or "unknown",
                 "modules": spec.get("modules") if isinstance(spec.get("modules"), list) else [],
-                "entities": spec.get("entities") if isinstance(spec.get("entities"), list) else [],
+                "entities": canonical_entity_rows,
                 "api_endpoints": canonical_api_endpoints,
                 "frontend_pages": canonical_pages,
             }
@@ -445,12 +457,12 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
             provider_mode=load_provider_mode(state_payload, default="local"),  # type: ignore[arg-type]
             spec_summary=SpecSummary(
                 stage=str(progression.get("stage_label") or "Stage 0"),
-                entities=_safe_int(progression.get("entities_count"), 0),
-                apis=_safe_int(progression.get("apis_count"), 0),
-                pages=_safe_int(progression.get("pages_count"), 0),
+                entities=len(canonical_entities),
+                apis=len(canonical_api_endpoints),
+                pages=len(canonical_pages),
                 history_count=len(history),
             ),
-            entities=_extract_entity_names(spec if isinstance(spec, dict) else {}),
+            entities=canonical_entities,
             runtime=RuntimeSummary(
                 backend_status=str(backend_runtime.get("status") or "STOPPED").strip().upper() or "STOPPED",
                 frontend_status=str(frontend_runtime.get("status") or "STOPPED").strip().upper() or "STOPPED",
