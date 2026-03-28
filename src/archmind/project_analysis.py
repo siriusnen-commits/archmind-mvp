@@ -12,6 +12,7 @@ SUGGESTION_PRIORITY_RANK = {"high": 3, "medium": 2, "low": 1, "none": 0}
 ESSENTIAL_FIELDS = {"title", "name", "content"}
 USEFUL_DOMAIN_FIELDS = {"description", "status", "priority"}
 LOW_VALUE_FIELDS = {"created_at", "updated_at", "timestamp", "deleted_at"}
+CRUD_KEYS = ("list", "create", "detail", "update", "delete")
 
 
 def _normalize_entity_name(value: Any) -> str:
@@ -426,15 +427,16 @@ def _is_detail_path(path: str) -> bool:
     return bool(re.search(r"/\{[^}]+\}$", path))
 
 
-def _compute_entity_crud_status(
-    entities: list[str],
-    fields_by_entity: dict[str, list[dict[str, str]]],
-    backend_field_presence: dict[str, bool],
-    apis: list[dict[str, str]],
-    pages: list[str],
-) -> dict[str, dict[str, Any]]:
-    by_method_path = {(str(item.get("method") or "").strip().upper(), str(item.get("path") or "").strip()) for item in apis}
-    resource_api_presence: dict[str, dict[str, bool]] = {}
+def _empty_crud_coverage() -> dict[str, bool]:
+    return {key: False for key in CRUD_KEYS}
+
+
+def _build_final_crud_coverage(apis: list[dict[str, str]]) -> dict[str, dict[str, bool]]:
+    by_method_path = {
+        (str(item.get("method") or "").strip().upper(), str(item.get("path") or "").strip())
+        for item in apis
+    }
+    coverage: dict[str, dict[str, bool]] = {}
     for method, path in by_method_path:
         parts = [part for part in str(path).split("/") if part]
         if not parts:
@@ -442,10 +444,7 @@ def _compute_entity_crud_status(
         resource = str(parts[0] or "").strip().lower()
         if not resource:
             continue
-        bucket = resource_api_presence.setdefault(
-            resource,
-            {"list": False, "create": False, "detail": False, "update": False, "delete": False},
-        )
+        bucket = coverage.setdefault(resource, _empty_crud_coverage())
         if len(parts) == 1:
             if method == "GET":
                 bucket["list"] = True
@@ -459,8 +458,34 @@ def _compute_entity_crud_status(
                 bucket["update"] = True
             elif method == "DELETE":
                 bucket["delete"] = True
+    return coverage
+
+
+def _missing_crud_gaps_from_coverage(coverage: dict[str, bool] | None) -> list[str]:
+    row = coverage if isinstance(coverage, dict) else {}
+    out: list[str] = []
+    if not bool(row.get("list")):
+        out.append("GET list")
+    if not bool(row.get("create")):
+        out.append("POST create")
+    if not bool(row.get("detail")):
+        out.append("GET detail")
+    if not bool(row.get("update")):
+        out.append("PUT/PATCH update")
+    if not bool(row.get("delete")):
+        out.append("DELETE")
+    return out
+
+
+def _compute_entity_crud_status(
+    entities: list[str],
+    fields_by_entity: dict[str, list[dict[str, str]]],
+    backend_field_presence: dict[str, bool],
+    crud_coverage: dict[str, dict[str, bool]],
+    pages: list[str],
+) -> dict[str, dict[str, Any]]:
     page_set = {str(page) for page in pages}
-    canonical_resources = sorted(resource_api_presence.keys())
+    canonical_resources = sorted(str(resource or "").strip().lower() for resource in crud_coverage.keys() if str(resource or "").strip())
     status: dict[str, dict[str, Any]] = {}
 
     def _singularize_resource_name(value: str) -> str:
@@ -489,7 +514,7 @@ def _compute_entity_crud_status(
 
     def _resolve_resource_for_entity(entity_name: str, entity_index: int) -> str:
         inferred_resource = _entity_resource(entity_name)
-        if inferred_resource and inferred_resource in resource_api_presence:
+        if inferred_resource and inferred_resource in crud_coverage:
             return inferred_resource
         if not canonical_resources:
             return inferred_resource
@@ -534,10 +559,7 @@ def _compute_entity_crud_status(
     for idx, entity in enumerate(entities):
         resource = _resolve_resource_for_entity(entity, idx)
 
-        presence = resource_api_presence.get(
-            resource,
-            {"list": False, "create": False, "detail": False, "update": False, "delete": False},
-        )
+        presence = crud_coverage.get(resource, _empty_crud_coverage())
         entity_key = _normalize_entity_name(entity).lower()
         has_list = bool(presence.get("list"))
         has_create = bool(presence.get("create"))
@@ -548,17 +570,7 @@ def _compute_entity_crud_status(
         page_list = f"{resource}/list" in page_set if resource else False
         page_detail = f"{resource}/detail" in page_set if resource else False
 
-        missing_api: list[str] = []
-        if not has_list:
-            missing_api.append("GET list")
-        if not has_create:
-            missing_api.append("POST create")
-        if not has_detail:
-            missing_api.append("GET detail")
-        if not has_update:
-            missing_api.append("PUT/PATCH update")
-        if not has_delete:
-            missing_api.append("DELETE")
+        missing_api = _missing_crud_gaps_from_coverage(presence)
 
         missing_pages: list[str] = []
         if not page_list:
@@ -756,6 +768,7 @@ def _build_suggestions(
     project_dir: Path,
     entities: list[str],
     entity_crud_status: dict[str, dict[str, Any]],
+    final_crud_coverage: dict[str, dict[str, bool]],
     placeholder_pages: list[str],
 ) -> tuple[list[dict[str, str]], dict[str, str]]:
     recent_commands = _recent_suggested_or_executed_commands(project_dir, limit=80)
@@ -788,7 +801,8 @@ def _build_suggestions(
     for entity in entities:
         info = entity_crud_status.get(entity) if isinstance(entity_crud_status.get(entity), dict) else {}
         resource = str(info.get("resource") or "")
-        missing_api = info.get("missing_api") if isinstance(info.get("missing_api"), list) else []
+        resource_coverage = final_crud_coverage.get(resource, _empty_crud_coverage())
+        missing_api = _missing_crud_gaps_from_coverage(resource_coverage)
         missing_pages = info.get("missing_pages") if isinstance(info.get("missing_pages"), list) else []
         missing_high_fields = (
             info.get("missing_important_fields")
@@ -1111,16 +1125,29 @@ def analyze_project(
     spec = spec_payload if isinstance(spec_payload, dict) else {}
     entities, fields_by_entity = _extract_entities(spec)
     apis = _extract_apis(spec)
+    final_crud_coverage = _build_final_crud_coverage(apis)
     spec_pages = _extract_pages(spec)
     file_pages = _extract_frontend_file_pages(project_dir)
     nav_pages = _extract_nav_manifest_pages(project_dir)
     pages = _merge_known_pages(spec_pages, nav_pages, file_pages)
     fields_by_entity, backend_field_presence = _resolve_fields_by_source(project_dir, entities, fields_by_entity)
-    entity_crud_status = _compute_entity_crud_status(entities, fields_by_entity, backend_field_presence, apis, pages)
+    entity_crud_status = _compute_entity_crud_status(
+        entities,
+        fields_by_entity,
+        backend_field_presence,
+        final_crud_coverage,
+        pages,
+    )
     placeholder_pages = _detect_placeholder_pages(project_dir, pages)
     nav_visible_pages = _extract_nav_visible_pages(project_dir, pages)
     runtime_status = _normalize_runtime_status(runtime_payload if isinstance(runtime_payload, dict) else {})
-    suggestions, next_action = _build_suggestions(project_dir, entities, entity_crud_status, placeholder_pages)
+    suggestions, next_action = _build_suggestions(
+        project_dir,
+        entities,
+        entity_crud_status,
+        final_crud_coverage,
+        placeholder_pages,
+    )
 
     # Step 1: backend safety filter (remove false "missing title")
     filtered: list[dict[str, str]] = []
@@ -1167,6 +1194,7 @@ def analyze_project(
         "entities": entities,
         "fields_by_entity": fields_by_entity,
         "apis": apis,
+        "crud_coverage": final_crud_coverage,
         "pages": pages,
         "entity_crud_status": entity_crud_status,
         "placeholder_pages": placeholder_pages,

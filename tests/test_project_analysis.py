@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import archmind.project_analysis as project_analysis
 from archmind.project_analysis import analyze_project
 
 
@@ -686,6 +687,70 @@ def test_project_analysis_treats_inspect_visible_entries_crud_as_satisfied_for_d
     assert api_status["delete"] is True
     assert out["next_action"]["kind"] != "missing_crud_api"
     assert str(out["next_action"]["command"] or "").strip() != "/add_api GET /entries/{id}"
+
+
+def test_project_analysis_exposes_final_crud_coverage_object_for_next_action(tmp_path: Path) -> None:
+    project_dir = tmp_path / "tasks-final-crud-coverage"
+    spec = {
+        "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": [
+            "GET /tasks",
+            "POST /tasks",
+            "GET /tasks/{id}",
+            "PATCH /tasks/{id}",
+            "DELETE /tasks/{id}",
+        ],
+        "frontend_pages": [],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    coverage = out.get("crud_coverage") if isinstance(out.get("crud_coverage"), dict) else {}
+    task_coverage = coverage.get("tasks") if isinstance(coverage.get("tasks"), dict) else {}
+    assert task_coverage == {
+        "list": True,
+        "create": True,
+        "detail": True,
+        "update": True,
+        "delete": True,
+    }
+    assert out["next_action"]["kind"] != "missing_crud_api"
+    assert str(out["next_action"]["command"] or "").strip() != "/add_api GET /tasks/{id}"
+
+
+def test_project_analysis_next_action_uses_final_crud_coverage_authoritatively(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_dir = tmp_path / "tasks-authoritative-crud-coverage"
+    spec = {
+        "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": [
+            "GET /tasks",
+            "POST /tasks",
+            "GET /tasks/{id}",
+            "PATCH /tasks/{id}",
+            "DELETE /tasks/{id}",
+        ],
+        "frontend_pages": [],
+    }
+    real_compute = project_analysis._compute_entity_crud_status
+
+    def fake_compute(*args, **kwargs):
+        status = real_compute(*args, **kwargs)
+        task_status = status.get("Task") if isinstance(status.get("Task"), dict) else {}
+        if task_status:
+            task_status["missing_api"] = ["GET detail"]
+            api_row = task_status.get("api") if isinstance(task_status.get("api"), dict) else {}
+            if api_row:
+                api_row["detail"] = False
+        return status
+
+    monkeypatch.setattr(project_analysis, "_compute_entity_crud_status", fake_compute)
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    coverage = out.get("crud_coverage") if isinstance(out.get("crud_coverage"), dict) else {}
+    task_coverage = coverage.get("tasks") if isinstance(coverage.get("tasks"), dict) else {}
+    assert task_coverage.get("detail") is True
+    assert out["next_action"]["kind"] != "missing_crud_api"
+    assert str(out["next_action"]["command"] or "").strip() != "/add_api GET /tasks/{id}"
 
 
 @pytest.mark.parametrize(
