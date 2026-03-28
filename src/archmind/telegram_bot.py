@@ -4097,20 +4097,43 @@ async def command_inspect(update: Any, context: Any) -> None:
     reasoning = _load_json(archmind_dir / "architecture_reasoning.json") or {}
     state = load_state(project_path) or {}
 
-    analysis = _build_project_analysis(project_path)
+    try:
+        from archmind.deploy import get_local_runtime_status
+
+        runtime_payload = get_local_runtime_status(project_path)
+    except Exception:
+        runtime_payload = {}
+    analysis = analyze_project(
+        project_path,
+        project_name=project_path.name,
+        spec_payload=spec if isinstance(spec, dict) else {},
+        runtime_payload=runtime_payload if isinstance(runtime_payload, dict) else {},
+    )
 
     shape = str(spec.get("shape") or reasoning.get("app_shape") or "unknown").strip() or "unknown"
     template = str(spec.get("template") or reasoning.get("recommended_template") or "unknown").strip() or "unknown"
     domains = [str(x) for x in (spec.get("domains") or reasoning.get("domains") or []) if str(x).strip()]
     modules = [str(x) for x in (spec.get("modules") or reasoning.get("modules") or []) if str(x).strip()]
-    entities = _entity_summaries_for_inspect(spec.get("entities"), max_fields=5)
-    entity_tree_lines = _entity_tree_lines_for_inspect(spec.get("entities"), max_entities=10, max_fields=8)
+    canonical_entity_names = [str(x) for x in (analysis.get("entities") or []) if str(x).strip()]
+    canonical_fields_by_entity = analysis.get("fields_by_entity") if isinstance(analysis.get("fields_by_entity"), dict) else {}
+    canonical_entities: list[dict[str, Any]] = []
+    for entity_name in canonical_entity_names:
+        fields = canonical_fields_by_entity.get(entity_name) if isinstance(canonical_fields_by_entity, dict) else []
+        canonical_entities.append(
+            {
+                "name": entity_name,
+                "fields": fields if isinstance(fields, list) else [],
+            }
+        )
+
+    entities = _entity_summaries_for_inspect(canonical_entities, max_fields=5)
+    entity_tree_lines = _entity_tree_lines_for_inspect(canonical_entities, max_entities=10, max_fields=8)
     api_endpoints = [
         f"{str(item.get('method') or '').strip().upper()} {str(item.get('path') or '').strip()}"
         for item in (analysis.get("apis") or [])
         if isinstance(item, dict) and str(item.get("method") or "").strip() and str(item.get("path") or "").strip()
     ]
-    frontend_pages = [str(x) for x in (spec.get("frontend_pages") or []) if str(x).strip()]
+    frontend_pages = [str(x) for x in (analysis.get("pages") or []) if str(x).strip()]
     reason_summary = str(spec.get("reason_summary") or reasoning.get("reason_summary") or "").strip()
     evolution = spec.get("evolution") if isinstance(spec.get("evolution"), dict) else {}
     evolution_version = int(evolution.get("version") or 1) if evolution else 1
@@ -4120,9 +4143,9 @@ async def command_inspect(update: Any, context: Any) -> None:
     progression_spec = {
         "shape": shape or "unknown",
         "modules": spec.get("modules") if isinstance(spec.get("modules"), list) else [],
-        "entities": spec.get("entities") if isinstance(spec.get("entities"), list) else [],
+        "entities": canonical_entities,
         "api_endpoints": api_endpoints,
-        "frontend_pages": [str(x) for x in (analysis.get("pages") or []) if str(x).strip()],
+        "frontend_pages": frontend_pages,
     }
     progression = analyze_spec_progression(progression_spec)
     provider_mode = load_provider_mode(state, default="local")
@@ -4183,9 +4206,9 @@ async def command_inspect(update: Any, context: Any) -> None:
         "",
         "Spec Summary:",
         f"- Stage: {progression.get('stage_label')}",
-        f"- Entities: {int(progression.get('entities_count') or 0)}",
-        f"- APIs: {int(progression.get('apis_count') or 0)}",
-        f"- Pages: {int(progression.get('pages_count') or 0)}",
+        f"- Entities: {len(canonical_entity_names)}",
+        f"- APIs: {len(api_endpoints)}",
+        f"- Pages: {len(frontend_pages)}",
         f"- Evolution history: {evolution_history_count}",
     ]
     lines += ["", "Provider:", f"- Mode: {provider_mode}"]
