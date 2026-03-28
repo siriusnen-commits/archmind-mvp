@@ -15,6 +15,8 @@ DOMAIN_ENTITY_MAP: dict[str, str] = {
     "expenses": "Expense",
     "inventory": "Item",
     "notes": "Note",
+    "diary": "Entry",
+    "journals": "Entry",
 }
 
 ENTITY_FIELD_MAP: dict[str, list[dict[str, str]]] = {
@@ -28,6 +30,8 @@ ENTITY_FIELD_MAP: dict[str, list[dict[str, str]]] = {
     "Expense": [{"name": "amount", "type": "float"}, {"name": "category", "type": "string"}],
     "Item": [{"name": "name", "type": "string"}, {"name": "quantity", "type": "int"}],
     "Note": [{"name": "title", "type": "string"}, {"name": "content", "type": "string"}],
+    "Entry": [{"name": "title", "type": "string"}, {"name": "content", "type": "string"}],
+    "User": [{"name": "name", "type": "string"}, {"name": "email", "type": "string"}],
 }
 
 
@@ -36,6 +40,10 @@ def _entity_slug_and_plural(entity_name: str) -> tuple[str, str]:
     if not value:
         return "", ""
     slug = re.sub(r"(?<!^)(?=[A-Z])", "_", value).lower()
+    if slug.endswith("y") and len(slug) > 1 and slug[-2] not in "aeiou":
+        return slug, f"{slug[:-1]}ies"
+    if slug.endswith(("s", "x", "z", "ch", "sh")):
+        return slug, f"{slug}es"
     return slug, f"{slug}s"
 
 
@@ -76,6 +84,12 @@ def suggest_project_spec(
     if any(k in text for k in ("defect", "bug", "issue")) and "Defect" not in seen:
         seen.add("Defect")
         selected_entities.append("Defect")
+    if any(k in text for k in ("diary", "journal", "daily log", "entry")) and "Entry" not in seen:
+        seen.add("Entry")
+        selected_entities.append("Entry")
+    if any(k in text for k in ("login", "auth", "user", "account", "signup", "sign up")) and "User" not in seen:
+        seen.add("User")
+        selected_entities.append("User")
 
     selected_entities = selected_entities[:3]
 

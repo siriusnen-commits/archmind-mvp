@@ -45,3 +45,15 @@ def test_suggest_project_spec_keyword_inference_for_qa_hardware() -> None:
     assert "Device" in names
     assert "TestRun" in names
     assert "Defect" in names
+
+
+def test_suggest_project_spec_keyword_inference_for_diary_entry_user() -> None:
+    out = suggest_project_spec(
+        "my diary app with entry pages and user login",
+        {"domains": [], "frontend_needed": True},
+    )
+    names = [entity["name"] for entity in out["entities"]]
+    assert "Entry" in names
+    assert "User" in names
+    assert "GET /entries" in out["api_endpoints"]
+    assert "entries/list" in out["frontend_pages"]

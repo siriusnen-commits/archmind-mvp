@@ -523,6 +523,138 @@ def test_pipeline_fullstack_seed_spec_applies_to_generated_scaffold(tmp_path: Pa
     next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
     assert str(next_action.get("command") or "").strip() != "/add_entity Task"
 
+
+def test_pipeline_continue_does_not_erase_persisted_spec(tmp_path: Path, monkeypatch) -> None:
+    diary_spec = {
+        "entities": [
+            {
+                "name": "Entry",
+                "fields": [
+                    {"name": "title", "type": "string"},
+                    {"name": "content", "type": "string"},
+                ],
+            },
+            {
+                "name": "User",
+                "fields": [
+                    {"name": "name", "type": "string"},
+                    {"name": "email", "type": "string"},
+                ],
+            },
+        ],
+        "api_endpoints": ["GET /entries", "POST /entries", "GET /users", "POST /users"],
+        "frontend_pages": ["entries/list", "entries/detail", "users/list"],
+    }
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_seed_scaffold)
+    monkeypatch.setattr("archmind.pipeline.suggest_project_spec", lambda *_a, **_k: diary_spec)
+
+    first_exit = main(
+        [
+            "pipeline",
+            "--idea",
+            "diary app with users and entry pages",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "diary_lifecycle_demo",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert first_exit == 0
+
+    project_dir = tmp_path / "diary_lifecycle_demo"
+    spec_path = project_dir / ".archmind" / "project_spec.json"
+    before = json.loads(spec_path.read_text(encoding="utf-8"))
+    assert len(before.get("entities") or []) >= 2
+    assert len(before.get("api_endpoints") or []) >= 2
+    assert len(before.get("frontend_pages") or []) >= 2
+
+    continue_exit = main(
+        [
+            "pipeline",
+            "--path",
+            str(project_dir),
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert continue_exit in (0, 1)
+
+    after = json.loads(spec_path.read_text(encoding="utf-8"))
+    assert len(after.get("entities") or []) >= 2
+    assert len(after.get("api_endpoints") or []) >= 2
+    assert len(after.get("frontend_pages") or []) >= 2
+    assert (project_dir / "frontend" / "app" / "entries" / "page.tsx").exists()
+
+    detail = build_project_detail(project_dir)
+    assert detail.spec_summary.entities >= 2
+    assert detail.spec_summary.apis >= 2
+    assert detail.spec_summary.pages >= 2
+    analysis = analyze_project(project_dir, spec_payload=after, runtime_payload={})
+    next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
+    assert str(next_action.get("command") or "").strip() != "/add_entity Task"
+
+
+def test_pipeline_idea_rerun_does_not_overwrite_non_empty_spec_with_empty_suggestion(tmp_path: Path, monkeypatch) -> None:
+    rich_spec = {
+        "entities": [{"name": "Entry", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": ["GET /entries", "POST /entries"],
+        "frontend_pages": ["entries/list"],
+    }
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_seed_scaffold)
+    monkeypatch.setattr("archmind.pipeline.suggest_project_spec", lambda *_a, **_k: rich_spec)
+
+    first_exit = main(
+        [
+            "pipeline",
+            "--idea",
+            "diary app",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "spec_preserve_demo",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert first_exit == 0
+
+    project_dir = tmp_path / "spec_preserve_demo"
+    spec_path = project_dir / ".archmind" / "project_spec.json"
+    first = json.loads(spec_path.read_text(encoding="utf-8"))
+    assert len(first.get("entities") or []) >= 1
+
+    monkeypatch.setattr("archmind.pipeline.suggest_project_spec", lambda *_a, **_k: {})
+    second_exit = main(
+        [
+            "pipeline",
+            "--idea",
+            "diary app",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "spec_preserve_demo",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert second_exit == 0
+
+    second = json.loads(spec_path.read_text(encoding="utf-8"))
+    assert len(second.get("entities") or []) >= 1
+    assert len(second.get("api_endpoints") or []) >= 1
+    assert len(second.get("frontend_pages") or []) >= 1
+
+
 def test_pipeline_cli_type_keeps_fallback_metadata(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project)
 
