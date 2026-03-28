@@ -666,6 +666,28 @@ def test_project_analysis_handles_spaced_entity_name_without_false_missing_crud(
     assert out["next_action"]["command"] != "/add_api GET /entry_items/{id}"
 
 
+def test_project_analysis_treats_inspect_visible_entries_crud_as_satisfied_for_diary_entry_entity(tmp_path: Path) -> None:
+    project_dir = tmp_path / "diary-entry-entries-crud"
+    spec = {
+        "entities": [{"name": "DiaryEntry", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": [
+            "GET /entries",
+            "POST /entries",
+            "GET /entries/{id}",
+            "PATCH /entries/{id}",
+            "DELETE /entries/{id}",
+        ],
+        "frontend_pages": [],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    api_status = out["entity_crud_status"]["DiaryEntry"]["api"]
+    assert api_status["detail"] is True
+    assert api_status["update"] is True
+    assert api_status["delete"] is True
+    assert out["next_action"]["kind"] != "missing_crud_api"
+    assert str(out["next_action"]["command"] or "").strip() != "/add_api GET /entries/{id}"
+
+
 @pytest.mark.parametrize(
     ("entity_name", "resource"),
     [

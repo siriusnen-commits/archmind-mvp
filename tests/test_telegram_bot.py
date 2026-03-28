@@ -5690,6 +5690,101 @@ def test_inspect_and_next_use_identical_canonical_spec_snapshot_for_analysis(
     assert ("GET", f"/{resource}/{{id}}") in seen_api_sets[0]
 
 
+@pytest.mark.parametrize(
+    ("entity_name", "resource"),
+    [
+        ("Entry", "entries"),
+        ("Recipe", "recipes"),
+        ("Bookmark", "bookmarks"),
+        ("Board", "boards"),
+        ("Task", "tasks"),
+    ],
+)
+def test_next_action_is_not_missing_crud_when_inspect_visible_api_set_has_full_crud(
+    tmp_path: Path,
+    monkeypatch,
+    entity_name: str,
+    resource: str,
+) -> None:
+    project_dir = tmp_path / f"inspect-visible-full-crud-{resource}"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "domains": [resource],
+                "template": "fastapi",
+                "modules": [],
+                "entities": [{"name": entity_name, "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": [
+                    f"GET /{resource}",
+                    f"POST /{resource}",
+                    f"GET /{resource}/{{id}}",
+                    f"PATCH /{resource}/{{id}}",
+                    f"DELETE /{resource}/{{id}}",
+                ],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    inspect_msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=inspect_msg, effective_chat=DummyChat()), DummyContext()))
+    inspect_out = inspect_msg.sent[-1]
+    assert f"GET /{resource}/{{id}}" in inspect_out
+    assert f"PATCH /{resource}/{{id}}" in inspect_out
+    assert f"DELETE /{resource}/{{id}}" in inspect_out
+
+    analysis = telegram_bot._build_project_analysis(project_dir)
+    next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
+    assert str(next_action.get("kind") or "").strip() != "missing_crud_api"
+    assert str(next_action.get("command") or "").strip() != f"/add_api GET /{resource}/{{id}}"
+
+
+def test_diary_entry_entity_does_not_false_positive_missing_crud_when_inspect_shows_entries_crud(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_dir = tmp_path / "diary-entry-inspect-next-crud"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "domains": ["diary"],
+                "template": "fastapi",
+                "modules": [],
+                "entities": [{"name": "DiaryEntry", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": [
+                    "GET /entries",
+                    "POST /entries",
+                    "GET /entries/{id}",
+                    "PATCH /entries/{id}",
+                    "DELETE /entries/{id}",
+                ],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    inspect_msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=inspect_msg, effective_chat=DummyChat()), DummyContext()))
+    inspect_out = inspect_msg.sent[-1]
+    assert "GET /entries/{id}" in inspect_out
+
+    next_msg = DummyMessage()
+    asyncio.run(command_next(DummyUpdate(message=next_msg, effective_chat=DummyChat()), DummyContext()))
+    next_out = next_msg.sent[-1]
+    assert "missing detail API coverage" not in next_out
+    assert "Command: /add_api GET /entries/{id}" not in next_out
+
+
 def test_next_command_recommends_add_page_when_api_exists_without_pages(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "next_missing_pages"
     archmind = project_dir / ".archmind"
