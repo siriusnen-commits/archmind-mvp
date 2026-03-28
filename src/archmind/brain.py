@@ -11,6 +11,36 @@ def _has_any(text: str, keywords: list[str]) -> bool:
     return False
 
 
+def _crud_content_hint(text: str) -> bool:
+    return _has_any(
+        text,
+        [
+            r"\bdiary\b",
+            r"\bjournal\b",
+            r"\bmemo(s)?\b",
+            r"\bnote(s)?\b",
+            r"\bboard\b",
+            r"\bbookmark(s)?\b",
+            r"\brecipe(s)?\b",
+            r"\btask(s)?\b",
+            r"\btodo(s)?\b",
+            r"\btracker\b",
+            r"\bkanban\b",
+            r"\bentries\b",
+            r"\bcontent\b",
+            r"다이어리",
+            r"일지",
+            r"메모",
+            r"게시판",
+            r"북마크",
+            r"레시피",
+            r"노트",
+            r"기록",
+            r"할일",
+        ],
+    )
+
+
 def _extract_domains(text: str) -> list[str]:
     domains: list[str] = []
     mapping: list[tuple[str, list[str]]] = [
@@ -88,8 +118,13 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
             r"\blogin\b",
             r"\bauth\b",
             r"\bauthentication\b",
+            r"\bsign[\s-]?in\b",
+            r"\bsign[\s-]?up\b",
+            r"\boauth\b",
+            r"\bpassword\b",
+            r"\bsession\b",
+            r"\bmulti[\s-]?user\b",
             r"\buser account\b",
-            r"\buser\b",
             r"회원",
             r"로그인",
             r"사용자",
@@ -182,6 +217,10 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
     )
     if db_needed:
         persistence_needed = True
+    crud_content_hint = _crud_content_hint(text)
+    if crud_content_hint:
+        db_needed = True
+        persistence_needed = True
 
     domains = _extract_domains(text)
     modules: list[str] = []
@@ -211,11 +250,19 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
             r"웹앱",
             r"블로그",
             r"다이어리",
+            r"\btodo app\b",
+            r"\btask app\b",
+            r"\bnote app\b",
+            r"\bmemo app\b",
+            r"\bbookmark app\b",
+            r"\brecipe app\b",
             r"게시판",
             r"대시보드",
             r"관리화면",
         ],
     )
+    if crud_content_hint and _has_any(text, [r"\bapp\b", r"\bweb\b", r"웹", r"\bpage\b", r"화면"]):
+        fullstack_priority = True
 
     # RULE 1 + RULE 3
     if (auth_needed or db_needed) and not frontend_only_explicit:

@@ -89,3 +89,10 @@ def test_reason_architecture_webapp_keywords_force_fullstack_shape() -> None:
     out = reason_architecture_from_idea("개인용 블로그형식의 다이어리 webapp")
     assert out["app_shape"] == "fullstack"
     assert out["recommended_template"] == "fullstack-ddd"
+
+
+def test_reason_architecture_diary_app_sets_realistic_db_and_persistence() -> None:
+    out = reason_architecture_from_idea("personal diary app for daily entries")
+    assert out["app_shape"] == "fullstack"
+    assert out["db_needed"] is True
+    assert out["persistence_needed"] is True

@@ -6,11 +6,92 @@ from typing import Any
 
 from .reasoning import try_generate_reasoning_json
 
+
 def _entity_slug(name: str) -> str:
     value = str(name or "").strip()
     if not value:
         return ""
     return re.sub(r"(?<!^)(?=[A-Z])", "_", value).lower()
+
+
+def _pluralize_slug(value: str) -> str:
+    slug = str(value or "").strip().lower().strip("/")
+    if not slug:
+        return ""
+    if slug.endswith("s"):
+        return slug
+    if slug.endswith("ies"):
+        return slug
+    if slug.endswith(("ses", "xes", "zes", "ches", "shes")):
+        return slug
+    if slug.endswith("y") and len(slug) > 1 and slug[-2] not in "aeiou":
+        return f"{slug[:-1]}ies"
+    if slug.endswith(("x", "z", "ch", "sh")):
+        return f"{slug}es"
+    return f"{slug}s"
+
+
+def _normalize_api_endpoint(value: str) -> str:
+    text = str(value or "").strip()
+    match = re.match(r"^([A-Za-z]+)\s+(.+)$", text)
+    if not match:
+        return ""
+    method = match.group(1).upper()
+    path = match.group(2).strip()
+    if not path:
+        return ""
+    if not path.startswith("/"):
+        path = f"/{path}"
+    parts = [part for part in path.split("/") if part]
+    if parts and not parts[0].startswith("{") and not parts[0].startswith("["):
+        parts[0] = _pluralize_slug(parts[0].replace("-", "_"))
+    return f"{method} /{'/'.join(parts)}"
+
+
+def _normalize_page_path(value: str) -> str:
+    page = str(value or "").strip().replace("\\", "/").strip("/")
+    if not page:
+        return ""
+    parts = [part for part in page.split("/") if part]
+    if not parts:
+        return ""
+    resource = _pluralize_slug(parts[0].replace("-", "_"))
+    if not resource:
+        return ""
+    if len(parts) == 1:
+        return f"{resource}/list"
+    action = parts[1].lower().strip()
+    if action in {"index", "home"}:
+        action = "list"
+    elif action in {"create"}:
+        action = "new"
+    elif action in {"show", "view", "item"}:
+        action = "detail"
+    return f"{resource}/{action}"
+
+
+def _has_auth_signal(idea: str, reasoning: dict[str, Any]) -> bool:
+    if bool(reasoning.get("auth_needed")):
+        return True
+    modules = [str(x).strip().lower() for x in (reasoning.get("modules") or []) if str(x).strip()]
+    if "auth" in modules:
+        return True
+    text = str(idea or "").lower()
+    return any(
+        token in text
+        for token in (
+            "login",
+            "auth",
+            "oauth",
+            "signup",
+            "sign up",
+            "account",
+            "password",
+            "multi-user",
+            "multi user",
+            "rbac",
+        )
+    )
 
 
 def _limit_steps(phases: list[dict[str, Any]], max_steps: int = 15) -> list[dict[str, Any]]:
@@ -38,9 +119,10 @@ def build_plan_from_suggestion(
     *,
     provider_project_dir: Path | None = None,
 ) -> dict[str, Any]:
+    auth_signal = _has_auth_signal(idea, reasoning)
     entities = suggestion.get("entities") if isinstance(suggestion.get("entities"), list) else []
-    apis = [str(x).strip() for x in (suggestion.get("api_endpoints") or []) if str(x).strip()]
-    pages = [str(x).strip().strip("/") for x in (suggestion.get("frontend_pages") or []) if str(x).strip()]
+    apis = [_normalize_api_endpoint(str(x).strip()) for x in (suggestion.get("api_endpoints") or []) if str(x).strip()]
+    pages = [_normalize_page_path(str(x).strip()) for x in (suggestion.get("frontend_pages") or []) if str(x).strip()]
 
     entity_steps: list[str] = []
     field_steps: list[str] = []
@@ -49,6 +131,8 @@ def build_plan_from_suggestion(
             continue
         name = str(entity.get("name") or "").strip()
         if not name:
+            continue
+        if not auth_signal and name.lower() == "user":
             continue
         entity_steps.append(f"/add_entity {name}")
         fields = entity.get("fields") if isinstance(entity.get("fields"), list) else []
@@ -60,8 +144,8 @@ def build_plan_from_suggestion(
             if fname and ftype:
                 field_steps.append(f"/add_field {name} {fname}:{ftype}")
 
-    api_steps = [f"/add_api {endpoint}" for endpoint in apis]
-    page_steps = [f"/add_page {page}" for page in pages]
+    api_steps = [f"/add_api {endpoint}" for endpoint in apis if endpoint]
+    page_steps = [f"/add_page {page}" for page in pages if page]
 
     phases = [
         {"title": "Core entities", "steps": entity_steps},
@@ -138,11 +222,11 @@ def build_plan_from_project_spec(spec: dict[str, Any], *, provider_project_dir: 
 
         if frontend_enabled and slug:
             list_page = f"{plural}/list"
-            detail_page = f"{plural}/detail"
+            create_page = f"{plural}/new"
             if list_page not in pages:
                 phase4.append(f"/add_page {list_page}")
-            if detail_page not in pages:
-                phase4.append(f"/add_page {detail_page}")
+            if create_page not in pages:
+                phase4.append(f"/add_page {create_page}")
 
     if "dashboard" in modules and "dashboard/home" not in pages:
         phase4.append("/add_page dashboard/home")

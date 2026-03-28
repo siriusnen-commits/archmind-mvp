@@ -57,3 +57,21 @@ def test_suggest_project_spec_keyword_inference_for_diary_entry_user() -> None:
     assert "User" in names
     assert "GET /entries" in out["api_endpoints"]
     assert "entries/list" in out["frontend_pages"]
+
+
+def test_suggest_project_spec_diary_without_auth_does_not_inject_user_profile() -> None:
+    out = suggest_project_spec("my diary app with entry pages", {"domains": [], "frontend_needed": True, "auth_needed": False})
+    names = [entity["name"] for entity in out["entities"]]
+    assert "Entry" in names
+    assert "User" not in names
+    assert "entries/list" in out["frontend_pages"]
+    assert "entries/new" in out["frontend_pages"]
+
+
+def test_suggest_project_spec_bookmark_infers_primary_resource_with_plural_convention() -> None:
+    out = suggest_project_spec("bookmark manager web app", {"domains": [], "frontend_needed": True})
+    names = [entity["name"] for entity in out["entities"]]
+    assert "Bookmark" in names
+    assert "GET /bookmarks" in out["api_endpoints"]
+    assert "bookmarks/list" in out["frontend_pages"]
+    assert "bookmarks/new" in out["frontend_pages"]

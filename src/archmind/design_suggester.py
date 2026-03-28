@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,90 @@ def _unique(values: list[str]) -> list[str]:
         seen.add(key)
         out.append(value)
     return out
+
+
+def _pluralize_slug(value: str) -> str:
+    slug = str(value or "").strip().lower().strip("/")
+    if not slug:
+        return ""
+    if slug.endswith("s"):
+        return slug
+    if slug.endswith("ies"):
+        return slug
+    if slug.endswith(("ses", "xes", "zes", "ches", "shes")):
+        return slug
+    if slug.endswith("y") and len(slug) > 1 and slug[-2] not in "aeiou":
+        return f"{slug[:-1]}ies"
+    if slug.endswith(("x", "z", "ch", "sh")):
+        return f"{slug}es"
+    return f"{slug}s"
+
+
+def _normalize_api_endpoint(value: str) -> str:
+    text = str(value or "").strip()
+    match = re.match(r"^([A-Za-z]+)\s+(.+)$", text)
+    if not match:
+        return ""
+    method = match.group(1).upper()
+    path = match.group(2).strip()
+    if not path:
+        return ""
+    if not path.startswith("/"):
+        path = f"/{path}"
+    parts = [part for part in path.split("/") if part]
+    if parts and not parts[0].startswith("{") and not parts[0].startswith("["):
+        parts[0] = _pluralize_slug(parts[0].replace("-", "_"))
+    return f"{method} /{'/'.join(parts)}"
+
+
+def _normalize_page_path(value: str) -> str:
+    page = str(value or "").strip().replace("\\", "/").strip("/")
+    if not page:
+        return ""
+    parts = [part for part in page.split("/") if part]
+    if not parts:
+        return ""
+    resource = _pluralize_slug(parts[0].replace("-", "_"))
+    if not resource:
+        return ""
+    if len(parts) == 1:
+        return f"{resource}/list"
+    action = parts[1].lower().strip()
+    if action in {"index", "home"}:
+        action = "list"
+    elif action in {"create"}:
+        action = "new"
+    elif action in {"show", "view", "item"}:
+        action = "detail"
+    return f"{resource}/{action}"
+
+
+def _has_auth_signal(idea: str, reasoning: dict[str, Any]) -> bool:
+    if bool(reasoning.get("auth_needed")):
+        return True
+    modules = [str(x).strip().lower() for x in (reasoning.get("modules") or []) if str(x).strip()]
+    if "auth" in modules:
+        return True
+    text = str(idea or "").lower()
+    return any(
+        token in text
+        for token in (
+            "login",
+            "auth",
+            "oauth",
+            "signup",
+            "sign up",
+            "account",
+            "password",
+            "multi-user",
+            "multi user",
+            "rbac",
+        )
+    )
+
+
+def _is_auth_entity_name(name: str) -> bool:
+    return str(name or "").strip().lower() in {"user", "account", "profile", "member", "session"}
 
 
 def _normalize_domain_name(value: str) -> str:
@@ -122,13 +207,14 @@ def build_architecture_design(
     *,
     provider_project_dir: Path | None = None,
 ) -> dict[str, Any]:
+    auth_signal = _has_auth_signal(idea, reasoning)
     shape = str(reasoning.get("app_shape") or "unknown").strip() or "unknown"
     template = str(reasoning.get("recommended_template") or "unknown").strip() or "unknown"
     modules = [str(x).strip() for x in (reasoning.get("modules") or []) if str(x).strip()]
     domains = [str(x).strip() for x in (reasoning.get("domains") or []) if str(x).strip()]
     entities = suggestion.get("entities") if isinstance(suggestion.get("entities"), list) else []
-    api_endpoints = [str(x).strip() for x in (suggestion.get("api_endpoints") or []) if str(x).strip()]
-    frontend_pages = [str(x).strip().strip("/") for x in (suggestion.get("frontend_pages") or []) if str(x).strip()]
+    api_endpoints = [_normalize_api_endpoint(str(x).strip()) for x in (suggestion.get("api_endpoints") or []) if str(x).strip()]
+    frontend_pages = [_normalize_page_path(str(x).strip()) for x in (suggestion.get("frontend_pages") or []) if str(x).strip()]
 
     if (bool(reasoning.get("dashboard_needed")) or "dashboard" in [x.lower() for x in modules]) and bool(
         reasoning.get("frontend_needed")
@@ -144,6 +230,8 @@ def build_architecture_design(
             continue
         name = str(entity.get("name") or "").strip()
         if not name:
+            continue
+        if not auth_signal and _is_auth_entity_name(name):
             continue
         key = name.lower()
         if key in seen_entities:
@@ -203,7 +291,10 @@ def build_architecture_design(
         if isinstance(raw, list):
             values = [str(x).strip() for x in raw if str(x).strip()]
             if key == "frontend_pages":
-                values = [x.strip("/") for x in values]
+                values = [_normalize_page_path(x.strip("/")) for x in values]
+            elif key == "api_endpoints":
+                values = [_normalize_api_endpoint(x) for x in values]
+            values = [x for x in values if x]
             unique = _unique(values)
             if unique:
                 out[key] = unique[:10]
@@ -218,6 +309,8 @@ def build_architecture_design(
             name = str(raw_entity.get("name") or "").strip()
             key = name.lower()
             if not name or key in seen_entities:
+                continue
+            if not auth_signal and _is_auth_entity_name(name):
                 continue
             seen_entities.add(key)
             normalized_fields: list[dict[str, str]] = []
