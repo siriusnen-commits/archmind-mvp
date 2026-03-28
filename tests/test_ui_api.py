@@ -291,6 +291,25 @@ def test_ui_project_analysis_endpoint_response_shape(monkeypatch, tmp_path: Path
         assert key in payload["next_action"]
 
 
+def test_ui_project_analysis_returns_actionable_next_command_for_crud_gap(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "analysis-crud-gap")
+    spec_path = project_dir / ".archmind" / "project_spec.json"
+    payload = json.loads(spec_path.read_text(encoding="utf-8"))
+    payload["entities"] = [{"name": "Entry", "fields": [{"name": "title", "type": "string"}]}]
+    payload["api_endpoints"] = ["GET /entries", "POST /entries"]
+    payload["frontend_pages"] = ["entries/list", "entries/new", "entries/detail"]
+    spec_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/analysis-crud-gap/analysis")
+    assert response.status_code == 200
+    analysis = response.json()
+    assert analysis["next_action"]["kind"] == "missing_crud_api"
+    assert analysis["next_action"]["command"] == "/add_api GET /entries/{id}"
+
+
 def test_ui_projects_response_tolerates_malformed_repository_metadata(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     project_dir = _make_project(projects_root, "broken-repo")

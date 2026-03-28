@@ -5340,9 +5340,9 @@ def test_next_command_prioritizes_missing_api_before_pages_for_entity(tmp_path: 
     msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     out = msg.sent[-1]
-    assert "/add_api POST /tasks" in out
+    assert "/add_api GET /tasks/{id}" in out
     assert "/add_page tasks/list" not in out
-    assert "Command: /add_api POST /tasks" in out
+    assert "Command: /add_api GET /tasks/{id}" in out
 
 
 def test_next_command_recommends_add_api_when_entity_exists_without_apis(tmp_path: Path, monkeypatch) -> None:
@@ -5356,7 +5356,7 @@ def test_next_command_recommends_add_api_when_entity_exists_without_apis(tmp_pat
                 "domains": ["notes"],
                 "template": "fastapi",
                 "modules": [],
-                "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}]}],
+                "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}, {"name": "content", "type": "string"}]}],
                 "api_endpoints": [],
                 "frontend_pages": [],
             }
@@ -5367,7 +5367,33 @@ def test_next_command_recommends_add_api_when_entity_exists_without_apis(tmp_pat
     msg = DummyMessage()
     asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     out = msg.sent[-1]
-    assert "/add_api GET /notes" in out
+    assert "/add_api GET /notes/{id}" in out
+
+
+def test_next_command_diary_crud_gap_is_actionable_not_diagnosis_only(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "next_diary_crud_gap"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "domains": ["diary"],
+                "template": "fullstack-ddd",
+                "modules": [],
+                "entities": [{"name": "Entry", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": ["GET /entries", "POST /entries"],
+                "frontend_pages": ["entries/list", "entries/new", "entries/detail"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "incomplete CRUD API coverage" not in out
+    assert "Command: /add_api GET /entries/{id}" in out
 
 
 def test_next_command_recommends_add_page_when_api_exists_without_pages(tmp_path: Path, monkeypatch) -> None:
@@ -5846,7 +5872,7 @@ def test_auto_command_stops_on_repeated_low_value_pattern(tmp_path: Path, monkey
     assert "- Stopped: repeated low-value pattern" in out
 
 
-def test_auto_command_uses_implement_page_when_existing_page_file_is_placeholder(tmp_path: Path, monkeypatch) -> None:
+def test_auto_command_prioritizes_missing_page_before_placeholder_implementation(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "auto_existing_placeholder_page"
     archmind = project_dir / ".archmind"
     archmind.mkdir(parents=True, exist_ok=True)
@@ -5885,9 +5911,9 @@ def test_auto_command_uses_implement_page_when_existing_page_file_is_placeholder
     msg = DummyMessage()
     asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext(args=["1"])))
     out = msg.sent[-1]
-    assert executed == ["/implement_page songs/favorite"]
-    assert "- Next: /implement_page songs/favorite" in out
-    assert "/add_page songs/favorite" not in out
+    assert executed == ["/add_page songs/list"]
+    assert "- Next: /add_page songs/list" in out
+    assert "/implement_page songs/favorite" not in out
 def test_improve_suggestion_button_dispatches_add_field_command(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "improve_button_dispatch_add_field"
     archmind = project_dir / ".archmind"
