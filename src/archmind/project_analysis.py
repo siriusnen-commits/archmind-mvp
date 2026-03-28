@@ -101,6 +101,19 @@ def _parse_api_endpoint(value: Any) -> tuple[str, str] | None:
     return method, path
 
 
+def _is_path_param_segment(value: str) -> bool:
+    token = str(value or "").strip()
+    if not token:
+        return False
+    if token.startswith(":") and len(token) > 1:
+        return True
+    if token.startswith("{") and token.endswith("}") and len(token) > 2:
+        return True
+    if token.startswith("[") and token.endswith("]") and len(token) > 2:
+        return True
+    return False
+
+
 def _canonicalize_api_path(value: str) -> str:
     raw = str(value or "").strip().replace("\\", "/")
     if not raw:
@@ -110,18 +123,19 @@ def _canonicalize_api_path(value: str) -> str:
     parts = [p for p in raw.split("/") if p]
     if not parts:
         return ""
+    treat_as_resource = len(parts) == 1 or (len(parts) >= 2 and _is_path_param_segment(parts[1]))
     canonical_parts: list[str] = []
     for idx, part in enumerate(parts):
         token = str(part).strip()
         if not token:
             continue
-        if token.startswith("{") and token.endswith("}"):
-            canonical_parts.append(token)
+        if _is_path_param_segment(token):
+            canonical_parts.append("{id}")
             continue
         normalized = re.sub(r"[^a-z0-9_]+", "_", token.lower()).strip("_")
         if not normalized:
             continue
-        if idx == 0:
+        if idx == 0 and treat_as_resource:
             normalized = _pluralize_resource_name(normalized)
         canonical_parts.append(normalized)
     if not canonical_parts:
@@ -314,6 +328,17 @@ def _extract_apis(spec_payload: dict[str, Any]) -> list[dict[str, str]]:
     return out
 
 
+def canonical_api_endpoints_from_spec(spec_payload: dict[str, Any]) -> list[str]:
+    out: list[str] = []
+    for item in _extract_apis(spec_payload):
+        method = str(item.get("method") or "").strip().upper()
+        path = str(item.get("path") or "").strip()
+        if not method or not path:
+            continue
+        out.append(f"{method} {path}")
+    return out
+
+
 def _extract_pages(spec_payload: dict[str, Any]) -> list[str]:
     rows = spec_payload.get("frontend_pages") if isinstance(spec_payload.get("frontend_pages"), list) else []
     out: list[str] = []
@@ -406,7 +431,7 @@ def _compute_entity_crud_status(
     apis: list[dict[str, str]],
     pages: list[str],
 ) -> dict[str, dict[str, Any]]:
-    by_method_path = {(str(item.get("method") or ""), str(item.get("path") or "")) for item in apis}
+    by_method_path = {(str(item.get("method") or "").strip().upper(), str(item.get("path") or "").strip()) for item in apis}
     page_set = {str(page) for page in pages}
     status: dict[str, dict[str, Any]] = {}
 
@@ -414,14 +439,14 @@ def _compute_entity_crud_status(
         resource = _entity_resource(entity)
         entity_key = _normalize_entity_name(entity).lower()
         base = f"/{resource}" if resource else ""
+        detail_path = f"{base}/{{id}}" if base else ""
         has_list = ("GET", base) in by_method_path if base else False
         has_create = ("POST", base) in by_method_path if base else False
-        has_detail = any(method == "GET" and path.startswith(f"{base}/") for method, path in by_method_path) if base else False
-        has_update = any(
-            method in {"PUT", "PATCH"} and path.startswith(f"{base}/")
-            for method, path in by_method_path
-        ) if base else False
-        has_delete = any(method == "DELETE" and path.startswith(f"{base}/") for method, path in by_method_path) if base else False
+        has_detail = ("GET", detail_path) in by_method_path if detail_path else False
+        has_update = (
+            ("PATCH", detail_path) in by_method_path or ("PUT", detail_path) in by_method_path
+        ) if detail_path else False
+        has_delete = ("DELETE", detail_path) in by_method_path if detail_path else False
 
         page_list = f"{resource}/list" in page_set if resource else False
         page_detail = f"{resource}/detail" in page_set if resource else False

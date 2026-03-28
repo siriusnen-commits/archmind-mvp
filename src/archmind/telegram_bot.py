@@ -1133,10 +1133,15 @@ def _normalize_api_path(value: str) -> str:
     normalized_parts: list[str] = []
     treat_as_resource = len(parts) == 1 or (len(parts) >= 2 and parts[1].startswith("{") and parts[1].endswith("}"))
     for idx, part in enumerate(parts):
-        if part.startswith("{") and part.endswith("}"):
-            normalized_parts.append(part)
+        token = str(part or "").strip()
+        if (
+            (token.startswith(":") and len(token) > 1)
+            or (token.startswith("{") and token.endswith("}") and len(token) > 2)
+            or (token.startswith("[") and token.endswith("]") and len(token) > 2)
+        ):
+            normalized_parts.append("{id}")
             continue
-        normalized = _normalize_resource_segment(part)
+        normalized = _normalize_resource_segment(token)
         if not normalized:
             return ""
         if idx == 0 and treat_as_resource:
@@ -4091,13 +4096,19 @@ async def command_inspect(update: Any, context: Any) -> None:
     reasoning = _load_json(archmind_dir / "architecture_reasoning.json") or {}
     state = load_state(project_path) or {}
 
+    analysis = _build_project_analysis(project_path)
+
     shape = str(spec.get("shape") or reasoning.get("app_shape") or "unknown").strip() or "unknown"
     template = str(spec.get("template") or reasoning.get("recommended_template") or "unknown").strip() or "unknown"
     domains = [str(x) for x in (spec.get("domains") or reasoning.get("domains") or []) if str(x).strip()]
     modules = [str(x) for x in (spec.get("modules") or reasoning.get("modules") or []) if str(x).strip()]
     entities = _entity_summaries_for_inspect(spec.get("entities"), max_fields=5)
     entity_tree_lines = _entity_tree_lines_for_inspect(spec.get("entities"), max_entities=10, max_fields=8)
-    api_endpoints = [str(x) for x in (spec.get("api_endpoints") or []) if str(x).strip()]
+    api_endpoints = [
+        f"{str(item.get('method') or '').strip().upper()} {str(item.get('path') or '').strip()}"
+        for item in (analysis.get("apis") or [])
+        if isinstance(item, dict) and str(item.get("method") or "").strip() and str(item.get("path") or "").strip()
+    ]
     frontend_pages = [str(x) for x in (spec.get("frontend_pages") or []) if str(x).strip()]
     reason_summary = str(spec.get("reason_summary") or reasoning.get("reason_summary") or "").strip()
     evolution = spec.get("evolution") if isinstance(spec.get("evolution"), dict) else {}
@@ -4105,8 +4116,14 @@ async def command_inspect(update: Any, context: Any) -> None:
     evolution_added = _ordered_modules([str(x) for x in (evolution.get("added_modules") or [])]) if evolution else []
     evolution_history_count = len(evolution.get("history") or []) if isinstance(evolution.get("history"), list) else 0
     recent_evolution = summarize_recent_evolution(spec, limit=5)
-    progression_spec = raw_spec if isinstance(raw_spec, dict) and raw_spec else spec
-    progression = analyze_spec_progression(progression_spec if isinstance(progression_spec, dict) else {})
+    progression_spec = {
+        "shape": shape or "unknown",
+        "modules": spec.get("modules") if isinstance(spec.get("modules"), list) else [],
+        "entities": spec.get("entities") if isinstance(spec.get("entities"), list) else [],
+        "api_endpoints": api_endpoints,
+        "frontend_pages": [str(x) for x in (analysis.get("pages") or []) if str(x).strip()],
+    }
+    progression = analyze_spec_progression(progression_spec)
     provider_mode = load_provider_mode(state, default="local")
 
     root_backend_main = project_path / "app" / "main.py"

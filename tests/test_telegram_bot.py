@@ -2912,8 +2912,8 @@ def test_inspect_command_summarizes_project_spec_reasoning_and_state(tmp_path: P
     assert "Entity Fields:" in out
     assert "- Task" in out
     assert "  - title:string" in out
-    assert "APIs:" in out
-    assert "- GET /tasks" in out
+    assert "- APIs: 0" in out
+    assert "\nAPIs:\n" not in out
     assert "Pages:" in out
     assert "- tasks/list" in out
     assert "- tasks/detail" in out
@@ -2972,7 +2972,7 @@ def test_inspect_command_truncates_entity_api_and_page_lists(tmp_path: Path, mon
     out = msg.sent[-1]
 
     assert "Task(f0:string, f1:string, f2:string, f3:string, f4:string, ... +2 more)" in out
-    assert "more endpoints" in out
+    assert "more endpoints" not in out
     assert "more pages" in out
     assert "History count: 3" in out
 
@@ -5432,6 +5432,47 @@ def test_next_command_diary_crud_gap_is_actionable_not_diagnosis_only(tmp_path: 
     out = msg.sent[-1]
     assert "incomplete CRUD API coverage" not in out
     assert "Command: /add_api GET /entries/{id}" in out
+
+
+def test_inspect_and_next_use_consistent_canonical_api_list_for_crud(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect-next-crud-consistent"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "domains": ["entries"],
+                "template": "fastapi",
+                "modules": [],
+                "entities": [{"name": "Entry", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": [
+                    "GET /entries",
+                    "POST /entries",
+                    "GET /entries/:id",
+                    "PATCH /entries/{entry_id}",
+                    "DELETE /entries/{id}",
+                ],
+                "frontend_pages": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+
+    inspect_msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=inspect_msg, effective_chat=DummyChat()), DummyContext()))
+    inspect_out = inspect_msg.sent[-1]
+    assert "GET /entries/{id}" in inspect_out
+    assert "PATCH /entries/{id}" in inspect_out
+    assert "DELETE /entries/{id}" in inspect_out
+
+    next_msg = DummyMessage()
+    asyncio.run(command_next(DummyUpdate(message=next_msg, effective_chat=DummyChat()), DummyContext()))
+    next_out = next_msg.sent[-1]
+    assert "missing detail API coverage" not in next_out
+    assert "Command: /add_api GET /entries/{id}" not in next_out
+    assert "missing update API coverage" not in next_out
 
 
 def test_next_command_recommends_add_page_when_api_exists_without_pages(tmp_path: Path, monkeypatch) -> None:
