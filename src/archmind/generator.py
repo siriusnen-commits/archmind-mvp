@@ -1005,6 +1005,7 @@ def _ensure_frontend_navigation_shell_upgrade(app_root: Path, generated: list[st
                 "FastAPI + Next.js workspace" in layout_text
                 or "/ · /notes" in layout_text
                 or "/ui/defects" in layout_text
+                or "max-w-4xl p-6" in layout_text
             )
             if legacy_markers:
                 title_match = re.search(r'title:\s*["\']([^"\']+)["\']', layout_text)
@@ -1019,6 +1020,8 @@ def _ensure_frontend_navigation_shell_upgrade(app_root: Path, generated: list[st
                 "Open the generated domain pages" in root_text
                 or 'router.replace("/notes")' in root_text
                 or "__ROOT_LINKS__" in root_text
+                or "ArchMind Fullstack Workspace" in root_text
+                or "This scaffold is domain-neutral." in root_text
             )
             if legacy_markers:
                 _write_if_changed(root_page_path, _render_frontend_root_with_navigation(), generated, project_dir)

@@ -368,6 +368,55 @@ def test_apply_page_scaffold_backfills_legacy_memo_shell_and_surfaces_new_pages(
     assert "router.replace(primaryHref)" in root_text
 
 
+def test_apply_page_scaffold_upgrades_fullstack_template_shell_to_navigation_home(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_shell"
+    app_dir = project_dir / "frontend" / "app"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (app_dir / "layout.tsx").write_text(
+        'import "./globals.css";\n'
+        "\n"
+        "export const metadata = {\n"
+        '  title: "fullstack_shell",\n'
+        "};\n"
+        "\n"
+        "export default function RootLayout({ children }: { children: React.ReactNode }) {\n"
+        "  return (\n"
+        '    <html lang="en">\n'
+        "      <body>\n"
+        '        <main className="mx-auto min-h-screen max-w-4xl p-6">{children}</main>\n'
+        "      </body>\n"
+        "    </html>\n"
+        "  );\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (app_dir / "page.tsx").write_text(
+        "export default function HomePage() {\n"
+        "  return (\n"
+        '    <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-6">\n'
+        '      <h1 className="text-2xl font-semibold">ArchMind Fullstack Workspace</h1>\n'
+        '      <p className="text-sm text-slate-300">\n'
+        "        This scaffold is domain-neutral. Entities, APIs, and pages are generated from project spec.\n"
+        "      </p>\n"
+        "    </section>\n"
+        "  );\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    apply_page_scaffold(project_dir, "entries/list")
+
+    root_text = (app_dir / "page.tsx").read_text(encoding="utf-8")
+    layout_text = (app_dir / "layout.tsx").read_text(encoding="utf-8")
+    nav_text = (app_dir / "_lib" / "navigation.ts").read_text(encoding="utf-8")
+    assert "ArchMind Fullstack Workspace" not in root_text
+    assert "This scaffold is domain-neutral." not in root_text
+    assert 'from "./_lib/navigation"' in root_text
+    assert "APP_NAV_LINKS.map" in layout_text
+    assert 'href: "/entries/list"' in nav_text
+
+
 def test_apply_frontend_page_scaffold_is_idempotent_and_skips_backend_only(tmp_path: Path) -> None:
     backend_only = tmp_path / "backend_demo"
     (backend_only / "app").mkdir(parents=True, exist_ok=True)
