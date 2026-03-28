@@ -1023,55 +1023,78 @@ def _render_frontend_root_with_navigation() -> str:
     return (
         '"use client";\n\n'
         'import Link from "next/link";\n'
-        'import { useEffect, useMemo, useState } from "react";\n'
-        'import { useRouter } from "next/navigation";\n'
+        'import { useMemo } from "react";\n'
         'import { useApiBaseUrl } from "./_lib/apiBase";\n'
         'import { APP_NAV_LINKS } from "./_lib/navigation";\n\n'
+        "function isDetailRoute(href: string): boolean {\n"
+        "  return href.includes(\"/[id]\");\n"
+        "}\n\n"
+        "function isCreateRoute(href: string): boolean {\n"
+        "  return href.endsWith(\"/new\");\n"
+        "}\n\n"
+        "function findPrimaryCollectionHref(): string {\n"
+        "  const preferred = APP_NAV_LINKS.find((link) => link.primary && !isDetailRoute(link.href) && !isCreateRoute(link.href) && link.href !== \"/\");\n"
+        "  if (preferred) return preferred.href;\n"
+        "  const firstCollection = APP_NAV_LINKS.find((link) => !isDetailRoute(link.href) && !isCreateRoute(link.href) && link.href !== \"/\");\n"
+        "  if (firstCollection) return firstCollection.href;\n"
+        "  return APP_NAV_LINKS[0]?.href || \"/\";\n"
+        "}\n\n"
         "export default function Page() {\n"
-        "  const router = useRouter();\n"
-        "  const [checkingPrimary, setCheckingPrimary] = useState(true);\n"
         "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n"
-        "  const primaryHref = useMemo(() => APP_NAV_LINKS.find((link) => link.primary)?.href || APP_NAV_LINKS[0]?.href || \"/\", []);\n\n"
-        "  useEffect(() => {\n"
-        "    let active = true;\n"
-        "    (async () => {\n"
-        "      try {\n"
-        "        if (primaryHref === \"/\") {\n"
-        "          setCheckingPrimary(false);\n"
-        "          return;\n"
-        "        }\n"
-        "        const response = await fetch(primaryHref, { cache: \"no-store\" });\n"
-        "        if (!active) return;\n"
-        "        if (response.ok) {\n"
-        "          router.replace(primaryHref);\n"
-        "          return;\n"
-        "        }\n"
-        "      } catch {\n"
-        "        // Ignore and show default landing.\n"
-        "      }\n"
-        "      if (active) {\n"
-        "        setCheckingPrimary(false);\n"
-        "      }\n"
-        "    })();\n"
-        "    return () => {\n"
-        "      active = false;\n"
-        "    };\n"
-        "  }, [router, primaryHref]);\n\n"
-        "  if (checkingPrimary) {\n"
-        '    return <p className="text-sm text-slate-300">Loading workspace...</p>;\n'
-        "  }\n\n"
+        "  const primaryCollectionHref = useMemo(() => findPrimaryCollectionHref(), []);\n"
+        "  const primaryCollection = useMemo(() => APP_NAV_LINKS.find((link) => link.href === primaryCollectionHref) || APP_NAV_LINKS[0] || null, [primaryCollectionHref]);\n"
+        "  const createAction = useMemo(() => {\n"
+        "    if (!primaryCollectionHref || primaryCollectionHref === \"/\") {\n"
+        "      return APP_NAV_LINKS.find((link) => isCreateRoute(link.href)) || null;\n"
+        "    }\n"
+        "    return APP_NAV_LINKS.find((link) => link.href === `${primaryCollectionHref}/new`) || APP_NAV_LINKS.find((link) => isCreateRoute(link.href)) || null;\n"
+        "  }, [primaryCollectionHref]);\n"
+        "  const secondaryLinks = useMemo(() => {\n"
+        "    return APP_NAV_LINKS.filter((link) => {\n"
+        "      if (isDetailRoute(link.href)) return false;\n"
+        "      if (primaryCollection && link.href === primaryCollection.href) return false;\n"
+        "      if (createAction && link.href === createAction.href) return false;\n"
+        "      return true;\n"
+        "    });\n"
+        "  }, [primaryCollection, createAction]);\n\n"
         "  return (\n"
-        '    <section className="space-y-4 rounded-2xl border border-slate-800 bg-slate-900/60 p-6">\n'
-        '      <h1 className="text-lg font-semibold">Project Home</h1>\n'
-        '      <p className="text-xs text-slate-300">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>\n'
-        '      <p className="text-sm text-slate-200">Available sections from generated pages:</p>\n'
-        '      <div className="flex flex-wrap gap-2 text-sm">\n'
-        "        {APP_NAV_LINKS.map((link) => (\n"
-        '          <Link key={link.href} href={link.href} className="rounded-lg border border-slate-700 px-3 py-2 hover:bg-slate-800">\n'
-        "            {link.label}\n"
-        "          </Link>\n"
-        "        ))}\n"
+        '    <section className="space-y-6 rounded-2xl border border-slate-800 bg-slate-900/60 p-6">\n'
+        '      <div className="space-y-2">\n'
+        '        <p className="text-xs uppercase tracking-wider text-slate-400">Workspace</p>\n'
+        '        <h1 className="text-xl font-semibold text-slate-50">{primaryCollection ? `${primaryCollection.label} Home` : "Project Home"}</h1>\n'
+        '        <p className="text-sm text-slate-200">Jump into the main flow and create your first record quickly.</p>\n'
         "      </div>\n"
+        '      <div className="rounded-xl border border-slate-700/80 bg-slate-950/60 p-4">\n'
+        '        <p className="text-xs text-slate-400">Primary section</p>\n'
+        '        <p className="mt-1 text-lg font-semibold text-slate-100">{primaryCollection?.label || "Main"}</p>\n'
+        '        <div className="mt-3 flex flex-wrap gap-2">\n'
+        "          {primaryCollection ? (\n"
+        '            <Link href={primaryCollection.href} className="rounded-md bg-cyan-400 px-3 py-2 text-sm font-semibold text-slate-950 hover:bg-cyan-300">\n'
+        "              Open {primaryCollection.label}\n"
+        "            </Link>\n"
+        "          ) : null}\n"
+        "          {createAction ? (\n"
+        '            <Link href={createAction.href} className="rounded-md border border-cyan-500/70 px-3 py-2 text-sm font-semibold text-cyan-200 hover:bg-slate-900">\n'
+        "              {createAction.label}\n"
+        "            </Link>\n"
+        "          ) : (\n"
+        '            <p className="text-sm text-slate-300">No create route is projected yet. Start with the primary section and add your first item workflow.</p>\n'
+        "          )}\n"
+        "        </div>\n"
+        "      </div>\n"
+        "      {secondaryLinks.length > 0 ? (\n"
+        '        <div className="space-y-2">\n'
+        '          <p className="text-xs uppercase tracking-wider text-slate-400">Other sections</p>\n'
+        '          <div className="flex flex-wrap gap-2 text-sm">\n'
+        "            {secondaryLinks.map((link) => (\n"
+        '              <Link key={link.href} href={link.href} className="rounded-lg border border-slate-700 px-3 py-2 text-slate-200 hover:bg-slate-800">\n'
+        "                {link.label}\n"
+        "              </Link>\n"
+        "            ))}\n"
+        "          </div>\n"
+        "        </div>\n"
+        "      ) : null}\n"
+        '      <p className="text-xs text-slate-400">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>\n'
         "    </section>\n"
         "  );\n"
         "}\n"

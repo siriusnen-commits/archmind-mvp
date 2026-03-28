@@ -409,7 +409,8 @@ def test_apply_page_scaffold_backfills_legacy_memo_shell_and_surfaces_new_pages(
     assert 'href: "/reminders"' in nav_text
     assert "APP_NAV_LINKS.map" in layout_text
     assert 'from "./_lib/navigation"' in root_text
-    assert "router.replace(primaryHref)" in root_text
+    assert "Primary section" in root_text
+    assert "Open {primaryCollection.label}" in root_text
 
 
 def test_apply_page_scaffold_upgrades_fullstack_template_shell_to_navigation_home(tmp_path: Path) -> None:
@@ -457,8 +458,32 @@ def test_apply_page_scaffold_upgrades_fullstack_template_shell_to_navigation_hom
     assert "ArchMind Fullstack Workspace" not in root_text
     assert "This scaffold is domain-neutral." not in root_text
     assert 'from "./_lib/navigation"' in root_text
+    assert "Primary section" in root_text
     assert "APP_NAV_LINKS.map" in layout_text
     assert 'href: "/entries"' in nav_text
+
+
+def test_apply_page_scaffold_landing_surfaces_create_cta_when_new_page_exists(tmp_path: Path) -> None:
+    project_dir = tmp_path / "landing_cta"
+    app_dir = project_dir / "frontend" / "app"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (app_dir / "layout.tsx").write_text("export default function Layout(){return null}\n", encoding="utf-8")
+    (app_dir / "page.tsx").write_text(
+        "export default function HomePage() {\n"
+        "  return <div>ArchMind Fullstack Workspace</div>;\n"
+        "}\n",
+        encoding="utf-8",
+    )
+
+    apply_page_scaffold(project_dir, "entries/list")
+    apply_page_scaffold(project_dir, "entries/new")
+
+    root_text = (app_dir / "page.tsx").read_text(encoding="utf-8")
+    nav_text = (app_dir / "_lib" / "navigation.ts").read_text(encoding="utf-8")
+    assert 'href: "/entries/new"' in nav_text
+    assert "createAction" in root_text
+    assert "{createAction.label}" in root_text
 
 
 def test_apply_frontend_page_scaffold_is_idempotent_and_skips_backend_only(tmp_path: Path) -> None:
