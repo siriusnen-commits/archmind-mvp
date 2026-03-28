@@ -96,6 +96,49 @@ def test_build_plan_from_suggestion_normalizes_prefixed_provider_steps(monkeypat
     all_steps = [step for phase in (out.get("phases") or []) for step in (phase.get("steps") or [])]
     assert "/add_entity Entry" in all_steps
     assert "/add_field Entry title:string" in all_steps
-    assert "/add_api GET /entry" in all_steps
-    assert "/add_page entry/list" in all_steps
+    assert "/add_api GET /entries" in all_steps
+    assert "/add_page entries/list" in all_steps
     assert not any("slash command:" in step.lower() for step in all_steps)
+
+
+def test_build_plan_from_suggestion_drops_fragment_only_provider_steps(monkeypatch: pytest.MonkeyPatch) -> None:
+    suggestion = {
+        "entities": [
+            {"name": "Board", "fields": [{"name": "title", "type": "string"}]},
+            {"name": "Card", "fields": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+        ],
+        "api_endpoints": ["GET /boards", "GET /cards"],
+        "frontend_pages": ["boards/list", "cards/list"],
+    }
+
+    monkeypatch.setattr(
+        "archmind.plan_suggester.try_generate_reasoning_json",
+        lambda *_a, **_k: {
+            "phases": [
+                {
+                    "title": "Broken provider",
+                    "steps": [
+                        "/boards",
+                        "/cards",
+                        "/list",
+                        "/new",
+                        "/add_entity Board",
+                        "/add_entity Card",
+                        "/add_api GET /cards",
+                        "/add_page cards/list",
+                    ],
+                }
+            ]
+        },
+    )
+
+    out = build_plan_from_suggestion("kanban board app with boards and cards", {"app_shape": "fullstack"}, suggestion)
+    all_steps = [step for phase in (out.get("phases") or []) for step in (phase.get("steps") or [])]
+    assert "/add_entity Board" in all_steps
+    assert "/add_entity Card" in all_steps
+    assert "/add_api GET /cards" in all_steps
+    assert "/add_page cards/list" in all_steps
+    assert "/boards" not in all_steps
+    assert "/cards" not in all_steps
+    assert "/list" not in all_steps
+    assert "/new" not in all_steps

@@ -38,8 +38,23 @@ ENTITY_FIELD_MAP: dict[str, list[dict[str, str]]] = {
     "Bookmark": [{"name": "title", "type": "string"}, {"name": "url", "type": "string"}],
     "Recipe": [{"name": "title", "type": "string"}, {"name": "instructions", "type": "string"}],
     "Board": [{"name": "title", "type": "string"}, {"name": "description", "type": "string"}],
+    "Card": [
+        {"name": "title", "type": "string"},
+        {"name": "description", "type": "string"},
+        {"name": "board_id", "type": "int"},
+    ],
+    "Tag": [{"name": "name", "type": "string"}, {"name": "entry_id", "type": "int"}],
+    "Category": [{"name": "name", "type": "string"}],
     "User": [{"name": "name", "type": "string"}, {"name": "email", "type": "string"}],
 }
+
+
+def _add_entity_once(out: list[str], seen: set[str], entity_name: str) -> None:
+    key = str(entity_name or "").strip()
+    if not key or key in seen:
+        return
+    seen.add(key)
+    out.append(key)
 
 
 def _entity_slug_and_plural(entity_name: str) -> tuple[str, str]:
@@ -223,11 +238,26 @@ def suggest_project_spec(
         seen.add("User")
         selected_entities.append("User")
 
-    selected_entities = selected_entities[:3]
+    # Companion entity inference for common multi-entity product ideas.
+    # This keeps generation and inspect aligned with design/plan expectations.
+    expanded_entities: list[str] = []
+    expanded_seen: set[str] = set()
+    for entity_name in selected_entities:
+        _add_entity_once(expanded_entities, expanded_seen, entity_name)
+        if entity_name == "Board":
+            if any(k in text for k in ("card", "cards", "kanban", "column")):
+                _add_entity_once(expanded_entities, expanded_seen, "Card")
+        if entity_name == "Entry":
+            if any(k in text for k in ("tag", "tags", "label", "labels")):
+                _add_entity_once(expanded_entities, expanded_seen, "Tag")
+        if entity_name == "Bookmark":
+            if any(k in text for k in ("category", "categories", "folder", "folders")):
+                _add_entity_once(expanded_entities, expanded_seen, "Category")
+    selected_entities = expanded_entities[:3]
 
     entities: list[dict[str, Any]] = []
     for entity_name in selected_entities:
-        fields = ENTITY_FIELD_MAP.get(entity_name, [])[:2]
+        fields = ENTITY_FIELD_MAP.get(entity_name, [])[:6]
         entities.append({"name": entity_name, "fields": fields})
 
     api_endpoints: list[str] = []
