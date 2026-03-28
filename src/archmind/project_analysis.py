@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from archmind.execution_history import load_recent_execution_events
+from archmind.runtime_status import build_runtime_snapshot
 
 LOW_PRIORITY_MISSING_FIELDS = {"created_at", "updated_at"}
 SUGGESTION_PRIORITY_RANK = {"high": 3, "medium": 2, "low": 1, "none": 0}
@@ -606,16 +607,26 @@ def _extract_nav_visible_pages(project_dir: Path, pages: list[str]) -> list[str]
 
 
 def _normalize_runtime_status(runtime_payload: dict[str, Any] | None) -> dict[str, Any]:
-    runtime = runtime_payload if isinstance(runtime_payload, dict) else {}
-    backend = runtime.get("backend") if isinstance(runtime.get("backend"), dict) else {}
-    frontend = runtime.get("frontend") if isinstance(runtime.get("frontend"), dict) else {}
+    snapshot = build_runtime_snapshot(runtime_payload if isinstance(runtime_payload, dict) else {}, {})
+    backend = snapshot.get("backend") if isinstance(snapshot.get("backend"), dict) else {}
+    frontend = snapshot.get("frontend") if isinstance(snapshot.get("frontend"), dict) else {}
+    backend_url = str(backend.get("url") or "").strip()
+    frontend_url = str(frontend.get("url") or "").strip()
+    backend_status = str(backend.get("status") or "NOT RUNNING").strip().upper() or "NOT RUNNING"
+    frontend_status = str(frontend.get("status") or "NOT RUNNING").strip().upper() or "NOT RUNNING"
+    if backend_status == "NOT RUNNING":
+        backend_status = "STOPPED"
+    if frontend_status == "NOT RUNNING":
+        frontend_status = "STOPPED"
     return {
-        "backend_status": str(backend.get("status") or "STOPPED").strip().upper() or "STOPPED",
-        "frontend_status": str(frontend.get("status") or "STOPPED").strip().upper() or "STOPPED",
-        "backend_url": str(backend.get("url") or "").strip(),
-        "frontend_url": str(frontend.get("url") or "").strip(),
-        "backend_urls": [str(backend.get("url") or "").strip()] if str(backend.get("url") or "").strip() else [],
-        "frontend_urls": [str(frontend.get("url") or "").strip()] if str(frontend.get("url") or "").strip() else [],
+        "backend_status": backend_status,
+        "frontend_status": frontend_status,
+        "backend_url": backend_url,
+        "frontend_url": frontend_url,
+        "backend_last_known_url": str(backend.get("last_known_url") or "").strip(),
+        "frontend_last_known_url": str(frontend.get("last_known_url") or "").strip(),
+        "backend_urls": [backend_url] if backend_url else [],
+        "frontend_urls": [frontend_url] if frontend_url else [],
     }
 
 

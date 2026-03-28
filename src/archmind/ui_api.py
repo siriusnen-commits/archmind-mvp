@@ -25,6 +25,7 @@ from archmind.project_query import (
     update_project_provider_mode,
 )
 from archmind.deploy import get_local_runtime_status
+from archmind.runtime_status import build_runtime_snapshot
 from archmind.ui_models import (
     AddApiRequest,
     AddApiResponse,
@@ -441,8 +442,9 @@ def post_ui_project_run_command(project_name: str, body: RunCommandRequest) -> R
 
 def _runtime_action_response(project_dir, action: str, result: dict) -> RuntimeActionResponse:
     runtime = get_local_runtime_status(project_dir)
-    backend = runtime.get("backend") if isinstance(runtime.get("backend"), dict) else {}
-    frontend = runtime.get("frontend") if isinstance(runtime.get("frontend"), dict) else {}
+    snapshot = build_runtime_snapshot(runtime if isinstance(runtime, dict) else {}, {})
+    backend = snapshot.get("backend") if isinstance(snapshot.get("backend"), dict) else {}
+    frontend = snapshot.get("frontend") if isinstance(snapshot.get("frontend"), dict) else {}
     ok = bool(result.get("ok"))
     detail = str(result.get("detail") or "").strip()
     error = "" if ok else _extract_runtime_action_error(result)
@@ -454,8 +456,8 @@ def _runtime_action_response(project_dir, action: str, result: dict) -> RuntimeA
         status=str(result.get("status") or ("SUCCESS" if ok else "FAIL")),
         detail=detail,
         error=error,
-        backend_status=str(backend.get("status") or "STOPPED").strip().upper() or "STOPPED",
-        frontend_status=str(frontend.get("status") or "STOPPED").strip().upper() or "STOPPED",
+        backend_status=str(backend.get("status") or "NOT RUNNING").strip().upper() or "NOT RUNNING",
+        frontend_status=str(frontend.get("status") or "NOT RUNNING").strip().upper() or "NOT RUNNING",
         backend_url=str(backend.get("url") or ""),
         frontend_url=str(frontend.get("url") or ""),
     )

@@ -57,6 +57,26 @@ def test_project_analysis_extracts_entities_fields_apis_pages_and_crud(tmp_path:
     assert out["runtime_status"]["backend_status"] == "RUNNING"
 
 
+def test_project_analysis_runtime_status_keeps_stale_url_as_last_known_not_current(tmp_path: Path) -> None:
+    project_dir = tmp_path / "runtime-stale-url"
+    out = analyze_project(
+        project_dir,
+        project_name="runtime-stale-url",
+        spec_payload={},
+        runtime_payload={
+            "backend": {"status": "NOT RUNNING", "url": "http://127.0.0.1:61080"},
+            "frontend": {"status": "NOT RUNNING", "url": "http://127.0.0.1:3173"},
+        },
+    )
+    runtime = out["runtime_status"]
+    assert runtime["backend_status"] == "STOPPED"
+    assert runtime["frontend_status"] == "STOPPED"
+    assert runtime["backend_url"] == ""
+    assert runtime["frontend_url"] == ""
+    assert runtime["backend_last_known_url"] == "http://127.0.0.1:61080"
+    assert runtime["frontend_last_known_url"] == "http://127.0.0.1:3173"
+
+
 def test_project_analysis_detects_placeholder_pages_and_suggestions_priority(tmp_path: Path) -> None:
     project_dir = tmp_path / "placeholder-app"
     spec = {

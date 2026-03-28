@@ -202,6 +202,29 @@ def test_ui_project_detail_response_shape(monkeypatch, tmp_path: Path) -> None:
     assert payload["spec_summary"]["stage"].startswith("Stage")
 
 
+def test_ui_project_detail_does_not_expose_stale_runtime_url_as_running(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "stale-runtime")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setattr(
+        "archmind.project_query.get_local_runtime_status",
+        lambda _project_dir: {
+            "backend": {"status": "NOT RUNNING", "url": "http://127.0.0.1:8123"},
+            "frontend": {"status": "NOT RUNNING", "url": "http://127.0.0.1:3123"},
+        },
+    )
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/stale-runtime")
+    assert response.status_code == 200
+    runtime = response.json()["runtime"]
+    assert runtime["backend_status"] == "NOT RUNNING"
+    assert runtime["frontend_status"] == "NOT RUNNING"
+    assert runtime["backend_url"] == ""
+    assert runtime["frontend_url"] == ""
+    assert runtime["backend_last_known_url"] == "http://127.0.0.1:8123"
+    assert runtime["frontend_last_known_url"] == "http://127.0.0.1:3123"
+
+
 def test_ui_project_detail_includes_recent_runs_newest_first(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     project_dir = _make_project(projects_root, "recent-runs")

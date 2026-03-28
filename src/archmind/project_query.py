@@ -28,6 +28,7 @@ from archmind.telegram_bot import (
 )
 from archmind.current_project import get_validated_current_project, set_current_project
 from archmind.deploy import delete_project, restart_local_services, run_backend_local_with_health, stop_local_services
+from archmind.runtime_status import build_runtime_snapshot
 from archmind.ui_models import ProjectDetailResponse, ProjectListItem, RepositorySummary, RuntimeSummary, SpecSummary
 
 
@@ -194,22 +195,14 @@ def _resolved_runtime_hosts() -> list[str]:
 def _runtime_urls_for_display(
     status: str, runtime_payload: dict[str, Any], state_payload: dict[str, Any]
 ) -> tuple[str, str, list[str], list[str]]:
-    backend = runtime_payload.get("backend") if isinstance(runtime_payload.get("backend"), dict) else {}
-    frontend = runtime_payload.get("frontend") if isinstance(runtime_payload.get("frontend"), dict) else {}
-    backend_running = str(backend.get("status") or "").strip().upper() == "RUNNING"
-    frontend_running = str(frontend.get("status") or "").strip().upper() == "RUNNING"
+    snapshot = build_runtime_snapshot(runtime_payload if isinstance(runtime_payload, dict) else {}, state_payload)
+    backend = snapshot.get("backend") if isinstance(snapshot.get("backend"), dict) else {}
+    frontend = snapshot.get("frontend") if isinstance(snapshot.get("frontend"), dict) else {}
     backend_url = str(backend.get("url") or "").strip()
     frontend_url = str(frontend.get("url") or "").strip()
     if status != "RUNNING":
-        return "", "", [], []
-    if not backend_running:
         backend_url = ""
-    if not frontend_running:
         frontend_url = ""
-    if not backend_url and backend_running:
-        backend_url = str(state_payload.get("backend_deploy_url") or "").strip()
-    if not frontend_url and frontend_running:
-        frontend_url = str(state_payload.get("frontend_deploy_url") or "").strip()
     return backend_url, frontend_url, _expand_runtime_urls(backend_url), _expand_runtime_urls(frontend_url)
 
 
@@ -337,9 +330,10 @@ def build_project_list_item(project_dir: Path) -> ProjectListItem:
         result_payload = _load_json(archmind_dir / "result.json") or {}
         runtime_payload = get_local_runtime_status(project_dir)
         status = _project_runtime_status(project_dir, state_payload, result_payload, runtime_payload)
+        snapshot = build_runtime_snapshot(runtime_payload if isinstance(runtime_payload, dict) else {}, state_payload)
+        backend_runtime = snapshot.get("backend") if isinstance(snapshot.get("backend"), dict) else {}
+        frontend_runtime = snapshot.get("frontend") if isinstance(snapshot.get("frontend"), dict) else {}
         backend_url, frontend_url, _, _ = _runtime_urls_for_display(status, runtime_payload, state_payload)
-        backend_runtime = runtime_payload.get("backend") if isinstance(runtime_payload.get("backend"), dict) else {}
-        frontend_runtime = runtime_payload.get("frontend") if isinstance(runtime_payload.get("frontend"), dict) else {}
         if status == "RUNNING":
             if str(backend_runtime.get("status") or "").strip().upper() == "RUNNING" and str(frontend_runtime.get("status") or "").strip().upper() == "RUNNING":
                 runtime = "RUNNING (backend+frontend)"
@@ -395,9 +389,10 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
         result_payload = _load_json(archmind_dir / "result.json") or {}
         runtime_payload = get_local_runtime_status(project_dir)
         status = _project_runtime_status(project_dir, state_payload, result_payload, runtime_payload)
+        snapshot = build_runtime_snapshot(runtime_payload if isinstance(runtime_payload, dict) else {}, state_payload)
         backend_url, frontend_url, backend_urls, frontend_urls = _runtime_urls_for_display(status, runtime_payload, state_payload)
-        backend_runtime = runtime_payload.get("backend") if isinstance(runtime_payload.get("backend"), dict) else {}
-        frontend_runtime = runtime_payload.get("frontend") if isinstance(runtime_payload.get("frontend"), dict) else {}
+        backend_runtime = snapshot.get("backend") if isinstance(snapshot.get("backend"), dict) else {}
+        frontend_runtime = snapshot.get("frontend") if isinstance(snapshot.get("frontend"), dict) else {}
         progression = analyze_spec_progression(spec if isinstance(spec, dict) else {})
         evolution = spec.get("evolution") if isinstance(spec.get("evolution"), dict) else {}
         history = evolution.get("history") if isinstance(evolution.get("history"), list) else []
@@ -449,6 +444,8 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
                 frontend_url=frontend_url,
                 backend_urls=backend_urls,
                 frontend_urls=frontend_urls,
+                backend_last_known_url=str(backend_runtime.get("last_known_url") or "").strip(),
+                frontend_last_known_url=str(frontend_runtime.get("last_known_url") or "").strip(),
             ),
             recent_evolution=summarize_recent_evolution(spec, limit=5),
             recent_runs=recent_runs,
