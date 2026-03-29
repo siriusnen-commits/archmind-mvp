@@ -2063,6 +2063,12 @@ def analyze_project(
 
     return {
         "project_name": str(project_name or project_dir.name),
+        "domains": [str(x).strip() for x in (spec.get("domains") or []) if str(x).strip()]
+        if isinstance(spec.get("domains"), list)
+        else [],
+        "modules": [str(x).strip() for x in (spec.get("modules") or []) if str(x).strip()]
+        if isinstance(spec.get("modules"), list)
+        else [],
         "entities": entities,
         "fields_by_entity": fields_by_entity,
         "apis": apis,

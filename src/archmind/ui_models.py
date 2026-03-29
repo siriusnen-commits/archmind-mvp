@@ -81,6 +81,7 @@ class ProjectDetailResponse(BaseModel):
     recent_evolution: list[str] = Field(default_factory=list)
     recent_runs: list[dict[str, Any]] = Field(default_factory=list)
     evolution_history: list[dict[str, Any]] = Field(default_factory=list)
+    architecture: dict[str, Any] = Field(default_factory=dict)
     logs: dict[str, Any] = Field(default_factory=dict)
     auto_summary: dict[str, Any] = Field(default_factory=dict)
     repository: RepositorySummary = Field(default_factory=RepositorySummary)

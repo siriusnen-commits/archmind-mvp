@@ -573,6 +573,13 @@ def _empty_project_detail(project_dir: Path, warning: str = "") -> ProjectDetail
         recent_evolution=[],
         recent_runs=[],
         evolution_history=[],
+        architecture={
+            "app_shape": "unknown",
+            "recommended_template": "unknown",
+            "reason_summary": "",
+            "backend_entry": "",
+            "backend_run_mode": "",
+        },
         logs={"default_source": "latest", "max_lines": _UI_LOG_MAX_LINES, "sources": []},
         auto_summary={},
         repository=RepositorySummary(),
@@ -763,6 +770,15 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
         auto_summary = state_payload.get("auto_last_result") if isinstance(state_payload.get("auto_last_result"), dict) else {}
         recent_evolution = summarize_recent_evolution(spec, limit=5)
         evolution_history = _build_evolution_history(recent_runs, recent_evolution)
+        architecture = {
+            "app_shape": str(state_payload.get("architecture_app_shape") or spec.get("shape") or "unknown").strip() or "unknown",
+            "recommended_template": (
+                str(state_payload.get("architecture_recommended_template") or spec.get("template") or "unknown").strip() or "unknown"
+            ),
+            "reason_summary": str(state_payload.get("architecture_reason_summary") or "").strip(),
+            "backend_entry": str(state_payload.get("backend_entry") or result_payload.get("backend_entry") or "").strip(),
+            "backend_run_mode": str(state_payload.get("backend_run_mode") or "").strip(),
+        }
         logs = build_project_logs(project_dir, state_payload=state_payload if isinstance(state_payload, dict) else {})
         return ProjectDetailResponse(
             name=project_dir.name,
@@ -796,6 +812,7 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
             recent_evolution=recent_evolution,
             recent_runs=recent_runs,
             evolution_history=evolution_history,
+            architecture=architecture,
             logs=logs,
             auto_summary=auto_summary,
             repository=repository,
