@@ -6203,16 +6203,18 @@ AUTO_ALLOWED_COMMANDS = {"/add_field", "/add_api", "/add_page", "/implement_page
 AUTO_HIGH_VALUE_FIELDS = {"title", "name", "content"}
 AUTO_USEFUL_FIELDS = {"description", "status", "priority"}
 AUTO_LOW_VALUE_FIELDS = {"created_at", "updated_at", "timestamp", "deleted_at"}
+AUTO_RELATION_KINDS = {"relation_page_behavior", "relation_scoped_api", "relation_placeholder_page"}
+AUTO_HARD_MAX_STEPS = 8
 
 
-def _parse_auto_max_steps(args: list[str]) -> int:
+def _parse_auto_max_steps(args: list[str]) -> int | None:
     if not args:
-        return 3
+        return None
     try:
         raw = int(str(args[0]).strip())
     except Exception:
-        return 3
-    return max(1, min(3, raw))
+        return None
+    return max(1, min(AUTO_HARD_MAX_STEPS, raw))
 
 
 def _extract_next_action(analysis: dict[str, Any]) -> tuple[str, str, str]:
@@ -6249,14 +6251,7 @@ def classify_auto_action_priority(next_action: dict[str, Any] | None) -> str:
     if kind == "missing_entity":
         return "high"
 
-    if kind in {
-        "missing_crud_api",
-        "missing_page",
-        "placeholder_page",
-        "relation_page_behavior",
-        "relation_scoped_api",
-        "relation_placeholder_page",
-    }:
+    if kind in {"missing_crud_api", "missing_page", "placeholder_page"} | AUTO_RELATION_KINDS:
         return "high"
 
     if command.startswith("/add_field "):
@@ -6293,7 +6288,191 @@ def _analysis_progress_signature(analysis: dict[str, Any]) -> tuple[Any, ...]:
     placeholders = tuple(
         sorted(str(x).strip() for x in (analysis.get("placeholder_pages") or []) if str(x).strip())
     )
-    return entities, apis, pages, placeholders
+    fields = tuple(
+        sorted(
+            (
+                str(entity).strip().lower(),
+                str(item.get("name") or "").strip().lower(),
+            )
+            for entity, rows in (analysis.get("fields_by_entity") or {}).items()
+            if isinstance(rows, list)
+            for item in rows
+            if isinstance(item, dict) and str(item.get("name") or "").strip()
+        )
+    )
+    return entities, apis, pages, placeholders, fields
+
+
+def _auto_relation_page_count(analysis: dict[str, Any]) -> int:
+    pages = [str(x).strip().lower() for x in (analysis.get("pages") or []) if str(x).strip()]
+    return len({page for page in pages if "/by_" in page})
+
+
+def _auto_relation_api_count(analysis: dict[str, Any]) -> int:
+    count = 0
+    seen: set[str] = set()
+    for item in (analysis.get("apis") or []):
+        if not isinstance(item, dict):
+            continue
+        method = str(item.get("method") or "").strip().upper()
+        path = str(item.get("path") or "").strip().lower()
+        if not method or not path:
+            continue
+        if method != "GET":
+            continue
+        if "/{id}/" not in path:
+            continue
+        key = f"{method} {path}"
+        if key in seen:
+            continue
+        seen.add(key)
+        count += 1
+    return count
+
+
+def _auto_useful_field_count(analysis: dict[str, Any]) -> int:
+    count = 0
+    for rows in (analysis.get("fields_by_entity") or {}).values():
+        if not isinstance(rows, list):
+            continue
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip().lower()
+            if name in AUTO_HIGH_VALUE_FIELDS or name in AUTO_USEFUL_FIELDS:
+                count += 1
+    return count
+
+
+def _auto_progress_snapshot(analysis: dict[str, Any]) -> dict[str, int]:
+    entities = len([x for x in (analysis.get("entities") or []) if str(x).strip()])
+    apis = len(
+        {
+            (
+                str(item.get("method") or "").strip().upper(),
+                str(item.get("path") or "").strip(),
+            )
+            for item in (analysis.get("apis") or [])
+            if isinstance(item, dict)
+            and str(item.get("method") or "").strip()
+            and str(item.get("path") or "").strip()
+        }
+    )
+    pages = len({str(x).strip().lower() for x in (analysis.get("pages") or []) if str(x).strip()})
+    placeholders = len({str(x).strip().lower() for x in (analysis.get("placeholder_pages") or []) if str(x).strip()})
+    return {
+        "entities": entities,
+        "apis": apis,
+        "pages": pages,
+        "relation_pages": _auto_relation_page_count(analysis),
+        "relation_apis": _auto_relation_api_count(analysis),
+        "placeholders": placeholders,
+        "useful_fields": _auto_useful_field_count(analysis),
+    }
+
+
+def auto_progress_delta(previous: dict[str, int], current: dict[str, int]) -> dict[str, Any]:
+    delta_entities = int(current.get("entities", 0)) - int(previous.get("entities", 0))
+    delta_apis = int(current.get("apis", 0)) - int(previous.get("apis", 0))
+    delta_pages = int(current.get("pages", 0)) - int(previous.get("pages", 0))
+    delta_relation_pages = int(current.get("relation_pages", 0)) - int(previous.get("relation_pages", 0))
+    delta_relation_apis = int(current.get("relation_apis", 0)) - int(previous.get("relation_apis", 0))
+    delta_useful_fields = int(current.get("useful_fields", 0)) - int(previous.get("useful_fields", 0))
+    delta_placeholders = int(previous.get("placeholders", 0)) - int(current.get("placeholders", 0))
+    score = (
+        (delta_entities * 3)
+        + (delta_apis * 2)
+        + (delta_pages * 2)
+        + (delta_relation_pages * 3)
+        + (delta_relation_apis * 3)
+        + (delta_useful_fields * 2)
+        + (delta_placeholders * 2)
+    )
+    return {
+        "score": score,
+        "material": score > 0,
+        "delta": {
+            "entities": delta_entities,
+            "apis": delta_apis,
+            "pages": delta_pages,
+            "relation_pages": delta_relation_pages,
+            "relation_apis": delta_relation_apis,
+            "useful_fields": delta_useful_fields,
+            "placeholders_reduced": delta_placeholders,
+        },
+    }
+
+
+def _auto_is_multi_entity(analysis: dict[str, Any]) -> bool:
+    entities = [str(x).strip() for x in (analysis.get("entities") or []) if str(x).strip()]
+    return len(entities) >= 2
+
+
+def _auto_has_relation_opportunity(analysis: dict[str, Any]) -> bool:
+    next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
+    next_kind = str(next_action.get("kind") or "").strip().lower()
+    if next_kind in AUTO_RELATION_KINDS:
+        return True
+    for row in (analysis.get("suggestions") or []):
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("kind") or "").strip().lower() in AUTO_RELATION_KINDS:
+            return True
+    entities = [str(x).strip() for x in (analysis.get("entities") or []) if str(x).strip()]
+    if len(entities) < 2:
+        return False
+    fields_by_entity = analysis.get("fields_by_entity") if isinstance(analysis.get("fields_by_entity"), dict) else {}
+    for rows in fields_by_entity.values():
+        if not isinstance(rows, list):
+            continue
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            field_name = str(item.get("name") or "").strip().lower()
+            if field_name.endswith("_id"):
+                return True
+    return False
+
+
+def _compute_auto_iteration_budget(initial_analysis: dict[str, Any], requested_steps: int | None) -> tuple[int, list[str]]:
+    if requested_steps is not None:
+        return requested_steps, [f"user_requested={requested_steps}"]
+    budget = 3
+    reasons = ["base=3"]
+    if _auto_is_multi_entity(initial_analysis):
+        budget += 2
+        reasons.append("multi_entity=+2")
+    if _auto_has_relation_opportunity(initial_analysis):
+        budget += 2
+        reasons.append("relation_opportunity=+2")
+    return min(budget, AUTO_HARD_MAX_STEPS), reasons
+
+
+def _auto_entities_crud_and_pages_complete(analysis: dict[str, Any]) -> bool:
+    status = analysis.get("entity_crud_status") if isinstance(analysis.get("entity_crud_status"), dict) else {}
+    if not status:
+        return False
+    for info in status.values():
+        if not isinstance(info, dict):
+            return False
+        if info.get("missing_api"):
+            return False
+        if info.get("missing_pages"):
+            return False
+    return True
+
+
+def _auto_is_good_enough_mvp(analysis: dict[str, Any]) -> bool:
+    if not _auto_entities_crud_and_pages_complete(analysis):
+        return False
+    placeholder_pages = [str(x).strip() for x in (analysis.get("placeholder_pages") or []) if str(x).strip()]
+    if placeholder_pages:
+        return False
+    if _auto_has_relation_opportunity(analysis):
+        snapshot = _auto_progress_snapshot(analysis)
+        relation_total = int(snapshot.get("relation_pages", 0)) + int(snapshot.get("relation_apis", 0))
+        return relation_total > 0
+    return True
 
 
 def _auto_command_already_satisfied(analysis: dict[str, Any], normalized_command: str) -> bool:
@@ -6360,7 +6539,7 @@ async def command_auto(update: Any, context: Any) -> None:
         return
 
     args = [str(x).strip() for x in getattr(context, "args", []) if str(x).strip()]
-    max_steps = _parse_auto_max_steps(args)
+    requested_steps = _parse_auto_max_steps(args)
 
     lines: list[str] = [
         "Auto evolution run",
@@ -6375,12 +6554,40 @@ async def command_auto(update: Any, context: Any) -> None:
     progress_made = False
     run_id = f"auto-{int(time.time() * 1000)}-{project_path.name}"
     analysis = _build_project_analysis(project_path, use_canonical_spec=True)
+    initial_snapshot = _auto_progress_snapshot(analysis)
+    iteration_budget, budget_reasons = _compute_auto_iteration_budget(analysis, requested_steps)
+    total_progress_score = 0
+    dynamic_extensions = 0
+    lines.extend([
+        f"Budget: {iteration_budget}",
+        f"Budget reason: {', '.join(budget_reasons)}",
+        "",
+    ])
 
-    for idx in range(1, max_steps + 1):
+    idx = 1
+    while idx <= iteration_budget:
+        if _auto_is_good_enough_mvp(analysis):
+            lines.append(f"Step {idx}")
+            lines.append("- Result: STOP (good enough MVP reached)")
+            stop_reason = "good enough MVP reached"
+            append_execution_event(
+                project_path,
+                project_name=project_path.name,
+                source="telegram-auto",
+                command="",
+                status="stop",
+                message="Good enough MVP reached.",
+                run_id=run_id,
+                step_no=idx,
+                stop_reason=stop_reason,
+            )
+            break
+
         kind, message, raw_command = _extract_next_action(analysis)
         priority = classify_auto_action_priority({"kind": kind, "message": message, "command": raw_command})
         normalized_command = _normalize_recommended_command(raw_command)
         state_signature = _analysis_progress_signature(analysis)
+        before_snapshot = _auto_progress_snapshot(analysis)
 
         lines.append(f"Step {idx}")
         if priority == "none":
@@ -6515,7 +6722,32 @@ async def command_auto(update: Any, context: Any) -> None:
             executed_commands.append(normalized_command)
             next_analysis = _build_project_analysis(project_path, use_canonical_spec=True)
             if _analysis_progress_signature(next_analysis) != state_signature:
-                progress_made = True
+                delta = auto_progress_delta(before_snapshot, _auto_progress_snapshot(next_analysis))
+                score = int(delta.get("score") or 0)
+                if bool(delta.get("material")):
+                    progress_made = True
+                    total_progress_score += score
+                    lines.append(f"- Progress score: +{score}")
+                    if score >= 4 and _auto_is_multi_entity(next_analysis) and iteration_budget < AUTO_HARD_MAX_STEPS and dynamic_extensions < 2:
+                        iteration_budget += 1
+                        dynamic_extensions += 1
+                        lines.append(f"- Budget extended: {iteration_budget}")
+                else:
+                    lines.append("- Result: STOP (no material progress)")
+                    stop_reason = "no material progress"
+                    append_execution_event(
+                        project_path,
+                        project_name=project_path.name,
+                        source="telegram-auto",
+                        command=normalized_command,
+                        status="stop",
+                        message="No material progress after command execution.",
+                        run_id=run_id,
+                        step_no=idx,
+                        stop_reason=stop_reason,
+                    )
+                    analysis = next_analysis
+                    break
             else:
                 lines.append("- Result: STOP (no material state change)")
                 stop_reason = "no material state change after command"
@@ -6555,11 +6787,13 @@ async def command_auto(update: Any, context: Any) -> None:
             )
             break
         lines.append("")
+        idx += 1
     else:
         stop_reason = "iteration budget reached"
 
     if lines and lines[-1] == "":
         lines.pop()
+    final_snapshot = _auto_progress_snapshot(analysis)
     command_lines = ", ".join(executed_commands) if executed_commands else "(none)"
     progress_text = "yes" if progress_made else "no"
     lines.extend([
@@ -6569,6 +6803,16 @@ async def command_auto(update: Any, context: Any) -> None:
         f"- Commands: {command_lines}",
         f"- Stopped: {stop_reason}",
         f"- Progress made: {progress_text}",
+        f"- Progress score: {total_progress_score}",
+        (
+            "- Metrics: "
+            f"entities {initial_snapshot['entities']}->{final_snapshot['entities']}, "
+            f"apis {initial_snapshot['apis']}->{final_snapshot['apis']}, "
+            f"pages {initial_snapshot['pages']}->{final_snapshot['pages']}, "
+            f"relation_pages {initial_snapshot['relation_pages']}->{final_snapshot['relation_pages']}, "
+            f"relation_apis {initial_snapshot['relation_apis']}->{final_snapshot['relation_apis']}, "
+            f"placeholders {initial_snapshot['placeholders']}->{final_snapshot['placeholders']}"
+        ),
         f"- Current: {_auto_analysis_brief(analysis)}",
     ])
     await update.message.reply_text(_truncate_message("\n".join(lines)))
