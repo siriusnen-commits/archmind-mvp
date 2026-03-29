@@ -138,6 +138,7 @@ export default async function ProjectDetailPage({ params }: PageProps) {
   const apiBaseUrl = await resolveUiApiBaseUrl();
   const result = await fetchProjectDetail(apiBaseUrl, projectName);
   const detail = result.detail;
+  const analysis = detail && detail.analysis && typeof detail.analysis === "object" ? detail.analysis : {};
 
   return (
     <main className="mx-auto w-full max-w-4xl p-6">
@@ -156,11 +157,11 @@ export default async function ProjectDetailPage({ params }: PageProps) {
       {detail ? (
         <section className="space-y-3">
           <ProjectSummaryCard project={detail} />
-          <NextActionCard projectName={detail.name} nextAction={detail.analysis?.next_action} />
+          <NextActionCard projectName={detail.name} nextAction={analysis?.next_action} />
           <StructureVisualizationCard
-            entityGraph={detail.analysis?.entity_graph}
-            apiMap={detail.analysis?.api_map}
-            pageMap={detail.analysis?.page_map}
+            entityGraph={analysis?.entity_graph}
+            apiMap={analysis?.api_map}
+            pageMap={analysis?.page_map}
           />
           <RecentRunsCard items={Array.isArray(detail.recent_runs) ? detail.recent_runs : []} />
           <RuntimeCard runtime={detail.runtime} />

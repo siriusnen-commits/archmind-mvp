@@ -1071,6 +1071,58 @@ def test_dashboard_and_project_detail_share_ui_api_base_resolver() -> None:
     assert "resolveApiBaseUrl" not in project_detail_source
 
 
+def test_project_detail_source_always_renders_structure_visualization_card() -> None:
+    project_detail_source = Path("frontend/app/projects/[project]/page.tsx").read_text(encoding="utf-8")
+    assert 'import StructureVisualizationCard from "@/components/StructureVisualizationCard"' in project_detail_source
+    assert "<StructureVisualizationCard" in project_detail_source
+    assert "&& <StructureVisualizationCard" not in project_detail_source
+    assert "detail.analysis?.entity_graph &&" not in project_detail_source
+    assert "detail.analysis?.api_map &&" not in project_detail_source
+    assert "detail.analysis?.page_map &&" not in project_detail_source
+
+
+def test_structure_visualization_component_has_robust_empty_states_and_no_null_bailout() -> None:
+    source = Path("frontend/components/StructureVisualizationCard.tsx").read_text(encoding="utf-8")
+    assert "Structure visualization is not available yet." in source
+    assert "No entities available." in source
+    assert "No relations detected." in source
+    assert "No API groups available." in source
+    assert "No page groups available." in source
+    assert "return null" not in source
+
+
+def test_ui_project_detail_tolerates_partial_visualization_analysis_payload(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "partial-viz")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    def _partial_detail(_project_dir: Path):
+        from archmind.ui_models import ProjectDetailResponse, RuntimeSummary, SpecSummary
+
+        return ProjectDetailResponse(
+            name="partial-viz",
+            spec_summary=SpecSummary(stage="Stage 4", entities=1, apis=1, pages=1, history_count=0),
+            entities=["Note"],
+            runtime=RuntimeSummary(),
+            analysis={
+                "project_name": "partial-viz",
+                "next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""},
+                "entity_graph": {"nodes": [{"label": "Note"}], "edges": []},
+                # api_map/page_map intentionally omitted to simulate partial payload
+            },
+            safe=True,
+        )
+
+    monkeypatch.setattr("archmind.ui_api.build_project_detail", _partial_detail)
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/partial-viz")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["analysis"]["entity_graph"]["nodes"][0]["label"] == "Note"
+    assert "api_map" not in payload["analysis"] or isinstance(payload["analysis"].get("api_map"), dict)
+    assert "page_map" not in payload["analysis"] or isinstance(payload["analysis"].get("page_map"), dict)
+
+
 def test_ui_add_field_rejects_empty_inputs_safely(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     _make_project(projects_root, "field-empty")
