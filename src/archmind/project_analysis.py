@@ -705,6 +705,8 @@ def _infer_relation_pairs(
                     "parent_singular": _singularize_resource_name(parent_resource),
                     "child_entity": child_name,
                     "child_resource": child_resource,
+                    "field": field_name,
+                    "inferred": "field",
                 }
             )
 
@@ -740,8 +742,147 @@ def _infer_relation_pairs(
             "parent_singular": _singularize_resource_name(parent_resource),
             "child_entity": child_name,
             "child_resource": child_resource,
+            "field": "",
+            "inferred": "hint",
         }
     ]
+
+
+def _relation_page_name(parent_resource: str, child_resource: str) -> str:
+    return _normalize_page(f"{str(child_resource).strip().lower()}/by_{_singularize_resource_name(parent_resource)}")
+
+
+def _has_list_api(apis: list[dict[str, str]], resource: str) -> bool:
+    target = _canonicalize_api_path(f"/{str(resource).strip().lower()}")
+    for item in apis:
+        if not isinstance(item, dict):
+            continue
+        method = str(item.get("method") or "").strip().upper()
+        path = str(item.get("path") or "").strip()
+        if method == "GET" and path == target:
+            return True
+    return False
+
+
+def _collect_relation_diagnostics(
+    entities: list[str],
+    fields_by_entity: dict[str, list[dict[str, str]]],
+    entity_crud_status: dict[str, dict[str, Any]],
+    apis: list[dict[str, str]],
+    pages: list[str],
+) -> dict[str, Any]:
+    relations = _infer_relation_pairs(entities, fields_by_entity, entity_crud_status)
+    page_set = {str(page).strip() for page in pages if str(page).strip()}
+    relation_summaries: list[str] = []
+    relation_pages: list[str] = []
+    relation_apis: list[str] = []
+    relation_create_flows: list[str] = []
+    drift_warnings: list[str] = []
+
+    expected_pairs: set[tuple[str, str]] = set()
+    for rel in relations:
+        parent_entity = str(rel.get("parent_entity") or "").strip()
+        parent_resource = str(rel.get("parent_resource") or "").strip().lower()
+        child_entity = str(rel.get("child_entity") or "").strip()
+        child_resource = str(rel.get("child_resource") or "").strip().lower()
+        parent_singular = str(rel.get("parent_singular") or _singularize_resource_name(parent_resource)).strip().lower()
+        relation_field = str(rel.get("field") or "").strip().lower()
+        if not parent_entity or not child_entity or not parent_resource or not child_resource or not parent_singular:
+            continue
+
+        expected_pairs.add((parent_resource, child_resource))
+        if relation_field:
+            relation_summaries.append(f"{parent_entity} -> {child_entity} (field: {relation_field})")
+        else:
+            relation_summaries.append(f"{parent_entity} -> {child_entity} (inferred)")
+
+        relation_page = _relation_page_name(parent_resource, child_resource)
+        if relation_page and relation_page in page_set:
+            relation_pages.append(relation_page)
+        elif relation_page and _normalize_page(f"{parent_resource}/detail") in page_set:
+            drift_warnings.append(
+                f"Relation basis {relation_field or parent_singular + '_id'} exists, but relation page {relation_page} is missing."
+            )
+
+        scoped_path = _canonicalize_api_path(f"/{parent_resource}/{{id}}/{child_resource}")
+        if _relation_scoped_get_exists(apis, parent_resource, child_resource):
+            relation_apis.append(f"GET {scoped_path}")
+        else:
+            drift_warnings.append(
+                f"Relation basis {relation_field or parent_singular + '_id'} exists, but relation-scoped API GET {scoped_path} is missing."
+            )
+
+        child_new_page = _normalize_page(f"{child_resource}/new")
+        parent_detail_page = _normalize_page(f"{parent_resource}/detail")
+        create_flow_supported = child_new_page in page_set and (
+            _has_list_api(apis, parent_resource) or relation_page in page_set or parent_detail_page in page_set
+        )
+        if create_flow_supported:
+            relation_create_flows.append(
+                f"{child_entity} create prefill/selector via {relation_field or parent_singular + '_id'}"
+            )
+
+        parent_has_pages = any(page.startswith(f"{parent_resource}/") for page in page_set)
+        if not parent_has_pages:
+            drift_warnings.append(f"Canonical entity {parent_entity} exists, but no {parent_resource}-related page found.")
+
+    for page in sorted(page_set):
+        parts = page.split("/", 1)
+        if len(parts) != 2:
+            continue
+        child_resource = parts[0].strip().lower()
+        action = parts[1].strip().lower()
+        if not action.startswith("by_"):
+            continue
+        parent_singular = action[3:]
+        if not any(
+            str(rel.get("child_resource") or "").strip().lower() == child_resource
+            and str(rel.get("parent_singular") or "").strip().lower() == parent_singular
+            for rel in relations
+        ):
+            drift_warnings.append(
+                f"Relation page {page} exists, but no canonical relation pair matches {child_resource} by {parent_singular}."
+            )
+
+    relation_api_pattern = re.compile(r"^/([^/]+)/\{id\}/([^/]+)$")
+    for item in apis:
+        if not isinstance(item, dict):
+            continue
+        method = str(item.get("method") or "").strip().upper()
+        path = str(item.get("path") or "").strip()
+        if method != "GET":
+            continue
+        match = relation_api_pattern.match(path)
+        if not match:
+            continue
+        parent_resource = _canonical_resource_segment(match.group(1))
+        child_resource = _canonical_resource_segment(match.group(2))
+        if not parent_resource or not child_resource:
+            continue
+        if (parent_resource, child_resource) not in expected_pairs:
+            drift_warnings.append(
+                f"Relation API GET {path} exists, but no canonical relation pair matches {parent_resource}->{child_resource}."
+            )
+
+    def _dedupe(values: list[str]) -> list[str]:
+        out: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            text = str(value).strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            out.append(text)
+        return out
+
+    return {
+        "relations": relations,
+        "relation_summaries": _dedupe(relation_summaries),
+        "relation_pages": _dedupe(relation_pages),
+        "relation_apis": _dedupe(relation_apis),
+        "relation_create_flows": _dedupe(relation_create_flows),
+        "drift_warnings": _dedupe(drift_warnings),
+    }
 
 
 def _all_entities_have_basic_crud_and_pages(entity_crud_status: dict[str, dict[str, Any]]) -> bool:
@@ -1385,6 +1526,13 @@ def analyze_project(
     placeholder_pages = _detect_placeholder_pages(project_dir, pages)
     nav_visible_pages = _extract_nav_visible_pages(project_dir, pages)
     runtime_status = _normalize_runtime_status(runtime_payload if isinstance(runtime_payload, dict) else {})
+    relation_diagnostics = _collect_relation_diagnostics(
+        entities,
+        fields_by_entity,
+        entity_crud_status,
+        apis,
+        pages,
+    )
     suggestions, next_action = _build_suggestions(
         project_dir,
         entities,
@@ -1446,6 +1594,16 @@ def analyze_project(
         "entity_crud_status": entity_crud_status,
         "placeholder_pages": placeholder_pages,
         "nav_visible_pages": nav_visible_pages,
+        "relations": relation_diagnostics.get("relations") if isinstance(relation_diagnostics, dict) else [],
+        "relation_summary": (
+            relation_diagnostics.get("relation_summaries") if isinstance(relation_diagnostics, dict) else []
+        ),
+        "relation_pages": relation_diagnostics.get("relation_pages") if isinstance(relation_diagnostics, dict) else [],
+        "relation_apis": relation_diagnostics.get("relation_apis") if isinstance(relation_diagnostics, dict) else [],
+        "relation_create_flows": (
+            relation_diagnostics.get("relation_create_flows") if isinstance(relation_diagnostics, dict) else []
+        ),
+        "drift_warnings": relation_diagnostics.get("drift_warnings") if isinstance(relation_diagnostics, dict) else [],
         "runtime_status": runtime_status,
         "suggestions": suggestions,
         "next_action": next_action,
