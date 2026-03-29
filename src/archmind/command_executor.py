@@ -73,6 +73,7 @@ def execute_command(
     source: str = "manual-command",
     run_id: str | None = None,
     step_no: int | None = None,
+    enable_git_sync: bool = True,
 ) -> dict:
     normalized_command = str(command or "").strip()
     key = str(project_name or "").strip()
@@ -116,6 +117,7 @@ def execute_command(
             add_field_to_project,
             add_page_to_project,
             implement_page_in_project,
+            sync_repo_after_evolution_command,
         )
 
         result: dict[str, Any]
@@ -246,6 +248,21 @@ def execute_command(
             "error": error,
         }
     )
+    if bool(payload.get("ok")) and enable_git_sync:
+        sync = sync_repo_after_evolution_command(project_dir, normalized_command)
+        payload["repository_sync"] = sync
+        sync_status = str(sync.get("status") or "").strip().upper()
+        sync_reason = str(sync.get("reason") or "").strip()
+        if sync_status == "PUSH_FAILED":
+            base_message = str(payload.get("message_text") or payload.get("message") or "").strip()
+            extra = f"Repository sync: {sync_status}"
+            if sync_reason:
+                extra += f" ({sync_reason})"
+            if base_message:
+                payload["message_text"] = f"{base_message}\n\n{extra}"
+            else:
+                payload["message_text"] = extra
+            payload["message"] = str(payload.get("message_text") or payload.get("message") or "").strip()
     _write_execution_event(
         project_dir,
         project_name=str(payload.get("project_name") or key),

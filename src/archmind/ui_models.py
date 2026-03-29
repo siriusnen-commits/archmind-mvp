@@ -35,8 +35,14 @@ class SpecSummary(BaseModel):
 
 
 class RepositorySummary(BaseModel):
-    status: str = "SKIPPED"
+    status: str = "NONE"
     url: str = ""
+    repo_status: str = "NONE"
+    repo_url: str = ""
+    sync_status: str = "NOT_ATTEMPTED"
+    sync_reason: str = ""
+    last_commit_hash: str = ""
+    working_tree_state: str = ""
 
 
 class ProjectListItem(BaseModel):

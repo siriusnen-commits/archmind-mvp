@@ -317,8 +317,17 @@ def resolve_repository_metadata(
         if not url:
             url = str(result.get("github_repo_url") or "").strip()
         if not status:
-            status = "CREATED" if url else "SKIPPED"
-        return RepositorySummary(status=status or "SKIPPED", url=url)
+            status = "EXISTS" if url else "NONE"
+        return RepositorySummary(
+            status=status or "NONE",
+            url=url,
+            repo_status=status or "NONE",
+            repo_url=url,
+            sync_status=str(repository_info.get("sync_status") or "NOT_ATTEMPTED").strip().upper() or "NOT_ATTEMPTED",
+            sync_reason=str(repository_info.get("sync_reason") or "").strip(),
+            last_commit_hash=str(repository_info.get("last_commit_hash") or "").strip(),
+            working_tree_state=str(repository_info.get("working_tree_state") or "").strip(),
+        )
     except Exception:
         return RepositorySummary()
 

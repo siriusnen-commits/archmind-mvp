@@ -6,6 +6,7 @@ from typing import Any
 
 from archmind.execution_history import load_recent_execution_events
 from archmind.runtime_status import build_runtime_snapshot
+from archmind.state import load_state
 
 LOW_PRIORITY_MISSING_FIELDS = {"created_at", "updated_at"}
 SUGGESTION_PRIORITY_RANK = {"high": 3, "medium": 2, "low": 1, "none": 0}
@@ -1127,6 +1128,25 @@ def _normalize_runtime_status(runtime_payload: dict[str, Any] | None) -> dict[st
     }
 
 
+def _normalize_repository_status(project_dir: Path) -> dict[str, str]:
+    state_payload = load_state(project_dir) or {}
+    repository = state_payload.get("repository") if isinstance(state_payload.get("repository"), dict) else {}
+    repo_url = str(repository.get("repo_url") or repository.get("url") or state_payload.get("github_repo_url") or "").strip()
+    repo_status = str(repository.get("repo_status") or repository.get("status") or "").strip().upper()
+    if repo_status in {"SKIPPED", "FAILED", ""}:
+        repo_status = ""
+    if not repo_status:
+        repo_status = "EXISTS" if repo_url else "NONE"
+    return {
+        "repo_url": repo_url,
+        "repo_status": repo_status,
+        "repo_sync_status": str(repository.get("sync_status") or "NOT_ATTEMPTED").strip().upper() or "NOT_ATTEMPTED",
+        "repo_sync_reason": str(repository.get("sync_reason") or "").strip(),
+        "last_commit_hash": str(repository.get("last_commit_hash") or "").strip(),
+        "working_tree_state": str(repository.get("working_tree_state") or "").strip(),
+    }
+
+
 def _build_suggestions(
     project_dir: Path,
     entities: list[str],
@@ -1530,6 +1550,7 @@ def analyze_project(
     placeholder_pages = _detect_placeholder_pages(project_dir, pages)
     nav_visible_pages = _extract_nav_visible_pages(project_dir, pages)
     runtime_status = _normalize_runtime_status(runtime_payload if isinstance(runtime_payload, dict) else {})
+    repository_status = _normalize_repository_status(project_dir)
     relation_diagnostics = _collect_relation_diagnostics(
         entities,
         fields_by_entity,
@@ -1609,6 +1630,7 @@ def analyze_project(
         ),
         "drift_warnings": relation_diagnostics.get("drift_warnings") if isinstance(relation_diagnostics, dict) else [],
         "runtime_status": runtime_status,
+        "repository_status": repository_status,
         "suggestions": suggestions,
         "next_action": next_action,
     }
