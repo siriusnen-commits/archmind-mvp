@@ -81,6 +81,7 @@ class ProjectDetailResponse(BaseModel):
     recent_evolution: list[str] = Field(default_factory=list)
     recent_runs: list[dict[str, Any]] = Field(default_factory=list)
     evolution_history: list[dict[str, Any]] = Field(default_factory=list)
+    logs: dict[str, Any] = Field(default_factory=dict)
     auto_summary: dict[str, Any] = Field(default_factory=dict)
     repository: RepositorySummary = Field(default_factory=RepositorySummary)
     analysis: dict[str, Any] = Field(default_factory=dict)
@@ -233,3 +234,10 @@ class RunCommandResponse(BaseModel):
     auto_result: dict[str, Any] = Field(default_factory=dict)
     spec_summary: SpecSummary = Field(default_factory=SpecSummary)
     recent_evolution: list[str] = Field(default_factory=list)
+
+
+class ProjectLogsResponse(BaseModel):
+    project_name: str = ""
+    default_source: str = "latest"
+    max_lines: int = 200
+    sources: list[dict[str, Any]] = Field(default_factory=list)

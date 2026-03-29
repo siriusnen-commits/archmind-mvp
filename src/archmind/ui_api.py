@@ -11,6 +11,7 @@ from archmind.project_query import (
     add_project_entity,
     build_project_analysis,
     build_project_detail,
+    build_project_logs,
     build_project_list_item,
     delete_project_all,
     delete_project_local,
@@ -46,6 +47,7 @@ from archmind.ui_models import (
     RepositorySummary,
     ProviderUpdateRequest,
     ProjectAnalysisResponse,
+    ProjectLogsResponse,
     RuntimeActionResponse,
     RunCommandRequest,
     RunCommandResponse,
@@ -171,6 +173,34 @@ def get_ui_project_analysis(project_name: str) -> ProjectAnalysisResponse:
             status_code=500,
             content={
                 "detail": "Failed to load project analysis",
+                "error": str(exc),
+                "project_name": project_name,
+                "safe": True,
+            },
+        )
+
+
+@router.get("/projects/{project_name}/logs", response_model=ProjectLogsResponse)
+def get_ui_project_logs(project_name: str) -> ProjectLogsResponse:
+    try:
+        project_dir = find_project_by_name(project_name)
+        if project_dir is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        payload = build_project_logs(project_dir)
+        return ProjectLogsResponse(
+            project_name=project_name,
+            default_source=str(payload.get("default_source") or "latest").strip() or "latest",
+            max_lines=int(payload.get("max_lines") or 200),
+            sources=[row for row in (payload.get("sources") or []) if isinstance(row, dict)],
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Failed to load project logs: %s", project_name)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "Failed to load logs",
                 "error": str(exc),
                 "project_name": project_name,
                 "safe": True,

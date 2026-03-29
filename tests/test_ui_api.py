@@ -186,6 +186,9 @@ def test_ui_project_detail_response_shape(monkeypatch, tmp_path: Path) -> None:
     assert "recent_evolution" in payload
     assert "recent_runs" in payload
     assert isinstance(payload["recent_runs"], list)
+    assert "logs" in payload
+    assert isinstance(payload["logs"], dict)
+    assert isinstance(payload["logs"].get("sources", []), list)
     assert isinstance(payload.get("auto_summary", {}), dict)
     assert "repository" in payload
     assert payload["repository"]["status"] == "CREATED"
@@ -432,6 +435,83 @@ def test_ui_project_detail_includes_recent_runs_newest_first(monkeypatch, tmp_pa
     assert history[0]["summary"] == "low-priority next action"
     assert history[0]["action_type"] == "auto"
     assert history[0]["timestamp"] == "2026-03-22 00:00:02"
+
+
+def test_ui_project_logs_endpoint_returns_backend_and_frontend_content(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "logs-available")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    archmind_dir = project_dir / ".archmind"
+    (archmind_dir / "backend.log").write_text("backend line 1\nbackend line 2\n", encoding="utf-8")
+    (archmind_dir / "frontend.log").write_text("frontend line 1\nfrontend line 2\n", encoding="utf-8")
+
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/logs-available/logs")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["project_name"] == "logs-available"
+    groups = {row["key"]: row for row in payload["sources"]}
+    assert groups["backend"]["available"] is True
+    assert "backend line 2" in groups["backend"]["content"]
+    assert groups["frontend"]["available"] is True
+    assert "frontend line 2" in groups["frontend"]["content"]
+
+
+def test_ui_project_logs_endpoint_missing_logs_is_safe_empty(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "logs-missing")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/logs-missing/logs")
+    assert response.status_code == 200
+    payload = response.json()
+    groups = {row["key"]: row for row in payload["sources"]}
+    assert groups["backend"]["available"] is False
+    assert groups["backend"]["content"] == ""
+    assert groups["frontend"]["available"] is False
+    assert groups["latest"]["available"] is False
+
+
+def test_ui_project_logs_endpoint_large_log_is_bounded(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "logs-large")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    archmind_dir = project_dir / ".archmind"
+    lines = [f"line-{idx}" for idx in range(500)]
+    (archmind_dir / "backend.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/logs-large/logs")
+    assert response.status_code == 200
+    payload = response.json()
+    groups = {row["key"]: row for row in payload["sources"]}
+    backend = groups["backend"]
+    assert backend["available"] is True
+    assert backend["truncated"] is True
+    assert "line-499" in backend["content"]
+    assert "line-0" not in backend["content"]
+
+
+def test_ui_project_logs_endpoint_unreadable_source_reports_error(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "logs-unreadable")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    bad_path = project_dir / ".archmind" / "bad-backend-log"
+    bad_path.mkdir(parents=True, exist_ok=True)
+    state_payload = json.loads((project_dir / ".archmind" / "state.json").read_text(encoding="utf-8"))
+    runtime = state_payload.get("runtime", {})
+    runtime["backend_log_path"] = str(bad_path)
+    state_payload["runtime"] = runtime
+    write_state(project_dir, state_payload)
+
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/logs-unreadable/logs")
+    assert response.status_code == 200
+    payload = response.json()
+    groups = {row["key"]: row for row in payload["sources"]}
+    assert groups["backend"]["available"] is False
+    assert "not a file" in str(groups["backend"]["error"]).lower()
 
 
 def test_ui_project_detail_recent_runs_empty_when_history_missing(monkeypatch, tmp_path: Path) -> None:
@@ -1320,6 +1400,15 @@ def test_project_detail_source_renders_evolution_history_panel() -> None:
     assert "&& <EvolutionHistoryCard" not in project_detail_source
 
 
+def test_project_detail_source_renders_logs_viewer_panel() -> None:
+    project_detail_source = Path("frontend/app/projects/[project]/page.tsx").read_text(encoding="utf-8")
+    assert 'import LogsViewerCard from "@/components/LogsViewerCard"' in project_detail_source
+    assert "<LogsViewerCard" in project_detail_source
+    assert "projectName={detail.name}" in project_detail_source
+    assert "initialLogs={detail.logs}" in project_detail_source
+    assert "&& <LogsViewerCard" not in project_detail_source
+
+
 def test_structure_visualization_component_has_robust_empty_states_and_no_null_bailout() -> None:
     source = Path("frontend/components/StructureVisualizationCard.tsx").read_text(encoding="utf-8")
     assert '"use client";' in source
@@ -1410,6 +1499,19 @@ def test_recent_runs_component_is_hydration_safe_for_server_timestamp_strings() 
     assert "new Date(" not in source
     assert "toLocaleString" not in source
     assert "Intl.DateTimeFormat" not in source
+
+
+def test_logs_viewer_component_handles_sources_refresh_and_empty_states() -> None:
+    source = Path("frontend/components/LogsViewerCard.tsx").read_text(encoding="utf-8")
+    assert '"use client";' in source
+    assert "Logs" in source
+    assert "Refresh Logs" in source
+    assert "Refreshing..." in source
+    assert "/logs" in source
+    assert "No logs available yet." in source
+    assert "No " in source and "logs available." in source
+    assert "max-h-80 overflow-auto" in source
+    assert "return null" not in source
 
 
 def test_ui_project_detail_includes_auto_summary_when_present(monkeypatch, tmp_path: Path) -> None:

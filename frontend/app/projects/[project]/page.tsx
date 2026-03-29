@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import EvolutionCard from "@/components/EvolutionCard";
 import EvolutionHistoryCard from "@/components/EvolutionHistoryCard";
+import LogsViewerCard from "@/components/LogsViewerCard";
 import AddEntityCard from "@/components/AddEntityCard";
 import AddFieldCard from "@/components/AddFieldCard";
 import AddApiCard from "@/components/AddApiCard";
@@ -131,6 +132,20 @@ type ProjectDetail = {
     source?: string;
     stop_reason?: string;
   }>;
+  logs?: {
+    default_source?: string;
+    max_lines?: number;
+    sources?: Array<{
+      key?: string;
+      label?: string;
+      path?: string;
+      available?: boolean;
+      content?: string;
+      error?: string;
+      truncated?: boolean;
+      line_count?: number;
+    }>;
+  };
   auto_summary?: {
     run_id?: string;
     executed?: number;
@@ -212,6 +227,7 @@ export default async function ProjectDetailPage({ params }: PageProps) {
           <AutoControlPanel projectName={detail.name} autoSummary={detail.auto_summary} />
           <CommandConsole projectName={detail.name} />
           <EvolutionHistoryCard items={Array.isArray(detail.evolution_history) ? detail.evolution_history : []} />
+          <LogsViewerCard projectName={detail.name} initialLogs={detail.logs} />
           <StructureVisualizationCard
             projectName={detail.name}
             entityGraph={analysis?.entity_graph}

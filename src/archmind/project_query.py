@@ -4,6 +4,7 @@ import json
 import os
 import socket
 import subprocess
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,10 @@ from archmind.current_project import get_validated_current_project, set_current_
 from archmind.deploy import delete_project, restart_local_services, run_backend_local_with_health, stop_local_services
 from archmind.runtime_status import build_runtime_snapshot
 from archmind.ui_models import ProjectDetailResponse, ProjectListItem, RepositorySummary, RuntimeSummary, SpecSummary
+
+
+_UI_LOG_MAX_LINES = 200
+_UI_LOG_MAX_CHARS = 24_000
 
 
 def resolve_ui_projects_dir() -> Path:
@@ -365,6 +370,195 @@ def _normalize_ui_timestamp(value: Any) -> str:
     return parsed.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _is_within_project(path: Path, project_dir: Path) -> bool:
+    try:
+        path.resolve().relative_to(project_dir.resolve())
+        return True
+    except Exception:
+        return False
+
+
+def _tail_log_content(path: Path, *, max_lines: int = _UI_LOG_MAX_LINES, max_chars: int = _UI_LOG_MAX_CHARS) -> tuple[str, bool, int, str]:
+    target = path.expanduser().resolve()
+    if not target.exists():
+        return "", False, 0, ""
+    if not target.is_file():
+        return "", False, 0, "Log path is not a file"
+
+    line_count = 0
+    ring: deque[str] = deque(maxlen=max(1, int(max_lines)))
+    try:
+        with target.open("r", encoding="utf-8", errors="replace") as handle:
+            for raw in handle:
+                line_count += 1
+                ring.append(raw)
+    except Exception as exc:
+        return "", False, 0, f"Unable to read log: {exc}"
+
+    content = "".join(ring).strip("\n")
+    truncated = line_count > max_lines
+    if len(content) > max_chars:
+        content = content[-max_chars:]
+        truncated = True
+    visible_lines = 0 if not content else content.count("\n") + 1
+    return content, truncated, visible_lines, ""
+
+
+def _resolve_log_source(
+    project_dir: Path,
+    *,
+    key: str,
+    label: str,
+    candidates: list[Path],
+    max_lines: int,
+) -> dict[str, Any]:
+    for candidate in candidates:
+        if not _is_within_project(candidate, project_dir):
+            continue
+        content, truncated, visible_lines, error = _tail_log_content(candidate, max_lines=max_lines)
+        if error:
+            return {
+                "key": key,
+                "label": label,
+                "path": str(candidate),
+                "available": False,
+                "content": "",
+                "error": error,
+                "truncated": False,
+                "line_count": 0,
+            }
+        if content:
+            return {
+                "key": key,
+                "label": label,
+                "path": str(candidate),
+                "available": True,
+                "content": content,
+                "error": "",
+                "truncated": bool(truncated),
+                "line_count": int(visible_lines),
+            }
+        if candidate.exists():
+            return {
+                "key": key,
+                "label": label,
+                "path": str(candidate),
+                "available": False,
+                "content": "",
+                "error": "",
+                "truncated": False,
+                "line_count": 0,
+            }
+    return {
+        "key": key,
+        "label": label,
+        "path": "",
+        "available": False,
+        "content": "",
+        "error": "",
+        "truncated": False,
+        "line_count": 0,
+    }
+
+
+def build_project_logs(project_dir: Path, *, state_payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    state = state_payload if isinstance(state_payload, dict) else (load_state(project_dir) or {})
+    runtime_block = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
+    services = runtime_block.get("services") if isinstance(runtime_block.get("services"), dict) else {}
+    backend_service = services.get("backend") if isinstance(services.get("backend"), dict) else {}
+    frontend_service = services.get("frontend") if isinstance(services.get("frontend"), dict) else {}
+
+    def _build_paths(*values: Any) -> list[Path]:
+        rows: list[Path] = []
+        seen: set[str] = set()
+        for value in values:
+            raw = str(value or "").strip()
+            if not raw:
+                continue
+            try:
+                path = Path(raw).expanduser().resolve()
+            except Exception:
+                continue
+            key = str(path)
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(path)
+        return rows
+
+    backend_candidates = _build_paths(
+        backend_service.get("log_path"),
+        runtime_block.get("backend_log_path"),
+        project_dir / ".archmind" / "backend.log",
+    )
+    frontend_candidates = _build_paths(
+        frontend_service.get("log_path"),
+        runtime_block.get("frontend_log_path"),
+        project_dir / ".archmind" / "frontend.log",
+    )
+
+    backend_source = _resolve_log_source(
+        project_dir,
+        key="backend",
+        label="Backend",
+        candidates=backend_candidates,
+        max_lines=_UI_LOG_MAX_LINES,
+    )
+    frontend_source = _resolve_log_source(
+        project_dir,
+        key="frontend",
+        label="Frontend",
+        candidates=frontend_candidates,
+        max_lines=_UI_LOG_MAX_LINES,
+    )
+
+    latest_candidates: list[Path] = []
+    logs_dir = (project_dir / ".archmind" / "logs").expanduser().resolve()
+    if logs_dir.exists() and logs_dir.is_dir() and _is_within_project(logs_dir, project_dir):
+        latest_candidates.extend(
+            sorted(
+                [p for p in logs_dir.glob("*.log") if p.is_file()],
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+        )
+    for row in [backend_source.get("path"), frontend_source.get("path"), project_dir / ".archmind" / "backend.log", project_dir / ".archmind" / "frontend.log"]:
+        raw = str(row or "").strip()
+        if not raw:
+            continue
+        try:
+            path = Path(raw).expanduser().resolve()
+        except Exception:
+            continue
+        if not path.exists() or not path.is_file() or not _is_within_project(path, project_dir):
+            continue
+        latest_candidates.append(path)
+    dedup_latest: list[Path] = []
+    seen_latest: set[str] = set()
+    for path in latest_candidates:
+        key = str(path)
+        if key in seen_latest:
+            continue
+        seen_latest.add(key)
+        dedup_latest.append(path)
+
+    latest_source = _resolve_log_source(
+        project_dir,
+        key="latest",
+        label="Latest",
+        candidates=dedup_latest,
+        max_lines=_UI_LOG_MAX_LINES,
+    )
+
+    sources = [backend_source, frontend_source, latest_source]
+    default_source = "latest" if bool(latest_source.get("available")) else "backend"
+    return {
+        "default_source": default_source,
+        "max_lines": _UI_LOG_MAX_LINES,
+        "sources": sources,
+    }
+
+
 def _empty_project_detail(project_dir: Path, warning: str = "") -> ProjectDetailResponse:
     return ProjectDetailResponse(
         name=project_dir.name,
@@ -379,6 +573,7 @@ def _empty_project_detail(project_dir: Path, warning: str = "") -> ProjectDetail
         recent_evolution=[],
         recent_runs=[],
         evolution_history=[],
+        logs={"default_source": "latest", "max_lines": _UI_LOG_MAX_LINES, "sources": []},
         auto_summary={},
         repository=RepositorySummary(),
         analysis=analyze_project(project_dir, project_name=project_dir.name, spec_payload={}, runtime_payload={}),
@@ -568,6 +763,7 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
         auto_summary = state_payload.get("auto_last_result") if isinstance(state_payload.get("auto_last_result"), dict) else {}
         recent_evolution = summarize_recent_evolution(spec, limit=5)
         evolution_history = _build_evolution_history(recent_runs, recent_evolution)
+        logs = build_project_logs(project_dir, state_payload=state_payload if isinstance(state_payload, dict) else {})
         return ProjectDetailResponse(
             name=project_dir.name,
             display_name=_display_name_from_payloads(project_dir, state_payload, spec if isinstance(spec, dict) else {}),
@@ -600,6 +796,7 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
             recent_evolution=recent_evolution,
             recent_runs=recent_runs,
             evolution_history=evolution_history,
+            logs=logs,
             auto_summary=auto_summary,
             repository=repository,
             analysis=analysis,
