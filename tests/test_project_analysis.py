@@ -892,3 +892,116 @@ def test_project_analysis_single_entity_complete_still_stops_normally(tmp_path: 
     out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
     assert out["next_action"]["kind"] == "none"
     assert out["next_action"]["command"] == ""
+
+
+def test_project_analysis_relation_diagnostics_board_card_include_summary_artifacts_and_create_flow(tmp_path: Path) -> None:
+    project_dir = tmp_path / "kanban-relation-diagnostics"
+    spec = {
+        "entities": [
+            {"name": "Board", "fields": [{"name": "title", "type": "string"}]},
+            {"name": "Card", "fields": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+        ],
+        "api_endpoints": [
+            "GET /boards",
+            "POST /boards",
+            "GET /boards/{id}",
+            "PATCH /boards/{id}",
+            "DELETE /boards/{id}",
+            "GET /cards",
+            "POST /cards",
+            "GET /cards/{id}",
+            "PATCH /cards/{id}",
+            "DELETE /cards/{id}",
+            "GET /boards/{id}/cards",
+        ],
+        "frontend_pages": ["boards/list", "boards/detail", "cards/list", "cards/detail", "cards/new", "cards/by_board"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert "Board -> Card (field: board_id)" in out["relation_summary"]
+    assert "cards/by_board" in out["relation_pages"]
+    assert "GET /boards/{id}/cards" in out["relation_apis"]
+    assert "Card create prefill/selector via board_id" in out["relation_create_flows"]
+    assert out["drift_warnings"] == []
+
+
+def test_project_analysis_relation_diagnostics_entry_tag_include_summary_artifacts(tmp_path: Path) -> None:
+    project_dir = tmp_path / "entry-tag-relation-diagnostics"
+    spec = {
+        "entities": [
+            {"name": "Entry", "fields": [{"name": "title", "type": "string"}]},
+            {"name": "Tag", "fields": [{"name": "name", "type": "string"}, {"name": "entry_id", "type": "int"}]},
+        ],
+        "api_endpoints": [
+            "GET /entries",
+            "POST /entries",
+            "GET /entries/{id}",
+            "PATCH /entries/{id}",
+            "DELETE /entries/{id}",
+            "GET /tags",
+            "POST /tags",
+            "GET /tags/{id}",
+            "PATCH /tags/{id}",
+            "DELETE /tags/{id}",
+            "GET /entries/{id}/tags",
+        ],
+        "frontend_pages": ["entries/list", "entries/detail", "tags/list", "tags/detail", "tags/new", "tags/by_entry"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert "Entry -> Tag (field: entry_id)" in out["relation_summary"]
+    assert "tags/by_entry" in out["relation_pages"]
+    assert "GET /entries/{id}/tags" in out["relation_apis"]
+    assert "Tag create prefill/selector via entry_id" in out["relation_create_flows"]
+
+
+def test_project_analysis_relation_diagnostics_bookmark_category_inferred_and_create_flow(tmp_path: Path) -> None:
+    project_dir = tmp_path / "bookmark-category-relation-diagnostics"
+    spec = {
+        "entities": [
+            {"name": "Category", "fields": [{"name": "name", "type": "string"}]},
+            {"name": "Bookmark", "fields": [{"name": "title", "type": "string"}]},
+        ],
+        "api_endpoints": [
+            "GET /categories",
+            "POST /categories",
+            "GET /categories/{id}",
+            "PATCH /categories/{id}",
+            "DELETE /categories/{id}",
+            "GET /bookmarks",
+            "POST /bookmarks",
+            "GET /bookmarks/{id}",
+            "PATCH /bookmarks/{id}",
+            "DELETE /bookmarks/{id}",
+        ],
+        "frontend_pages": ["categories/list", "categories/detail", "bookmarks/list", "bookmarks/detail", "bookmarks/new"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert "Category -> Bookmark (inferred)" in out["relation_summary"]
+    assert "Bookmark create prefill/selector via category_id" in out["relation_create_flows"]
+
+
+def test_project_analysis_relation_diagnostics_warn_when_relation_field_has_no_relation_artifacts(tmp_path: Path) -> None:
+    project_dir = tmp_path / "relation-drift-warnings"
+    spec = {
+        "entities": [
+            {"name": "Board", "fields": [{"name": "title", "type": "string"}]},
+            {"name": "Card", "fields": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+        ],
+        "api_endpoints": [
+            "GET /boards",
+            "POST /boards",
+            "GET /boards/{id}",
+            "PATCH /boards/{id}",
+            "DELETE /boards/{id}",
+            "GET /cards",
+            "POST /cards",
+            "GET /cards/{id}",
+            "PATCH /cards/{id}",
+            "DELETE /cards/{id}",
+        ],
+        "frontend_pages": ["boards/list", "boards/detail", "cards/list", "cards/detail"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    warnings = "\n".join(out["drift_warnings"])
+    assert "board_id" in warnings
+    assert "GET /boards/{id}/cards" in warnings
+    assert "cards/by_board" in warnings

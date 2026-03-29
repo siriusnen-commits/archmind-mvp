@@ -4136,6 +4136,11 @@ async def command_inspect(update: Any, context: Any) -> None:
         if isinstance(item, dict) and str(item.get("method") or "").strip() and str(item.get("path") or "").strip()
     ]
     frontend_pages = [str(x) for x in (analysis.get("pages") or []) if str(x).strip()]
+    relation_summary = [str(x) for x in (analysis.get("relation_summary") or []) if str(x).strip()]
+    relation_pages = [str(x) for x in (analysis.get("relation_pages") or []) if str(x).strip()]
+    relation_apis = [str(x) for x in (analysis.get("relation_apis") or []) if str(x).strip()]
+    relation_create_flows = [str(x) for x in (analysis.get("relation_create_flows") or []) if str(x).strip()]
+    drift_warnings = [str(x) for x in (analysis.get("drift_warnings") or []) if str(x).strip()]
     reason_summary = str(spec.get("reason_summary") or reasoning.get("reason_summary") or "").strip()
     evolution = spec.get("evolution") if isinstance(spec.get("evolution"), dict) else {}
     evolution_version = int(evolution.get("version") or 1) if evolution else 1
@@ -4218,6 +4223,16 @@ async def command_inspect(update: Any, context: Any) -> None:
     lines += ["", "Entity Fields:"] + entity_tree_lines
     _append_truncated_bullets(lines, "APIs:", api_endpoints, limit=10, suffix_label="endpoints")
     _append_truncated_bullets(lines, "Pages:", frontend_pages, limit=10, suffix_label="pages")
+    if relation_summary:
+        _append_truncated_bullets(lines, "Relation Summary:", relation_summary, limit=10, suffix_label="relations")
+    if relation_pages:
+        _append_truncated_bullets(lines, "Relation Pages:", relation_pages, limit=10, suffix_label="pages")
+    if relation_apis:
+        _append_truncated_bullets(lines, "Relation APIs:", relation_apis, limit=10, suffix_label="apis")
+    if relation_create_flows:
+        _append_truncated_bullets(lines, "Relation Create Flow:", relation_create_flows, limit=10, suffix_label="flows")
+    if drift_warnings:
+        _append_truncated_bullets(lines, "Drift Warnings:", drift_warnings, limit=8, suffix_label="warnings")
     if reason_summary:
         lines += ["", "Reasoning:", reason_summary]
     if structure:

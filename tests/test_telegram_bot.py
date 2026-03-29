@@ -3022,6 +3022,145 @@ def test_inspect_summary_counts_match_canonical_detail_lists(tmp_path: Path, mon
     assert "- entries/detail" in out
 
 
+def test_inspect_includes_relation_summary_and_relation_artifacts_for_board_card(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect_board_card_relation"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "entities": [
+                    {"name": "Board", "fields": [{"name": "title", "type": "string"}]},
+                    {"name": "Card", "fields": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+                ],
+                "api_endpoints": [
+                    "GET /boards",
+                    "POST /boards",
+                    "GET /boards/{id}",
+                    "PATCH /boards/{id}",
+                    "DELETE /boards/{id}",
+                    "GET /cards",
+                    "POST /cards",
+                    "GET /cards/{id}",
+                    "PATCH /cards/{id}",
+                    "DELETE /cards/{id}",
+                    "GET /boards/{id}/cards",
+                ],
+                "frontend_pages": ["boards/list", "boards/detail", "cards/list", "cards/detail", "cards/new", "cards/by_board"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Relation Summary:" in out
+    assert "- Board -> Card (field: board_id)" in out
+    assert "Relation Pages:" in out
+    assert "- cards/by_board" in out
+    assert "Relation APIs:" in out
+    assert "- GET /boards/{id}/cards" in out
+    assert "Relation Create Flow:" in out
+    assert "- Card create prefill/selector via board_id" in out
+
+
+def test_inspect_includes_relation_summary_and_artifacts_for_entry_tag(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect_entry_tag_relation"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "entities": [
+                    {"name": "Entry", "fields": [{"name": "title", "type": "string"}]},
+                    {"name": "Tag", "fields": [{"name": "name", "type": "string"}, {"name": "entry_id", "type": "int"}]},
+                ],
+                "api_endpoints": ["GET /entries/{id}/tags"],
+                "frontend_pages": ["entries/list", "entries/detail", "tags/list", "tags/detail", "tags/new", "tags/by_entry"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "- Entry -> Tag (field: entry_id)" in out
+    assert "- tags/by_entry" in out
+    assert "- GET /entries/{id}/tags" in out
+
+
+def test_inspect_includes_inferred_relation_and_create_flow_for_bookmark_category(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect_bookmark_category_relation"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "entities": [
+                    {"name": "Category", "fields": [{"name": "name", "type": "string"}]},
+                    {"name": "Bookmark", "fields": [{"name": "title", "type": "string"}]},
+                ],
+                "api_endpoints": [
+                    "GET /categories",
+                    "POST /categories",
+                    "GET /bookmarks",
+                    "POST /bookmarks",
+                ],
+                "frontend_pages": ["categories/list", "categories/detail", "bookmarks/list", "bookmarks/detail", "bookmarks/new"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "- Category -> Bookmark (inferred)" in out
+    assert "- Bookmark create prefill/selector via category_id" in out
+
+
+def test_inspect_shows_drift_warning_when_relation_field_exists_without_relation_page_or_api(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect_relation_drift_warning"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "entities": [
+                    {"name": "Board", "fields": [{"name": "title", "type": "string"}]},
+                    {"name": "Card", "fields": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+                ],
+                "api_endpoints": [
+                    "GET /boards",
+                    "POST /boards",
+                    "GET /cards",
+                    "POST /cards",
+                ],
+                "frontend_pages": ["boards/list", "boards/detail", "cards/list", "cards/detail"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Drift Warnings:" in out
+    assert "board_id" in out
+    assert "cards/by_board" in out
+    assert "GET /boards/{id}/cards" in out
+
+
 def test_inspect_command_shows_recent_evolution_entries(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "inspect_recent_evolution"
     archmind = project_dir / ".archmind"
