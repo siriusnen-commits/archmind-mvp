@@ -4390,15 +4390,29 @@ async def command_inspect(update: Any, context: Any) -> None:
     frontend_url = str(runtime_frontend_payload.get("url") or "").strip()
     backend_last_known_url = str(runtime_backend_payload.get("last_known_url") or "").strip()
     frontend_last_known_url = str(runtime_frontend_payload.get("last_known_url") or "").strip()
+    backend_reason = str(runtime_backend_payload.get("reason") or "").strip()
+    frontend_reason = str(runtime_frontend_payload.get("reason") or "").strip()
+    backend_reason_detail = str(runtime_backend_payload.get("reason_detail") or "").strip()
+    frontend_reason_detail = str(runtime_frontend_payload.get("reason_detail") or "").strip()
 
     if runtime_backend == "RUNNING":
         runtime_failure_class = ""
 
     lines += ["", "Runtime:"]
     lines.append(f"Backend: {runtime_backend}")
+    if runtime_backend != "RUNNING" and backend_reason:
+        if backend_reason_detail:
+            lines.append(f"Backend Reason: {backend_reason} ({backend_reason_detail})")
+        else:
+            lines.append(f"Backend Reason: {backend_reason}")
     if backend_pid:
         lines.append(f"Backend PID: {backend_pid}")
     lines.append(f"Frontend: {runtime_frontend}")
+    if runtime_frontend != "RUNNING" and frontend_reason:
+        if frontend_reason_detail:
+            lines.append(f"Frontend Reason: {frontend_reason} ({frontend_reason_detail})")
+        else:
+            lines.append(f"Frontend Reason: {frontend_reason}")
     if frontend_pid:
         lines.append(f"Frontend PID: {frontend_pid}")
 
