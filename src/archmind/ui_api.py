@@ -444,7 +444,8 @@ def post_ui_project_implement_page(project_name: str, body: ImplementPageRequest
 def post_ui_project_run_command(project_name: str, body: RunCommandRequest) -> RunCommandResponse:
     try:
         command = str(body.command or "").strip()
-        result = execute_command(command, project_name, source="ui-next-run")
+        strategy = str(body.strategy or "").strip().lower()
+        result = execute_command(command, project_name, source="ui-next-run", auto_strategy=strategy)
         detail = str(result.get("detail") or result.get("message") or result.get("error") or "")
         return RunCommandResponse(
             ok=bool(result.get("ok")),

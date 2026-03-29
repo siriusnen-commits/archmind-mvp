@@ -221,6 +221,7 @@ class ProjectAnalysisResponse(BaseModel):
 
 class RunCommandRequest(BaseModel):
     command: str = ""
+    strategy: str = ""
 
 
 class RunCommandResponse(BaseModel):

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from archmind.command_executor import execute_command
+from archmind.command_executor import _execute_auto_command, execute_command
 from archmind.execution_history import load_recent_execution_events
 
 
@@ -236,18 +236,19 @@ def test_execute_command_auto_uses_auto_executor_and_skips_single_command_sync(m
     monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: Path("/tmp/demo"))
     sync_calls: list[str] = []
 
-    def fake_auto_executor(project_dir: Path, *, project_name: str, source: str, run_id=None, requested_steps=None):  # type: ignore[no-untyped-def]
+    def fake_auto_executor(project_dir: Path, *, project_name: str, source: str, run_id=None, requested_steps=None, auto_strategy=None):  # type: ignore[no-untyped-def]
         assert project_dir == Path("/tmp/demo")
         assert project_name == "demo"
         assert source == "ui-next-run"
         assert requested_steps is None
+        assert auto_strategy == "balanced"
         return {
             "ok": True,
             "project_name": project_name,
             "detail": "Auto completed",
             "message_text": "Auto evolution run",
             "repository_sync": {"status": "SYNCED"},
-            "auto_result": {"run_id": "auto-1", "executed": 1, "commands": ["/add_api GET /boards/{id}/cards"]},
+            "auto_result": {"run_id": "auto-1", "strategy": "balanced", "executed": 1, "commands": ["/add_api GET /boards/{id}/cards"]},
         }
 
     monkeypatch.setattr("archmind.command_executor._execute_auto_command", fake_auto_executor)
@@ -259,3 +260,146 @@ def test_execute_command_auto_uses_auto_executor_and_skips_single_command_sync(m
     assert out["auto_result"]["run_id"] == "auto-1"
     assert out["repository_sync"]["status"] == "SYNCED"
     assert sync_calls == []
+
+
+def test_execute_command_auto_forwards_explicit_strategy(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: Path("/tmp/demo"))
+
+    captured: dict[str, str] = {}
+
+    def fake_auto_executor(project_dir: Path, *, project_name: str, source: str, run_id=None, requested_steps=None, auto_strategy=None):  # type: ignore[no-untyped-def]
+        assert project_dir == Path("/tmp/demo")
+        captured["strategy"] = str(auto_strategy or "")
+        return {
+            "ok": True,
+            "project_name": project_name,
+            "detail": "Auto completed",
+            "message_text": "Auto evolution run",
+            "repository_sync": {"status": "SYNCED"},
+            "auto_result": {"run_id": "auto-2", "strategy": str(auto_strategy or "balanced"), "executed": 0, "commands": []},
+        }
+
+    monkeypatch.setattr("archmind.command_executor._execute_auto_command", fake_auto_executor)
+    out = execute_command("/auto", "demo", source="ui-next-run", auto_strategy="safe")
+    assert out["ok"] is True
+    assert captured["strategy"] == "safe"
+    assert out["auto_result"]["strategy"] == "safe"
+
+
+def test_auto_strategy_safe_stops_before_medium_priority_action(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "demo"
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    analyses = [
+        {
+            "entities": ["Task"],
+            "apis": [],
+            "pages": [],
+            "fields_by_entity": {"Task": [{"name": "title"}]},
+            "placeholder_pages": [],
+            "next_action": {"kind": "useful_field", "message": "Add description", "command": "/add_field Task description:string"},
+            "next_action_explanation": {"reason_summary": "description improves usability", "expected_effect": "better task context"},
+            "entity_crud_status": {"Task": {"missing_api": [], "missing_pages": []}},
+        }
+    ]
+    call_idx = {"value": 0}
+
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda *_args, **_kwargs: analyses[min(call_idx["value"], len(analyses) - 1)])
+    monkeypatch.setattr("archmind.telegram_bot._compute_auto_iteration_budget", lambda *_args, **_kwargs: (3, ["base=3"]))
+    monkeypatch.setattr("archmind.telegram_bot.classify_auto_action_priority", lambda *_args, **_kwargs: "medium")
+    monkeypatch.setattr("archmind.telegram_bot._normalize_recommended_command", lambda command: command)
+    monkeypatch.setattr("archmind.telegram_bot._parse_command_string", lambda command: ("/add_field", ["Task", "description:string"]))
+    monkeypatch.setattr("archmind.telegram_bot._analysis_progress_signature", lambda analysis: ("sig",))
+    monkeypatch.setattr("archmind.telegram_bot._auto_progress_snapshot", lambda *_args, **_kwargs: {"entities": 1, "apis": 0, "pages": 0, "relation_pages": 0, "relation_apis": 0, "placeholders": 0})
+    monkeypatch.setattr("archmind.telegram_bot._auto_is_good_enough_mvp", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr("archmind.telegram_bot._auto_stop_explanation", lambda reason, _analysis: f"base:{reason}")
+    monkeypatch.setattr("archmind.telegram_bot._auto_command_already_satisfied", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr("archmind.telegram_bot._auto_is_multi_entity", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr("archmind.telegram_bot._auto_analysis_brief", lambda *_args, **_kwargs: "entities=1, apis=0, pages=0")
+    monkeypatch.setattr("archmind.telegram_bot._auto_runtime_state_lines", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("archmind.telegram_bot.auto_progress_delta", lambda *_args, **_kwargs: {"score": 0, "material": False})
+    monkeypatch.setattr("archmind.telegram_bot.sync_repo_after_auto_batch", lambda *_args, **_kwargs: {"status": "NOT_ATTEMPTED"})
+    monkeypatch.setattr("archmind.state.load_state", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("archmind.state.write_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("archmind.command_executor.execute_command", lambda *_args, **_kwargs: {"ok": False, "error": "should not execute"})
+
+    out = _execute_auto_command(project_dir, project_name="demo", source="ui-next-run", auto_strategy="safe")
+    assert out["ok"] is True
+    assert out["auto_result"]["strategy"] == "safe"
+    assert out["auto_result"]["executed"] == 0
+    assert "strategy guard" in str(out["auto_result"]["stop_reason"]).lower()
+    assert "safe strategy allows only high-priority actions" in str(out["auto_result"]["stop_explanation"]).lower()
+
+
+def test_auto_strategy_aggressive_can_execute_medium_priority_action(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "demo"
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    analysis_before = {
+        "entities": ["Task"],
+        "apis": [],
+        "pages": [],
+        "fields_by_entity": {"Task": [{"name": "title"}]},
+        "placeholder_pages": [],
+        "next_action": {"kind": "useful_field", "message": "Add description", "command": "/add_field Task description:string"},
+        "next_action_explanation": {"reason_summary": "description improves usability", "expected_effect": "better task context"},
+        "entity_crud_status": {"Task": {"missing_api": [], "missing_pages": []}},
+    }
+    analysis_after = {
+        "entities": ["Task"],
+        "apis": [],
+        "pages": [],
+        "fields_by_entity": {"Task": [{"name": "title"}, {"name": "description"}]},
+        "placeholder_pages": [],
+        "next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""},
+        "next_action_explanation": {},
+        "entity_crud_status": {"Task": {"missing_api": [], "missing_pages": []}},
+    }
+    calls = {"count": 0}
+
+    def fake_build_analysis(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        calls["count"] += 1
+        return analysis_before if calls["count"] <= 1 else analysis_after
+
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", fake_build_analysis)
+    monkeypatch.setattr("archmind.telegram_bot._compute_auto_iteration_budget", lambda *_args, **_kwargs: (3, ["base=3"]))
+    monkeypatch.setattr("archmind.telegram_bot.classify_auto_action_priority", lambda row: "none" if str((row or {}).get("kind") or "").strip().lower() == "none" else "medium")
+    monkeypatch.setattr("archmind.telegram_bot._normalize_recommended_command", lambda command: command)
+    monkeypatch.setattr("archmind.telegram_bot._parse_command_string", lambda command: ("/add_field", ["Task", "description:string"]) if command else ("", []))
+    monkeypatch.setattr("archmind.telegram_bot._analysis_progress_signature", lambda analysis: ("with-description",) if len((analysis.get("fields_by_entity") or {}).get("Task", [])) > 1 else ("base",))
+    monkeypatch.setattr(
+        "archmind.telegram_bot._auto_progress_snapshot",
+        lambda analysis: {
+            "entities": 1,
+            "apis": 0,
+            "pages": 0,
+            "relation_pages": 0,
+            "relation_apis": 0,
+            "placeholders": 0,
+            "useful_fields": len((analysis.get("fields_by_entity") or {}).get("Task", [])),
+        },
+    )
+    monkeypatch.setattr("archmind.telegram_bot._auto_is_good_enough_mvp", lambda analysis: str((analysis.get("next_action") or {}).get("kind") or "").strip().lower() == "none")
+    monkeypatch.setattr("archmind.telegram_bot._auto_stop_explanation", lambda reason, _analysis: f"base:{reason}")
+    monkeypatch.setattr("archmind.telegram_bot._auto_command_already_satisfied", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr("archmind.telegram_bot._auto_is_multi_entity", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr("archmind.telegram_bot._auto_analysis_brief", lambda *_args, **_kwargs: "entities=1, apis=0, pages=0")
+    monkeypatch.setattr("archmind.telegram_bot._auto_runtime_state_lines", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("archmind.telegram_bot.auto_progress_delta", lambda *_args, **_kwargs: {"score": 3, "material": True})
+    monkeypatch.setattr("archmind.telegram_bot.sync_repo_after_auto_batch", lambda *_args, **_kwargs: {"status": "SYNCED"})
+    monkeypatch.setattr("archmind.state.load_state", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("archmind.state.write_state", lambda *_args, **_kwargs: None)
+
+    executed: list[str] = []
+
+    def fake_execute(command: str, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        executed.append(command)
+        return {"ok": True, "detail": "ok"}
+
+    monkeypatch.setattr("archmind.command_executor.execute_command", fake_execute)
+
+    out = _execute_auto_command(project_dir, project_name="demo", source="ui-next-run", auto_strategy="aggressive")
+    assert out["ok"] is True
+    assert out["auto_result"]["strategy"] == "aggressive"
+    assert out["auto_result"]["executed"] >= 1
+    assert executed[0] == "/add_field Task description:string"
