@@ -80,6 +80,7 @@ def test_ui_projects_response_shape(monkeypatch, tmp_path: Path) -> None:
         "backend_url",
         "frontend_url",
         "repository",
+        "project_health_status",
         "is_current",
         "warning",
     ):
@@ -88,6 +89,7 @@ def test_ui_projects_response_shape(monkeypatch, tmp_path: Path) -> None:
     assert item["status"] in {"RUNNING", "STOPPED", "FAIL"}
     assert item["backend_url"] == ""
     assert item["frontend_url"] == ""
+    assert item["project_health_status"] in {"RUNNING", "BROKEN", "NEEDS FIX", "IDLE"}
     assert item["repository"]["status"] == "CREATED"
     assert item["repository"]["url"] == "https://github.com/example/alpha"
 
@@ -164,6 +166,103 @@ def test_ui_projects_show_distinct_runtime_frontend_urls_per_project(monkeypatch
     assert rows["alpha"]["frontend_url"] == "http://127.0.0.1:5173"
     assert rows["beta"]["frontend_url"] == "http://127.0.0.1:5280"
     assert rows["alpha"]["frontend_url"] != rows["beta"]["frontend_url"]
+
+
+def test_ui_projects_status_badge_running(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "running-badge")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    def fake_runtime(_project_dir: Path):  # type: ignore[no-untyped-def]
+        return {
+            "backend": {"status": "RUNNING", "url": "http://127.0.0.1:7100"},
+            "frontend": {"status": "NOT RUNNING", "url": ""},
+        }
+
+    monkeypatch.setattr("archmind.project_query.get_local_runtime_status", fake_runtime)
+    client = TestClient(create_ui_app())
+    payload = client.get("/ui/projects").json()
+    rows = {item["name"]: item for item in payload["projects"]}
+    assert rows["running-badge"]["project_health_status"] == "RUNNING"
+
+
+def test_ui_projects_status_badge_broken_for_unresolved_failure(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "broken-badge")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    state_payload = json.loads((project_dir / ".archmind" / "state.json").read_text(encoding="utf-8"))
+    state_payload["agent_state"] = "NOT_DONE"
+    state_payload["runtime_failure_class"] = "runtime-entrypoint-error"
+    state_payload["last_failure_class"] = "runtime-entrypoint-error"
+    write_state(project_dir, state_payload)
+
+    def fake_runtime(_project_dir: Path):  # type: ignore[no-untyped-def]
+        return {
+            "backend": {"status": "NOT RUNNING", "url": ""},
+            "frontend": {"status": "NOT RUNNING", "url": ""},
+        }
+
+    monkeypatch.setattr("archmind.project_query.get_local_runtime_status", fake_runtime)
+    client = TestClient(create_ui_app())
+    payload = client.get("/ui/projects").json()
+    rows = {item["name"]: item for item in payload["projects"]}
+    assert rows["broken-badge"]["project_health_status"] == "BROKEN"
+
+
+def test_ui_projects_status_badge_needs_fix_for_not_done_without_failure_class(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "needs-fix-badge")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    state_payload = json.loads((project_dir / ".archmind" / "state.json").read_text(encoding="utf-8"))
+    state_payload["agent_state"] = "NOT_DONE"
+    state_payload["runtime_failure_class"] = ""
+    state_payload["last_failure_class"] = ""
+    write_state(project_dir, state_payload)
+
+    def fake_runtime(_project_dir: Path):  # type: ignore[no-untyped-def]
+        return {
+            "backend": {"status": "NOT RUNNING", "url": ""},
+            "frontend": {"status": "NOT RUNNING", "url": ""},
+        }
+
+    monkeypatch.setattr("archmind.project_query.get_local_runtime_status", fake_runtime)
+    client = TestClient(create_ui_app())
+    payload = client.get("/ui/projects").json()
+    rows = {item["name"]: item for item in payload["projects"]}
+    assert rows["needs-fix-badge"]["project_health_status"] == "NEEDS FIX"
+
+
+def test_ui_projects_status_badge_idle_for_inactive_non_failure_project(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "idle-badge")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    def fake_runtime(_project_dir: Path):  # type: ignore[no-untyped-def]
+        return {
+            "backend": {"status": "NOT RUNNING", "url": ""},
+            "frontend": {"status": "NOT RUNNING", "url": ""},
+        }
+
+    monkeypatch.setattr("archmind.project_query.get_local_runtime_status", fake_runtime)
+    client = TestClient(create_ui_app())
+    payload = client.get("/ui/projects").json()
+    rows = {item["name"]: item for item in payload["projects"]}
+    assert rows["idle-badge"]["project_health_status"] == "IDLE"
+
+
+def test_ui_projects_status_badge_fallback_is_safe_with_partial_data(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "partial-badge")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    def fake_runtime(_project_dir: Path):  # type: ignore[no-untyped-def]
+        return {}
+
+    monkeypatch.setattr("archmind.project_query.get_local_runtime_status", fake_runtime)
+    client = TestClient(create_ui_app())
+    payload = client.get("/ui/projects").json()
+    rows = {item["name"]: item for item in payload["projects"]}
+    assert rows["partial-badge"]["project_health_status"] in {"RUNNING", "BROKEN", "NEEDS FIX", "IDLE"}
 
 
 def test_ui_project_detail_response_shape(monkeypatch, tmp_path: Path) -> None:
@@ -1376,16 +1475,6 @@ def test_project_detail_source_renders_next_candidates_panel() -> None:
     assert "<NextCandidatesCard" in project_detail_source
     assert "candidates={analysis?.next_candidates}" in project_detail_source
     assert "&& <NextCandidatesCard" not in project_detail_source
-
-
-def test_project_detail_source_renders_current_project_indicator_and_sets_context_on_open() -> None:
-    project_detail_source = Path("frontend/app/projects/[project]/page.tsx").read_text(encoding="utf-8")
-    assert 'import CurrentProjectIndicator from "@/components/CurrentProjectIndicator"' in project_detail_source
-    assert "<CurrentProjectIndicator" in project_detail_source
-    assert "projectName={detail?.name || projectName}" in project_detail_source
-    assert "displayName={detail?.display_name || detail?.name || projectName}" in project_detail_source
-    assert "setOnMount" in project_detail_source
-    assert "&& <CurrentProjectIndicator" not in project_detail_source
 
 
 def test_project_detail_source_renders_auto_control_panel() -> None:

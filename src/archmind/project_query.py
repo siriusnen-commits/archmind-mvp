@@ -601,9 +601,49 @@ def _fallback_list_item(project_dir: Path, warning: str = "") -> ProjectListItem
         backend_url="",
         frontend_url="",
         repository=RepositorySummary(),
+        project_health_status="IDLE",
         is_current=_is_current_project(project_dir),
         warning=str(warning or "").strip(),
     )
+
+
+def _derive_project_health_status(
+    *,
+    status: str,
+    backend_runtime: dict[str, Any],
+    frontend_runtime: dict[str, Any],
+    state_payload: dict[str, Any],
+    result_payload: dict[str, Any],
+) -> str:
+    normalized_status = str(status or "").strip().upper()
+    backend_status = str(backend_runtime.get("status") or "").strip().upper()
+    frontend_status = str(frontend_runtime.get("status") or "").strip().upper()
+
+    if normalized_status == "RUNNING" or backend_status == "RUNNING" or frontend_status == "RUNNING":
+        return "RUNNING"
+
+    runtime_block = state_payload.get("runtime") if isinstance(state_payload.get("runtime"), dict) else {}
+    deploy_block = state_payload.get("deploy") if isinstance(state_payload.get("deploy"), dict) else {}
+    failure_signals = [
+        state_payload.get("last_failure_class"),
+        state_payload.get("runtime_failure_class"),
+        runtime_block.get("failure_class"),
+        deploy_block.get("failure_class"),
+    ]
+    has_failure_signal = any(str(item or "").strip() for item in failure_signals)
+
+    agent_state = str(state_payload.get("agent_state") or "").strip().upper()
+    result_status = str(result_payload.get("status") or "").strip().upper()
+    not_done_signals = {"NOT_DONE", "BLOCKED", "STUCK"}
+    has_not_done_signal = agent_state in not_done_signals or result_status in not_done_signals
+
+    if normalized_status == "FAIL" or (has_failure_signal and has_not_done_signal):
+        return "BROKEN"
+
+    if has_not_done_signal or agent_state in {"FIXING", "RETRYING"}:
+        return "NEEDS FIX"
+
+    return "IDLE"
 
 
 def resolve_repository_metadata(
@@ -684,6 +724,13 @@ def build_project_list_item(project_dir: Path) -> ProjectListItem:
             backend_url=backend_url,
             frontend_url=frontend_url,
             repository=repository,
+            project_health_status=_derive_project_health_status(
+                status=status,
+                backend_runtime=backend_runtime,
+                frontend_runtime=frontend_runtime,
+                state_payload=state_payload if isinstance(state_payload, dict) else {},
+                result_payload=result_payload if isinstance(result_payload, dict) else {},
+            ),
             is_current=_is_current_project(project_dir),
             warning="",
         )

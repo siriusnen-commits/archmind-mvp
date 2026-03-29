@@ -19,6 +19,7 @@ export type ProjectListItem = {
     status?: string;
     url?: string;
   };
+  project_health_status?: string;
   is_current?: boolean;
 };
 
@@ -61,6 +62,33 @@ export default function ProjectList({ projects, selectedName }: Props) {
     }
   }
 
+  function normalizeBadge(status: string): "RUNNING" | "BROKEN" | "NEEDS FIX" | "IDLE" {
+    const normalized = String(status || "").trim().toUpperCase();
+    if (normalized === "RUNNING") {
+      return "RUNNING";
+    }
+    if (normalized === "BROKEN") {
+      return "BROKEN";
+    }
+    if (normalized === "NEEDS FIX") {
+      return "NEEDS FIX";
+    }
+    return "IDLE";
+  }
+
+  function badgeClass(status: "RUNNING" | "BROKEN" | "NEEDS FIX" | "IDLE"): string {
+    if (status === "RUNNING") {
+      return "border-emerald-400 bg-emerald-900/50 text-emerald-200";
+    }
+    if (status === "BROKEN") {
+      return "border-rose-400 bg-rose-900/50 text-rose-200";
+    }
+    if (status === "NEEDS FIX") {
+      return "border-amber-400 bg-amber-900/50 text-amber-200";
+    }
+    return "border-slate-500 bg-slate-800/70 text-slate-200";
+  }
+
   if (!projects.length) {
     return (
       <div className="rounded-md border border-slate-700 bg-slate-900 p-4 text-sm text-slate-300">
@@ -79,6 +107,7 @@ export default function ProjectList({ projects, selectedName }: Props) {
           const isCurrent = Boolean(project.is_current);
           const isSelected = Boolean(selectedName && selectedName === name);
           const repositoryUrl = String(project.repository?.url || "").trim();
+          const healthStatus = normalizeBadge(String(project.project_health_status || ""));
           return (
             <li key={name || displayName}>
               <div
@@ -96,6 +125,7 @@ export default function ProjectList({ projects, selectedName }: Props) {
                   >
                     {displayName}
                   </Link>
+                  <span className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${badgeClass(healthStatus)}`}>{healthStatus}</span>
                   {isCurrent ? (
                     <span className="rounded-full border border-emerald-400 bg-emerald-900/50 px-2 py-0.5 text-[11px] font-medium text-emerald-200">
                       CURRENT

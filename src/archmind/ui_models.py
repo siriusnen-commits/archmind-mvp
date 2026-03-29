@@ -60,6 +60,7 @@ class ProjectListItem(BaseModel):
     backend_url: str = ""
     frontend_url: str = ""
     repository: RepositorySummary = Field(default_factory=RepositorySummary)
+    project_health_status: str = "IDLE"
     is_current: bool = False
     warning: str = ""
 
