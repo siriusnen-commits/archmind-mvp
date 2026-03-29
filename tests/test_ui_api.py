@@ -423,6 +423,12 @@ def test_ui_project_detail_includes_recent_runs_newest_first(monkeypatch, tmp_pa
     assert runs[0]["stop_reason"] == "low-priority next action"
     assert runs[1]["command"] == "/add_field Task title:string"
     assert runs[1]["status"] == "ok"
+    history = payload["evolution_history"]
+    assert isinstance(history, list)
+    assert history[0]["title"] == "/auto"
+    assert history[0]["status"] == "STOPPED"
+    assert history[0]["summary"] == "low-priority next action"
+    assert history[0]["action_type"] == "auto"
 
 
 def test_ui_project_detail_recent_runs_empty_when_history_missing(monkeypatch, tmp_path: Path) -> None:
@@ -436,6 +442,42 @@ def test_ui_project_detail_recent_runs_empty_when_history_missing(monkeypatch, t
     payload = response.json()
     assert "recent_runs" in payload
     assert payload["recent_runs"] == []
+    assert "evolution_history" in payload
+    assert payload["evolution_history"] == []
+
+
+def test_ui_project_detail_includes_fix_and_continue_in_evolution_history(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "history-actions")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    assert append_execution_event(
+        project_dir,
+        project_name="history-actions",
+        source="telegram-fix",
+        command="/fix",
+        status="ok",
+        message="Fix completed",
+        timestamp="2026-03-22T00:00:03Z",
+    )
+    assert append_execution_event(
+        project_dir,
+        project_name="history-actions",
+        source="telegram-continue",
+        command="/continue",
+        status="ok",
+        message="Continue completed",
+        timestamp="2026-03-22T00:00:04Z",
+    )
+
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/history-actions")
+    assert response.status_code == 200
+    payload = response.json()
+    history = payload["evolution_history"]
+    assert history[0]["title"] == "/continue"
+    assert history[0]["action_type"] == "continue"
+    assert history[1]["title"] == "/fix"
+    assert history[1]["action_type"] == "fix"
 
 
 def test_ui_projects_response_includes_safe_repository_when_missing(monkeypatch, tmp_path: Path) -> None:
@@ -1259,6 +1301,14 @@ def test_project_detail_source_renders_auto_control_panel() -> None:
     assert "&& <AutoControlPanel" not in project_detail_source
 
 
+def test_project_detail_source_renders_evolution_history_panel() -> None:
+    project_detail_source = Path("frontend/app/projects/[project]/page.tsx").read_text(encoding="utf-8")
+    assert 'import EvolutionHistoryCard from "@/components/EvolutionHistoryCard"' in project_detail_source
+    assert "<EvolutionHistoryCard" in project_detail_source
+    assert "items={Array.isArray(detail.evolution_history) ? detail.evolution_history : []}" in project_detail_source
+    assert "&& <EvolutionHistoryCard" not in project_detail_source
+
+
 def test_structure_visualization_component_has_robust_empty_states_and_no_null_bailout() -> None:
     source = Path("frontend/components/StructureVisualizationCard.tsx").read_text(encoding="utf-8")
     assert '"use client";' in source
@@ -1305,6 +1355,17 @@ def test_auto_control_panel_renders_states_and_uses_auto_command_path() -> None:
     assert "return null" not in source
 
 
+def test_evolution_history_component_has_empty_state_and_partial_payload_safety() -> None:
+    source = Path("frontend/components/EvolutionHistoryCard.tsx").read_text(encoding="utf-8")
+    assert '"use client";' in source
+    assert "Evolution History" in source
+    assert "No evolution history yet." in source
+    assert "Array.isArray(items)" in source
+    assert "Unknown action" in source
+    assert "rows.length === 0" in source
+    assert "return null" not in source
+
+
 def test_ui_project_detail_includes_auto_summary_when_present(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     _make_project(projects_root, "auto-summary-detail")
@@ -1338,6 +1399,37 @@ def test_ui_project_detail_includes_auto_summary_when_present(monkeypatch, tmp_p
     payload = response.json()
     assert payload["auto_summary"]["executed"] == 2
     assert payload["auto_summary"]["stop_reason"] == "good enough MVP reached"
+
+
+def test_ui_project_detail_accepts_partial_evolution_history_payload(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "partial-evolution-history")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    def _fake_build_project_detail(_project_dir: Path):
+        from archmind.ui_models import ProjectDetailResponse, RuntimeSummary, SpecSummary
+
+        return ProjectDetailResponse(
+            name="partial-evolution-history",
+            spec_summary=SpecSummary(),
+            entities=[],
+            runtime=RuntimeSummary(),
+            evolution_history=[
+                {"title": "/auto", "status": "STOPPED"},
+                {"summary": "missing title is allowed"},
+            ],
+            analysis={"project_name": "partial-evolution-history"},
+            safe=True,
+        )
+
+    monkeypatch.setattr("archmind.ui_api.build_project_detail", _fake_build_project_detail)
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/partial-evolution-history")
+    assert response.status_code == 200
+    payload = response.json()
+    assert isinstance(payload["evolution_history"], list)
+    assert payload["evolution_history"][0]["status"] == "STOPPED"
+    assert "summary" in payload["evolution_history"][1]
 
 
 def test_ui_run_command_auto_response_includes_auto_result(monkeypatch, tmp_path: Path) -> None:
