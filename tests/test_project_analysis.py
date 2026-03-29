@@ -1032,3 +1032,126 @@ def test_project_analysis_relation_diagnostics_warn_when_relation_page_exists_bu
     warnings = "\n".join(out["drift_warnings"])
     assert "GET /boards/{id}/cards" in warnings
     assert "cards/by_board" not in warnings
+
+
+def test_project_analysis_visualization_single_entity_graph_and_maps(tmp_path: Path) -> None:
+    project_dir = tmp_path / "single-entity-visualization"
+    spec = {
+        "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": [
+            "GET /tasks",
+            "POST /tasks",
+            "GET /tasks/{id}",
+            "PATCH /tasks/{id}",
+            "DELETE /tasks/{id}",
+        ],
+        "frontend_pages": ["tasks/list", "tasks/new", "tasks/detail"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    graph = out["entity_graph"]
+    assert [node["label"] for node in graph["nodes"]] == ["Task"]
+    assert graph["edges"] == []
+
+    api_group = out["api_map"]["groups"][0]
+    assert api_group["resource"] == "tasks"
+    assert len(api_group["core_crud"]) == 5
+    assert api_group["relation_scoped"] == []
+
+    page_group = out["page_map"]["groups"][0]
+    assert page_group["resource"] == "tasks"
+    assert page_group["core_pages"] == ["tasks/list", "tasks/new", "tasks/detail"]
+    assert page_group["relation_pages"] == []
+
+
+def test_project_analysis_visualization_entry_tag_maps_relation_structures(tmp_path: Path) -> None:
+    project_dir = tmp_path / "entry-tag-visualization"
+    spec = {
+        "entities": [
+            {"name": "Entry", "fields": [{"name": "title", "type": "string"}]},
+            {"name": "Tag", "fields": [{"name": "name", "type": "string"}, {"name": "entry_id", "type": "int"}]},
+        ],
+        "api_endpoints": [
+            "GET /entries",
+            "POST /entries",
+            "GET /entries/{id}",
+            "PATCH /entries/{id}",
+            "DELETE /entries/{id}",
+            "GET /tags",
+            "POST /tags",
+            "GET /tags/{id}",
+            "PATCH /tags/{id}",
+            "DELETE /tags/{id}",
+            "GET /entries/{id}/tags",
+        ],
+        "frontend_pages": ["entries/list", "entries/new", "entries/detail", "tags/list", "tags/new", "tags/detail", "tags/by_entry"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    graph = out["entity_graph"]
+    assert any(edge["from"] == "Entry" and edge["to"] == "Tag" and edge["label"] == "entry_id" for edge in graph["edges"])
+
+    api_groups = {group["resource"]: group for group in out["api_map"]["groups"]}
+    assert "GET /entries/{id}/tags" in api_groups["tags"]["relation_scoped"]
+    assert "GET /tags" in api_groups["tags"]["core_crud"]
+
+    page_groups = {group["resource"]: group for group in out["page_map"]["groups"]}
+    assert "tags/by_entry" in page_groups["tags"]["relation_pages"]
+    assert "tags/detail" in page_groups["tags"]["core_pages"]
+
+
+def test_project_analysis_visualization_board_card_maps_relation_structures(tmp_path: Path) -> None:
+    project_dir = tmp_path / "board-card-visualization"
+    spec = {
+        "entities": [
+            {"name": "Board", "fields": [{"name": "title", "type": "string"}]},
+            {"name": "Card", "fields": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+        ],
+        "api_endpoints": [
+            "GET /boards",
+            "POST /boards",
+            "GET /boards/{id}",
+            "PATCH /boards/{id}",
+            "DELETE /boards/{id}",
+            "GET /cards",
+            "POST /cards",
+            "GET /cards/{id}",
+            "PATCH /cards/{id}",
+            "DELETE /cards/{id}",
+            "GET /boards/{id}/cards",
+        ],
+        "frontend_pages": ["boards/list", "boards/detail", "cards/list", "cards/new", "cards/detail", "cards/by_board"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    graph = out["entity_graph"]
+    assert any(edge["from"] == "Board" and edge["to"] == "Card" and edge["label"] == "board_id" for edge in graph["edges"])
+
+    api_groups = {group["resource"]: group for group in out["api_map"]["groups"]}
+    assert "GET /boards/{id}/cards" in api_groups["cards"]["relation_scoped"]
+
+    page_groups = {group["resource"]: group for group in out["page_map"]["groups"]}
+    assert "cards/by_board" in page_groups["cards"]["relation_pages"]
+
+
+def test_project_analysis_visualization_inferred_relation_in_entity_graph(tmp_path: Path) -> None:
+    project_dir = tmp_path / "inferred-category-bookmark-visualization"
+    spec = {
+        "entities": [
+            {"name": "Category", "fields": [{"name": "name", "type": "string"}]},
+            {"name": "Bookmark", "fields": [{"name": "title", "type": "string"}]},
+        ],
+        "api_endpoints": [
+            "GET /categories",
+            "POST /categories",
+            "GET /categories/{id}",
+            "PATCH /categories/{id}",
+            "DELETE /categories/{id}",
+            "GET /bookmarks",
+            "POST /bookmarks",
+            "GET /bookmarks/{id}",
+            "PATCH /bookmarks/{id}",
+            "DELETE /bookmarks/{id}",
+        ],
+        "frontend_pages": ["categories/list", "categories/detail", "bookmarks/list", "bookmarks/detail"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    graph = out["entity_graph"]
+    assert any(edge["from"] == "Category" and edge["to"] == "Bookmark" and edge["inferred"] is True for edge in graph["edges"])

@@ -4219,6 +4219,43 @@ async def command_inspect(update: Any, context: Any) -> None:
     relation_apis = [str(x) for x in (analysis.get("relation_apis") or []) if str(x).strip()]
     relation_create_flows = [str(x) for x in (analysis.get("relation_create_flows") or []) if str(x).strip()]
     drift_warnings = [str(x) for x in (analysis.get("drift_warnings") or []) if str(x).strip()]
+    entity_graph = analysis.get("entity_graph") if isinstance(analysis.get("entity_graph"), dict) else {}
+    api_map = analysis.get("api_map") if isinstance(analysis.get("api_map"), dict) else {}
+    page_map = analysis.get("page_map") if isinstance(analysis.get("page_map"), dict) else {}
+
+    graph_nodes = [item for item in (entity_graph.get("nodes") or []) if isinstance(item, dict)]
+    graph_edges = [item for item in (entity_graph.get("edges") or []) if isinstance(item, dict)]
+    api_groups = [item for item in (api_map.get("groups") or []) if isinstance(item, dict)]
+    page_groups = [item for item in (page_map.get("groups") or []) if isinstance(item, dict)]
+
+    structure_entities = [str(item.get("label") or "").strip() for item in graph_nodes if str(item.get("label") or "").strip()]
+    structure_relations: list[str] = []
+    for edge in graph_edges:
+        parent = str(edge.get("from") or "").strip()
+        child = str(edge.get("to") or "").strip()
+        label = str(edge.get("label") or "").strip()
+        if not parent or not child:
+            continue
+        if label and label != "inferred":
+            structure_relations.append(f"{parent} -> {child} ({label})")
+        else:
+            structure_relations.append(f"{parent} -> {child} (inferred)")
+
+    api_group_labels: list[str] = []
+    for group in api_groups:
+        resource = str(group.get("resource") or "").strip()
+        if not resource:
+            continue
+        total = int(group.get("total") or 0)
+        api_group_labels.append(f"{resource}({total})")
+
+    page_group_labels: list[str] = []
+    for group in page_groups:
+        resource = str(group.get("resource") or "").strip()
+        if not resource:
+            continue
+        total = int(group.get("total") or 0)
+        page_group_labels.append(f"{resource}({total})")
     reason_summary = str(spec.get("reason_summary") or reasoning.get("reason_summary") or "").strip()
     evolution = spec.get("evolution") if isinstance(spec.get("evolution"), dict) else {}
     evolution_version = int(evolution.get("version") or 1) if evolution else 1
@@ -4301,6 +4338,12 @@ async def command_inspect(update: Any, context: Any) -> None:
     lines += ["", "Entity Fields:"] + entity_tree_lines
     _append_truncated_bullets(lines, "APIs:", api_endpoints, limit=10, suffix_label="endpoints")
     _append_truncated_bullets(lines, "Pages:", frontend_pages, limit=10, suffix_label="pages")
+    if structure_entities or structure_relations or api_group_labels or page_group_labels:
+        lines += ["", "Structure Map:"]
+        lines.append(f"- Entities: {', '.join(structure_entities) if structure_entities else '(none)'}")
+        lines.append(f"- Relations: {', '.join(structure_relations) if structure_relations else '(none)'}")
+        lines.append(f"- API groups: {', '.join(api_group_labels) if api_group_labels else '(none)'}")
+        lines.append(f"- Page groups: {', '.join(page_group_labels) if page_group_labels else '(none)'}")
     if relation_summary:
         _append_truncated_bullets(lines, "Relation Summary:", relation_summary, limit=10, suffix_label="relations")
     if relation_pages:

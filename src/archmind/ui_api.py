@@ -128,6 +128,9 @@ def get_ui_project_analysis(project_name: str) -> ProjectAnalysisResponse:
             fields_by_entity=payload.get("fields_by_entity") if isinstance(payload.get("fields_by_entity"), dict) else {},
             apis=[x for x in (payload.get("apis") or []) if isinstance(x, dict)],
             pages=[str(x) for x in (payload.get("pages") or []) if str(x).strip()],
+            entity_graph=payload.get("entity_graph") if isinstance(payload.get("entity_graph"), dict) else {},
+            api_map=payload.get("api_map") if isinstance(payload.get("api_map"), dict) else {},
+            page_map=payload.get("page_map") if isinstance(payload.get("page_map"), dict) else {},
             entity_crud_status=payload.get("entity_crud_status")
             if isinstance(payload.get("entity_crud_status"), dict)
             else {},
