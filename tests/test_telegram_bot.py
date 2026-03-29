@@ -6109,6 +6109,34 @@ def test_auto_command_stops_when_no_immediate_next_action(tmp_path: Path, monkey
     assert last.get("stop_reason") == "no immediate next action"
 
 
+def test_auto_command_stops_on_good_enough_mvp_for_single_entity_complete(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "auto_good_enough_single"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.telegram_bot._build_project_analysis",
+        lambda _p, **_kwargs: {
+            "next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""},
+            "entities": ["Task"],
+            "entity_crud_status": {
+                "Task": {
+                    "missing_api": [],
+                    "missing_pages": [],
+                }
+            },
+            "placeholder_pages": [],
+            "apis": [{"method": "GET", "path": "/tasks"}],
+            "pages": ["tasks/list", "tasks/detail"],
+            "fields_by_entity": {"Task": [{"name": "title", "type": "string"}]},
+        },
+    )
+    msg = DummyMessage()
+    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "- Result: STOP (good enough MVP reached)" in out
+    assert "- Stopped: good enough MVP reached" in out
+
+
 def test_auto_command_executes_valid_next_actions(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "auto_ok"
     project_dir.mkdir(parents=True, exist_ok=True)
@@ -6158,6 +6186,80 @@ def test_auto_command_executes_valid_next_actions(tmp_path: Path, monkeypatch) -
     assert "- Commands: /add_api GET /tasks, /add_page tasks/list" in out
     assert "- Progress made: yes" in out
     assert "- Stopped: no immediate next action" in out
+
+
+def test_auto_command_multi_entity_relation_project_can_run_beyond_old_default_budget(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "auto_dynamic_budget_multi_entity"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    sequence = iter(
+        [
+            {
+                "next_action": {"kind": "missing_crud_api", "message": "add board detail", "command": "/add_api GET /boards/{id}"},
+                "suggestions": [{"kind": "relation_scoped_api", "message": "rel", "command": "/add_api GET /boards/{id}/cards"}],
+                "entities": ["Board", "Card"],
+                "entity_crud_status": {"Board": {"missing_api": ["GET detail"], "missing_pages": []}, "Card": {"missing_api": [], "missing_pages": []}},
+                "fields_by_entity": {"Board": [{"name": "title", "type": "string"}], "Card": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+                "apis": [{"method": "GET", "path": "/boards"}, {"method": "POST", "path": "/boards"}, {"method": "GET", "path": "/cards"}, {"method": "POST", "path": "/cards"}],
+                "pages": ["boards/list", "boards/detail", "cards/list", "cards/detail"],
+                "placeholder_pages": [],
+            },
+            {
+                "next_action": {"kind": "missing_crud_api", "message": "add card detail", "command": "/add_api GET /cards/{id}"},
+                "suggestions": [{"kind": "relation_scoped_api", "message": "rel", "command": "/add_api GET /boards/{id}/cards"}],
+                "entities": ["Board", "Card"],
+                "entity_crud_status": {"Board": {"missing_api": [], "missing_pages": []}, "Card": {"missing_api": ["GET detail"], "missing_pages": []}},
+                "fields_by_entity": {"Board": [{"name": "title", "type": "string"}], "Card": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+                "apis": [{"method": "GET", "path": "/boards"}, {"method": "POST", "path": "/boards"}, {"method": "GET", "path": "/boards/{id}"}, {"method": "GET", "path": "/cards"}, {"method": "POST", "path": "/cards"}],
+                "pages": ["boards/list", "boards/detail", "cards/list", "cards/detail"],
+                "placeholder_pages": [],
+            },
+            {
+                "next_action": {"kind": "relation_scoped_api", "message": "add relation api", "command": "/add_api GET /boards/{id}/cards"},
+                "suggestions": [{"kind": "relation_page_behavior", "message": "rel page", "command": "/add_page cards/by_board"}],
+                "entities": ["Board", "Card"],
+                "entity_crud_status": {"Board": {"missing_api": [], "missing_pages": []}, "Card": {"missing_api": [], "missing_pages": []}},
+                "fields_by_entity": {"Board": [{"name": "title", "type": "string"}], "Card": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+                "apis": [{"method": "GET", "path": "/boards"}, {"method": "POST", "path": "/boards"}, {"method": "GET", "path": "/boards/{id}"}, {"method": "GET", "path": "/cards"}, {"method": "POST", "path": "/cards"}, {"method": "GET", "path": "/cards/{id}"}],
+                "pages": ["boards/list", "boards/detail", "cards/list", "cards/detail"],
+                "placeholder_pages": [],
+            },
+            {
+                "next_action": {"kind": "relation_placeholder_page", "message": "implement relation page", "command": "/implement_page cards/by_board"},
+                "suggestions": [],
+                "entities": ["Board", "Card"],
+                "entity_crud_status": {"Board": {"missing_api": [], "missing_pages": []}, "Card": {"missing_api": [], "missing_pages": []}},
+                "fields_by_entity": {"Board": [{"name": "title", "type": "string"}], "Card": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+                "apis": [{"method": "GET", "path": "/boards"}, {"method": "POST", "path": "/boards"}, {"method": "GET", "path": "/boards/{id}"}, {"method": "GET", "path": "/cards"}, {"method": "POST", "path": "/cards"}, {"method": "GET", "path": "/cards/{id}"}, {"method": "GET", "path": "/boards/{id}/cards"}],
+                "pages": ["boards/list", "boards/detail", "cards/list", "cards/detail", "cards/by_board"],
+                "placeholder_pages": ["cards/by_board"],
+            },
+            {
+                "next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""},
+                "suggestions": [],
+                "entities": ["Board", "Card"],
+                "entity_crud_status": {"Board": {"missing_api": [], "missing_pages": []}, "Card": {"missing_api": [], "missing_pages": []}},
+                "fields_by_entity": {"Board": [{"name": "title", "type": "string"}], "Card": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+                "apis": [{"method": "GET", "path": "/boards"}, {"method": "POST", "path": "/boards"}, {"method": "GET", "path": "/boards/{id}"}, {"method": "GET", "path": "/cards"}, {"method": "POST", "path": "/cards"}, {"method": "GET", "path": "/cards/{id}"}, {"method": "GET", "path": "/boards/{id}/cards"}],
+                "pages": ["boards/list", "boards/detail", "cards/list", "cards/detail", "cards/by_board"],
+                "placeholder_pages": [],
+            },
+        ]
+    )
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p, **_kwargs: next(sequence))
+    executed_commands: list[str] = []
+
+    def _fake_execute(command: str, _project_name: str, **_kwargs: Any) -> dict[str, object]:
+        executed_commands.append(command)
+        return {"ok": True, "message": "ok"}
+
+    monkeypatch.setattr("archmind.telegram_bot.execute_command", _fake_execute)
+    msg = DummyMessage()
+    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert len(executed_commands) == 4
+    assert "Budget: 7" in out
+    assert "- Commands: /add_api GET /boards/{id}, /add_api GET /cards/{id}, /add_api GET /boards/{id}/cards, /implement_page cards/by_board" in out
 
 
 def test_auto_command_executes_relation_aware_next_action_when_available(tmp_path: Path, monkeypatch) -> None:
@@ -6388,6 +6490,87 @@ def test_auto_command_stops_when_command_makes_no_material_state_change(tmp_path
     assert executed == ["/add_field Task title:string"]
     assert "- Result: STOP (no material state change)" in out
     assert "- Stopped: no material state change after command" in out
+
+
+def test_auto_command_stops_when_state_changes_but_progress_score_is_zero(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "auto_no_material_progress"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    sequence = iter(
+        [
+            {
+                "next_action": {"kind": "missing_field", "message": "add custom field", "command": "/add_field Task archived:boolean"},
+                "entities": ["Task"],
+                "fields_by_entity": {"Task": [{"name": "title", "type": "string"}]},
+                "apis": [{"method": "GET", "path": "/tasks"}],
+                "pages": ["tasks/list"],
+                "placeholder_pages": [],
+            },
+            {
+                "next_action": {"kind": "missing_field", "message": "add another custom field", "command": "/add_field Task state:string"},
+                "entities": ["Task"],
+                "fields_by_entity": {"Task": [{"name": "title", "type": "string"}, {"name": "archived", "type": "boolean"}]},
+                "apis": [{"method": "GET", "path": "/tasks"}],
+                "pages": ["tasks/list"],
+                "placeholder_pages": [],
+            },
+        ]
+    )
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p, **_kwargs: next(sequence))
+    executed: list[str] = []
+    monkeypatch.setattr(
+        "archmind.telegram_bot.execute_command",
+        lambda cmd, _p, **_kwargs: (executed.append(cmd) or {"ok": True, "message": "ok"}),
+    )
+    msg = DummyMessage()
+    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext(args=["2"])))
+    out = msg.sent[-1]
+    assert executed == ["/add_field Task archived:boolean"]
+    assert "- Result: STOP (no material progress)" in out
+    assert "- Stopped: no material progress" in out
+
+
+def test_auto_progress_delta_scores_material_changes() -> None:
+    previous = {
+        "entities": 1,
+        "apis": 1,
+        "pages": 1,
+        "relation_pages": 0,
+        "relation_apis": 0,
+        "placeholders": 1,
+        "useful_fields": 1,
+    }
+    current = {
+        "entities": 1,
+        "apis": 2,
+        "pages": 2,
+        "relation_pages": 1,
+        "relation_apis": 1,
+        "placeholders": 0,
+        "useful_fields": 2,
+    }
+    delta = telegram_bot.auto_progress_delta(previous, current)
+    assert delta["material"] is True
+    assert int(delta["score"]) > 0
+    detail = delta.get("delta") if isinstance(delta.get("delta"), dict) else {}
+    assert int(detail.get("apis", 0)) == 1
+    assert int(detail.get("relation_pages", 0)) == 1
+    assert int(detail.get("placeholders_reduced", 0)) == 1
+
+
+def test_auto_progress_delta_is_zero_when_canonical_metrics_unchanged() -> None:
+    snapshot = {
+        "entities": 2,
+        "apis": 5,
+        "pages": 4,
+        "relation_pages": 1,
+        "relation_apis": 1,
+        "placeholders": 0,
+        "useful_fields": 3,
+    }
+    delta = telegram_bot.auto_progress_delta(snapshot, dict(snapshot))
+    assert delta["material"] is False
+    assert int(delta["score"]) == 0
 
 
 def test_auto_command_reanalyzes_after_each_successful_step(tmp_path: Path, monkeypatch) -> None:
