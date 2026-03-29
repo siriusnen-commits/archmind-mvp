@@ -234,6 +234,134 @@ def test_ui_project_detail_summary_counts_match_analysis_lists(monkeypatch, tmp_
     assert payload["spec_summary"]["pages"] == 3
 
 
+def test_ui_project_detail_includes_visualization_for_single_entity(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "single-entity-viz")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.get("/ui/projects/single-entity-viz")
+    assert response.status_code == 200
+    analysis = response.json()["analysis"]
+    graph = analysis["entity_graph"]
+    assert [node["label"] for node in graph["nodes"]] == ["Note"]
+    assert graph["edges"] == []
+
+    api_groups = {group["resource"]: group for group in analysis["api_map"]["groups"]}
+    assert "notes" in api_groups
+    assert "GET /notes" in api_groups["notes"]["core_crud"]
+
+    page_groups = {group["resource"]: group for group in analysis["page_map"]["groups"]}
+    assert "notes" in page_groups
+    assert "notes/list" in page_groups["notes"]["core_pages"]
+    assert page_groups["notes"]["relation_pages"] == []
+
+
+def test_ui_project_detail_includes_visualization_for_entry_tag_relation(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "entry-tag-viz")
+    spec_path = project_dir / ".archmind" / "project_spec.json"
+    payload = json.loads(spec_path.read_text(encoding="utf-8"))
+    payload["entities"] = [
+        {"name": "Entry", "fields": [{"name": "title", "type": "string"}]},
+        {"name": "Tag", "fields": [{"name": "name", "type": "string"}, {"name": "entry_id", "type": "int"}]},
+    ]
+    payload["api_endpoints"] = [
+        "GET /entries",
+        "POST /entries",
+        "GET /entries/{id}",
+        "PATCH /entries/{id}",
+        "DELETE /entries/{id}",
+        "GET /tags",
+        "POST /tags",
+        "GET /tags/{id}",
+        "PATCH /tags/{id}",
+        "DELETE /tags/{id}",
+        "GET /entries/{id}/tags",
+    ]
+    payload["frontend_pages"] = ["entries/list", "entries/new", "entries/detail", "tags/list", "tags/new", "tags/detail", "tags/by_entry"]
+    spec_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/entry-tag-viz")
+    assert response.status_code == 200
+    analysis = response.json()["analysis"]
+
+    edges = analysis["entity_graph"]["edges"]
+    assert any(edge["from"] == "Entry" and edge["to"] == "Tag" and edge["label"] == "entry_id" for edge in edges)
+
+    api_groups = {group["resource"]: group for group in analysis["api_map"]["groups"]}
+    assert "GET /entries/{id}/tags" in api_groups["tags"]["relation_scoped"]
+
+    page_groups = {group["resource"]: group for group in analysis["page_map"]["groups"]}
+    assert "tags/by_entry" in page_groups["tags"]["relation_pages"]
+
+
+def test_ui_project_detail_includes_visualization_for_board_card_relation(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "board-card-viz")
+    spec_path = project_dir / ".archmind" / "project_spec.json"
+    payload = json.loads(spec_path.read_text(encoding="utf-8"))
+    payload["entities"] = [
+        {"name": "Board", "fields": [{"name": "title", "type": "string"}]},
+        {"name": "Card", "fields": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+    ]
+    payload["api_endpoints"] = [
+        "GET /boards",
+        "POST /boards",
+        "GET /boards/{id}",
+        "PATCH /boards/{id}",
+        "DELETE /boards/{id}",
+        "GET /cards",
+        "POST /cards",
+        "GET /cards/{id}",
+        "PATCH /cards/{id}",
+        "DELETE /cards/{id}",
+        "GET /boards/{id}/cards",
+    ]
+    payload["frontend_pages"] = ["boards/list", "boards/detail", "cards/list", "cards/new", "cards/detail", "cards/by_board"]
+    spec_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/board-card-viz")
+    assert response.status_code == 200
+    analysis = response.json()["analysis"]
+
+    edges = analysis["entity_graph"]["edges"]
+    assert any(edge["from"] == "Board" and edge["to"] == "Card" and edge["label"] == "board_id" for edge in edges)
+
+    api_groups = {group["resource"]: group for group in analysis["api_map"]["groups"]}
+    assert "GET /boards/{id}/cards" in api_groups["cards"]["relation_scoped"]
+
+    page_groups = {group["resource"]: group for group in analysis["page_map"]["groups"]}
+    assert "cards/by_board" in page_groups["cards"]["relation_pages"]
+
+
+def test_ui_project_detail_includes_visualization_for_inferred_relation(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "inferred-viz")
+    spec_path = project_dir / ".archmind" / "project_spec.json"
+    payload = json.loads(spec_path.read_text(encoding="utf-8"))
+    payload["entities"] = [
+        {"name": "Category", "fields": [{"name": "name", "type": "string"}]},
+        {"name": "Bookmark", "fields": [{"name": "title", "type": "string"}]},
+    ]
+    payload["api_endpoints"] = ["GET /categories", "POST /categories", "GET /bookmarks", "POST /bookmarks"]
+    payload["frontend_pages"] = ["categories/list", "bookmarks/list"]
+    spec_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/inferred-viz")
+    assert response.status_code == 200
+    analysis = response.json()["analysis"]
+
+    edges = analysis["entity_graph"]["edges"]
+    assert any(edge["from"] == "Category" and edge["to"] == "Bookmark" and edge["inferred"] is True for edge in edges)
+
+
 def test_ui_project_detail_does_not_expose_stale_runtime_url_as_running(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     _make_project(projects_root, "stale-runtime")
@@ -420,6 +548,39 @@ def test_ui_project_analysis_uses_canonical_expanded_apis_for_next_action(monkey
     analysis = response.json()
     assert analysis["next_action"]["kind"] != "missing_crud_api"
     assert analysis["next_action"]["command"] != "/add_api GET /entries/{id}"
+
+
+def test_ui_project_analysis_visualization_defaults_when_payload_fields_are_invalid(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "analysis-viz-invalid")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    def _broken_analysis(_project_dir: Path) -> dict[str, object]:
+        return {
+            "project_name": "analysis-viz-invalid",
+            "entities": ["Note"],
+            "fields_by_entity": {},
+            "apis": [],
+            "pages": [],
+            "entity_graph": [],
+            "api_map": ["bad"],
+            "page_map": "broken",
+            "entity_crud_status": {},
+            "placeholder_pages": [],
+            "nav_visible_pages": [],
+            "runtime_status": {},
+            "suggestions": [],
+            "next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""},
+        }
+
+    monkeypatch.setattr("archmind.ui_api.build_project_analysis", _broken_analysis)
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/analysis-viz-invalid/analysis")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["entity_graph"] == {}
+    assert payload["api_map"] == {}
+    assert payload["page_map"] == {}
 
 
 def test_ui_projects_response_tolerates_malformed_repository_metadata(monkeypatch, tmp_path: Path) -> None:
