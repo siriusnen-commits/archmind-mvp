@@ -783,3 +783,112 @@ def test_project_analysis_crud_consistency_for_common_resource_styles(
     assert out["entity_crud_status"][entity_name]["api"]["detail"] is True
     assert out["entity_crud_status"][entity_name]["api"]["update"] is True
     assert str(out["next_action"]["command"] or "").strip() != f"/add_api GET /{resource}/{{id}}"
+
+
+def test_project_analysis_board_card_relation_after_crud_suggests_relation_aware_next_step(tmp_path: Path) -> None:
+    project_dir = tmp_path / "kanban-relation-aware"
+    spec = {
+        "entities": [
+            {"name": "Board", "fields": [{"name": "title", "type": "string"}]},
+            {
+                "name": "Card",
+                "fields": [
+                    {"name": "title", "type": "string"},
+                    {"name": "board_id", "type": "int"},
+                ],
+            },
+        ],
+        "api_endpoints": [
+            "GET /boards",
+            "POST /boards",
+            "GET /boards/{id}",
+            "PATCH /boards/{id}",
+            "DELETE /boards/{id}",
+            "GET /cards",
+            "POST /cards",
+            "GET /cards/{id}",
+            "PATCH /cards/{id}",
+            "DELETE /cards/{id}",
+        ],
+        "frontend_pages": ["boards/list", "boards/detail", "cards/list", "cards/detail"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert out["next_action"]["kind"] == "relation_page_behavior"
+    assert out["next_action"]["command"] == "/add_page cards/by_board"
+    assert "No immediate suggestions." not in str(out["next_action"]["message"] or "")
+
+
+def test_project_analysis_entry_tag_relation_after_crud_suggests_relation_aware_next_step(tmp_path: Path) -> None:
+    project_dir = tmp_path / "diary-tag-relation-aware"
+    spec = {
+        "entities": [
+            {"name": "Entry", "fields": [{"name": "title", "type": "string"}]},
+            {
+                "name": "Tag",
+                "fields": [
+                    {"name": "name", "type": "string"},
+                    {"name": "entry_id", "type": "int"},
+                ],
+            },
+        ],
+        "api_endpoints": [
+            "GET /entries",
+            "POST /entries",
+            "GET /entries/{id}",
+            "PATCH /entries/{id}",
+            "DELETE /entries/{id}",
+            "GET /tags",
+            "POST /tags",
+            "GET /tags/{id}",
+            "PATCH /tags/{id}",
+            "DELETE /tags/{id}",
+        ],
+        "frontend_pages": ["entries/list", "entries/detail", "tags/list", "tags/detail"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert out["next_action"]["kind"] in {"relation_page_behavior", "relation_scoped_api"}
+    assert str(out["next_action"]["command"] or "").startswith(("/add_page ", "/add_api GET /"))
+
+
+def test_project_analysis_bookmark_category_relation_hint_without_fk_still_suggests_relation_aware_step(tmp_path: Path) -> None:
+    project_dir = tmp_path / "bookmark-category-relation-hint"
+    spec = {
+        "entities": [
+            {"name": "Bookmark", "fields": [{"name": "title", "type": "string"}]},
+            {"name": "Category", "fields": [{"name": "name", "type": "string"}]},
+        ],
+        "api_endpoints": [
+            "GET /bookmarks",
+            "POST /bookmarks",
+            "GET /bookmarks/{id}",
+            "PATCH /bookmarks/{id}",
+            "DELETE /bookmarks/{id}",
+            "GET /categories",
+            "POST /categories",
+            "GET /categories/{id}",
+            "PATCH /categories/{id}",
+            "DELETE /categories/{id}",
+        ],
+        "frontend_pages": ["bookmarks/list", "bookmarks/detail", "categories/list", "categories/detail"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert out["next_action"]["kind"] in {"relation_page_behavior", "relation_scoped_api"}
+    assert "No immediate suggestions." not in str(out["next_action"]["message"] or "")
+
+
+def test_project_analysis_single_entity_complete_still_stops_normally(tmp_path: Path) -> None:
+    project_dir = tmp_path / "single-entity-complete"
+    spec = {
+        "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}, {"name": "content", "type": "string"}]}],
+        "api_endpoints": [
+            "GET /notes",
+            "POST /notes",
+            "GET /notes/{id}",
+            "PATCH /notes/{id}",
+            "DELETE /notes/{id}",
+        ],
+        "frontend_pages": ["notes/list", "notes/detail"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert out["next_action"]["kind"] == "none"
+    assert out["next_action"]["command"] == ""

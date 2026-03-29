@@ -6160,6 +6160,78 @@ def test_auto_command_executes_valid_next_actions(tmp_path: Path, monkeypatch) -
     assert "- Stopped: no immediate next action" in out
 
 
+def test_auto_command_executes_relation_aware_next_action_when_available(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "auto_relation_ok"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    sequence = iter(
+        [
+            {
+                "next_action": {
+                    "kind": "relation_page_behavior",
+                    "message": "Relation-aware view is missing for Board-Card.",
+                    "command": "/add_page cards/by_board",
+                },
+                "entities": ["Board", "Card"],
+                "fields_by_entity": {
+                    "Board": [{"name": "title", "type": "string"}],
+                    "Card": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}],
+                },
+                "apis": [
+                    {"method": "GET", "path": "/boards"},
+                    {"method": "POST", "path": "/boards"},
+                    {"method": "GET", "path": "/boards/{id}"},
+                    {"method": "PATCH", "path": "/boards/{id}"},
+                    {"method": "DELETE", "path": "/boards/{id}"},
+                    {"method": "GET", "path": "/cards"},
+                    {"method": "POST", "path": "/cards"},
+                    {"method": "GET", "path": "/cards/{id}"},
+                    {"method": "PATCH", "path": "/cards/{id}"},
+                    {"method": "DELETE", "path": "/cards/{id}"},
+                ],
+                "pages": ["boards/list", "boards/detail", "cards/list", "cards/detail"],
+                "placeholder_pages": [],
+            },
+            {
+                "next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""},
+                "entities": ["Board", "Card"],
+                "fields_by_entity": {
+                    "Board": [{"name": "title", "type": "string"}],
+                    "Card": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}],
+                },
+                "apis": [
+                    {"method": "GET", "path": "/boards"},
+                    {"method": "POST", "path": "/boards"},
+                    {"method": "GET", "path": "/boards/{id}"},
+                    {"method": "PATCH", "path": "/boards/{id}"},
+                    {"method": "DELETE", "path": "/boards/{id}"},
+                    {"method": "GET", "path": "/cards"},
+                    {"method": "POST", "path": "/cards"},
+                    {"method": "GET", "path": "/cards/{id}"},
+                    {"method": "PATCH", "path": "/cards/{id}"},
+                    {"method": "DELETE", "path": "/cards/{id}"},
+                ],
+                "pages": ["boards/list", "boards/detail", "cards/list", "cards/detail", "cards/by_board"],
+                "placeholder_pages": [],
+            },
+        ]
+    )
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p, **_kwargs: next(sequence))
+    executed_commands: list[str] = []
+
+    def _fake_execute(command: str, _project_name: str, **_kwargs: Any) -> dict[str, object]:
+        executed_commands.append(command)
+        return {"ok": True, "message": "ok"}
+
+    monkeypatch.setattr("archmind.telegram_bot.execute_command", _fake_execute)
+    msg = DummyMessage()
+    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert executed_commands == ["/add_page cards/by_board"]
+    assert "- Result: OK" in out
+    assert "- Stopped: no immediate next action" in out
+
+
 def test_auto_command_stops_on_repeated_command(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "auto_repeat"
     project_dir.mkdir(parents=True, exist_ok=True)
