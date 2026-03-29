@@ -359,6 +359,7 @@ def test_build_completion_message_preserves_repo_existence_when_result_marks_cre
     assert "GitHub Repo:" in msg
     assert "SKIPPED" not in msg
     assert "https://github.com/siriusnen-commits/repo_persisted_completion" in msg
+    assert "repository creation is only attempted for generated ideas" not in msg
 
 
 def test_build_completion_message_shows_repository_failed_independently_of_runtime(tmp_path: Path) -> None:
@@ -3422,7 +3423,11 @@ def test_inspect_repository_status_prefers_existing_repo_url_over_skipped_status
         json.dumps(
             {
                 "github_repo_url": "https://github.com/example/persisted-repo",
-                "repository": {"status": "SKIPPED", "url": "https://github.com/example/persisted-repo"},
+                "repository": {
+                    "status": "SKIPPED",
+                    "url": "https://github.com/example/persisted-repo",
+                    "reason": "repository creation is only attempted for generated ideas",
+                },
             }
         ),
         encoding="utf-8",
@@ -3434,6 +3439,7 @@ def test_inspect_repository_status_prefers_existing_repo_url_over_skipped_status
     assert "Repository:" in out
     assert "Status: EXISTS" in out
     assert "https://github.com/example/persisted-repo" in out
+    assert "repository creation is only attempted for generated ideas" not in out
 
 
 def test_inspect_command_shows_repository_sync_section(tmp_path: Path, monkeypatch) -> None:
@@ -3471,6 +3477,41 @@ def test_inspect_command_shows_repository_sync_section(tmp_path: Path, monkeypat
     assert "Last commit: abc1234" in out
     assert "Working tree: dirty" in out
     assert "Reason: authentication failed" in out
+
+
+def test_inspect_command_shows_sync_hint_for_github_auth_missing(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect_repo_sync_auth_hint"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps({"shape": "backend", "template": "fastapi", "modules": [], "entities": [], "api_endpoints": [], "frontend_pages": []}),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "repository": {
+                    "repo_status": "EXISTS",
+                    "repo_url": "https://github.com/example/repo-auth-hint",
+                    "sync_status": "COMMIT_ONLY",
+                    "sync_reason": "github authentication not configured (fatal: could not read Username for 'https://github.com': Device not configured)",
+                    "last_commit_hash": "abc1234",
+                    "working_tree_state": "clean",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Sync:" in out
+    assert "Status: COMMIT_ONLY" in out
+    assert "Hint: configure git credentials or token for GitHub push from this environment" in out
 
 
 def test_inspect_command_hides_stale_runtime_failure_when_detection_ok(tmp_path: Path, monkeypatch) -> None:
@@ -6784,6 +6825,51 @@ def test_auto_command_skips_repository_sync_when_no_steps_executed(tmp_path: Pat
     out = msg.sent[-1]
     assert called["sync"] == 0
     assert "- Repo sync: NOT_ATTEMPTED" in out
+
+
+def test_auto_command_surfaces_repo_sync_auth_failure_cleanly(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "auto_repo_auth_failure"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    sequence = iter(
+        [
+            {
+                "next_action": {"kind": "missing_page", "message": "add list page", "command": "/add_page tasks/list"},
+                "entities": ["Task"],
+                "fields_by_entity": {"Task": [{"name": "title", "type": "string"}]},
+                "apis": [{"method": "GET", "path": "/tasks"}],
+                "pages": [],
+                "placeholder_pages": [],
+            },
+            {
+                "next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""},
+                "entities": ["Task"],
+                "fields_by_entity": {"Task": [{"name": "title", "type": "string"}]},
+                "apis": [{"method": "GET", "path": "/tasks"}],
+                "pages": ["tasks/list"],
+                "placeholder_pages": [],
+            },
+        ]
+    )
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p, **_kwargs: next(sequence))
+    monkeypatch.setattr("archmind.telegram_bot.execute_command", lambda _c, _p, **_kwargs: {"ok": True, "message": "ok"})
+    monkeypatch.setattr(
+        "archmind.telegram_bot.sync_repo_after_auto_batch",
+        lambda _p, _commands: {
+            "status": "COMMIT_ONLY",
+            "reason": "github authentication not configured (fatal: could not read Username for 'https://github.com': Device not configured)",
+            "hint": "configure git credentials or token for GitHub push from this environment",
+            "last_commit_hash": "fff111",
+            "working_tree_state": "clean",
+        },
+    )
+    msg = DummyMessage()
+    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "- Repo sync: COMMIT_ONLY" in out
+    assert "- Repo sync reason: github authentication not configured" in out
+    assert "- Repo sync hint: configure git credentials or token for GitHub push from this environment" in out
+    assert "- Repo last commit: fff111" in out
 
 
 def test_sync_repo_after_auto_batch_uses_persisted_repo_existence_even_if_status_is_skipped(

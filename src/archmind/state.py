@@ -38,7 +38,7 @@ HEALTHCHECK_STATUSES = ("SUCCESS", "FAIL", "SKIPPED")
 SERVICE_DEPLOY_STATUSES = ("SUCCESS", "FAIL", "SKIPPED")
 PREFLIGHT_STATUSES = ("OK", "FIXED", "FAILED")
 REPOSITORY_STATUSES = ("CREATED", "EXISTS", "FAILED", "SKIPPED", "NONE", "")
-REPOSITORY_SYNC_STATUSES = ("SYNCED", "DIRTY", "PUSH_FAILED", "NOT_ATTEMPTED", "")
+REPOSITORY_SYNC_STATUSES = ("SYNCED", "DIRTY", "PUSH_FAILED", "COMMIT_ONLY", "NOT_ATTEMPTED", "")
 PROVIDER_MODES = ("local", "cloud", "auto")
 
 
@@ -111,6 +111,18 @@ def _safe_repository_status(value: str) -> str:
 def _safe_repository_sync_status(value: str) -> str:
     status = (value or "").upper()
     return status if status in REPOSITORY_SYNC_STATUSES else ""
+
+
+def _normalize_repository_reason(reason: str, repo_url: str, repo_status: str) -> str:
+    text = str(reason or "").strip()
+    if not text:
+        return ""
+    status = str(repo_status or "").strip().upper()
+    has_repo = bool(str(repo_url or "").strip())
+    if has_repo and status in {"CREATED", "EXISTS"}:
+        # Once repository exists, creation-attempt reasons are stale and misleading.
+        return ""
+    return text[:220]
 
 
 def _safe_provider_mode(value: str, default: str = "local") -> str:
@@ -299,6 +311,7 @@ def _default_repository_state() -> dict[str, Any]:
         "attempted": False,
         "sync_status": "NOT_ATTEMPTED",
         "sync_reason": "",
+        "sync_hint": "",
         "last_commit_hash": "",
         "working_tree_state": "",
     }
@@ -598,10 +611,15 @@ def _normalize_loaded_state(project_dir: Path, payload: dict[str, Any]) -> dict[
     repository_defaults["repo_status"] = repo_status
     repository_defaults["status"] = status
     repository_defaults["name"] = str(repository_defaults.get("name") or "").strip()[:160]
-    repository_defaults["reason"] = str(repository_defaults.get("reason") or "").strip()[:220]
+    repository_defaults["reason"] = _normalize_repository_reason(
+        str(repository_defaults.get("reason") or ""),
+        repository_defaults["repo_url"],
+        repository_defaults["repo_status"],
+    )
     repository_defaults["attempted"] = bool(repository_defaults.get("attempted"))
     repository_defaults["sync_status"] = _safe_repository_sync_status(str(repository_defaults.get("sync_status") or "")) or "NOT_ATTEMPTED"
     repository_defaults["sync_reason"] = str(repository_defaults.get("sync_reason") or "").strip()[:220]
+    repository_defaults["sync_hint"] = str(repository_defaults.get("sync_hint") or "").strip()[:220]
     repository_defaults["last_commit_hash"] = str(repository_defaults.get("last_commit_hash") or "").strip()[:40]
     repository_defaults["working_tree_state"] = str(repository_defaults.get("working_tree_state") or "").strip()[:20]
     normalized["repository"] = repository_defaults
@@ -826,10 +844,15 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     repository["repo_status"] = repo_status
     repository["status"] = status
     repository["name"] = str(repository.get("name") or "").strip()[:160]
-    repository["reason"] = str(repository.get("reason") or "").strip()[:220]
+    repository["reason"] = _normalize_repository_reason(
+        str(repository.get("reason") or ""),
+        repository["repo_url"],
+        repository["repo_status"],
+    )
     repository["attempted"] = bool(repository.get("attempted"))
     repository["sync_status"] = _safe_repository_sync_status(str(repository.get("sync_status") or "")) or "NOT_ATTEMPTED"
     repository["sync_reason"] = str(repository.get("sync_reason") or "").strip()[:220]
+    repository["sync_hint"] = str(repository.get("sync_hint") or "").strip()[:220]
     repository["last_commit_hash"] = str(repository.get("last_commit_hash") or "").strip()[:40]
     repository["working_tree_state"] = str(repository.get("working_tree_state") or "").strip()[:20]
     payload["repository"] = repository

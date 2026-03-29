@@ -1142,6 +1142,7 @@ def _normalize_repository_status(project_dir: Path) -> dict[str, str]:
         "repo_status": repo_status,
         "repo_sync_status": str(repository.get("sync_status") or "NOT_ATTEMPTED").strip().upper() or "NOT_ATTEMPTED",
         "repo_sync_reason": str(repository.get("sync_reason") or "").strip(),
+        "repo_sync_hint": str(repository.get("sync_hint") or "").strip(),
         "last_commit_hash": str(repository.get("last_commit_hash") or "").strip(),
         "working_tree_state": str(repository.get("working_tree_state") or "").strip(),
     }

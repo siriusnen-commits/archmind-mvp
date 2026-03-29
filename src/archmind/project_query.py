@@ -325,6 +325,7 @@ def resolve_repository_metadata(
             repo_url=url,
             sync_status=str(repository_info.get("sync_status") or "NOT_ATTEMPTED").strip().upper() or "NOT_ATTEMPTED",
             sync_reason=str(repository_info.get("sync_reason") or "").strip(),
+            sync_hint=str(repository_info.get("sync_hint") or "").strip(),
             last_commit_hash=str(repository_info.get("last_commit_hash") or "").strip(),
             working_tree_state=str(repository_info.get("working_tree_state") or "").strip(),
         )

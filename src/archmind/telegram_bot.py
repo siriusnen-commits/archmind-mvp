@@ -4458,6 +4458,7 @@ async def command_inspect(update: Any, context: Any) -> None:
     repository_reason = str(repository_info.get("reason") or "").strip()
     repository_sync_status = str(repository_info.get("sync_status") or "").strip()
     repository_sync_reason = str(repository_info.get("sync_reason") or "").strip()
+    repository_sync_hint = str(repository_info.get("sync_hint") or "").strip()
     repository_last_commit = str(repository_info.get("last_commit_hash") or "").strip()
     repository_working_tree = str(repository_info.get("working_tree_state") or "").strip()
     if repository_status or repository_url or repository_reason:
@@ -4467,7 +4468,7 @@ async def command_inspect(update: Any, context: Any) -> None:
             lines.append(f"URL: {repository_url}")
         if repository_reason:
             lines.append(f"Reason: {repository_reason}")
-    if repository_sync_status or repository_last_commit or repository_working_tree or repository_sync_reason:
+    if repository_sync_status or repository_last_commit or repository_working_tree or repository_sync_reason or repository_sync_hint:
         lines += ["", "Sync:"]
         lines.append(f"Status: {repository_sync_status or 'NOT_ATTEMPTED'}")
         if repository_last_commit:
@@ -4476,6 +4477,8 @@ async def command_inspect(update: Any, context: Any) -> None:
             lines.append(f"Working tree: {repository_working_tree}")
         if repository_sync_reason:
             lines.append(f"Reason: {repository_sync_reason}")
+        if repository_sync_hint:
+            lines.append(f"Hint: {repository_sync_hint}")
     if runtime_failure_class:
         lines += ["", f"Failure Class: {runtime_failure_class}"]
     elif runtime_detect_ok or backend_entry or backend_run_mode or has_backend:
@@ -4710,6 +4713,7 @@ def _build_selected_project_summary(project_path: Path) -> str:
     repository_reason = str(repository_info.get("reason") or "").strip()
     repository_sync_status = str(repository_info.get("sync_status") or "").strip()
     repository_sync_reason = str(repository_info.get("sync_reason") or "").strip()
+    repository_sync_hint = str(repository_info.get("sync_hint") or "").strip()
     repository_last_commit = str(repository_info.get("last_commit_hash") or "").strip()
     repository_working_tree = str(repository_info.get("working_tree_state") or "").strip()
     if repository_status or repository_url or repository_reason:
@@ -4719,7 +4723,7 @@ def _build_selected_project_summary(project_path: Path) -> str:
             lines.append(f"URL: {repository_url}")
         if repository_reason:
             lines.append(f"Reason: {repository_reason}")
-    if repository_sync_status or repository_last_commit or repository_working_tree or repository_sync_reason:
+    if repository_sync_status or repository_last_commit or repository_working_tree or repository_sync_reason or repository_sync_hint:
         lines += ["", "Sync:"]
         lines.append(f"Status: {repository_sync_status or 'NOT_ATTEMPTED'}")
         if repository_last_commit:
@@ -4728,6 +4732,8 @@ def _build_selected_project_summary(project_path: Path) -> str:
             lines.append(f"Working tree: {repository_working_tree}")
         if repository_sync_reason:
             lines.append(f"Reason: {repository_sync_reason}")
+        if repository_sync_hint:
+            lines.append(f"Hint: {repository_sync_hint}")
     if runtime_failure_class:
         lines.append(f"Failure Class: {runtime_failure_class}")
     elif runtime_detect_ok or backend_entry or backend_run_mode or has_backend:
@@ -4784,6 +4790,7 @@ def _repository_summary_from_state(state_payload: dict[str, Any]) -> dict[str, s
     reason = str((repository_block.get("reason") if isinstance(repository_block, dict) else "") or "").strip()
     sync_status = str((repository_block.get("sync_status") if isinstance(repository_block, dict) else "") or "").strip().upper()
     sync_reason = str((repository_block.get("sync_reason") if isinstance(repository_block, dict) else "") or "").strip()
+    sync_hint = str((repository_block.get("sync_hint") if isinstance(repository_block, dict) else "") or "").strip()
     last_commit_hash = str((repository_block.get("last_commit_hash") if isinstance(repository_block, dict) else "") or "").strip()
     working_tree_state = str((repository_block.get("working_tree_state") if isinstance(repository_block, dict) else "") or "").strip()
     if status in {"SKIPPED", "NONE"}:
@@ -4792,12 +4799,23 @@ def _repository_summary_from_state(state_payload: dict[str, Any]) -> dict[str, s
         status = ""
     if not status:
         status = "EXISTS" if url else "NONE"
+    if status in {"CREATED", "EXISTS"}:
+        reason = ""
+    if not sync_hint and sync_reason:
+        lowered = sync_reason.lower()
+        if "github authentication not configured" in lowered or "could not read username for 'https://github.com'" in lowered:
+            sync_hint = "configure git credentials or token for GitHub push from this environment"
+        elif "github authentication failed" in lowered:
+            sync_hint = "check GitHub credentials/token permissions for this environment"
+        elif "repository access failed" in lowered or "remote push rejected" in lowered:
+            sync_hint = "check remote URL, permissions, and branch protection settings"
     return {
         "status": status,
         "url": url,
         "reason": reason,
         "sync_status": sync_status or "NOT_ATTEMPTED",
         "sync_reason": sync_reason,
+        "sync_hint": sync_hint,
         "last_commit_hash": last_commit_hash,
         "working_tree_state": working_tree_state or ("clean" if status == "NONE" else ""),
     }
@@ -4824,9 +4842,12 @@ def _persist_repository_sync_state(project_path: Path, sync: dict[str, Any], *, 
     repository["status"] = repo_status
     repository["sync_status"] = str(sync.get("status") or repository.get("sync_status") or "NOT_ATTEMPTED").strip().upper()
     repository["sync_reason"] = str(sync.get("reason") or "").strip()[:220]
+    repository["sync_hint"] = str(sync.get("hint") or "").strip()[:220]
     repository["last_commit_hash"] = str(sync.get("last_commit_hash") or repository.get("last_commit_hash") or "").strip()[:40]
     repository["working_tree_state"] = str(sync.get("working_tree_state") or repository.get("working_tree_state") or "").strip()[:20]
-    if command_label:
+    if repo_url and repo_status in {"CREATED", "EXISTS"}:
+        repository["reason"] = ""
+    elif command_label:
         repository["reason"] = str(repository.get("reason") or "").strip()[:220]
     payload["repository"] = repository
     payload["github_repo_url"] = repo_url
@@ -7117,6 +7138,8 @@ async def command_auto(update: Any, context: Any) -> None:
     ])
     if str(repo_sync.get("reason") or "").strip():
         lines.append(f"- Repo sync reason: {str(repo_sync.get('reason') or '').strip()}")
+    if str(repo_sync.get("hint") or "").strip():
+        lines.append(f"- Repo sync hint: {str(repo_sync.get('hint') or '').strip()}")
     if str(repo_sync.get("last_commit_hash") or "").strip():
         lines.append(f"- Repo last commit: {str(repo_sync.get('last_commit_hash') or '').strip()}")
     if str(repo_sync.get("working_tree_state") or "").strip():
