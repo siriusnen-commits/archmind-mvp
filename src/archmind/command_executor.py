@@ -11,6 +11,7 @@ ADD_API_RE = re.compile(r"^/add_api\s+(GET|POST|PUT|PATCH|DELETE)\s+(\S+)\s*$", 
 ADD_PAGE_RE = re.compile(r"^/add_page\s+(.+)$")
 ADD_IMPLEMENT_PAGE_RE = re.compile(r"^/implement_page\s+(.+)$")
 ADD_ENTITY_RE = re.compile(r"^/add_entity\s+(\S+)\s*$")
+AUTO_RE = re.compile(r"^/auto(?:\s+(\d+))?\s*$")
 
 
 def _resolve_project_dir(project_name: str) -> Path | None:
@@ -66,6 +67,405 @@ def _write_execution_event(
     )
 
 
+def _execute_auto_command(
+    project_dir: Path,
+    *,
+    project_name: str,
+    source: str,
+    run_id: str | None = None,
+    requested_steps: int | None = None,
+) -> dict[str, Any]:
+    from archmind.state import load_state, write_state
+    from archmind.execution_history import append_execution_event
+    from archmind.telegram_bot import (
+        AUTO_ALLOWED_COMMANDS,
+        _analysis_progress_signature,
+        _auto_analysis_brief,
+        _auto_command_already_satisfied,
+        _auto_is_good_enough_mvp,
+        _auto_is_multi_entity,
+        _auto_progress_snapshot,
+        _auto_runtime_state_lines,
+        _auto_stop_explanation,
+        _build_project_analysis,
+        _compute_auto_iteration_budget,
+        _extract_next_action,
+        _extract_next_action_explanation,
+        _normalize_recommended_command,
+        _parse_command_string,
+        auto_progress_delta,
+        classify_auto_action_priority,
+        sync_repo_after_auto_batch,
+    )
+
+    summary_lines: list[str] = [
+        "Auto evolution run",
+        f"Target Project: {project_dir.name}",
+        "",
+    ]
+    seen_commands: set[str] = set()
+    seen_command_states: set[tuple[str, tuple[Any, ...]]] = set()
+    executed_commands: list[str] = []
+    executed = 0
+    stop_reason = "max step count reached"
+    progress_made = False
+    run_key = run_id or f"auto-{project_dir.name}"
+    analysis = _build_project_analysis(project_dir, use_canonical_spec=True)
+    initial_snapshot = _auto_progress_snapshot(analysis)
+    iteration_budget, budget_reasons = _compute_auto_iteration_budget(analysis, requested_steps)
+    total_progress_score = 0
+    dynamic_extensions = 0
+
+    summary_lines.extend(
+        [
+            f"Budget: {iteration_budget}",
+            f"Budget reason: {', '.join(budget_reasons)}",
+            "",
+        ]
+    )
+
+    idx = 1
+    while idx <= iteration_budget:
+        kind, message, raw_command = _extract_next_action(analysis)
+        explanation = _extract_next_action_explanation(analysis)
+        reason_summary = str(explanation.get("reason_summary") or "").strip() or message
+        expected_effect = str(explanation.get("expected_effect") or "").strip()
+        priority_reason = str(explanation.get("priority_reason") or "").strip()
+        priority = classify_auto_action_priority({"kind": kind, "message": message, "command": raw_command})
+        normalized_command = _normalize_recommended_command(raw_command)
+        cmd, _ = _parse_command_string(normalized_command) if normalized_command else ("", [])
+        actionable_supported = priority in {"high", "medium"} and bool(normalized_command) and cmd in AUTO_ALLOWED_COMMANDS
+        state_signature = _analysis_progress_signature(analysis)
+        before_snapshot = _auto_progress_snapshot(analysis)
+
+        summary_lines.append(f"Step {idx}")
+        if reason_summary:
+            summary_lines.append(f"- Why: {reason_summary}")
+        if expected_effect:
+            summary_lines.append(f"- Expected effect: {expected_effect}")
+        if priority_reason:
+            summary_lines.append(f"- Priority reason: {priority_reason}")
+
+        if not actionable_supported:
+            if _auto_is_good_enough_mvp(analysis):
+                stop_reason = "good enough MVP reached"
+                stop_explanation = _auto_stop_explanation(stop_reason, analysis)
+                summary_lines.append("- Result: STOP (good enough MVP reached)")
+                summary_lines.append(f"- Why stop: {stop_explanation}")
+                append_execution_event(
+                    project_dir,
+                    project_name=project_name,
+                    source=source,
+                    command=normalized_command or raw_command or "",
+                    status="stop",
+                    message=f"Good enough MVP reached. {stop_explanation}",
+                    run_id=run_key,
+                    step_no=idx,
+                    stop_reason=stop_reason,
+                )
+                break
+            if priority == "none":
+                stop_reason = "no immediate next action"
+                stop_explanation = _auto_stop_explanation(stop_reason, analysis)
+                summary_lines.append("- No immediate next action.")
+                summary_lines.append(f"- Why stop: {stop_explanation}")
+                append_execution_event(
+                    project_dir,
+                    project_name=project_name,
+                    source=source,
+                    command=normalized_command or raw_command or "",
+                    status="stop",
+                    message=f"No immediate next action. {stop_explanation}",
+                    run_id=run_key,
+                    step_no=idx,
+                    stop_reason=stop_reason,
+                )
+                break
+            if not normalized_command:
+                stop_reason = "empty or malformed command"
+                stop_explanation = _auto_stop_explanation(stop_reason, analysis)
+                summary_lines.append("- Result: STOP (empty or malformed command)")
+                summary_lines.append(f"- Why stop: {stop_explanation}")
+                append_execution_event(
+                    project_dir,
+                    project_name=project_name,
+                    source=source,
+                    command=raw_command or "",
+                    status="stop",
+                    message="Empty or malformed command.",
+                    run_id=run_key,
+                    step_no=idx,
+                    stop_reason=stop_reason,
+                )
+                break
+            summary_lines.append(f"- Next: {normalized_command}")
+            if cmd not in AUTO_ALLOWED_COMMANDS:
+                stop_reason = f"unsupported command: {cmd or normalized_command}"
+                stop_explanation = _auto_stop_explanation(stop_reason, analysis)
+                summary_lines.append("- Result: STOP (unsupported command)")
+                summary_lines.append(f"- Why stop: {stop_explanation}")
+                append_execution_event(
+                    project_dir,
+                    project_name=project_name,
+                    source=source,
+                    command=normalized_command,
+                    status="stop",
+                    message="Unsupported command for auto run.",
+                    run_id=run_key,
+                    step_no=idx,
+                    stop_reason=stop_reason,
+                )
+                break
+            if priority == "low":
+                stop_reason = "low-priority next action"
+                stop_explanation = _auto_stop_explanation(stop_reason, analysis)
+                summary_lines.append("- Result: STOP (low-priority next action)")
+                summary_lines.append(f"- Why stop: {stop_explanation}")
+                append_execution_event(
+                    project_dir,
+                    project_name=project_name,
+                    source=source,
+                    command=normalized_command,
+                    status="stop",
+                    message="Low-priority next action.",
+                    run_id=run_key,
+                    step_no=idx,
+                    stop_reason=stop_reason,
+                )
+                break
+
+        summary_lines.append(f"- Next: {normalized_command}")
+        if _auto_command_already_satisfied(analysis, normalized_command):
+            stop_reason = "already satisfied command"
+            stop_explanation = _auto_stop_explanation(stop_reason, analysis)
+            summary_lines.append("- Result: STOP (already satisfied in canonical state)")
+            summary_lines.append(f"- Why stop: {stop_explanation}")
+            append_execution_event(
+                project_dir,
+                project_name=project_name,
+                source=source,
+                command=normalized_command,
+                status="stop",
+                message="Command already satisfied by canonical project state.",
+                run_id=run_key,
+                step_no=idx,
+                stop_reason=stop_reason,
+            )
+            break
+
+        state_key = (normalized_command, state_signature)
+        if state_key in seen_command_states:
+            stop_reason = "repeated command without state change"
+            stop_explanation = _auto_stop_explanation(stop_reason, analysis)
+            summary_lines.append("- Result: STOP (repeated command without state change)")
+            summary_lines.append(f"- Why stop: {stop_explanation}")
+            append_execution_event(
+                project_dir,
+                project_name=project_name,
+                source=source,
+                command=normalized_command,
+                status="stop",
+                message="Repeated command without material state change.",
+                run_id=run_key,
+                step_no=idx,
+                stop_reason=stop_reason,
+            )
+            break
+        seen_command_states.add(state_key)
+
+        if normalized_command in seen_commands:
+            stop_reason = "repeated command detected"
+            stop_explanation = _auto_stop_explanation(stop_reason, analysis)
+            summary_lines.append("- Result: STOP (repeated-command protection)")
+            summary_lines.append(f"- Why stop: {stop_explanation}")
+            append_execution_event(
+                project_dir,
+                project_name=project_name,
+                source=source,
+                command=normalized_command,
+                status="stop",
+                message="Repeated command detected.",
+                run_id=run_key,
+                step_no=idx,
+                stop_reason=stop_reason,
+            )
+            break
+        seen_commands.add(normalized_command)
+
+        step_result = execute_command(
+            normalized_command,
+            project_name,
+            source=source,
+            run_id=run_key,
+            step_no=idx,
+            enable_git_sync=False,
+        )
+        if bool(step_result.get("ok")):
+            summary_lines.append("- Result: OK")
+            executed += 1
+            executed_commands.append(normalized_command)
+            next_analysis = _build_project_analysis(project_dir, use_canonical_spec=True)
+            if _analysis_progress_signature(next_analysis) != state_signature:
+                delta = auto_progress_delta(before_snapshot, _auto_progress_snapshot(next_analysis))
+                score = int(delta.get("score") or 0)
+                if bool(delta.get("material")):
+                    progress_made = True
+                    total_progress_score += score
+                    summary_lines.append(f"- Progress score: +{score}")
+                    if score >= 4 and _auto_is_multi_entity(next_analysis) and iteration_budget < 8 and dynamic_extensions < 2:
+                        iteration_budget += 1
+                        dynamic_extensions += 1
+                        summary_lines.append(f"- Budget extended: {iteration_budget}")
+                else:
+                    stop_reason = "no material progress"
+                    stop_explanation = _auto_stop_explanation(stop_reason, next_analysis)
+                    summary_lines.append("- Result: STOP (no material progress)")
+                    summary_lines.append(f"- Why stop: {stop_explanation}")
+                    append_execution_event(
+                        project_dir,
+                        project_name=project_name,
+                        source=source,
+                        command=normalized_command,
+                        status="stop",
+                        message="No material progress after command execution.",
+                        run_id=run_key,
+                        step_no=idx,
+                        stop_reason=stop_reason,
+                    )
+                    analysis = next_analysis
+                    break
+            else:
+                stop_reason = "no material state change after command"
+                stop_explanation = _auto_stop_explanation(stop_reason, next_analysis)
+                summary_lines.append("- Result: STOP (no material state change)")
+                summary_lines.append(f"- Why stop: {stop_explanation}")
+                append_execution_event(
+                    project_dir,
+                    project_name=project_name,
+                    source=source,
+                    command=normalized_command,
+                    status="stop",
+                    message="No material state change after command execution.",
+                    run_id=run_key,
+                    step_no=idx,
+                    stop_reason=stop_reason,
+                )
+                analysis = next_analysis
+                break
+            analysis = next_analysis
+        else:
+            detail = str(step_result.get("error") or step_result.get("detail") or step_result.get("message") or "execution failed").strip()
+            stop_reason = f"command failed: {detail}"
+            stop_explanation = _auto_stop_explanation(stop_reason, analysis)
+            summary_lines.append(f"- Result: FAIL ({detail})")
+            summary_lines.append(f"- Why stop: {stop_explanation}")
+            append_execution_event(
+                project_dir,
+                project_name=project_name,
+                source=source,
+                command=normalized_command,
+                status="stop",
+                message=detail,
+                run_id=run_key,
+                step_no=idx,
+                stop_reason=stop_reason,
+            )
+            break
+
+        summary_lines.append("")
+        idx += 1
+    else:
+        stop_reason = "iteration budget reached"
+
+    if summary_lines and summary_lines[-1] == "":
+        summary_lines.pop()
+    final_snapshot = _auto_progress_snapshot(analysis)
+    stop_explanation = _auto_stop_explanation(stop_reason, analysis)
+    repo_sync: dict[str, Any] = {"status": "NOT_ATTEMPTED", "reason": "no executed changes"}
+    if executed_commands:
+        repo_sync = sync_repo_after_auto_batch(project_dir, executed_commands)
+
+    runtime_lines = _auto_runtime_state_lines(project_dir)
+    runtime_backend = ""
+    runtime_frontend = ""
+    runtime_backend_url = ""
+    runtime_frontend_url = ""
+    if runtime_lines:
+        first = str(runtime_lines[0] or "")
+        if "backend=" in first and "frontend=" in first:
+            pieces = first.split("backend=", 1)[-1].split(", frontend=")
+            if len(pieces) == 2:
+                runtime_backend = pieces[0].strip()
+                runtime_frontend = pieces[1].strip()
+    for row in runtime_lines:
+        text = str(row or "").strip()
+        if text.startswith("- Backend URL:"):
+            runtime_backend_url = text.split(":", 1)[-1].strip()
+        if text.startswith("- Frontend URL:"):
+            runtime_frontend_url = text.split(":", 1)[-1].strip()
+
+    summary_lines.extend(
+        [
+            "",
+            "Summary",
+            f"- Executed: {executed}",
+            f"- Commands: {', '.join(executed_commands) if executed_commands else '(none)'}",
+            f"- Stopped: {stop_reason}",
+            f"- Stop explanation: {stop_explanation}",
+            f"- Progress made: {'yes' if progress_made else 'no'}",
+            f"- Progress score: {total_progress_score}",
+            (
+                "- Metrics: "
+                f"entities {initial_snapshot['entities']}->{final_snapshot['entities']}, "
+                f"apis {initial_snapshot['apis']}->{final_snapshot['apis']}, "
+                f"pages {initial_snapshot['pages']}->{final_snapshot['pages']}, "
+                f"relation_pages {initial_snapshot['relation_pages']}->{final_snapshot['relation_pages']}, "
+                f"relation_apis {initial_snapshot['relation_apis']}->{final_snapshot['relation_apis']}, "
+                f"placeholders {initial_snapshot['placeholders']}->{final_snapshot['placeholders']}"
+            ),
+            f"- Current: {_auto_analysis_brief(analysis)}",
+            f"- Repo sync: {str(repo_sync.get('status') or 'NOT_ATTEMPTED').strip().upper()}",
+        ]
+    )
+    summary_lines.extend(runtime_lines)
+
+    auto_result = {
+        "run_id": run_key,
+        "executed": executed,
+        "commands": executed_commands,
+        "stop_reason": stop_reason,
+        "stop_explanation": stop_explanation,
+        "progress_made": progress_made,
+        "progress_score": total_progress_score,
+        "metrics_before": initial_snapshot,
+        "metrics_after": final_snapshot,
+        "current": _auto_analysis_brief(analysis),
+        "repo_sync": repo_sync,
+        "runtime": {
+            "backend_status": runtime_backend,
+            "frontend_status": runtime_frontend,
+            "backend_url": runtime_backend_url,
+            "frontend_url": runtime_frontend_url,
+        },
+    }
+
+    try:
+        state = load_state(project_dir) or {}
+        state["auto_last_result"] = auto_result
+        write_state(project_dir, state)
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "project_name": project_name,
+        "message_text": "\n".join(summary_lines),
+        "detail": f"Auto completed: executed={executed}, stopped={stop_reason}",
+        "repository_sync": repo_sync,
+        "auto_result": auto_result,
+    }
+
+
 def execute_command(
     command: str,
     project_name: str,
@@ -109,6 +509,7 @@ def execute_command(
     page_match = ADD_PAGE_RE.match(normalized_command)
     implement_page_match = ADD_IMPLEMENT_PAGE_RE.match(normalized_command)
     entity_match = ADD_ENTITY_RE.match(normalized_command)
+    auto_match = AUTO_RE.match(normalized_command)
 
     try:
         from archmind.telegram_bot import (
@@ -121,7 +522,22 @@ def execute_command(
         )
 
         result: dict[str, Any]
-        if entity_match:
+        if auto_match:
+            raw_steps = str(auto_match.group(1) or "").strip()
+            requested_steps = None
+            if raw_steps:
+                try:
+                    requested_steps = int(raw_steps)
+                except Exception:
+                    requested_steps = None
+            result = _execute_auto_command(
+                project_dir,
+                project_name=key,
+                source=source,
+                run_id=run_id,
+                requested_steps=requested_steps,
+            )
+        elif entity_match:
             entity_name = str(entity_match.group(1) or "").strip()
             result = add_entity_to_project(project_dir, entity_name, auto_restart_backend=True)
         elif field_match:
@@ -183,7 +599,7 @@ def execute_command(
                 "command": normalized_command,
                 "project_name": key,
                 "message": "",
-                "error": "Unsupported command. Supported: /add_entity, /add_field, /add_api, /add_page, /implement_page",
+                "error": "Unsupported command. Supported: /add_entity, /add_field, /add_api, /add_page, /implement_page, /auto",
             }
             _write_execution_event(
                 project_dir,
@@ -248,7 +664,7 @@ def execute_command(
             "error": error,
         }
     )
-    if bool(payload.get("ok")) and enable_git_sync:
+    if bool(payload.get("ok")) and enable_git_sync and not auto_match:
         sync = sync_repo_after_evolution_command(project_dir, normalized_command)
         payload["repository_sync"] = sync
         sync_status = str(sync.get("status") or "").strip().upper()
