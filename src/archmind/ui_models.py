@@ -206,6 +206,7 @@ class ProjectAnalysisResponse(BaseModel):
     entity_graph: dict[str, Any] = Field(default_factory=dict)
     api_map: dict[str, Any] = Field(default_factory=dict)
     page_map: dict[str, Any] = Field(default_factory=dict)
+    visualization_gaps: list[dict[str, Any]] = Field(default_factory=list)
     entity_crud_status: dict[str, dict[str, Any]] = Field(default_factory=dict)
     placeholder_pages: list[str] = Field(default_factory=list)
     nav_visible_pages: list[str] = Field(default_factory=list)

@@ -1224,6 +1224,117 @@ def test_project_analysis_visualization_board_card_maps_relation_structures(tmp_
     assert "cards/by_board" in page_groups["cards"]["relation_pages"]
 
 
+def test_project_analysis_visualization_gap_action_for_missing_board_card_relation_page(tmp_path: Path) -> None:
+    project_dir = tmp_path / "board-card-gap-page"
+    spec = {
+        "entities": [
+            {"name": "Board", "fields": [{"name": "title", "type": "string"}]},
+            {"name": "Card", "fields": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+        ],
+        "api_endpoints": [
+            "GET /boards",
+            "POST /boards",
+            "GET /boards/{id}",
+            "PATCH /boards/{id}",
+            "DELETE /boards/{id}",
+            "GET /cards",
+            "POST /cards",
+            "GET /cards/{id}",
+            "PATCH /cards/{id}",
+            "DELETE /cards/{id}",
+            "GET /boards/{id}/cards",
+        ],
+        "frontend_pages": ["boards/list", "boards/detail", "cards/list", "cards/new", "cards/detail"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    gaps = [row for row in out["visualization_gaps"] if row.get("gap_type") == "missing_relation_page"]
+    assert any(row.get("expected") == "cards/by_board" for row in gaps)
+    assert any(row.get("command") == "/add_page cards/by_board" for row in gaps)
+
+
+def test_project_analysis_visualization_gap_action_for_missing_board_card_relation_api(tmp_path: Path) -> None:
+    project_dir = tmp_path / "board-card-gap-api"
+    spec = {
+        "entities": [
+            {"name": "Board", "fields": [{"name": "title", "type": "string"}]},
+            {"name": "Card", "fields": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+        ],
+        "api_endpoints": [
+            "GET /boards",
+            "POST /boards",
+            "GET /boards/{id}",
+            "PATCH /boards/{id}",
+            "DELETE /boards/{id}",
+            "GET /cards",
+            "POST /cards",
+            "GET /cards/{id}",
+            "PATCH /cards/{id}",
+            "DELETE /cards/{id}",
+        ],
+        "frontend_pages": ["boards/list", "boards/detail", "cards/list", "cards/new", "cards/detail", "cards/by_board"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    gaps = [row for row in out["visualization_gaps"] if row.get("gap_type") == "missing_relation_scoped_api"]
+    assert any(row.get("expected") == "GET /boards/{id}/cards" for row in gaps)
+    assert any(row.get("command") == "/add_api GET /boards/{id}/cards" for row in gaps)
+
+
+def test_project_analysis_visualization_gap_action_entry_tag_missing_relation_artifacts(tmp_path: Path) -> None:
+    project_dir = tmp_path / "entry-tag-gap-actions"
+    spec = {
+        "entities": [
+            {"name": "Entry", "fields": [{"name": "title", "type": "string"}]},
+            {"name": "Tag", "fields": [{"name": "name", "type": "string"}, {"name": "entry_id", "type": "int"}]},
+        ],
+        "api_endpoints": [
+            "GET /entries",
+            "POST /entries",
+            "GET /entries/{id}",
+            "PATCH /entries/{id}",
+            "DELETE /entries/{id}",
+            "GET /tags",
+            "POST /tags",
+            "GET /tags/{id}",
+            "PATCH /tags/{id}",
+            "DELETE /tags/{id}",
+        ],
+        "frontend_pages": ["entries/list", "entries/detail", "tags/list", "tags/new", "tags/detail"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    gaps = out["visualization_gaps"]
+    assert any(row.get("expected") == "tags/by_entry" and row.get("command") == "/add_page tags/by_entry" for row in gaps)
+    assert any(
+        row.get("expected") == "GET /entries/{id}/tags" and row.get("command") == "/add_api GET /entries/{id}/tags"
+        for row in gaps
+    )
+
+
+def test_project_analysis_visualization_gap_disappears_when_relation_gaps_resolved(tmp_path: Path) -> None:
+    project_dir = tmp_path / "board-card-gap-resolved"
+    spec = {
+        "entities": [
+            {"name": "Board", "fields": [{"name": "title", "type": "string"}]},
+            {"name": "Card", "fields": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+        ],
+        "api_endpoints": [
+            "GET /boards",
+            "POST /boards",
+            "GET /boards/{id}",
+            "PATCH /boards/{id}",
+            "DELETE /boards/{id}",
+            "GET /cards",
+            "POST /cards",
+            "GET /cards/{id}",
+            "PATCH /cards/{id}",
+            "DELETE /cards/{id}",
+            "GET /boards/{id}/cards",
+        ],
+        "frontend_pages": ["boards/list", "boards/detail", "cards/list", "cards/new", "cards/detail", "cards/by_board"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert out["visualization_gaps"] == []
+
+
 def test_project_analysis_visualization_inferred_relation_in_entity_graph(tmp_path: Path) -> None:
     project_dir = tmp_path / "inferred-category-bookmark-visualization"
     spec = {
