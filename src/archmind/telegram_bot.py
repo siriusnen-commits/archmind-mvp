@@ -1302,32 +1302,108 @@ def _merge_string_list(existing: Any, incoming: Any) -> tuple[list[str], int]:
     return current, added
 
 
-def _auto_restart_backend_lines(project_path: Path) -> tuple[list[str], bool]:
+def _runtime_recovery_lines(
+    project_path: Path,
+    *,
+    backend_changed: bool,
+    frontend_changed: bool,
+) -> tuple[list[str], bool, dict[str, Any]]:
+    meta: dict[str, Any] = {
+        "attempted": False,
+        "failed": False,
+        "reason": "",
+        "backend": {"needed": False, "status": "", "detail": ""},
+        "frontend": {"needed": False, "status": "", "detail": ""},
+    }
     try:
-        from archmind.deploy import get_local_runtime_status, restart_local_services
+        from archmind.deploy import detect_deploy_kind, get_local_runtime_status, restart_local_services
     except Exception:
-        return (["Auto-restart:", "Skipped (runtime unavailable)"], False)
+        meta["reason"] = "runtime unavailable"
+        return (["Auto-restart:", "Attempted: no", "Skipped (runtime unavailable)"], False, meta)
 
-    runtime = get_local_runtime_status(project_path)
-    backend = runtime.get("backend") if isinstance(runtime, dict) else {}
-    backend_status = str((backend or {}).get("status") or "").strip().upper()
-    if backend_status != "RUNNING":
-        return (["Auto-restart:", "Skipped (backend not running)"], False)
+    kind = str(detect_deploy_kind(project_path) or "").strip().lower()
+    has_backend = kind in {"backend", "fullstack"}
+    has_frontend = kind in {"frontend", "fullstack"}
+    need_backend = bool(backend_changed and has_backend)
+    need_frontend = bool(frontend_changed and has_frontend)
+    meta["backend"]["needed"] = need_backend
+    meta["frontend"]["needed"] = need_frontend
 
-    result = restart_local_services(project_path)
-    runtime_after = get_local_runtime_status(project_path)
-    backend_after = runtime_after.get("backend") if isinstance(runtime_after, dict) else {}
-    after_status = str((backend_after or {}).get("status") or "").strip().upper()
+    if not need_backend and not need_frontend:
+        if backend_changed and not has_backend:
+            reason = "project has no backend"
+        elif frontend_changed and not has_frontend:
+            reason = "project has no frontend"
+        else:
+            reason = "no runtime-relevant change"
+        meta["reason"] = reason
+        return (["Auto-restart:", "Attempted: no", f"Skipped ({reason})"], False, meta)
 
-    if after_status == "RUNNING":
-        return (["Auto-restart:", "Backend: RESTARTED"], False)
+    meta["attempted"] = True
+    try:
+        result = restart_local_services(project_path)
+        runtime_after = get_local_runtime_status(project_path)
+    except Exception as exc:
+        detail = str(exc).strip() or "runtime restart failed"
+        meta["failed"] = True
+        meta["reason"] = detail
+        lines = ["Auto-restart:", "Attempted: yes", "Failed (runtime restart error)", f"Detail: {detail}"]
+        return lines, True, meta
+    backend_after = runtime_after.get("backend") if isinstance(runtime_after.get("backend"), dict) else {}
+    frontend_after = runtime_after.get("frontend") if isinstance(runtime_after.get("frontend"), dict) else {}
+    lines: list[str] = ["Auto-restart:", "Attempted: yes"]
+    failed = False
 
-    restart_backend = result.get("backend") if isinstance(result, dict) and isinstance(result.get("backend"), dict) else {}
-    detail = str(restart_backend.get("detail") or "").strip()
-    lines = ["Auto-restart:", f"Backend: {after_status or 'FAILED'}"]
-    if detail:
-        lines += ["Detail:", detail]
-    return (lines, True)
+    if need_backend:
+        backend_status_after = str(backend_after.get("status") or "").strip().upper()
+        backend_running = backend_status_after == "RUNNING"
+        restart_backend = (
+            result.get("backend")
+            if isinstance(result, dict) and isinstance(result.get("backend"), dict)
+            else {}
+        )
+        backend_detail = str(
+            restart_backend.get("detail")
+            or backend_after.get("detail")
+            or result.get("detail")
+            or ""
+        ).strip()
+        meta["backend"]["status"] = "RESTARTED" if backend_running else (backend_status_after or "FAILED")
+        meta["backend"]["detail"] = backend_detail
+        if backend_running:
+            lines.append("Backend: RESTARTED")
+        else:
+            failed = True
+            lines.append(f"Backend: FAILED ({backend_status_after or 'STOPPED'})")
+            if backend_detail:
+                lines.append(f"Backend detail: {backend_detail}")
+
+    if need_frontend:
+        frontend_status_after = str(frontend_after.get("status") or "").strip().upper()
+        frontend_running = frontend_status_after == "RUNNING"
+        restart_frontend = (
+            result.get("frontend")
+            if isinstance(result, dict) and isinstance(result.get("frontend"), dict)
+            else {}
+        )
+        frontend_detail = str(
+            restart_frontend.get("detail")
+            or frontend_after.get("detail")
+            or result.get("detail")
+            or ""
+        ).strip()
+        meta["frontend"]["status"] = "RESTARTED" if frontend_running else (frontend_status_after or "FAILED")
+        meta["frontend"]["detail"] = frontend_detail
+        if frontend_running:
+            lines.append("Frontend: RESTARTED")
+        else:
+            failed = True
+            lines.append(f"Frontend: FAILED ({frontend_status_after or 'STOPPED'})")
+            if frontend_detail:
+                lines.append(f"Frontend detail: {frontend_detail}")
+
+    meta["failed"] = failed
+    return lines, failed, meta
 
 
 def _ensure_evolution_block(spec: dict[str, Any]) -> dict[str, Any]:
@@ -5295,10 +5371,15 @@ def add_entity_to_project(
         if not frontend_exists:
             code_lines += ["", "Frontend scaffold:", "SKIPPED (no frontend structure)"]
 
-        auto_restart_lines = ["Auto restart:", "SKIPPED"]
+        auto_restart_lines = ["Auto-restart:", "Attempted: no", "Skipped (runtime recovery disabled)"]
         restart_failed = False
+        runtime_recovery: dict[str, Any] = {"attempted": False, "failed": False, "reason": "runtime recovery disabled"}
         if auto_restart_backend:
-            auto_restart_lines, restart_failed = _auto_restart_backend_lines(target)
+            auto_restart_lines, restart_failed, runtime_recovery = _runtime_recovery_lines(
+                target,
+                backend_changed=True,
+                frontend_changed=frontend_exists,
+            )
             if restart_failed and "- /logs" not in next_lines:
                 next_lines.append("- /logs")
 
@@ -5324,6 +5405,7 @@ def add_entity_to_project(
             },
             "recent_evolution": recent,
             "generated_files": generated_files,
+            "runtime_recovery": runtime_recovery,
             "message_text": (
                 "Entity added\n\n"
                 "Project:\n"
@@ -5533,10 +5615,15 @@ def add_field_to_project(
             if n and t:
                 fields_after.append(f"{n}:{t}")
 
-        auto_restart_lines = ["Auto restart:", "SKIPPED"]
+        auto_restart_lines = ["Auto-restart:", "Attempted: no", "Skipped (runtime recovery disabled)"]
         restart_failed = False
+        runtime_recovery: dict[str, Any] = {"attempted": False, "failed": False, "reason": "runtime recovery disabled"}
         if auto_restart_backend:
-            auto_restart_lines, restart_failed = _auto_restart_backend_lines(target)
+            auto_restart_lines, restart_failed, runtime_recovery = _runtime_recovery_lines(
+                target,
+                backend_changed=True,
+                frontend_changed=False,
+            )
 
         next_lines = ["Next:", "- /inspect", "- /restart"]
         if restart_failed:
@@ -5565,6 +5652,7 @@ def add_field_to_project(
                 ),
             },
             "recent_evolution": recent,
+            "runtime_recovery": runtime_recovery,
             "message_text": (
                 "Field added\n\n"
                 "Project:\n"
@@ -5708,10 +5796,15 @@ def add_api_to_project(
         spec_path.parent.mkdir(parents=True, exist_ok=True)
         spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        auto_restart_lines = ["Auto restart:", "SKIPPED"]
+        auto_restart_lines = ["Auto-restart:", "Attempted: no", "Skipped (runtime recovery disabled)"]
         restart_failed = False
+        runtime_recovery: dict[str, Any] = {"attempted": False, "failed": False, "reason": "runtime recovery disabled"}
         if auto_restart_backend:
-            auto_restart_lines, restart_failed = _auto_restart_backend_lines(target)
+            auto_restart_lines, restart_failed, runtime_recovery = _runtime_recovery_lines(
+                target,
+                backend_changed=True,
+                frontend_changed=False,
+            )
 
         next_lines = ["- /inspect", "- /restart"]
         if method == "GET" and "{id}" not in path:
@@ -5743,6 +5836,7 @@ def add_api_to_project(
                 ),
             },
             "recent_evolution": recent,
+            "runtime_recovery": runtime_recovery,
             "message_text": (
                 "API added\n\n"
                 "Project:\n"
@@ -5848,10 +5942,15 @@ def add_page_to_project(
         spec_path.parent.mkdir(parents=True, exist_ok=True)
         spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        auto_restart_lines = ["Auto restart:", "SKIPPED"]
+        auto_restart_lines = ["Auto-restart:", "Attempted: no", "Skipped (runtime recovery disabled)"]
         restart_failed = False
+        runtime_recovery: dict[str, Any] = {"attempted": False, "failed": False, "reason": "runtime recovery disabled"}
         if auto_restart_backend:
-            auto_restart_lines, restart_failed = _auto_restart_backend_lines(target)
+            auto_restart_lines, restart_failed, runtime_recovery = _runtime_recovery_lines(
+                target,
+                backend_changed=False,
+                frontend_changed=True,
+            )
 
         lines = [
             "Page added",
@@ -5896,6 +5995,7 @@ def add_page_to_project(
                 ),
             },
             "recent_evolution": recent,
+            "runtime_recovery": runtime_recovery,
             "message_text": "\n".join(lines),
         }
     except Exception as exc:
@@ -5962,10 +6062,15 @@ def implement_page_in_project(
         elif status == "already_implemented":
             ok = True
 
-        auto_restart_lines = ["Auto restart:", "SKIPPED"]
+        auto_restart_lines = ["Auto-restart:", "Attempted: no", "Skipped (runtime recovery disabled)"]
         restart_failed = False
+        runtime_recovery: dict[str, Any] = {"attempted": False, "failed": False, "reason": "runtime recovery disabled"}
         if auto_restart_backend and status == "implemented":
-            auto_restart_lines, restart_failed = _auto_restart_backend_lines(target)
+            auto_restart_lines, restart_failed, runtime_recovery = _runtime_recovery_lines(
+                target,
+                backend_changed=False,
+                frontend_changed=True,
+            )
 
         progression = analyze_spec_progression(spec)
         recent = summarize_recent_evolution(spec, limit=5)
@@ -6000,6 +6105,7 @@ def implement_page_in_project(
             },
             "recent_evolution": recent,
             "changed_files": changed_files,
+            "runtime_recovery": runtime_recovery,
             "message_text": "\n".join(lines),
         }
     except Exception as exc:
@@ -6573,6 +6679,39 @@ def _auto_analysis_brief(analysis: dict[str, Any]) -> str:
     return f"entities={entities}, apis={apis}, pages={pages}"
 
 
+def _auto_runtime_state_lines(project_path: Path) -> list[str]:
+    try:
+        from archmind.deploy import detect_deploy_kind, get_local_runtime_status
+    except Exception:
+        return ["- Runtime state: unavailable"]
+
+    kind = str(detect_deploy_kind(project_path) or "").strip().lower()
+    has_backend = kind in {"backend", "fullstack"}
+    has_frontend = kind in {"frontend", "fullstack"}
+    runtime = get_local_runtime_status(project_path)
+    backend = runtime.get("backend") if isinstance(runtime.get("backend"), dict) else {}
+    frontend = runtime.get("frontend") if isinstance(runtime.get("frontend"), dict) else {}
+    backend_status = str(backend.get("status") or "NOT RUNNING").strip().upper() or "NOT RUNNING"
+    frontend_status = str(frontend.get("status") or "NOT RUNNING").strip().upper() or "NOT RUNNING"
+    backend_url = str(backend.get("url") or "").strip()
+    frontend_url = str(frontend.get("url") or "").strip()
+
+    lines = [f"- Runtime state: backend={backend_status}, frontend={frontend_status}"]
+    if backend_url:
+        lines.append(f"- Backend URL: {backend_url}")
+    if frontend_url:
+        lines.append(f"- Frontend URL: {frontend_url}")
+
+    degraded = False
+    if has_backend and backend_status != "RUNNING":
+        degraded = True
+    if has_frontend and frontend_status != "RUNNING":
+        degraded = True
+    if degraded:
+        lines.append("- Runtime recovery: attempted but services are not fully running")
+    return lines
+
+
 async def command_auto(update: Any, context: Any) -> None:
     project_path = _resolve_target_project()
     if project_path is None:
@@ -6858,6 +6997,7 @@ async def command_auto(update: Any, context: Any) -> None:
         ),
         f"- Current: {_auto_analysis_brief(analysis)}",
     ])
+    lines.extend(_auto_runtime_state_lines(project_path))
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 
 
