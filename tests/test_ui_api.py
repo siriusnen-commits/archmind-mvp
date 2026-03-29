@@ -1378,6 +1378,16 @@ def test_project_detail_source_renders_next_candidates_panel() -> None:
     assert "&& <NextCandidatesCard" not in project_detail_source
 
 
+def test_project_detail_source_renders_current_project_indicator_and_sets_context_on_open() -> None:
+    project_detail_source = Path("frontend/app/projects/[project]/page.tsx").read_text(encoding="utf-8")
+    assert 'import CurrentProjectIndicator from "@/components/CurrentProjectIndicator"' in project_detail_source
+    assert "<CurrentProjectIndicator" in project_detail_source
+    assert "projectName={detail?.name || projectName}" in project_detail_source
+    assert "displayName={detail?.display_name || detail?.name || projectName}" in project_detail_source
+    assert "setOnMount" in project_detail_source
+    assert "&& <CurrentProjectIndicator" not in project_detail_source
+
+
 def test_project_detail_source_renders_auto_control_panel() -> None:
     project_detail_source = Path("frontend/app/projects/[project]/page.tsx").read_text(encoding="utf-8")
     assert 'import AutoControlPanel from "@/components/AutoControlPanel"' in project_detail_source
@@ -1417,6 +1427,43 @@ def test_project_detail_source_renders_logs_viewer_panel() -> None:
     assert "projectName={detail.name}" in project_detail_source
     assert "initialLogs={detail.logs}" in project_detail_source
     assert "&& <LogsViewerCard" not in project_detail_source
+
+
+def test_dashboard_source_renders_current_project_indicator() -> None:
+    source = Path("frontend/app/dashboard/page.tsx").read_text(encoding="utf-8")
+    assert 'import CurrentProjectIndicator from "@/components/CurrentProjectIndicator"' in source
+    assert "<CurrentProjectIndicator" in source
+    assert "projectName={currentProjectName}" in source
+    assert "displayName={String(currentProject?.display_name || currentProjectName || \"\")}" in source
+
+
+def test_current_project_indicator_component_tracks_local_context_and_syncs_current_project() -> None:
+    source = Path("frontend/components/CurrentProjectIndicator.tsx").read_text(encoding="utf-8")
+    assert '"use client";' in source
+    assert "Current Project Context" in source
+    assert "Current Project:" in source
+    assert "archmind.currentProject" in source
+    assert "localStorage.getItem" in source
+    assert "localStorage.setItem" in source
+    assert "/select" in source
+    assert "setOnMount" in source
+    assert "Commands from this view apply to this project context." in source
+    assert "return null" not in source
+
+
+def test_project_list_component_renders_strong_current_badge() -> None:
+    source = Path("frontend/components/ProjectList.tsx").read_text(encoding="utf-8")
+    assert "CURRENT" in source
+    assert "Set current" in source
+
+
+def test_project_detail_source_passes_project_name_to_command_panels_for_context_safety() -> None:
+    source = Path("frontend/app/projects/[project]/page.tsx").read_text(encoding="utf-8")
+    assert "NextActionCard projectName={detail.name}" in source
+    assert "NextCandidatesCard projectName={detail.name}" in source
+    assert "AutoControlPanel projectName={detail.name}" in source
+    assert "CommandConsole projectName={detail.name}" in source
+    assert "RuntimeActionsCard projectName={detail.name}" in source
 
 
 def test_structure_visualization_component_has_robust_empty_states_and_no_null_bailout() -> None:

@@ -1,3 +1,4 @@
+import CurrentProjectIndicator from "@/components/CurrentProjectIndicator";
 import EvolutionCard from "@/components/EvolutionCard";
 import ProjectList, { ProjectListItem } from "@/components/ProjectList";
 import ProjectSummaryCard from "@/components/ProjectSummaryCard";
@@ -107,6 +108,11 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
           className="rounded-md border border-slate-500 px-3 py-1.5 text-sm text-slate-100 hover:bg-slate-800"
         />
       </header>
+      <CurrentProjectIndicator
+        projectName={currentProjectName}
+        displayName={String(currentProject?.display_name || currentProjectName || "")}
+        className="mb-4"
+      />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
         <ProjectList projects={projects} selectedName={selectedProjectName} />
