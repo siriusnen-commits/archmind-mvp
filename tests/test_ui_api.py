@@ -1354,11 +1354,16 @@ def test_auto_control_panel_renders_states_and_uses_auto_command_path() -> None:
     assert "Auto Control" in source
     assert "No auto run yet." in source
     assert "Latest Auto Result" in source
+    assert "Strategy" in source
+    assert "<option value=\"safe\">Safe</option>" in source
+    assert "<option value=\"balanced\">Balanced</option>" in source
+    assert "<option value=\"aggressive\">Aggressive</option>" in source
     assert "/commands" in source
-    assert 'JSON.stringify({ command: "/auto" })' in source
+    assert 'JSON.stringify({ command: "/auto", strategy: selectedStrategy })' in source
     assert "Running Auto..." in source
     assert "Auto failed:" in source
     assert "Progress score:" in source
+    assert "Strategy: {strategy}" in source
     assert "Runtime: backend=" in source
     assert "return null" not in source
 
@@ -1407,6 +1412,7 @@ def test_ui_project_detail_includes_auto_summary_when_present(monkeypatch, tmp_p
             runtime=RuntimeSummary(),
             auto_summary={
                 "run_id": "auto-1",
+                "strategy": "balanced",
                 "executed": 2,
                 "commands": ["/add_page cards/by_board", "/add_api GET /boards/{id}/cards"],
                 "stop_reason": "good enough MVP reached",
@@ -1424,6 +1430,7 @@ def test_ui_project_detail_includes_auto_summary_when_present(monkeypatch, tmp_p
     assert response.status_code == 200
     payload = response.json()
     assert payload["auto_summary"]["executed"] == 2
+    assert payload["auto_summary"]["strategy"] == "balanced"
     assert payload["auto_summary"]["stop_reason"] == "good enough MVP reached"
 
 
@@ -1463,10 +1470,11 @@ def test_ui_run_command_auto_response_includes_auto_result(monkeypatch, tmp_path
     _make_project(projects_root, "auto-command")
     monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
 
-    def _fake_execute_command(command: str, project_name: str, *, source: str = "manual-command", **_: object) -> dict[str, object]:
+    def _fake_execute_command(command: str, project_name: str, *, source: str = "manual-command", auto_strategy: str | None = None, **_: object) -> dict[str, object]:
         assert command == "/auto"
         assert project_name == "auto-command"
         assert source == "ui-next-run"
+        assert auto_strategy == "safe"
         return {
             "ok": True,
             "project_name": project_name,
@@ -1474,6 +1482,7 @@ def test_ui_run_command_auto_response_includes_auto_result(monkeypatch, tmp_path
             "detail": "Auto completed",
             "auto_result": {
                 "run_id": "auto-2",
+                "strategy": "safe",
                 "executed": 1,
                 "commands": ["/add_api GET /boards/{id}/cards"],
                 "stop_reason": "no immediate next action",
@@ -1485,12 +1494,13 @@ def test_ui_run_command_auto_response_includes_auto_result(monkeypatch, tmp_path
 
     monkeypatch.setattr("archmind.ui_api.execute_command", _fake_execute_command)
     client = TestClient(create_ui_app())
-    response = client.post("/ui/projects/auto-command/commands", json={"command": "/auto"})
+    response = client.post("/ui/projects/auto-command/commands", json={"command": "/auto", "strategy": "safe"})
     assert response.status_code == 200
     payload = response.json()
     assert payload["ok"] is True
     assert payload["command"] == "/auto"
     assert payload["auto_result"]["run_id"] == "auto-2"
+    assert payload["auto_result"]["strategy"] == "safe"
     assert payload["auto_result"]["executed"] == 1
 
 

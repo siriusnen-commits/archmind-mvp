@@ -4,8 +4,11 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { UI_API_BASE } from "@/components/uiApi";
 
+type AutoStrategy = "safe" | "balanced" | "aggressive";
+
 type AutoSummary = {
   run_id?: string;
+  strategy?: AutoStrategy | string;
   executed?: number;
   commands?: string[];
   stop_reason?: string;
@@ -43,8 +46,16 @@ function metricValue(row: Record<string, number> | undefined, key: string): numb
 
 export default function AutoControlPanel({ projectName, autoSummary }: Props) {
   const router = useRouter();
+  const initialStrategyRaw = String((autoSummary && typeof autoSummary === "object" ? autoSummary.strategy : "") || "")
+    .trim()
+    .toLowerCase();
+  const initialStrategy: AutoStrategy =
+    initialStrategyRaw === "safe" || initialStrategyRaw === "aggressive" || initialStrategyRaw === "balanced"
+      ? (initialStrategyRaw as AutoStrategy)
+      : "balanced";
   const [runState, setRunState] = useState<RunState>("idle");
   const [message, setMessage] = useState("");
+  const [selectedStrategy, setSelectedStrategy] = useState<AutoStrategy>(initialStrategy);
   const [lastAutoResult, setLastAutoResult] = useState<AutoSummary | undefined>(
     autoSummary && typeof autoSummary === "object" ? autoSummary : undefined,
   );
@@ -60,6 +71,7 @@ export default function AutoControlPanel({ projectName, autoSummary }: Props) {
   const executed = Number.isFinite(Number(display.executed)) ? Number(display.executed) : commands.length;
   const stopReason = String(display.stop_reason || "").trim();
   const stopExplanation = String(display.stop_explanation || "").trim();
+  const strategy = String(display.strategy || "").trim().toLowerCase() || selectedStrategy;
   const progressMadeRaw = display.progress_made;
   const progressMade =
     typeof progressMadeRaw === "boolean" ? (progressMadeRaw ? "yes" : "no") : "";
@@ -91,7 +103,7 @@ export default function AutoControlPanel({ projectName, autoSummary }: Props) {
       const response = await fetch(`${UI_API_BASE}/projects/${encodeURIComponent(targetProject)}/commands`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ command: "/auto" }),
+        body: JSON.stringify({ command: "/auto", strategy: selectedStrategy }),
       });
       const payload = (await response.json().catch(() => ({}))) as {
         ok?: boolean;
@@ -107,6 +119,10 @@ export default function AutoControlPanel({ projectName, autoSummary }: Props) {
       }
       if (payload.auto_result && typeof payload.auto_result === "object") {
         setLastAutoResult(payload.auto_result);
+        const nextStrategy = String(payload.auto_result.strategy || "").trim().toLowerCase();
+        if (nextStrategy === "safe" || nextStrategy === "balanced" || nextStrategy === "aggressive") {
+          setSelectedStrategy(nextStrategy);
+        }
       }
       setRunState("success");
       setMessage(detail || "Auto completed");
@@ -122,6 +138,20 @@ export default function AutoControlPanel({ projectName, autoSummary }: Props) {
     <section className="rounded-md border border-slate-700 bg-slate-900 p-4">
       <h3 className="text-sm font-semibold text-slate-100">Auto Control</h3>
       <div className="mt-3 flex items-center gap-2">
+        <label className="text-xs text-slate-300" htmlFor="auto-strategy">
+          Strategy
+        </label>
+        <select
+          id="auto-strategy"
+          value={selectedStrategy}
+          onChange={(event) => setSelectedStrategy(event.target.value as AutoStrategy)}
+          disabled={runState === "running"}
+          className="rounded-md border border-slate-600 bg-slate-950 px-2 py-1.5 text-xs text-slate-100 disabled:opacity-60"
+        >
+          <option value="safe">Safe</option>
+          <option value="balanced">Balanced</option>
+          <option value="aggressive">Aggressive</option>
+        </select>
         <button
           type="button"
           onClick={runAuto}
@@ -148,6 +178,7 @@ export default function AutoControlPanel({ projectName, autoSummary }: Props) {
         {!hasSummary ? <p className="mt-2 text-xs text-slate-400">No auto run yet.</p> : null}
         {hasSummary ? (
           <div className="mt-2 space-y-1 text-xs text-slate-200">
+            <p>Strategy: {strategy}</p>
             <p>Executed: {executed}</p>
             <p>Commands: {commands.length ? commands.join(", ") : "(none)"}</p>
             {stopReason ? <p>Stopped: {stopReason}</p> : null}
@@ -172,4 +203,3 @@ export default function AutoControlPanel({ projectName, autoSummary }: Props) {
     </section>
   );
 }
-

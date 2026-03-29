@@ -12,6 +12,41 @@ ADD_PAGE_RE = re.compile(r"^/add_page\s+(.+)$")
 ADD_IMPLEMENT_PAGE_RE = re.compile(r"^/implement_page\s+(.+)$")
 ADD_ENTITY_RE = re.compile(r"^/add_entity\s+(\S+)\s*$")
 AUTO_RE = re.compile(r"^/auto(?:\s+(\d+))?\s*$")
+AUTO_STRATEGIES = {"safe", "balanced", "aggressive"}
+
+
+def _normalize_auto_strategy(value: str | None) -> str:
+    text = str(value or "").strip().lower()
+    return text if text in AUTO_STRATEGIES else "balanced"
+
+
+def _strategy_allows_priority(strategy: str, priority: str) -> bool:
+    normalized = _normalize_auto_strategy(strategy)
+    level = str(priority or "").strip().lower()
+    if level == "none":
+        return False
+    if normalized == "safe":
+        return level == "high"
+    if normalized == "aggressive":
+        return level in {"high", "medium"}
+    return level in {"high", "medium"}
+
+
+def _strategy_adjust_budget(base_budget: int, strategy: str) -> int:
+    normalized = _normalize_auto_strategy(strategy)
+    if normalized == "safe":
+        return max(1, min(4, base_budget - 1))
+    if normalized == "aggressive":
+        return min(8, base_budget + 1)
+    return base_budget
+
+
+def _strategy_stop_explanation(strategy: str, priority: str) -> str:
+    normalized = _normalize_auto_strategy(strategy)
+    level = str(priority or "").strip().lower() or "unknown"
+    if normalized == "safe":
+        return f"Safe strategy allows only high-priority actions; next candidate priority is {level}."
+    return f"Strategy guard blocked next candidate priority={level}."
 
 
 def _resolve_project_dir(project_name: str) -> Path | None:
@@ -74,6 +109,7 @@ def _execute_auto_command(
     source: str,
     run_id: str | None = None,
     requested_steps: int | None = None,
+    auto_strategy: str | None = None,
 ) -> dict[str, Any]:
     from archmind.state import load_state, write_state
     from archmind.execution_history import append_execution_event
@@ -103,6 +139,7 @@ def _execute_auto_command(
         f"Target Project: {project_dir.name}",
         "",
     ]
+    strategy = _normalize_auto_strategy(auto_strategy)
     seen_commands: set[str] = set()
     seen_command_states: set[tuple[str, tuple[Any, ...]]] = set()
     executed_commands: list[str] = []
@@ -112,14 +149,16 @@ def _execute_auto_command(
     run_key = run_id or f"auto-{project_dir.name}"
     analysis = _build_project_analysis(project_dir, use_canonical_spec=True)
     initial_snapshot = _auto_progress_snapshot(analysis)
-    iteration_budget, budget_reasons = _compute_auto_iteration_budget(analysis, requested_steps)
+    base_budget, budget_reasons = _compute_auto_iteration_budget(analysis, requested_steps)
+    iteration_budget = _strategy_adjust_budget(base_budget, strategy)
     total_progress_score = 0
     dynamic_extensions = 0
 
     summary_lines.extend(
         [
+            f"Strategy: {strategy}",
             f"Budget: {iteration_budget}",
-            f"Budget reason: {', '.join(budget_reasons)}",
+            f"Budget reason: {', '.join(budget_reasons)} + strategy={strategy}",
             "",
         ]
     )
@@ -134,7 +173,8 @@ def _execute_auto_command(
         priority = classify_auto_action_priority({"kind": kind, "message": message, "command": raw_command})
         normalized_command = _normalize_recommended_command(raw_command)
         cmd, _ = _parse_command_string(normalized_command) if normalized_command else ("", [])
-        actionable_supported = priority in {"high", "medium"} and bool(normalized_command) and cmd in AUTO_ALLOWED_COMMANDS
+        priority_allowed = _strategy_allows_priority(strategy, priority)
+        actionable_supported = priority_allowed and bool(normalized_command) and cmd in AUTO_ALLOWED_COMMANDS
         state_signature = _analysis_progress_signature(analysis)
         before_snapshot = _auto_progress_snapshot(analysis)
 
@@ -211,6 +251,23 @@ def _execute_auto_command(
                     command=normalized_command,
                     status="stop",
                     message="Unsupported command for auto run.",
+                    run_id=run_key,
+                    step_no=idx,
+                    stop_reason=stop_reason,
+                )
+                break
+            if not priority_allowed:
+                stop_reason = f"strategy guard: {strategy} blocks {priority or 'unknown'}-priority action"
+                stop_explanation = _strategy_stop_explanation(strategy, priority)
+                summary_lines.append("- Result: STOP (strategy guard)")
+                summary_lines.append(f"- Why stop: {stop_explanation}")
+                append_execution_event(
+                    project_dir,
+                    project_name=project_name,
+                    source=source,
+                    command=normalized_command,
+                    status="stop",
+                    message=stop_explanation,
                     run_id=run_key,
                     step_no=idx,
                     stop_reason=stop_reason,
@@ -312,7 +369,20 @@ def _execute_auto_command(
                     progress_made = True
                     total_progress_score += score
                     summary_lines.append(f"- Progress score: +{score}")
-                    if score >= 4 and _auto_is_multi_entity(next_analysis) and iteration_budget < 8 and dynamic_extensions < 2:
+                    extension_limit = 0
+                    extension_threshold = 4
+                    if strategy == "balanced":
+                        extension_limit = 2
+                    elif strategy == "aggressive":
+                        extension_limit = 3
+                        extension_threshold = 3
+                    if (
+                        extension_limit > 0
+                        and score >= extension_threshold
+                        and _auto_is_multi_entity(next_analysis)
+                        and iteration_budget < 8
+                        and dynamic_extensions < extension_limit
+                    ):
                         iteration_budget += 1
                         dynamic_extensions += 1
                         summary_lines.append(f"- Budget extended: {iteration_budget}")
@@ -380,7 +450,11 @@ def _execute_auto_command(
     if summary_lines and summary_lines[-1] == "":
         summary_lines.pop()
     final_snapshot = _auto_progress_snapshot(analysis)
-    stop_explanation = _auto_stop_explanation(stop_reason, analysis)
+    if str(stop_reason).startswith("strategy guard:"):
+        blocked_priority = str(stop_reason).split(" blocks ", 1)[-1].split("-priority", 1)[0].strip()
+        stop_explanation = _strategy_stop_explanation(strategy, blocked_priority)
+    else:
+        stop_explanation = _auto_stop_explanation(stop_reason, analysis)
     repo_sync: dict[str, Any] = {"status": "NOT_ATTEMPTED", "reason": "no executed changes"}
     if executed_commands:
         repo_sync = sync_repo_after_auto_batch(project_dir, executed_commands)
@@ -431,6 +505,7 @@ def _execute_auto_command(
 
     auto_result = {
         "run_id": run_key,
+        "strategy": strategy,
         "executed": executed,
         "commands": executed_commands,
         "stop_reason": stop_reason,
@@ -474,8 +549,10 @@ def execute_command(
     run_id: str | None = None,
     step_no: int | None = None,
     enable_git_sync: bool = True,
+    auto_strategy: str | None = None,
 ) -> dict:
     normalized_command = str(command or "").strip()
+    normalized_auto_strategy = _normalize_auto_strategy(auto_strategy)
     key = str(project_name or "").strip()
     if not normalized_command:
         return {
@@ -536,6 +613,7 @@ def execute_command(
                 source=source,
                 run_id=run_id,
                 requested_steps=requested_steps,
+                auto_strategy=normalized_auto_strategy,
             )
         elif entity_match:
             entity_name = str(entity_match.group(1) or "").strip()
