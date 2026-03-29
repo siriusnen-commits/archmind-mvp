@@ -61,6 +61,24 @@ def test_project_analysis_extracts_entities_fields_apis_pages_and_crud(tmp_path:
     assert out["runtime_status"]["backend_status"] == "RUNNING"
 
 
+def test_project_analysis_exposes_domains_and_modules_from_spec(tmp_path: Path) -> None:
+    project_dir = tmp_path / "architecture-meta-app"
+    out = analyze_project(
+        project_dir,
+        project_name="architecture-meta-app",
+        spec_payload={
+            "domains": ["productivity", "notes"],
+            "modules": ["auth", "dashboard"],
+            "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}]}],
+            "api_endpoints": ["GET /notes"],
+            "frontend_pages": ["notes/list"],
+        },
+        runtime_payload={},
+    )
+    assert out["domains"] == ["productivity", "notes"]
+    assert out["modules"] == ["auth", "dashboard"]
+
+
 def test_project_analysis_runtime_status_keeps_stale_url_as_last_known_not_current(tmp_path: Path) -> None:
     project_dir = tmp_path / "runtime-stale-url"
     out = analyze_project(

@@ -183,6 +183,8 @@ def test_ui_project_detail_response_shape(monkeypatch, tmp_path: Path) -> None:
     assert "entities" in payload
     assert "Note" in payload["entities"]
     assert "runtime" in payload
+    assert "architecture" in payload
+    assert isinstance(payload["architecture"], dict)
     assert "recent_evolution" in payload
     assert "recent_runs" in payload
     assert isinstance(payload["recent_runs"], list)
@@ -1400,6 +1402,14 @@ def test_project_detail_source_renders_evolution_history_panel() -> None:
     assert "&& <EvolutionHistoryCard" not in project_detail_source
 
 
+def test_project_detail_source_renders_inspect_overview_panel() -> None:
+    project_detail_source = Path("frontend/app/projects/[project]/page.tsx").read_text(encoding="utf-8")
+    assert 'import InspectOverviewCard from "@/components/InspectOverviewCard"' in project_detail_source
+    assert "<InspectOverviewCard" in project_detail_source
+    assert "project={detail}" in project_detail_source
+    assert "&& <InspectOverviewCard" not in project_detail_source
+
+
 def test_project_detail_source_renders_logs_viewer_panel() -> None:
     project_detail_source = Path("frontend/app/projects/[project]/page.tsx").read_text(encoding="utf-8")
     assert 'import LogsViewerCard from "@/components/LogsViewerCard"' in project_detail_source
@@ -1511,6 +1521,22 @@ def test_logs_viewer_component_handles_sources_refresh_and_empty_states() -> Non
     assert "No logs available yet." in source
     assert "No " in source and "logs available." in source
     assert "max-h-80 overflow-auto" in source
+    assert "return null" not in source
+
+
+def test_inspect_overview_component_surfaces_inspect_grade_sections_and_safe_fallbacks() -> None:
+    source = Path("frontend/components/InspectOverviewCard.tsx").read_text(encoding="utf-8")
+    assert "Inspect Overview" in source
+    assert "Spec Overview" in source
+    assert "Architecture / Structure" in source
+    assert "Entities & Fields" in source
+    assert "APIs & Pages" in source
+    assert "Relations & Drift" in source
+    assert "Runtime / Repository / Sync" in source
+    assert "Why Next?" in source
+    assert "No domains available" in source
+    assert "No drift warnings" in source
+    assert "No immediate next rationale available." in source
     assert "return null" not in source
 
 

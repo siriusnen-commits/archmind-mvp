@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import EvolutionCard from "@/components/EvolutionCard";
 import EvolutionHistoryCard from "@/components/EvolutionHistoryCard";
+import InspectOverviewCard from "@/components/InspectOverviewCard";
 import LogsViewerCard from "@/components/LogsViewerCard";
 import AddEntityCard from "@/components/AddEntityCard";
 import AddFieldCard from "@/components/AddFieldCard";
@@ -41,6 +42,12 @@ type RuntimeInfo = {
 type RepositoryInfo = {
   status?: string;
   url?: string;
+  sync_status?: string;
+  sync_reason?: string;
+  sync_hint?: string;
+  sync_remote_type?: string;
+  last_commit_hash?: string;
+  working_tree_state?: string;
 };
 
 type AnalysisNextAction = {
@@ -132,6 +139,13 @@ type ProjectDetail = {
     source?: string;
     stop_reason?: string;
   }>;
+  architecture?: {
+    app_shape?: string;
+    recommended_template?: string;
+    reason_summary?: string;
+    backend_entry?: string;
+    backend_run_mode?: string;
+  };
   logs?: {
     default_source?: string;
     max_lines?: number;
@@ -222,6 +236,7 @@ export default async function ProjectDetailPage({ params }: PageProps) {
       {detail ? (
         <section className="space-y-3">
           <ProjectSummaryCard project={detail} />
+          <InspectOverviewCard project={detail} />
           <NextActionCard projectName={detail.name} nextAction={analysis?.next_action} />
           <NextCandidatesCard projectName={detail.name} candidates={analysis?.next_candidates} />
           <AutoControlPanel projectName={detail.name} autoSummary={detail.auto_summary} />
