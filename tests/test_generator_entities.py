@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from archmind.generator import (
     apply_entity_scaffold,
     apply_frontend_page_scaffold,
     apply_page_scaffold,
+    ensure_runtime_gitignore,
     generate_project,
     implement_page_scaffold,
 )
@@ -275,6 +277,62 @@ def test_apply_frontend_page_scaffold_creates_pages_for_frontend_structure(tmp_p
     assert 'from "../../_lib/apiBase"' in detail_text
     assert "useApiBaseUrl()" in detail_text
     assert "placeholder" not in detail_text.lower()
+
+
+def test_ensure_runtime_gitignore_merges_without_overwriting_existing_rules(tmp_path: Path) -> None:
+    project_dir = tmp_path / "gitignore_merge_demo"
+    frontend_dir = project_dir / "frontend"
+    frontend_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / ".gitignore").write_text("custom.keep\n", encoding="utf-8")
+    (frontend_dir / ".gitignore").write_text("frontend.keep\n", encoding="utf-8")
+
+    changed = ensure_runtime_gitignore(project_dir)
+
+    assert ".gitignore" in changed
+    assert "frontend/.gitignore" in changed
+    root_text = (project_dir / ".gitignore").read_text(encoding="utf-8")
+    front_text = (frontend_dir / ".gitignore").read_text(encoding="utf-8")
+    assert "custom.keep" in root_text
+    assert ".archmind/" in root_text
+    assert "*.log" in root_text
+    assert ".next/" in root_text
+    assert "frontend.keep" in front_text
+    assert ".next/" in front_text
+    assert "*.pid" in front_text
+
+    second = ensure_runtime_gitignore(project_dir)
+    assert second == []
+
+
+def test_runtime_gitignore_rules_keep_working_tree_clean_for_runtime_artifacts(tmp_path: Path) -> None:
+    project_dir = tmp_path / "clean_runtime_artifacts_demo"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    ensure_runtime_gitignore(project_dir)
+    (project_dir / "README.md").write_text("# demo\n", encoding="utf-8")
+
+    subprocess.run(["git", "init"], cwd=project_dir, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.email", "archmind@example.com"], cwd=project_dir, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "config", "user.name", "ArchMind"], cwd=project_dir, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "add", "."], cwd=project_dir, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=project_dir, check=True, capture_output=True, text=True)
+
+    (project_dir / "frontend" / ".next" / "cache").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / ".next" / "cache" / "x.txt").write_text("x\n", encoding="utf-8")
+    (project_dir / "logs").mkdir(parents=True, exist_ok=True)
+    (project_dir / "logs" / "runtime.log").write_text("log\n", encoding="utf-8")
+    (project_dir / "tmp").mkdir(parents=True, exist_ok=True)
+    (project_dir / "tmp" / "server.pid").write_text("123\n", encoding="utf-8")
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "state.json").write_text("{}", encoding="utf-8")
+
+    status = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=project_dir,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert status.stdout.strip() == ""
 
 
 def test_apply_frontend_page_scaffold_note_entity_is_usable_crud_mvp(tmp_path: Path) -> None:

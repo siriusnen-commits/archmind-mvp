@@ -69,6 +69,13 @@ def test_fullstack_template_is_domain_neutral_for_diary_generation(tmp_path: Pat
     assert "create note" not in merged
     assert (project_dir / "frontend" / "app" / "page.tsx").exists()
     assert (project_dir / "backend" / "app" / "api" / "routers" / "health.py").exists()
+    assert (project_dir / ".gitignore").exists()
+    assert (project_dir / "frontend" / ".gitignore").exists()
+    root_gitignore = (project_dir / ".gitignore").read_text(encoding="utf-8")
+    frontend_gitignore = (project_dir / "frontend" / ".gitignore").read_text(encoding="utf-8")
+    assert ".archmind/" in root_gitignore
+    assert "frontend/.next/" in root_gitignore
+    assert ".next/" in frontend_gitignore
 
 
 def test_fullstack_scaffolds_entities_and_pages_from_project_spec(tmp_path: Path) -> None:

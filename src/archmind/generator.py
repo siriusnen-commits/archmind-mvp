@@ -23,6 +23,25 @@ DEBUG_RAW_OUTPUT = Path("examples/last_raw_output.txt")
 DEBUG_REPAIRED_OUTPUT = Path("examples/last_repaired_output.txt")
 SUPPORTED_MODULES = ("auth", "db", "dashboard", "worker", "file-upload")
 RELATION_HINT_ENTITY_TOKENS = {"tag", "tags", "category", "categories", "label", "labels", "group", "groups"}
+RUNTIME_GITIGNORE_ROOT_ENTRIES = (
+    ".next/",
+    "out/",
+    "frontend/.next/",
+    "frontend/out/",
+    "*.log",
+    "*.pid",
+    "*.tmp",
+    ".archmind/",
+    "logs/",
+    "tmp/",
+)
+RUNTIME_GITIGNORE_FRONTEND_ENTRIES = (
+    ".next/",
+    "out/",
+    "*.log",
+    "*.pid",
+    "*.tmp",
+)
 
 
 @dataclass
@@ -399,6 +418,46 @@ def ensure_files(base: Path, files: Dict[str, str], *, force: bool) -> None:
         safe_write_file(Path(p), content, force=force)
 
 
+def _merge_gitignore_entries(path: Path, entries: tuple[str, ...], *, block_title: str) -> bool:
+    existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    normalized_existing = {line.strip() for line in existing.splitlines() if line.strip()}
+    missing = [item for item in entries if item.strip() and item.strip() not in normalized_existing]
+    if not missing:
+        return False
+
+    chunks: list[str] = []
+    if existing:
+        chunks.append(existing.rstrip("\n"))
+    chunks.append(block_title)
+    chunks.extend(missing)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(chunks).rstrip("\n") + "\n", encoding="utf-8")
+    return True
+
+
+def ensure_runtime_gitignore(project_root: Path) -> list[str]:
+    root = project_root.expanduser().resolve()
+    changed: list[str] = []
+    root_gitignore = root / ".gitignore"
+    if _merge_gitignore_entries(
+        root_gitignore,
+        RUNTIME_GITIGNORE_ROOT_ENTRIES,
+        block_title="# ArchMind runtime/build artifacts",
+    ):
+        changed.append(".gitignore")
+
+    frontend_dir = root / "frontend"
+    if frontend_dir.is_dir() or (frontend_dir / "package.json").exists():
+        frontend_gitignore = frontend_dir / ".gitignore"
+        if _merge_gitignore_entries(
+            frontend_gitignore,
+            RUNTIME_GITIGNORE_FRONTEND_ENTRIES,
+            block_title="# ArchMind runtime/build artifacts",
+        ):
+            changed.append("frontend/.gitignore")
+    return changed
+
+
 def write_project(spec: Dict[str, Any], opt: GenerateOptions) -> Path:
     project_name = str(spec.get("project_name") or "archmind_project")
     project_root = opt.out / project_name
@@ -416,6 +475,7 @@ def write_project(spec: Dict[str, Any], opt: GenerateOptions) -> Path:
     project_root.mkdir(parents=True, exist_ok=True)
     ensure_dirs(project_root, spec.get("directories") or [])
     ensure_files(project_root, spec.get("files") or {}, force=opt.force)
+    ensure_runtime_gitignore(project_root)
 
     # Save spec snapshot (always overwrite inside a newly created folder)
     safe_write_file(

@@ -100,6 +100,12 @@ def enforce_nextjs_runtime(_files: dict[str, str], project_name: str) -> dict[st
         "npm-debug.log*\n"
         "yarn-debug.log*\n"
         "yarn-error.log*\n"
+        "*.log\n"
+        "*.pid\n"
+        "*.tmp\n"
+        ".archmind/\n"
+        "logs/\n"
+        "tmp/\n"
     )
     files["README.md"] = (
         f"# {project_name}\n\n"

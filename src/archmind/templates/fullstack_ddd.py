@@ -191,6 +191,17 @@ module.exports = nextConfig;
 """
 
     files["frontend/.eslintrc.json"] = '{\n  "extends": ["next/core-web-vitals"]\n}\n'
+    files["frontend/.gitignore"] = (
+        "node_modules/\n"
+        ".next/\n"
+        "out/\n"
+        "npm-debug.log*\n"
+        "yarn-debug.log*\n"
+        "yarn-error.log*\n"
+        "*.log\n"
+        "*.pid\n"
+        "*.tmp\n"
+    )
 
     files["frontend/postcss.config.js"] = """module.exports = {
   plugins: {
@@ -292,6 +303,18 @@ cp -n .env.example .env
 npm run dev
 ```
 """
+    files[".gitignore"] = (
+        ".next/\n"
+        "out/\n"
+        "frontend/.next/\n"
+        "frontend/out/\n"
+        "*.log\n"
+        "*.pid\n"
+        "*.tmp\n"
+        ".archmind/\n"
+        "logs/\n"
+        "tmp/\n"
+    )
 
     files["scripts/dev.sh"] = """#!/usr/bin/env bash
 set -euo pipefail

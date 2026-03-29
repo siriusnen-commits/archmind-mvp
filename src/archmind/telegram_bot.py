@@ -36,6 +36,7 @@ from archmind.generator import (
     apply_entity_fields_to_scaffold,
     apply_entity_scaffold,
     apply_frontend_page_scaffold,
+    ensure_runtime_gitignore,
     implement_page_scaffold,
     apply_modules_to_project,
     apply_page_scaffold,
@@ -4906,6 +4907,7 @@ def sync_repo_after_evolution_command(project_path: Path, command_label: str) ->
         snapshot = {"attempted": False, "status": "NOT_ATTEMPTED", "reason": "repository not configured"}
         _persist_repository_sync_state(root, snapshot, command_label=command_label)
         return snapshot
+    ensure_runtime_gitignore(root)
     message = f"archmind: {str(command_label or 'evolution update').strip()}"
     sync_result = sync_repository_changes(root, commit_message=message)
     _persist_repository_sync_state(root, sync_result, command_label=command_label)
@@ -4919,6 +4921,7 @@ def sync_repo_after_auto_batch(project_path: Path, executed_commands: list[str])
         snapshot = {"attempted": False, "status": "NOT_ATTEMPTED", "reason": "repository not configured"}
         _persist_repository_sync_state(root, snapshot, command_label="/auto")
         return snapshot
+    ensure_runtime_gitignore(root)
     body = "\n".join(f"- {str(item or '').replace('/', '', 1)}" for item in executed_commands if str(item).strip())
     commit_message = "archmind(auto):\n" + (body if body else "- evolution updates")
     sync_result = sync_repository_changes(root, commit_message=commit_message)
