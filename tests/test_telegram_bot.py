@@ -6473,6 +6473,216 @@ def test_auto_command_executes_relation_aware_next_action_when_available(tmp_pat
     assert "- Stopped: no immediate next action" in out
 
 
+def test_auto_command_does_not_stop_good_enough_when_actionable_relation_scoped_api_exists_board_card(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_dir = tmp_path / "auto_board_card_next_authority"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    sequence = iter(
+        [
+            {
+                "next_action": {
+                    "kind": "relation_scoped_api",
+                    "message": "Relation-scoped API is missing for Board-Card: list Card by Board.",
+                    "command": "/add_api GET /boards/{id}/cards",
+                },
+                "suggestions": [],
+                "entities": ["Board", "Card"],
+                "entity_crud_status": {
+                    "Board": {"missing_api": [], "missing_pages": []},
+                    "Card": {"missing_api": [], "missing_pages": []},
+                },
+                "fields_by_entity": {
+                    "Board": [{"name": "title", "type": "string"}],
+                    "Card": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}],
+                },
+                "apis": [
+                    {"method": "GET", "path": "/boards"},
+                    {"method": "POST", "path": "/boards"},
+                    {"method": "GET", "path": "/boards/{id}"},
+                    {"method": "PATCH", "path": "/boards/{id}"},
+                    {"method": "DELETE", "path": "/boards/{id}"},
+                    {"method": "GET", "path": "/cards"},
+                    {"method": "POST", "path": "/cards"},
+                    {"method": "GET", "path": "/cards/{id}"},
+                    {"method": "PATCH", "path": "/cards/{id}"},
+                    {"method": "DELETE", "path": "/cards/{id}"},
+                ],
+                "pages": ["boards/list", "boards/detail", "cards/list", "cards/detail", "cards/by_board"],
+                "placeholder_pages": [],
+                "drift_warnings": ["Relation basis board_id exists, but relation-scoped API GET /boards/{id}/cards is missing."],
+            },
+            {
+                "next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""},
+                "suggestions": [],
+                "entities": ["Board", "Card"],
+                "entity_crud_status": {
+                    "Board": {"missing_api": [], "missing_pages": []},
+                    "Card": {"missing_api": [], "missing_pages": []},
+                },
+                "fields_by_entity": {
+                    "Board": [{"name": "title", "type": "string"}],
+                    "Card": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}],
+                },
+                "apis": [
+                    {"method": "GET", "path": "/boards"},
+                    {"method": "POST", "path": "/boards"},
+                    {"method": "GET", "path": "/boards/{id}"},
+                    {"method": "PATCH", "path": "/boards/{id}"},
+                    {"method": "DELETE", "path": "/boards/{id}"},
+                    {"method": "GET", "path": "/cards"},
+                    {"method": "POST", "path": "/cards"},
+                    {"method": "GET", "path": "/cards/{id}"},
+                    {"method": "PATCH", "path": "/cards/{id}"},
+                    {"method": "DELETE", "path": "/cards/{id}"},
+                    {"method": "GET", "path": "/boards/{id}/cards"},
+                ],
+                "pages": ["boards/list", "boards/detail", "cards/list", "cards/detail", "cards/by_board"],
+                "placeholder_pages": [],
+                "drift_warnings": [],
+            },
+        ]
+    )
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p, **_kwargs: next(sequence))
+    executed_commands: list[str] = []
+    monkeypatch.setattr(
+        "archmind.telegram_bot.execute_command",
+        lambda cmd, _project, **_kwargs: (executed_commands.append(cmd) or {"ok": True, "message": "ok"}),
+    )
+    msg = DummyMessage()
+    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert executed_commands == ["/add_api GET /boards/{id}/cards"]
+    assert "Step 1" in out
+    assert "- Next: /add_api GET /boards/{id}/cards" in out
+    assert "- Result: OK" in out
+
+
+def test_auto_command_entry_tag_relation_page_missing_scoped_api_continues_toward_scoped_api(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_dir = tmp_path / "auto_entry_tag_next_authority"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    sequence = iter(
+        [
+            {
+                "next_action": {
+                    "kind": "relation_scoped_api",
+                    "message": "Relation-scoped API is missing for Entry-Tag: list Tag by Entry.",
+                    "command": "/add_api GET /entries/{id}/tags",
+                },
+                "suggestions": [],
+                "entities": ["Entry", "Tag"],
+                "entity_crud_status": {"Entry": {"missing_api": [], "missing_pages": []}, "Tag": {"missing_api": [], "missing_pages": []}},
+                "fields_by_entity": {
+                    "Entry": [{"name": "title", "type": "string"}],
+                    "Tag": [{"name": "name", "type": "string"}, {"name": "entry_id", "type": "int"}],
+                },
+                "apis": [
+                    {"method": "GET", "path": "/entries"},
+                    {"method": "POST", "path": "/entries"},
+                    {"method": "GET", "path": "/entries/{id}"},
+                    {"method": "PATCH", "path": "/entries/{id}"},
+                    {"method": "DELETE", "path": "/entries/{id}"},
+                    {"method": "GET", "path": "/tags"},
+                    {"method": "POST", "path": "/tags"},
+                    {"method": "GET", "path": "/tags/{id}"},
+                    {"method": "PATCH", "path": "/tags/{id}"},
+                    {"method": "DELETE", "path": "/tags/{id}"},
+                ],
+                "pages": ["entries/list", "entries/detail", "tags/list", "tags/detail", "tags/by_entry"],
+                "placeholder_pages": [],
+                "drift_warnings": ["Relation basis entry_id exists, but relation-scoped API GET /entries/{id}/tags is missing."],
+            },
+            {
+                "next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""},
+                "suggestions": [],
+                "entities": ["Entry", "Tag"],
+                "entity_crud_status": {"Entry": {"missing_api": [], "missing_pages": []}, "Tag": {"missing_api": [], "missing_pages": []}},
+                "fields_by_entity": {
+                    "Entry": [{"name": "title", "type": "string"}],
+                    "Tag": [{"name": "name", "type": "string"}, {"name": "entry_id", "type": "int"}],
+                },
+                "apis": [
+                    {"method": "GET", "path": "/entries"},
+                    {"method": "POST", "path": "/entries"},
+                    {"method": "GET", "path": "/entries/{id}"},
+                    {"method": "PATCH", "path": "/entries/{id}"},
+                    {"method": "DELETE", "path": "/entries/{id}"},
+                    {"method": "GET", "path": "/tags"},
+                    {"method": "POST", "path": "/tags"},
+                    {"method": "GET", "path": "/tags/{id}"},
+                    {"method": "PATCH", "path": "/tags/{id}"},
+                    {"method": "DELETE", "path": "/tags/{id}"},
+                    {"method": "GET", "path": "/entries/{id}/tags"},
+                ],
+                "pages": ["entries/list", "entries/detail", "tags/list", "tags/detail", "tags/by_entry"],
+                "placeholder_pages": [],
+                "drift_warnings": [],
+            },
+        ]
+    )
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p, **_kwargs: next(sequence))
+    executed_commands: list[str] = []
+    monkeypatch.setattr(
+        "archmind.telegram_bot.execute_command",
+        lambda cmd, _project, **_kwargs: (executed_commands.append(cmd) or {"ok": True, "message": "ok"}),
+    )
+    msg = DummyMessage()
+    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert executed_commands == ["/add_api GET /entries/{id}/tags"]
+    assert "Step 1" in out
+    assert "- Next: /add_api GET /entries/{id}/tags" in out
+    assert "- Result: OK" in out
+
+
+def test_auto_good_enough_is_false_when_actionable_next_exists_and_true_when_next_none() -> None:
+    base = {
+        "entities": ["Board", "Card"],
+        "entity_crud_status": {
+            "Board": {"missing_api": [], "missing_pages": []},
+            "Card": {"missing_api": [], "missing_pages": []},
+        },
+        "placeholder_pages": [],
+        "fields_by_entity": {
+            "Board": [{"name": "title", "type": "string"}],
+            "Card": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}],
+        },
+        "apis": [
+            {"method": "GET", "path": "/boards"},
+            {"method": "POST", "path": "/boards"},
+            {"method": "GET", "path": "/boards/{id}"},
+            {"method": "PATCH", "path": "/boards/{id}"},
+            {"method": "DELETE", "path": "/boards/{id}"},
+            {"method": "GET", "path": "/cards"},
+            {"method": "POST", "path": "/cards"},
+            {"method": "GET", "path": "/cards/{id}"},
+            {"method": "PATCH", "path": "/cards/{id}"},
+            {"method": "DELETE", "path": "/cards/{id}"},
+            {"method": "GET", "path": "/boards/{id}/cards"},
+        ],
+        "pages": ["boards/list", "boards/detail", "cards/list", "cards/detail", "cards/by_board"],
+        "drift_warnings": [],
+    }
+    with_actionable = {
+        **base,
+        "next_action": {
+            "kind": "relation_scoped_api",
+            "message": "missing relation scoped api",
+            "command": "/add_api GET /boards/{id}/cards",
+        },
+    }
+    with_none = {
+        **base,
+        "next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""},
+    }
+    assert telegram_bot._auto_is_good_enough_mvp(with_actionable) is False
+    assert telegram_bot._auto_is_good_enough_mvp(with_none) is True
+
+
 def test_auto_command_stops_on_repeated_command(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "auto_repeat"
     project_dir.mkdir(parents=True, exist_ok=True)
