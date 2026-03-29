@@ -6,6 +6,7 @@ import pytest
 
 import archmind.project_analysis as project_analysis
 from archmind.project_analysis import analyze_project
+from archmind.spec_suggester import suggest_project_spec
 
 
 def _write(path: Path, text: str) -> None:
@@ -1359,3 +1360,20 @@ def test_project_analysis_visualization_inferred_relation_in_entity_graph(tmp_pa
     out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
     graph = out["entity_graph"]
     assert any(edge["from"] == "Category" and edge["to"] == "Bookmark" and edge["inferred"] is True for edge in graph["edges"])
+
+
+def test_starter_pack_specs_remain_compatible_with_project_analysis_next_and_relation_logic(tmp_path: Path) -> None:
+    todo_dir = tmp_path / "starter-todo-analysis"
+    todo_spec = suggest_project_spec("simple todo app", {"domains": [], "frontend_needed": True})
+    todo_out = analyze_project(todo_dir, spec_payload=todo_spec, runtime_payload={})
+    assert isinstance(todo_out.get("next_action"), dict)
+    assert "kind" in todo_out["next_action"]
+    assert "command" in todo_out["next_action"]
+
+    board_dir = tmp_path / "starter-board-analysis"
+    board_spec = suggest_project_spec("kanban board app", {"domains": [], "frontend_needed": True})
+    board_out = analyze_project(board_dir, spec_payload=board_spec, runtime_payload={})
+    relations = board_out.get("relations") if isinstance(board_out.get("relations"), list) else []
+    assert any(str(rel.get("parent_entity") or "") == "Board" and str(rel.get("child_entity") or "") == "Card" for rel in relations if isinstance(rel, dict))
+    assert isinstance(board_out.get("next_action"), dict)
+    assert "kind" in board_out["next_action"]
