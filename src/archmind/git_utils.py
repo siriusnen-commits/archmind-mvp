@@ -24,6 +24,43 @@ def _short_reason(text: str) -> str:
     return line[0][:220]
 
 
+def _normalize_push_failure_reason(stderr: str, stdout: str) -> tuple[str, str]:
+    combined = "\n".join(part for part in [str(stderr or "").strip(), str(stdout or "").strip()] if part).strip()
+    lowered = combined.lower()
+    detail = _short_reason(combined)
+
+    if "could not read username for 'https://github.com'" in lowered:
+        reason = "github authentication not configured"
+        if detail:
+            reason = f"{reason} ({detail})"
+        return reason, "configure git credentials or token for GitHub push from this environment"
+    if "authentication failed" in lowered or "invalid username or password" in lowered:
+        reason = "github authentication failed"
+        if detail:
+            reason = f"{reason} ({detail})"
+        return reason, "check GitHub credentials/token permissions for this environment"
+    if "permission denied" in lowered:
+        reason = "repository access failed"
+        if detail:
+            reason = f"{reason} ({detail})"
+        return reason, "check repository write permission for the configured GitHub credentials"
+    if "repository not found" in lowered:
+        reason = "repository access failed"
+        if detail:
+            reason = f"{reason} ({detail})"
+        return reason, "verify remote repository URL and access permission"
+    if "remote rejected" in lowered or "[remote rejected]" in lowered:
+        reason = "remote push rejected"
+        if detail:
+            reason = f"{reason} ({detail})"
+        return reason, "check branch protection or remote policy for this repository"
+
+    reason = "git push failed"
+    if detail:
+        reason = f"{reason} ({detail})"
+    return reason, ""
+
+
 def _is_git_repo(project_dir: Path) -> bool:
     try:
         result = _run_git(project_dir, ["rev-parse", "--is-inside-work-tree"])
@@ -87,6 +124,7 @@ def sync_repository_changes(project_dir: Path, *, commit_message: str) -> dict[s
             "working_tree_state": str(snapshot.get("working_tree_state") or "unknown"),
             "committed": False,
             "pushed": False,
+            "hint": "",
         }
     if not snapshot.get("has_remote"):
         return {
@@ -97,6 +135,7 @@ def sync_repository_changes(project_dir: Path, *, commit_message: str) -> dict[s
             "working_tree_state": str(snapshot.get("working_tree_state") or "unknown"),
             "committed": False,
             "pushed": False,
+            "hint": "",
         }
 
     status_before = _working_tree_state(root)
@@ -109,6 +148,7 @@ def sync_repository_changes(project_dir: Path, *, commit_message: str) -> dict[s
             "working_tree_state": status_before,
             "committed": False,
             "pushed": False,
+            "hint": "",
         }
 
     add_result = _run_git(root, ["add", "."])
@@ -121,6 +161,7 @@ def sync_repository_changes(project_dir: Path, *, commit_message: str) -> dict[s
             "working_tree_state": _working_tree_state(root),
             "committed": False,
             "pushed": False,
+            "hint": "",
         }
 
     commit_result = _run_git(root, ["commit", "-m", str(commit_message or "archmind: update").strip()])
@@ -137,6 +178,7 @@ def sync_repository_changes(project_dir: Path, *, commit_message: str) -> dict[s
                 "working_tree_state": _working_tree_state(root),
                 "committed": False,
                 "pushed": False,
+                "hint": "",
             }
         return {
             "attempted": True,
@@ -146,18 +188,21 @@ def sync_repository_changes(project_dir: Path, *, commit_message: str) -> dict[s
             "working_tree_state": _working_tree_state(root),
             "committed": False,
             "pushed": False,
+            "hint": "",
         }
 
     push_result = _run_git(root, ["push"])
     if push_result.returncode != 0:
+        normalized_reason, hint = _normalize_push_failure_reason(str(push_result.stderr or ""), str(push_result.stdout or ""))
         return {
             "attempted": True,
-            "status": "PUSH_FAILED",
-            "reason": _short_reason(push_result.stderr or push_result.stdout or "git push failed"),
+            "status": "COMMIT_ONLY",
+            "reason": normalized_reason,
             "last_commit_hash": _last_commit_hash(root),
             "working_tree_state": _working_tree_state(root),
             "committed": True,
             "pushed": False,
+            "hint": hint,
         }
     return {
         "attempted": True,
@@ -167,4 +212,5 @@ def sync_repository_changes(project_dir: Path, *, commit_message: str) -> dict[s
         "working_tree_state": _working_tree_state(root),
         "committed": True,
         "pushed": True,
+        "hint": "",
     }

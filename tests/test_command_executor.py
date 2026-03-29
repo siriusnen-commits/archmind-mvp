@@ -218,13 +218,15 @@ def test_execute_command_push_failure_does_not_fail_evolution(monkeypatch) -> No
     monkeypatch.setattr(
         "archmind.telegram_bot.sync_repo_after_evolution_command",
         lambda *_args, **_kwargs: {
-            "status": "PUSH_FAILED",
-            "reason": "authentication failed",
+            "status": "COMMIT_ONLY",
+            "reason": "github authentication not configured (fatal: could not read Username for 'https://github.com': Device not configured)",
+            "hint": "configure git credentials or token for GitHub push from this environment",
             "last_commit_hash": "fff111",
             "working_tree_state": "clean",
         },
     )
     out = execute_command("/add_api GET /tasks", "demo")
     assert out["ok"] is True
-    assert out["repository_sync"]["status"] == "PUSH_FAILED"
-    assert "Repository sync: PUSH_FAILED (authentication failed)" in str(out["message_text"])
+    assert out["repository_sync"]["status"] == "COMMIT_ONLY"
+    assert "Repository sync: COMMIT_ONLY (github authentication not configured" in str(out["message_text"])
+    assert "Hint: configure git credentials or token for GitHub push from this environment" in str(out["message_text"])

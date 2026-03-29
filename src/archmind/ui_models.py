@@ -41,6 +41,7 @@ class RepositorySummary(BaseModel):
     repo_url: str = ""
     sync_status: str = "NOT_ATTEMPTED"
     sync_reason: str = ""
+    sync_hint: str = ""
     last_commit_hash: str = ""
     working_tree_state: str = ""
 

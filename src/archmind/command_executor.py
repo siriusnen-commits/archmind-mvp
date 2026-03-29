@@ -253,11 +253,14 @@ def execute_command(
         payload["repository_sync"] = sync
         sync_status = str(sync.get("status") or "").strip().upper()
         sync_reason = str(sync.get("reason") or "").strip()
-        if sync_status == "PUSH_FAILED":
+        if sync_status in {"PUSH_FAILED", "COMMIT_ONLY"}:
             base_message = str(payload.get("message_text") or payload.get("message") or "").strip()
             extra = f"Repository sync: {sync_status}"
             if sync_reason:
                 extra += f" ({sync_reason})"
+            sync_hint = str(sync.get("hint") or "").strip()
+            if sync_hint:
+                extra += f"\nHint: {sync_hint}"
             if base_message:
                 payload["message_text"] = f"{base_message}\n\n{extra}"
             else:
