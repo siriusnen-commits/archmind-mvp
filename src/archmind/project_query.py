@@ -276,6 +276,7 @@ def _empty_project_detail(project_dir: Path, warning: str = "") -> ProjectDetail
         runtime=RuntimeSummary(),
         recent_evolution=[],
         recent_runs=[],
+        auto_summary={},
         repository=RepositorySummary(),
         analysis=analyze_project(project_dir, project_name=project_dir.name, spec_payload={}, runtime_payload={}),
         warning=str(warning or "").strip(),
@@ -461,6 +462,7 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
                     "stop_reason": str(item.get("stop_reason") or "").strip(),
                 }
             )
+        auto_summary = state_payload.get("auto_last_result") if isinstance(state_payload.get("auto_last_result"), dict) else {}
         return ProjectDetailResponse(
             name=project_dir.name,
             display_name=_display_name_from_payloads(project_dir, state_payload, spec if isinstance(spec, dict) else {}),
@@ -492,6 +494,7 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
             ),
             recent_evolution=summarize_recent_evolution(spec, limit=5),
             recent_runs=recent_runs,
+            auto_summary=auto_summary,
             repository=repository,
             analysis=analysis,
             warning="",

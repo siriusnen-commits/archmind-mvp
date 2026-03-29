@@ -80,6 +80,7 @@ class ProjectDetailResponse(BaseModel):
     runtime: RuntimeSummary
     recent_evolution: list[str] = Field(default_factory=list)
     recent_runs: list[dict[str, Any]] = Field(default_factory=list)
+    auto_summary: dict[str, Any] = Field(default_factory=dict)
     repository: RepositorySummary = Field(default_factory=RepositorySummary)
     analysis: dict[str, Any] = Field(default_factory=dict)
     warning: str = ""
@@ -227,5 +228,6 @@ class RunCommandResponse(BaseModel):
     command: str = ""
     detail: str = ""
     error: str = ""
+    auto_result: dict[str, Any] = Field(default_factory=dict)
     spec_summary: SpecSummary = Field(default_factory=SpecSummary)
     recent_evolution: list[str] = Field(default_factory=list)

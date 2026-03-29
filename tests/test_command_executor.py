@@ -230,3 +230,32 @@ def test_execute_command_push_failure_does_not_fail_evolution(monkeypatch) -> No
     assert out["repository_sync"]["status"] == "COMMIT_ONLY"
     assert "Repository sync: COMMIT_ONLY (github authentication not configured" in str(out["message_text"])
     assert "Hint: configure git credentials or token for GitHub push from this environment" in str(out["message_text"])
+
+
+def test_execute_command_auto_uses_auto_executor_and_skips_single_command_sync(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: Path("/tmp/demo"))
+    sync_calls: list[str] = []
+
+    def fake_auto_executor(project_dir: Path, *, project_name: str, source: str, run_id=None, requested_steps=None):  # type: ignore[no-untyped-def]
+        assert project_dir == Path("/tmp/demo")
+        assert project_name == "demo"
+        assert source == "ui-next-run"
+        assert requested_steps is None
+        return {
+            "ok": True,
+            "project_name": project_name,
+            "detail": "Auto completed",
+            "message_text": "Auto evolution run",
+            "repository_sync": {"status": "SYNCED"},
+            "auto_result": {"run_id": "auto-1", "executed": 1, "commands": ["/add_api GET /boards/{id}/cards"]},
+        }
+
+    monkeypatch.setattr("archmind.command_executor._execute_auto_command", fake_auto_executor)
+    monkeypatch.setattr("archmind.telegram_bot.sync_repo_after_evolution_command", lambda *_args, **_kwargs: sync_calls.append("called") or {"status": "SYNCED"})
+
+    out = execute_command("/auto", "demo", source="ui-next-run")
+    assert out["ok"] is True
+    assert out["command"] == "/auto"
+    assert out["auto_result"]["run_id"] == "auto-1"
+    assert out["repository_sync"]["status"] == "SYNCED"
+    assert sync_calls == []

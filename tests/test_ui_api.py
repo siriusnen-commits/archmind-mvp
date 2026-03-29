@@ -186,6 +186,7 @@ def test_ui_project_detail_response_shape(monkeypatch, tmp_path: Path) -> None:
     assert "recent_evolution" in payload
     assert "recent_runs" in payload
     assert isinstance(payload["recent_runs"], list)
+    assert isinstance(payload.get("auto_summary", {}), dict)
     assert "repository" in payload
     assert payload["repository"]["status"] == "CREATED"
     assert payload["repository"]["url"] == "https://github.com/example/beta"
@@ -1250,6 +1251,14 @@ def test_project_detail_source_renders_next_candidates_panel() -> None:
     assert "&& <NextCandidatesCard" not in project_detail_source
 
 
+def test_project_detail_source_renders_auto_control_panel() -> None:
+    project_detail_source = Path("frontend/app/projects/[project]/page.tsx").read_text(encoding="utf-8")
+    assert 'import AutoControlPanel from "@/components/AutoControlPanel"' in project_detail_source
+    assert "<AutoControlPanel" in project_detail_source
+    assert "autoSummary={detail.auto_summary}" in project_detail_source
+    assert "&& <AutoControlPanel" not in project_detail_source
+
+
 def test_structure_visualization_component_has_robust_empty_states_and_no_null_bailout() -> None:
     source = Path("frontend/components/StructureVisualizationCard.tsx").read_text(encoding="utf-8")
     assert '"use client";' in source
@@ -1279,6 +1288,92 @@ def test_next_candidates_component_renders_empty_state_and_uses_command_executio
     assert "Completed" in source
     assert "Executed: {executedCommand}" in source
     assert "return null" not in source
+
+
+def test_auto_control_panel_renders_states_and_uses_auto_command_path() -> None:
+    source = Path("frontend/components/AutoControlPanel.tsx").read_text(encoding="utf-8")
+    assert '"use client";' in source
+    assert "Auto Control" in source
+    assert "No auto run yet." in source
+    assert "Latest Auto Result" in source
+    assert "/commands" in source
+    assert 'JSON.stringify({ command: "/auto" })' in source
+    assert "Running Auto..." in source
+    assert "Auto failed:" in source
+    assert "Progress score:" in source
+    assert "Runtime: backend=" in source
+    assert "return null" not in source
+
+
+def test_ui_project_detail_includes_auto_summary_when_present(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "auto-summary-detail")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    def _fake_build_project_detail(_project_dir: Path):
+        from archmind.ui_models import ProjectDetailResponse, RuntimeSummary, SpecSummary
+
+        return ProjectDetailResponse(
+            name="auto-summary-detail",
+            spec_summary=SpecSummary(stage="Stage 4", entities=2, apis=6, pages=6, history_count=1),
+            entities=["Board", "Card"],
+            runtime=RuntimeSummary(),
+            auto_summary={
+                "run_id": "auto-1",
+                "executed": 2,
+                "commands": ["/add_page cards/by_board", "/add_api GET /boards/{id}/cards"],
+                "stop_reason": "good enough MVP reached",
+                "stop_explanation": "Core CRUD and relation flow are complete.",
+                "progress_made": True,
+                "progress_score": 9,
+            },
+            analysis={"project_name": "auto-summary-detail", "next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""}},
+            safe=True,
+        )
+
+    monkeypatch.setattr("archmind.ui_api.build_project_detail", _fake_build_project_detail)
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/auto-summary-detail")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["auto_summary"]["executed"] == 2
+    assert payload["auto_summary"]["stop_reason"] == "good enough MVP reached"
+
+
+def test_ui_run_command_auto_response_includes_auto_result(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "auto-command")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    def _fake_execute_command(command: str, project_name: str, *, source: str = "manual-command", **_: object) -> dict[str, object]:
+        assert command == "/auto"
+        assert project_name == "auto-command"
+        assert source == "ui-next-run"
+        return {
+            "ok": True,
+            "project_name": project_name,
+            "command": command,
+            "detail": "Auto completed",
+            "auto_result": {
+                "run_id": "auto-2",
+                "executed": 1,
+                "commands": ["/add_api GET /boards/{id}/cards"],
+                "stop_reason": "no immediate next action",
+                "stop_explanation": "Canonical analysis no longer returns an actionable next command.",
+                "progress_made": True,
+                "progress_score": 3,
+            },
+        }
+
+    monkeypatch.setattr("archmind.ui_api.execute_command", _fake_execute_command)
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/auto-command/commands", json={"command": "/auto"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["command"] == "/auto"
+    assert payload["auto_result"]["run_id"] == "auto-2"
+    assert payload["auto_result"]["executed"] == 1
 
 
 def test_ui_project_detail_tolerates_partial_visualization_analysis_payload(monkeypatch, tmp_path: Path) -> None:

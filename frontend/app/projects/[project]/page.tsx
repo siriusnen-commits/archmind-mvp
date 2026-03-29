@@ -6,6 +6,7 @@ import AddFieldCard from "@/components/AddFieldCard";
 import AddApiCard from "@/components/AddApiCard";
 import AddPageCard from "@/components/AddPageCard";
 import DangerZoneCard from "@/components/DangerZoneCard";
+import AutoControlPanel from "@/components/AutoControlPanel";
 import NextActionCard from "@/components/NextActionCard";
 import NextCandidatesCard from "@/components/NextCandidatesCard";
 import ProjectSummaryCard from "@/components/ProjectSummaryCard";
@@ -118,6 +119,24 @@ type ProjectDetail = {
     message?: string;
     stop_reason?: string;
   }>;
+  auto_summary?: {
+    run_id?: string;
+    executed?: number;
+    commands?: string[];
+    stop_reason?: string;
+    stop_explanation?: string;
+    progress_made?: boolean;
+    progress_score?: number;
+    metrics_before?: Record<string, number>;
+    metrics_after?: Record<string, number>;
+    current?: string;
+    runtime?: {
+      backend_status?: string;
+      frontend_status?: string;
+      backend_url?: string;
+      frontend_url?: string;
+    };
+  };
   repository?: RepositoryInfo;
   analysis?: ProjectAnalysis;
 };
@@ -178,6 +197,7 @@ export default async function ProjectDetailPage({ params }: PageProps) {
           <ProjectSummaryCard project={detail} />
           <NextActionCard projectName={detail.name} nextAction={analysis?.next_action} />
           <NextCandidatesCard projectName={detail.name} candidates={analysis?.next_candidates} />
+          <AutoControlPanel projectName={detail.name} autoSummary={detail.auto_summary} />
           <StructureVisualizationCard
             projectName={detail.name}
             entityGraph={analysis?.entity_graph}

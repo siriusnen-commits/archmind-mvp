@@ -452,6 +452,7 @@ def post_ui_project_run_command(project_name: str, body: RunCommandRequest) -> R
             command=str(result.get("command") or command),
             detail=detail,
             error=str(result.get("error") or ""),
+            auto_result=result.get("auto_result") if isinstance(result.get("auto_result"), dict) else {},
             spec_summary=result.get("spec_summary") if isinstance(result.get("spec_summary"), dict) else {},
             recent_evolution=[str(x) for x in (result.get("recent_evolution") or []) if str(x).strip()],
         )
