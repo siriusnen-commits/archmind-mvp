@@ -48,26 +48,38 @@ type Props = {
 };
 
 export default function StructureVisualizationCard({ entityGraph, apiMap, pageMap }: Props) {
-  const nodes = Array.isArray(entityGraph?.nodes) ? entityGraph?.nodes : [];
-  const edges = Array.isArray(entityGraph?.edges) ? entityGraph?.edges : [];
-  const apiGroups = Array.isArray(apiMap?.groups) ? apiMap?.groups : [];
-  const pageGroups = Array.isArray(pageMap?.groups) ? pageMap?.groups : [];
+  const nodes = (Array.isArray(entityGraph?.nodes) ? entityGraph.nodes : []).filter(
+    (item): item is EntityGraphNode => Boolean(item && typeof item === "object"),
+  );
+  const edges = (Array.isArray(entityGraph?.edges) ? entityGraph.edges : []).filter(
+    (item): item is EntityGraphEdge => Boolean(item && typeof item === "object"),
+  );
+  const apiGroups = (Array.isArray(apiMap?.groups) ? apiMap.groups : []).filter(
+    (item): item is ApiGroup => Boolean(item && typeof item === "object"),
+  );
+  const pageGroups = (Array.isArray(pageMap?.groups) ? pageMap.groups : []).filter(
+    (item): item is PageGroup => Boolean(item && typeof item === "object"),
+  );
+  const hasVisualization = nodes.length > 0 || edges.length > 0 || apiGroups.length > 0 || pageGroups.length > 0;
 
   return (
     <section className="rounded-md border border-slate-700 bg-slate-900 p-4">
       <h3 className="text-sm font-semibold text-slate-100">Structure Visualization</h3>
+      {!hasVisualization ? (
+        <p className="mt-2 text-xs text-slate-400">Structure visualization is not available yet.</p>
+      ) : null}
 
       <div className="mt-4 space-y-4">
         <div>
           <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">Entity Graph</h4>
           {nodes.length ? (
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              {nodes.map((node) => {
+              {nodes.map((node, idx) => {
                 const label = String(node?.label || node?.id || "").trim() || "(unknown)";
                 const resource = String(node?.resource || "").trim();
                 const crudComplete = Boolean(node?.crud_complete);
                 return (
-                  <article key={label} className="rounded-md border border-slate-700 bg-slate-950/70 p-3">
+                  <article key={`${label}-${idx}`} className="rounded-md border border-slate-700 bg-slate-950/70 p-3">
                     <p className="text-sm font-semibold text-slate-100">{label}</p>
                     <p className="mt-1 text-xs text-slate-300">resource: {resource || "(none)"}</p>
                     <span
@@ -84,7 +96,7 @@ export default function StructureVisualizationCard({ entityGraph, apiMap, pageMa
               })}
             </div>
           ) : (
-            <p className="mt-2 text-xs text-slate-400">No entities detected.</p>
+            <p className="mt-2 text-xs text-slate-400">No entities available.</p>
           )}
 
           {edges.length ? (
@@ -120,14 +132,14 @@ export default function StructureVisualizationCard({ entityGraph, apiMap, pageMa
           <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">API Map</h4>
           {apiGroups.length ? (
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              {apiGroups.map((group) => {
+              {apiGroups.map((group, idx) => {
                 const resource = String(group?.resource || "").trim() || "(unknown)";
                 const entity = String(group?.entity || "").trim();
                 const core = Array.isArray(group?.core_crud) ? group.core_crud : [];
                 const relation = Array.isArray(group?.relation_scoped) ? group.relation_scoped : [];
                 const other = Array.isArray(group?.other) ? group.other : [];
                 return (
-                  <article key={resource} className="rounded-md border border-slate-700 bg-slate-950/70 p-3">
+                  <article key={`api-${resource}-${idx}`} className="rounded-md border border-slate-700 bg-slate-950/70 p-3">
                     <p className="text-sm font-semibold text-slate-100">
                       {resource}
                       {entity ? <span className="ml-1 text-xs font-normal text-slate-400">({entity})</span> : null}
@@ -140,7 +152,7 @@ export default function StructureVisualizationCard({ entityGraph, apiMap, pageMa
               })}
             </div>
           ) : (
-            <p className="mt-2 text-xs text-slate-400">No APIs detected.</p>
+            <p className="mt-2 text-xs text-slate-400">No API groups available.</p>
           )}
         </div>
 
@@ -148,14 +160,14 @@ export default function StructureVisualizationCard({ entityGraph, apiMap, pageMa
           <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">Page Map</h4>
           {pageGroups.length ? (
             <div className="mt-2 grid gap-2 sm:grid-cols-2">
-              {pageGroups.map((group) => {
+              {pageGroups.map((group, idx) => {
                 const resource = String(group?.resource || "").trim() || "(unknown)";
                 const entity = String(group?.entity || "").trim();
                 const core = Array.isArray(group?.core_pages) ? group.core_pages : [];
                 const relation = Array.isArray(group?.relation_pages) ? group.relation_pages : [];
                 const other = Array.isArray(group?.other_pages) ? group.other_pages : [];
                 return (
-                  <article key={resource} className="rounded-md border border-slate-700 bg-slate-950/70 p-3">
+                  <article key={`page-${resource}-${idx}`} className="rounded-md border border-slate-700 bg-slate-950/70 p-3">
                     <p className="text-sm font-semibold text-slate-100">
                       {resource}
                       {entity ? <span className="ml-1 text-xs font-normal text-slate-400">({entity})</span> : null}
@@ -168,7 +180,7 @@ export default function StructureVisualizationCard({ entityGraph, apiMap, pageMa
               })}
             </div>
           ) : (
-            <p className="mt-2 text-xs text-slate-400">No pages detected.</p>
+            <p className="mt-2 text-xs text-slate-400">No page groups available.</p>
           )}
         </div>
       </div>
