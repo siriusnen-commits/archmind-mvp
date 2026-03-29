@@ -8,6 +8,7 @@ import AddApiCard from "@/components/AddApiCard";
 import AddPageCard from "@/components/AddPageCard";
 import DangerZoneCard from "@/components/DangerZoneCard";
 import AutoControlPanel from "@/components/AutoControlPanel";
+import CommandConsole from "@/components/CommandConsole";
 import NextActionCard from "@/components/NextActionCard";
 import NextCandidatesCard from "@/components/NextCandidatesCard";
 import ProjectSummaryCard from "@/components/ProjectSummaryCard";
@@ -209,6 +210,7 @@ export default async function ProjectDetailPage({ params }: PageProps) {
           <NextActionCard projectName={detail.name} nextAction={analysis?.next_action} />
           <NextCandidatesCard projectName={detail.name} candidates={analysis?.next_candidates} />
           <AutoControlPanel projectName={detail.name} autoSummary={detail.auto_summary} />
+          <CommandConsole projectName={detail.name} />
           <EvolutionHistoryCard items={Array.isArray(detail.evolution_history) ? detail.evolution_history : []} />
           <StructureVisualizationCard
             projectName={detail.name}
