@@ -6483,6 +6483,32 @@ def _auto_is_good_enough_mvp(analysis: dict[str, Any]) -> bool:
     placeholder_pages = [str(x).strip() for x in (analysis.get("placeholder_pages") or []) if str(x).strip()]
     if placeholder_pages:
         return False
+    next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
+    next_kind = str(next_action.get("kind") or "").strip()
+    next_message = str(next_action.get("message") or "").strip()
+    next_command = str(next_action.get("command") or "").strip()
+    next_priority = classify_auto_action_priority(
+        {"kind": next_kind, "message": next_message, "command": next_command}
+    )
+    normalized_next_command = _normalize_recommended_command(next_command)
+    next_cmd, _ = _parse_command_string(normalized_next_command) if normalized_next_command else ("", [])
+    has_actionable_supported_next = (
+        next_priority in {"high", "medium"}
+        and bool(normalized_next_command)
+        and next_cmd in AUTO_ALLOWED_COMMANDS
+    )
+    if has_actionable_supported_next:
+        return False
+    if _auto_is_multi_entity(analysis):
+        drift_warnings = [str(x).strip().lower() for x in (analysis.get("drift_warnings") or []) if str(x).strip()]
+        relation_drift_tokens = (
+            "relation-scoped api",
+            "relation page",
+            "relation basis",
+            "no canonical relation pair",
+        )
+        if any(any(token in warning for token in relation_drift_tokens) for warning in drift_warnings):
+            return False
     if _auto_has_relation_opportunity(analysis):
         snapshot = _auto_progress_snapshot(analysis)
         relation_total = int(snapshot.get("relation_pages", 0)) + int(snapshot.get("relation_apis", 0))
@@ -6581,96 +6607,98 @@ async def command_auto(update: Any, context: Any) -> None:
 
     idx = 1
     while idx <= iteration_budget:
-        if _auto_is_good_enough_mvp(analysis):
-            lines.append(f"Step {idx}")
-            lines.append("- Result: STOP (good enough MVP reached)")
-            stop_reason = "good enough MVP reached"
-            append_execution_event(
-                project_path,
-                project_name=project_path.name,
-                source="telegram-auto",
-                command="",
-                status="stop",
-                message="Good enough MVP reached.",
-                run_id=run_id,
-                step_no=idx,
-                stop_reason=stop_reason,
-            )
-            break
-
         kind, message, raw_command = _extract_next_action(analysis)
         priority = classify_auto_action_priority({"kind": kind, "message": message, "command": raw_command})
         normalized_command = _normalize_recommended_command(raw_command)
+        cmd, _ = _parse_command_string(normalized_command) if normalized_command else ("", [])
+        actionable_supported = priority in {"high", "medium"} and bool(normalized_command) and cmd in AUTO_ALLOWED_COMMANDS
         state_signature = _analysis_progress_signature(analysis)
         before_snapshot = _auto_progress_snapshot(analysis)
 
         lines.append(f"Step {idx}")
-        if priority == "none":
-            lines.append("- No immediate next action.")
-            stop_reason = "no immediate next action"
-            append_execution_event(
-                project_path,
-                project_name=project_path.name,
-                source="telegram-auto",
-                command=normalized_command or raw_command or "",
-                status="stop",
-                message="No immediate next action.",
-                run_id=run_id,
-                step_no=idx,
-                stop_reason=stop_reason,
-            )
-            break
+        if not actionable_supported:
+            if _auto_is_good_enough_mvp(analysis):
+                lines.append("- Result: STOP (good enough MVP reached)")
+                stop_reason = "good enough MVP reached"
+                append_execution_event(
+                    project_path,
+                    project_name=project_path.name,
+                    source="telegram-auto",
+                    command=normalized_command or raw_command or "",
+                    status="stop",
+                    message="Good enough MVP reached.",
+                    run_id=run_id,
+                    step_no=idx,
+                    stop_reason=stop_reason,
+                )
+                break
+            if priority == "none":
+                lines.append("- No immediate next action.")
+                stop_reason = "no immediate next action"
+                append_execution_event(
+                    project_path,
+                    project_name=project_path.name,
+                    source="telegram-auto",
+                    command=normalized_command or raw_command or "",
+                    status="stop",
+                    message="No immediate next action.",
+                    run_id=run_id,
+                    step_no=idx,
+                    stop_reason=stop_reason,
+                )
+                break
 
-        if not normalized_command:
-            lines.append(f"- Next: {raw_command or '(empty)'}")
-            lines.append("- Result: STOP (empty or malformed command)")
-            stop_reason = "empty or malformed command"
-            append_execution_event(
-                project_path,
-                project_name=project_path.name,
-                source="telegram-auto",
-                command=raw_command or "",
-                status="stop",
-                message="Empty or malformed command.",
-                run_id=run_id,
-                step_no=idx,
-                stop_reason=stop_reason,
-            )
-            break
+            if not normalized_command:
+                lines.append(f"- Next: {raw_command or '(empty)'}")
+                lines.append("- Result: STOP (empty or malformed command)")
+                stop_reason = "empty or malformed command"
+                append_execution_event(
+                    project_path,
+                    project_name=project_path.name,
+                    source="telegram-auto",
+                    command=raw_command or "",
+                    status="stop",
+                    message="Empty or malformed command.",
+                    run_id=run_id,
+                    step_no=idx,
+                    stop_reason=stop_reason,
+                )
+                break
 
-        cmd, _ = _parse_command_string(normalized_command)
+            lines.append(f"- Next: {normalized_command}")
+            if cmd not in AUTO_ALLOWED_COMMANDS:
+                lines.append("- Result: STOP (unsupported command)")
+                stop_reason = f"unsupported command: {cmd or normalized_command}"
+                append_execution_event(
+                    project_path,
+                    project_name=project_path.name,
+                    source="telegram-auto",
+                    command=normalized_command,
+                    status="stop",
+                    message="Unsupported command for auto run.",
+                    run_id=run_id,
+                    step_no=idx,
+                    stop_reason=stop_reason,
+                )
+                break
+
+            if priority == "low":
+                lines.append("- Result: STOP (low-priority next action)")
+                stop_reason = "low-priority next action"
+                append_execution_event(
+                    project_path,
+                    project_name=project_path.name,
+                    source="telegram-auto",
+                    command=normalized_command,
+                    status="stop",
+                    message="Low-priority next action.",
+                    run_id=run_id,
+                    step_no=idx,
+                    stop_reason=stop_reason,
+                )
+                break
+
         lines.append(f"- Next: {normalized_command}")
-        if cmd not in AUTO_ALLOWED_COMMANDS:
-            lines.append("- Result: STOP (unsupported command)")
-            stop_reason = f"unsupported command: {cmd or normalized_command}"
-            append_execution_event(
-                project_path,
-                project_name=project_path.name,
-                source="telegram-auto",
-                command=normalized_command,
-                status="stop",
-                message="Unsupported command for auto run.",
-                run_id=run_id,
-                step_no=idx,
-                stop_reason=stop_reason,
-            )
-            break
-
-        if priority == "low":
-            lines.append("- Result: STOP (low-priority next action)")
-            stop_reason = "low-priority next action"
-            append_execution_event(
-                project_path,
-                project_name=project_path.name,
-                source="telegram-auto",
-                command=normalized_command,
-                status="stop",
-                message="Low-priority next action.",
-                run_id=run_id,
-                step_no=idx,
-                stop_reason=stop_reason,
-            )
-            break
 
         if _auto_command_already_satisfied(analysis, normalized_command):
             lines.append("- Result: STOP (already satisfied in canonical state)")

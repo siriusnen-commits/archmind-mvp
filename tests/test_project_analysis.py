@@ -1005,3 +1005,30 @@ def test_project_analysis_relation_diagnostics_warn_when_relation_field_has_no_r
     assert "board_id" in warnings
     assert "GET /boards/{id}/cards" in warnings
     assert "cards/by_board" in warnings
+
+
+def test_project_analysis_relation_diagnostics_warn_when_relation_page_exists_but_scoped_api_missing(tmp_path: Path) -> None:
+    project_dir = tmp_path / "relation-page-without-scoped-api"
+    spec = {
+        "entities": [
+            {"name": "Board", "fields": [{"name": "title", "type": "string"}]},
+            {"name": "Card", "fields": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+        ],
+        "api_endpoints": [
+            "GET /boards",
+            "POST /boards",
+            "GET /boards/{id}",
+            "PATCH /boards/{id}",
+            "DELETE /boards/{id}",
+            "GET /cards",
+            "POST /cards",
+            "GET /cards/{id}",
+            "PATCH /cards/{id}",
+            "DELETE /cards/{id}",
+        ],
+        "frontend_pages": ["boards/list", "boards/detail", "cards/list", "cards/detail", "cards/by_board"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    warnings = "\n".join(out["drift_warnings"])
+    assert "GET /boards/{id}/cards" in warnings
+    assert "cards/by_board" not in warnings
