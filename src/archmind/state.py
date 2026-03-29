@@ -312,6 +312,9 @@ def _default_repository_state() -> dict[str, Any]:
         "sync_status": "NOT_ATTEMPTED",
         "sync_reason": "",
         "sync_hint": "",
+        "sync_dirty_detail": "",
+        "sync_remote_url": "",
+        "sync_remote_type": "",
         "last_commit_hash": "",
         "working_tree_state": "",
     }
@@ -620,6 +623,9 @@ def _normalize_loaded_state(project_dir: Path, payload: dict[str, Any]) -> dict[
     repository_defaults["sync_status"] = _safe_repository_sync_status(str(repository_defaults.get("sync_status") or "")) or "NOT_ATTEMPTED"
     repository_defaults["sync_reason"] = str(repository_defaults.get("sync_reason") or "").strip()[:220]
     repository_defaults["sync_hint"] = str(repository_defaults.get("sync_hint") or "").strip()[:220]
+    repository_defaults["sync_dirty_detail"] = str(repository_defaults.get("sync_dirty_detail") or "").strip()[:220]
+    repository_defaults["sync_remote_url"] = str(repository_defaults.get("sync_remote_url") or "").strip()[:300]
+    repository_defaults["sync_remote_type"] = str(repository_defaults.get("sync_remote_type") or "").strip()[:20]
     repository_defaults["last_commit_hash"] = str(repository_defaults.get("last_commit_hash") or "").strip()[:40]
     repository_defaults["working_tree_state"] = str(repository_defaults.get("working_tree_state") or "").strip()[:20]
     normalized["repository"] = repository_defaults
@@ -853,6 +859,9 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     repository["sync_status"] = _safe_repository_sync_status(str(repository.get("sync_status") or "")) or "NOT_ATTEMPTED"
     repository["sync_reason"] = str(repository.get("sync_reason") or "").strip()[:220]
     repository["sync_hint"] = str(repository.get("sync_hint") or "").strip()[:220]
+    repository["sync_dirty_detail"] = str(repository.get("sync_dirty_detail") or "").strip()[:220]
+    repository["sync_remote_url"] = str(repository.get("sync_remote_url") or "").strip()[:300]
+    repository["sync_remote_type"] = str(repository.get("sync_remote_type") or "").strip()[:20]
     repository["last_commit_hash"] = str(repository.get("last_commit_hash") or "").strip()[:40]
     repository["working_tree_state"] = str(repository.get("working_tree_state") or "").strip()[:20]
     payload["repository"] = repository

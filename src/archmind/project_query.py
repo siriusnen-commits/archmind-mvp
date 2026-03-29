@@ -326,6 +326,9 @@ def resolve_repository_metadata(
             sync_status=str(repository_info.get("sync_status") or "NOT_ATTEMPTED").strip().upper() or "NOT_ATTEMPTED",
             sync_reason=str(repository_info.get("sync_reason") or "").strip(),
             sync_hint=str(repository_info.get("sync_hint") or "").strip(),
+            sync_dirty_detail=str(repository_info.get("sync_dirty_detail") or "").strip(),
+            sync_remote_url=str(repository_info.get("sync_remote_url") or "").strip(),
+            sync_remote_type=str(repository_info.get("sync_remote_type") or "").strip(),
             last_commit_hash=str(repository_info.get("last_commit_hash") or "").strip(),
             working_tree_state=str(repository_info.get("working_tree_state") or "").strip(),
         )
