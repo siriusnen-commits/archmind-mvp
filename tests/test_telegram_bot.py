@@ -6910,6 +6910,40 @@ def test_sync_repo_after_auto_batch_uses_persisted_repo_existence_even_if_status
     assert repository.get("sync_status") == "SYNCED"
 
 
+def test_sync_repo_after_evolution_command_ensures_runtime_gitignore_rules(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_dir = tmp_path / "repo_gitignore_guard"
+    archmind_dir = project_dir / ".archmind"
+    archmind_dir.mkdir(parents=True, exist_ok=True)
+    (archmind_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "repository": {
+                    "status": "CREATED",
+                    "repo_status": "CREATED",
+                    "url": "https://github.com/example/repo_gitignore_guard",
+                    "repo_url": "https://github.com/example/repo_gitignore_guard",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def fake_sync(_project_dir: Path, commit_message: str) -> dict[str, str]:
+        del commit_message
+        gitignore = (project_dir / ".gitignore").read_text(encoding="utf-8")
+        assert ".archmind/" in gitignore
+        assert "frontend/.next/" in gitignore
+        return {"status": "SYNCED", "working_tree_state": "clean"}
+
+    monkeypatch.setattr("archmind.telegram_bot.sync_repository_changes", fake_sync)
+    result = telegram_bot.sync_repo_after_evolution_command(project_dir, "/add_api GET /tasks")
+
+    assert result.get("status") == "SYNCED"
+    assert (project_dir / ".gitignore").exists()
+
+
 def test_auto_command_multi_entity_relation_project_can_run_beyond_old_default_budget(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "auto_dynamic_budget_multi_entity"
     project_dir.mkdir(parents=True, exist_ok=True)
