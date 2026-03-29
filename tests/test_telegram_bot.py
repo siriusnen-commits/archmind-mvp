@@ -3461,6 +3461,8 @@ def test_inspect_command_shows_repository_sync_section(tmp_path: Path, monkeypat
                     "repo_url": "https://github.com/example/repo-sync",
                     "sync_status": "PUSH_FAILED",
                     "sync_reason": "authentication failed",
+                    "sync_remote_type": "ssh",
+                    "sync_remote_url": "git@github.com:example/repo-sync.git",
                     "last_commit_hash": "abc1234",
                     "working_tree_state": "dirty",
                 }
@@ -3474,6 +3476,8 @@ def test_inspect_command_shows_repository_sync_section(tmp_path: Path, monkeypat
     out = msg.sent[-1]
     assert "Sync:" in out
     assert "Status: PUSH_FAILED" in out
+    assert "Remote type: ssh" in out
+    assert "Remote URL: git@github.com:example/repo-sync.git" in out
     assert "Last commit: abc1234" in out
     assert "Working tree: dirty" in out
     assert "Reason: authentication failed" in out
