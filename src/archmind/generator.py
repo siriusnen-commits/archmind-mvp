@@ -22,6 +22,7 @@ from .reasoning import generate_reasoning_text
 DEBUG_RAW_OUTPUT = Path("examples/last_raw_output.txt")
 DEBUG_REPAIRED_OUTPUT = Path("examples/last_repaired_output.txt")
 SUPPORTED_MODULES = ("auth", "db", "dashboard", "worker", "file-upload")
+RELATION_HINT_ENTITY_TOKENS = {"tag", "tags", "category", "categories", "label", "labels", "group", "groups"}
 
 
 @dataclass
@@ -671,6 +672,199 @@ def _pluralize_resource_name(value: str) -> str:
 def _normalize_resource_segment(value: str) -> str:
     text = re.sub(r"[^a-zA-Z0-9_-]", "", str(value or "").strip().lower())
     return text
+
+
+def _load_project_spec_payload(project_dir: Path) -> dict[str, Any]:
+    spec_path = project_dir / ".archmind" / "project_spec.json"
+    if not spec_path.exists():
+        return {}
+    try:
+        payload = json.loads(spec_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _extract_relation_entities_from_spec(spec_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    entities = spec_payload.get("entities") if isinstance(spec_payload.get("entities"), list) else []
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in entities:
+        if not isinstance(raw, dict):
+            continue
+        entity_name = str(raw.get("name") or "").strip()
+        if not entity_name:
+            continue
+        _, slug, plural = _entity_identity(entity_name)
+        resource = str(plural or "").strip().lower()
+        if not resource or resource in seen:
+            continue
+        seen.add(resource)
+        fields_raw = raw.get("fields") if isinstance(raw.get("fields"), list) else []
+        fields: list[str] = []
+        seen_fields: set[str] = set()
+        for field in fields_raw:
+            if not isinstance(field, dict):
+                continue
+            field_name = str(field.get("name") or "").strip().lower()
+            if not field_name or field_name in seen_fields:
+                continue
+            seen_fields.add(field_name)
+            fields.append(field_name)
+        out.append(
+            {
+                "name": entity_name,
+                "slug": slug,
+                "resource": resource,
+                "resource_singular": _singularize_resource_name(resource),
+                "fields": fields,
+            }
+        )
+    return out
+
+
+def _infer_relation_pairs_from_spec(spec_payload: dict[str, Any]) -> list[dict[str, str]]:
+    entities = _extract_relation_entities_from_spec(spec_payload)
+    if len(entities) < 2:
+        return []
+    alias_to_parent: dict[str, dict[str, str]] = {}
+    for entity in entities:
+        resource = str(entity.get("resource") or "")
+        singular = str(entity.get("resource_singular") or "")
+        slug = str(entity.get("slug") or "")
+        aliases = {resource, singular, slug}
+        aliases.update(part for part in slug.split("_") if part)
+        for alias in {token for token in aliases if token}:
+            alias_to_parent[alias] = {"name": str(entity.get("name") or ""), "resource": resource, "singular": singular}
+
+    pairs: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for child in entities:
+        child_name = str(child.get("name") or "")
+        child_resource = str(child.get("resource") or "")
+        fields = child.get("fields") if isinstance(child.get("fields"), list) else []
+        for field_name in fields:
+            field = str(field_name or "").strip().lower()
+            if not field.endswith("_id"):
+                continue
+            base = field[:-3].strip("_")
+            if not base:
+                continue
+            parent = alias_to_parent.get(base)
+            if not parent:
+                continue
+            parent_name = str(parent.get("name") or "")
+            parent_resource = str(parent.get("resource") or "")
+            parent_singular = str(parent.get("singular") or _singularize_resource_name(parent_resource))
+            if not parent_name or not parent_resource or parent_name.lower() == child_name.lower():
+                continue
+            key = (parent_resource, child_resource)
+            if key in seen:
+                continue
+            seen.add(key)
+            pairs.append(
+                {
+                    "parent_name": parent_name,
+                    "parent_resource": parent_resource,
+                    "parent_singular": parent_singular,
+                    "child_name": child_name,
+                    "child_resource": child_resource,
+                    "child_field": field,
+                }
+            )
+
+    if pairs:
+        return pairs
+
+    category_like: list[dict[str, Any]] = []
+    others: list[dict[str, Any]] = []
+    for entity in entities:
+        singular = str(entity.get("resource_singular") or "").strip().lower()
+        if singular in RELATION_HINT_ENTITY_TOKENS:
+            category_like.append(entity)
+        else:
+            others.append(entity)
+    for parent in category_like:
+        for child in others:
+            parent_resource = str(parent.get("resource") or "")
+            child_resource = str(child.get("resource") or "")
+            if not parent_resource or not child_resource:
+                continue
+            key = (parent_resource, child_resource)
+            if key in seen:
+                continue
+            seen.add(key)
+            parent_singular = str(parent.get("resource_singular") or _singularize_resource_name(parent_resource))
+            pairs.append(
+                {
+                    "parent_name": str(parent.get("name") or ""),
+                    "parent_resource": parent_resource,
+                    "parent_singular": parent_singular,
+                    "child_name": str(child.get("name") or ""),
+                    "child_resource": child_resource,
+                    "child_field": f"{parent_singular}_id",
+                }
+            )
+    return pairs
+
+
+def _relation_sections_for_parent(project_dir: Path, parent_resource: str) -> list[dict[str, str]]:
+    resource = _pluralize_resource_name(_normalize_resource_segment(parent_resource))
+    if not resource:
+        return []
+    spec_payload = _load_project_spec_payload(project_dir)
+    pairs = _infer_relation_pairs_from_spec(spec_payload)
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for pair in pairs:
+        if str(pair.get("parent_resource") or "") != resource:
+            continue
+        child_resource = str(pair.get("child_resource") or "").strip().lower()
+        child_field = str(pair.get("child_field") or "").strip().lower()
+        parent_singular = str(pair.get("parent_singular") or _singularize_resource_name(resource)).strip().lower()
+        if not child_resource or not child_field or not parent_singular:
+            continue
+        key = f"{child_resource}:{child_field}"
+        if key in seen:
+            continue
+        seen.add(key)
+        child_title = child_resource.replace("_", " ").title()
+        out.append(
+            {
+                "child_title": child_title,
+                "child_resource": child_resource,
+                "child_field": child_field,
+                "relation_href": f"/{child_resource}/by_{parent_singular}",
+                "create_href": f"/{child_resource}/new",
+            }
+        )
+    return out
+
+
+def _sync_relation_detail_pages(project_dir: Path, generated: list[str]) -> None:
+    app_root = _resolve_frontend_app_root(project_dir)
+    if app_root is None:
+        return
+    spec_payload = _load_project_spec_payload(project_dir)
+    pairs = _infer_relation_pairs_from_spec(spec_payload)
+    parent_resources = sorted({str(item.get("parent_resource") or "").strip().lower() for item in pairs if str(item.get("parent_resource") or "").strip()})
+    for parent_resource in parent_resources:
+        if _is_note_like_entity_path(parent_resource):
+            continue
+        detail_page = app_root / parent_resource / "[id]" / "page.tsx"
+        if not detail_page.exists():
+            continue
+        helper_import = _api_base_helper_import_for_page(app_root, detail_page)
+        component_name = _safe_component_name([parent_resource, "detail"])
+        title = parent_resource.replace("_", " ").title()
+        content = _render_frontend_entity_detail_page(
+            component_name=component_name,
+            title=title,
+            entity_path=parent_resource,
+            api_helper_import=helper_import,
+            relation_sections=_relation_sections_for_parent(project_dir, parent_resource),
+        )
+        _write_if_changed(detail_page, content, generated, project_dir)
 
 
 def _canonicalize_api_path(path: str) -> str:
@@ -1445,11 +1639,13 @@ def apply_frontend_page_scaffold(project_dir: Path, entity_name: str) -> list[st
             title=class_name,
             entity_path=plural,
             api_helper_import=detail_helper_import,
+            relation_sections=_relation_sections_for_parent(project_dir, plural),
         ),
         generated,
         project_dir,
     )
     _register_frontend_nav_link(app_root, f"/{plural}", generated, project_dir)
+    _sync_relation_detail_pages(project_dir, generated)
     return generated
 
 
@@ -1503,10 +1699,12 @@ def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
                 title=title,
                 entity_path=entity_path,
                 api_helper_import=helper_import,
+                relation_sections=_relation_sections_for_parent(project_dir, entity_path),
             ),
             generated,
             project_dir,
         )
+        _sync_relation_detail_pages(project_dir, generated)
         return generated
     if entity_path and route_kind == "create":
         singular = _singularize_resource_name(entity_path).replace("-", " ").replace("_", " ").title()
@@ -1638,6 +1836,7 @@ def _render_implemented_page_content(app_root: Path, target: Path, rel: str) -> 
             title=title,
             entity_path=entity_path,
             api_helper_import=helper_import,
+            relation_sections=[],
         )
     return _render_generic_page_scaffold(
         component_name=comp_name,
@@ -1704,6 +1903,7 @@ def implement_page_scaffold(project_dir: Path, page_path: str) -> dict[str, Any]
     content = _render_implemented_page_content(app_root, target, rel)
     _write_if_changed(target, content, changed, project_dir)
     _register_frontend_nav_link(app_root, f"/{route_rel or rel}", changed, project_dir)
+    _sync_relation_detail_pages(project_dir, changed)
     return {
         "ok": True,
         "status": "implemented",
@@ -1816,6 +2016,7 @@ def _render_frontend_entity_detail_page(
     entity_path: str,
     id_mode: str = "path",
     api_helper_import: str = "../../_lib/apiBase",
+    relation_sections: list[dict[str, str]] | None = None,
 ) -> str:
     api_path = f"/{str(entity_path or '').strip('/')}"
     if _is_note_like_entity_path(entity_path):
@@ -1837,12 +2038,108 @@ def _render_frontend_entity_detail_page(
         else 'import { useParams } from "next/navigation";\n'
     )
     hook = "const searchParams = useSearchParams();" if id_mode == "query" else "const params = useParams();"
+    sections = relation_sections if isinstance(relation_sections, list) else []
+    import_link_line = 'import Link from "next/link";\n' if sections else ""
+    helper_extract_rows = ""
+    relation_state_blocks = ""
+    relation_effect_blocks = ""
+    relation_ui_blocks = ""
+    if sections:
+        helper_extract_rows = (
+            "\nfunction extractEntityRows(payload: unknown): EntityItem[] {\n"
+            "  if (Array.isArray(payload)) return payload as EntityItem[];\n"
+            "  if (payload && typeof payload === \"object\" && Array.isArray((payload as { items?: unknown[] }).items)) {\n"
+            "    return ((payload as { items: unknown[] }).items ?? []) as EntityItem[];\n"
+            "  }\n"
+            "  return [];\n"
+            "}\n"
+        )
+    for idx, section in enumerate(sections):
+        child_title = str(section.get("child_title") or "").strip() or "Related"
+        child_resource = str(section.get("child_resource") or "").strip().lower()
+        child_field = str(section.get("child_field") or "").strip().lower()
+        relation_href = str(section.get("relation_href") or "").strip()
+        create_href = str(section.get("create_href") or "").strip()
+        if not child_resource or not child_field:
+            continue
+        key = f"related{idx}"
+        relation_state_blocks += (
+            f"  const [{key}Items, set{key.capitalize()}Items] = useState<EntityItem[]>([]);\n"
+            f"  const [{key}Loading, set{key.capitalize()}Loading] = useState(false);\n"
+            f"  const [{key}Error, set{key.capitalize()}Error] = useState(\"\");\n"
+        )
+        relation_effect_blocks += (
+            "\n  useEffect(() => {\n"
+            "    if (!id || apiBaseLoading || !apiBaseUrl) {\n"
+            f"      set{key.capitalize()}Items([]);\n"
+            f"      set{key.capitalize()}Error(\"\");\n"
+            "      return;\n"
+            "    }\n"
+            "    let mounted = true;\n"
+            "    (async () => {\n"
+            f"      set{key.capitalize()}Loading(true);\n"
+            f"      set{key.capitalize()}Error(\"\");\n"
+            "      try {\n"
+            f'        const scoped = await fetch(`${{apiBaseUrl}}{api_path}/${{id}}/{child_resource}`, {{ cache: "no-store" }});\n'
+            "        if (scoped.ok) {\n"
+            "          const scopedPayload = await scoped.json();\n"
+            f"          if (mounted) set{key.capitalize()}Items(extractEntityRows(scopedPayload));\n"
+            "          return;\n"
+            "        }\n"
+            f'        const fallback = await fetch(`${{apiBaseUrl}}/{child_resource}`, {{ cache: "no-store" }});\n'
+            "        if (!fallback.ok) {\n"
+            "          throw new Error(`HTTP ${fallback.status}`);\n"
+            "        }\n"
+            "        const payload = await fallback.json();\n"
+            "        const rows = extractEntityRows(payload).filter((row) => (\n"
+            f'          String((row as Record<string, unknown>)["{child_field}"] ?? "").trim() === id\n'
+            "        ));\n"
+            f"        if (mounted) set{key.capitalize()}Items(rows);\n"
+            "      } catch (e) {\n"
+            "        const message = e instanceof Error ? e.message : String(e || \"unknown error\");\n"
+            "        if (mounted) {\n"
+            f"          set{key.capitalize()}Error(message);\n"
+            f"          set{key.capitalize()}Items([]);\n"
+            "        }\n"
+            "      } finally {\n"
+            f"        if (mounted) set{key.capitalize()}Loading(false);\n"
+            "      }\n"
+            "    })();\n"
+            "    return () => {\n"
+            "      mounted = false;\n"
+            "    };\n"
+            f"  }}, [apiBaseLoading, apiBaseUrl, id]);\n"
+        )
+        relation_ui_blocks += (
+            '      <section className="space-y-2 rounded-md border border-slate-700 p-3">\n'
+            f'        <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">{child_title}</h2>'
+            f'<div className="flex gap-3 text-xs">'
+            f'<Link href={{`{relation_href}?{child_field}=${{id}}`}} className="text-cyan-300 underline">View all</Link>'
+            f'<Link href={{`{create_href}?{child_field}=${{id}}`}} className="text-emerald-300 underline">Create new</Link>'
+            "</div></div>\n"
+            f"        {{{key}Loading ? <p className=\"text-xs text-slate-300\">Loading related items...</p> : null}}\n"
+            f"        {{{key}Error ? <p className=\"text-xs text-rose-300\">Failed to load related items: {{{key}Error}}</p> : null}}\n"
+            f"        {{{key}Items.length === 0 && !{key}Loading && !{key}Error ? <p className=\"text-xs text-slate-300\">No related items yet.</p> : null}}\n"
+            f"        {{{key}Items.length > 0 ? (\n"
+            '          <ul className="space-y-2 text-xs">\n'
+            f"            {{{key}Items.map((row, idx) => (\n"
+            '              <li key={String((row as Record<string, unknown>).id ?? idx)} className="rounded border border-slate-700 bg-slate-950/60 p-2">\n'
+            "                <div className=\"font-medium\">{String((row as Record<string, unknown>).title ?? (row as Record<string, unknown>).name ?? `#${idx}`)}</div>\n"
+            "                <pre className=\"mt-1 overflow-x-auto text-[11px] text-slate-400\">{JSON.stringify(row, null, 2)}</pre>\n"
+            "              </li>\n"
+            "            ))}\n"
+            "          </ul>\n"
+            "        ) : null}\n"
+            "      </section>\n"
+        )
     return (
         '"use client";\n\n'
+        f"{import_link_line}"
         "import { useEffect, useState } from \"react\";\n"
         f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n'
         f"{imports}\n"
         "type EntityItem = Record<string, unknown>;\n\n"
+        f"{helper_extract_rows}\n"
         f"export default function {component_name}() {{\n"
         f"  {hook}\n"
         f"  {id_source}\n"
@@ -1851,6 +2148,7 @@ def _render_frontend_entity_detail_page(
         "  const [notFound, setNotFound] = useState(false);\n"
         "  const [error, setError] = useState(\"\");\n"
         "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
+        f"{relation_state_blocks}\n"
         "  useEffect(() => {\n"
         "    if (!id) {\n"
         "      setLoading(false);\n"
@@ -1888,6 +2186,7 @@ def _render_frontend_entity_detail_page(
         "      mounted = false;\n"
         "    };\n"
         "  }, [apiBaseLoading, apiBaseUrl, id]);\n\n"
+        f"{relation_effect_blocks}\n"
         "  return (\n"
         '    <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">\n'
         f'      <h1 className="text-lg font-semibold">{title} Detail</h1>\n'
@@ -1898,6 +2197,7 @@ def _render_frontend_entity_detail_page(
         "      {!loading && !notFound && !error && item ? (\n"
         "        <pre className=\"overflow-x-auto text-xs text-slate-300\">{JSON.stringify(item, null, 2)}</pre>\n"
         "      ) : null}\n"
+        f"{relation_ui_blocks}"
         "    </section>\n"
         "  );\n"
         "}\n"
