@@ -192,6 +192,7 @@ def test_ui_project_detail_response_shape(monkeypatch, tmp_path: Path) -> None:
     assert "analysis" in payload
     assert payload["analysis"]["project_name"] == "beta"
     assert isinstance(payload["analysis"]["suggestions"], list)
+    assert isinstance(payload["analysis"].get("next_candidates", []), list)
     assert isinstance(payload["analysis"]["next_action"], dict)
     for key in ("kind", "message", "command"):
         assert key in payload["analysis"]["next_action"]
@@ -473,12 +474,67 @@ def test_ui_project_analysis_endpoint_response_shape(monkeypatch, tmp_path: Path
     assert isinstance(payload["nav_visible_pages"], list)
     assert isinstance(payload["runtime_status"], dict)
     assert isinstance(payload["suggestions"], list)
+    assert isinstance(payload["next_candidates"], list)
     assert isinstance(payload["next_action"], dict)
     assert isinstance(payload["next_action_explanation"], dict)
     for key in ("kind", "message", "command"):
         assert key in payload["next_action"]
     for key in ("gap_type", "reason_summary", "priority_reason", "expected_effect"):
         assert key in payload["next_action_explanation"]
+
+
+def test_ui_project_analysis_endpoint_filters_and_limits_next_candidates(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "analysis-next-candidates")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    def _fake_build_project_analysis(_project_dir: Path) -> dict[str, object]:
+        return {
+            "project_name": "analysis-next-candidates",
+            "entities": ["Task"],
+            "fields_by_entity": {"Task": [{"name": "title", "type": "string"}]},
+            "apis": [],
+            "pages": [],
+            "entity_graph": {},
+            "api_map": {},
+            "page_map": {},
+            "visualization_gaps": [],
+            "entity_crud_status": {},
+            "placeholder_pages": [],
+            "nav_visible_pages": [],
+            "runtime_status": {},
+            "suggestions": [],
+            "next_candidates": [
+                {"command": "/add_page tasks/list", "gap_type": "page_missing", "priority": "high", "reason": "a", "expected_effect": "ea"},
+                {"command": "", "gap_type": "page_missing", "priority": "high", "reason": "skip", "expected_effect": "skip"},
+                {"command": "/add_api GET /tasks", "gap_type": "crud_api_missing", "priority": "high", "reason_summary": "b", "expected_effect": "eb"},
+                {"command": "/implement_page tasks/list", "gap_type": "placeholder_page", "priority": "medium", "reason": "c", "expected_effect": "ec"},
+                {"command": "/add_field Task description:string", "gap_type": "field_missing", "priority": "medium", "reason": "drop by cap", "expected_effect": "ed"},
+            ],
+            "next_action": {"kind": "missing_page", "message": "msg", "command": "/add_page tasks/list"},
+            "next_action_explanation": {
+                "gap_type": "page_missing",
+                "reason_summary": "msg",
+                "priority": "high",
+                "priority_reason": "reason",
+                "expected_effect": "effect",
+            },
+        }
+
+    monkeypatch.setattr("archmind.ui_api.build_project_analysis", _fake_build_project_analysis)
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/analysis-next-candidates/analysis")
+    assert response.status_code == 200
+    payload = response.json()
+    rows = payload["next_candidates"]
+    assert len(rows) == 3
+    assert [row["command"] for row in rows] == [
+        "/add_page tasks/list",
+        "/add_api GET /tasks",
+        "/implement_page tasks/list",
+    ]
+    assert rows[1]["reason"] == "b"
+    assert rows[1]["reason_summary"] == "b"
 
 
 def test_ui_project_analysis_visualization_matches_relation_aware_canonical_state(monkeypatch, tmp_path: Path) -> None:
@@ -1186,6 +1242,14 @@ def test_project_detail_source_always_renders_structure_visualization_card() -> 
     assert "detail.analysis?.page_map &&" not in project_detail_source
 
 
+def test_project_detail_source_renders_next_candidates_panel() -> None:
+    project_detail_source = Path("frontend/app/projects/[project]/page.tsx").read_text(encoding="utf-8")
+    assert 'import NextCandidatesCard from "@/components/NextCandidatesCard"' in project_detail_source
+    assert "<NextCandidatesCard" in project_detail_source
+    assert "candidates={analysis?.next_candidates}" in project_detail_source
+    assert "&& <NextCandidatesCard" not in project_detail_source
+
+
 def test_structure_visualization_component_has_robust_empty_states_and_no_null_bailout() -> None:
     source = Path("frontend/components/StructureVisualizationCard.tsx").read_text(encoding="utf-8")
     assert '"use client";' in source
@@ -1201,6 +1265,19 @@ def test_structure_visualization_component_has_robust_empty_states_and_no_null_b
     assert "No relations detected." in source
     assert "No API groups available." in source
     assert "No page groups available." in source
+    assert "return null" not in source
+
+
+def test_next_candidates_component_renders_empty_state_and_uses_command_execution_path() -> None:
+    source = Path("frontend/components/NextCandidatesCard.tsx").read_text(encoding="utf-8")
+    assert '"use client";' in source
+    assert "Next Candidates" in source
+    assert "No immediate next action." in source
+    assert "/commands" in source
+    assert "JSON.stringify({ command: normalizedCommand })" in source
+    assert "Running..." in source
+    assert "Completed" in source
+    assert "Executed: {executedCommand}" in source
     assert "return null" not in source
 
 
