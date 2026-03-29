@@ -1618,33 +1618,151 @@ def _extract_add_field_name(command: str) -> str:
 
 
 def _select_next_action(suggestions: list[dict[str, str]]) -> dict[str, str]:
+    def _decorate(row: dict[str, str]) -> dict[str, str]:
+        base = {
+            "kind": str(row.get("kind") or "none"),
+            "message": str(row.get("message") or ""),
+            "command": str(row.get("command") or "").strip(),
+        }
+        explanation = _build_next_action_explanation(base)
+        return {
+            **base,
+            "gap_type": explanation.get("gap_type", ""),
+            "reason_summary": explanation.get("reason_summary", ""),
+            "priority": explanation.get("priority", ""),
+            "priority_reason": explanation.get("priority_reason", ""),
+            "expected_effect": explanation.get("expected_effect", ""),
+        }
+
     best_without_command: dict[str, str] | None = None
     for row in suggestions:
         priority = _suggestion_priority(row)
         command = str(row.get("command") or "").strip()
         if SUGGESTION_PRIORITY_RANK.get(priority, 0) >= SUGGESTION_PRIORITY_RANK["medium"]:
             if command:
-                return {
-                    "kind": str(row.get("kind") or "none"),
-                    "message": str(row.get("message") or ""),
-                    "command": command,
-                }
+                return _decorate({"kind": str(row.get("kind") or "none"), "message": str(row.get("message") or ""), "command": command})
             if best_without_command is None:
-                best_without_command = {
-                    "kind": str(row.get("kind") or "none"),
-                    "message": str(row.get("message") or ""),
-                    "command": "",
-                }
+                best_without_command = _decorate(
+                    {"kind": str(row.get("kind") or "none"), "message": str(row.get("message") or ""), "command": ""}
+                )
     if best_without_command is not None:
         return best_without_command
     for row in suggestions:
         if str(row.get("kind") or "").strip().lower() == "none":
-            return {
-                "kind": str(row.get("kind") or "none"),
-                "message": str(row.get("message") or ""),
-                "command": str(row.get("command") or ""),
-            }
-    return {"kind": "none", "message": "No immediate suggestions.", "command": ""}
+            return _decorate(
+                {
+                    "kind": str(row.get("kind") or "none"),
+                    "message": str(row.get("message") or ""),
+                    "command": str(row.get("command") or ""),
+                }
+            )
+    return _decorate({"kind": "none", "message": "No immediate suggestions.", "command": ""})
+
+
+def _priority_reason_text(priority: str) -> str:
+    normalized = str(priority or "").strip().lower()
+    if normalized == "high":
+        return "This blocks meaningful app structure or user flow."
+    if normalized == "medium":
+        return "This improves usability and completeness."
+    if normalized == "low":
+        return "This is optional and can be deferred."
+    return "No actionable gap remains."
+
+
+def _expected_effect_from_command(kind: str, command: str, message: str) -> str:
+    text = str(command or "").strip()
+    lowered_message = str(message or "").strip().lower()
+
+    add_page = re.match(r"^/add_page\s+([a-z0-9_]+)/(.+)$", text)
+    if add_page:
+        resource = add_page.group(1)
+        action = add_page.group(2)
+        if action.startswith("by_"):
+            return f"Adds relation-aware page flow for {resource}/{action}."
+        return f"Adds missing {action} page flow for {resource}."
+
+    implement_page = re.match(r"^/implement_page\s+([a-z0-9_]+/.+)$", text)
+    if implement_page:
+        page = implement_page.group(1)
+        if "/by_" in page:
+            return f"Turns relation page {page} into a usable flow."
+        return f"Turns {page} from placeholder into usable UI."
+
+    add_api = re.match(r"^/add_api\s+([A-Z]+)\s+(.+)$", text)
+    if add_api:
+        method = add_api.group(1)
+        path = add_api.group(2)
+        relation_match = re.match(r"^/([^/]+)/\{id\}/([^/]+)$", path)
+        if relation_match and method == "GET":
+            parent = relation_match.group(1)
+            child = relation_match.group(2)
+            return f"Enables scoped relation fetch for {child} under {parent}."
+        return f"Adds missing API capability via {method} {path}."
+
+    add_field = re.match(r"^/add_field\s+([A-Za-z0-9_]+)\s+([A-Za-z0-9_]+):([a-z0-9_]+)$", text)
+    if add_field:
+        entity = add_field.group(1)
+        field = add_field.group(2).lower()
+        if field in LOW_VALUE_FIELDS:
+            return f"Adds optional metadata field {field} to {entity}."
+        if field in ESSENTIAL_FIELDS:
+            return f"Improves core data completeness of {entity} with {field}."
+        return f"Improves {entity} data model with field {field}."
+
+    add_entity = re.match(r"^/add_entity\s+([A-Za-z0-9_]+)$", text)
+    if add_entity:
+        entity = add_entity.group(1)
+        return f"Introduces core domain entity {entity} as project baseline."
+
+    if "no immediate suggestions." in lowered_message:
+        return "No immediate action is needed."
+    if kind == "relation_scoped_api":
+        return "Completes relation-aware parent-child data access flow."
+    if kind == "relation_page_behavior":
+        return "Completes relation-aware parent-child page linkage."
+    return "Improves project completeness in the next iteration."
+
+
+def _build_next_action_explanation(next_action: dict[str, str] | None) -> dict[str, str]:
+    row = next_action if isinstance(next_action, dict) else {}
+    kind = str(row.get("kind") or "").strip().lower()
+    message = str(row.get("message") or "").strip()
+    command = str(row.get("command") or "").strip()
+    priority = _suggestion_priority({"kind": kind, "message": message, "command": command})
+    gap_map = {
+        "missing_entity": "entity_missing",
+        "missing_field": "field_missing",
+        "missing_crud_api": "crud_api_missing",
+        "missing_page": "page_missing",
+        "placeholder_page": "placeholder_page",
+        "relation_page_behavior": "relation_page_behavior_missing",
+        "relation_scoped_api": "relation_scoped_api_missing",
+        "relation_placeholder_page": "relation_placeholder_implementation",
+        "none": "none",
+    }
+    gap_type = gap_map.get(kind, "general_improvement")
+
+    reason_summary = message
+    if not reason_summary:
+        if kind == "none":
+            reason_summary = "No immediate next action is required."
+        elif kind == "relation_scoped_api":
+            reason_summary = "Relation-scoped API is missing for a detected parent-child relation."
+        elif kind == "relation_page_behavior":
+            reason_summary = "Relation-aware page behavior is missing for a detected parent-child relation."
+        elif kind == "missing_crud_api":
+            reason_summary = "A core CRUD API gap was detected."
+        else:
+            reason_summary = "A canonical project gap was detected."
+
+    return {
+        "gap_type": gap_type,
+        "reason_summary": reason_summary,
+        "priority": priority,
+        "priority_reason": _priority_reason_text(priority),
+        "expected_effect": _expected_effect_from_command(kind, command, message),
+    }
 
 
 def _recent_suggested_or_executed_commands(project_dir: Path, *, limit: int = 80) -> set[str]:
@@ -1833,6 +1951,13 @@ def analyze_project(
 
     # Step 3: next_action 결정
     next_action = _select_next_action(suggestions)
+    next_action_explanation = {
+        "gap_type": str(next_action.get("gap_type") or "").strip(),
+        "reason_summary": str(next_action.get("reason_summary") or "").strip(),
+        "priority": str(next_action.get("priority") or "").strip(),
+        "priority_reason": str(next_action.get("priority_reason") or "").strip(),
+        "expected_effect": str(next_action.get("expected_effect") or "").strip(),
+    }
 
     return {
         "project_name": str(project_name or project_dir.name),
@@ -1861,4 +1986,5 @@ def analyze_project(
         "repository_status": repository_status,
         "suggestions": suggestions,
         "next_action": next_action,
+        "next_action_explanation": next_action_explanation,
     }

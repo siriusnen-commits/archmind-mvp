@@ -4219,6 +4219,10 @@ async def command_inspect(update: Any, context: Any) -> None:
     relation_apis = [str(x) for x in (analysis.get("relation_apis") or []) if str(x).strip()]
     relation_create_flows = [str(x) for x in (analysis.get("relation_create_flows") or []) if str(x).strip()]
     drift_warnings = [str(x) for x in (analysis.get("drift_warnings") or []) if str(x).strip()]
+    next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
+    next_kind = str(next_action.get("kind") or "").strip().lower()
+    next_reason_summary = str(next_action.get("reason_summary") or "").strip()
+    next_message = str(next_action.get("message") or "").strip()
     entity_graph = analysis.get("entity_graph") if isinstance(analysis.get("entity_graph"), dict) else {}
     api_map = analysis.get("api_map") if isinstance(analysis.get("api_map"), dict) else {}
     page_map = analysis.get("page_map") if isinstance(analysis.get("page_map"), dict) else {}
@@ -4354,6 +4358,8 @@ async def command_inspect(update: Any, context: Any) -> None:
         _append_truncated_bullets(lines, "Relation Create Flow:", relation_create_flows, limit=10, suffix_label="flows")
     if drift_warnings:
         _append_truncated_bullets(lines, "Drift Warnings:", drift_warnings, limit=8, suffix_label="warnings")
+    if next_kind and next_kind != "none" and (next_reason_summary or next_message):
+        lines += ["", f"Why next?: {next_reason_summary or next_message}"]
     if reason_summary:
         lines += ["", "Reasoning:", reason_summary]
     if structure:
@@ -6528,6 +6534,12 @@ async def command_next(update: Any, context: Any) -> None:
     message = str(next_action.get("message") or "").strip()
     command = str(next_action.get("command") or "").strip()
     kind = str(next_action.get("kind") or "").strip().lower()
+    explanation = _extract_next_action_explanation(analysis)
+    reason_summary = str(explanation.get("reason_summary") or "").strip()
+    gap_type = str(explanation.get("gap_type") or "").strip()
+    priority = str(explanation.get("priority") or "").strip().lower()
+    priority_reason = str(explanation.get("priority_reason") or "").strip()
+    expected_effect = str(explanation.get("expected_effect") or "").strip()
 
     lines = [
         "Next development suggestion",
@@ -6538,9 +6550,29 @@ async def command_next(update: Any, context: Any) -> None:
     if kind == "none" or not message or message.lower() == "no immediate suggestions.":
         lines.append("No immediate next action.")
     else:
-        lines.append(message)
+        lines += [
+            "Reason:",
+            f"- {reason_summary or message}",
+            f"- Gap type: {gap_type or kind or 'general_improvement'}",
+        ]
+        lines += [
+            "",
+            "Priority:",
+            f"- {priority or 'medium'}",
+            f"- {priority_reason or 'This improves usability and completeness.'}",
+        ]
+        lines += [
+            "",
+            "Expected effect:",
+            f"- {expected_effect or 'Improves project completeness in the next iteration.'}",
+        ]
         if command:
-            lines.append(f"Command: {command}")
+            lines += [
+                "",
+                "Command:",
+                f"- {command}",
+                f"Command: {command}",
+            ]
 
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 
@@ -6569,6 +6601,62 @@ def _extract_next_action(analysis: dict[str, Any]) -> tuple[str, str, str]:
     message = str(next_action.get("message") or "").strip()
     command = str(next_action.get("command") or "").strip()
     return kind, message, command
+
+
+def _extract_next_action_explanation(analysis: dict[str, Any]) -> dict[str, str]:
+    explanation = (
+        analysis.get("next_action_explanation")
+        if isinstance(analysis.get("next_action_explanation"), dict)
+        else {}
+    )
+    if not explanation:
+        next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
+        explanation = {
+            "gap_type": str(next_action.get("gap_type") or "").strip(),
+            "reason_summary": str(next_action.get("reason_summary") or "").strip(),
+            "priority": str(next_action.get("priority") or "").strip(),
+            "priority_reason": str(next_action.get("priority_reason") or "").strip(),
+            "expected_effect": str(next_action.get("expected_effect") or "").strip(),
+        }
+    return {
+        "gap_type": str(explanation.get("gap_type") or "").strip(),
+        "reason_summary": str(explanation.get("reason_summary") or "").strip(),
+        "priority": str(explanation.get("priority") or "").strip(),
+        "priority_reason": str(explanation.get("priority_reason") or "").strip(),
+        "expected_effect": str(explanation.get("expected_effect") or "").strip(),
+    }
+
+
+def _auto_stop_explanation(stop_reason: str, analysis: dict[str, Any]) -> str:
+    reason = str(stop_reason or "").strip().lower()
+    if reason == "good enough mvp reached":
+        relations = [str(x) for x in (analysis.get("relation_summary") or []) if str(x).strip()]
+        relation_pages = [str(x) for x in (analysis.get("relation_pages") or []) if str(x).strip()]
+        relation_apis = [str(x) for x in (analysis.get("relation_apis") or []) if str(x).strip()]
+        if relations:
+            return (
+                "Core CRUD and pages are complete, and relation-aware flow has the required page/API coverage."
+                if relation_pages and relation_apis
+                else "Core CRUD is complete and no higher-priority canonical gap remains."
+            )
+        return "Core CRUD and baseline pages are complete with no higher-priority canonical gap remaining."
+    if reason == "no immediate next action":
+        return "Canonical analysis no longer returns an actionable next command."
+    if reason == "no material progress":
+        return "The latest actionable command did not change canonical entities/APIs/pages/relations."
+    if reason == "no material state change after command":
+        return "Command execution returned OK but canonical project structure stayed unchanged."
+    if reason == "low-priority next action":
+        return "Only optional low-value improvements remain, so auto stopped to avoid churn."
+    if reason == "already satisfied command":
+        return "The suggested command was already satisfied by canonical project state."
+    if reason == "repeated command without state change":
+        return "The same command-state pair repeated without structural progress."
+    if reason == "repeated command detected":
+        return "Loop protection stopped repeated execution of the same command."
+    if reason == "iteration budget reached":
+        return "Safe iteration budget was reached; run /auto again if you want another bounded pass."
+    return "Auto run stopped based on deterministic safety and progress rules."
 
 
 def _extract_add_field_name(command: str) -> str:
@@ -6972,6 +7060,10 @@ async def command_auto(update: Any, context: Any) -> None:
     idx = 1
     while idx <= iteration_budget:
         kind, message, raw_command = _extract_next_action(analysis)
+        explanation = _extract_next_action_explanation(analysis)
+        reason_summary = str(explanation.get("reason_summary") or "").strip() or message
+        expected_effect = str(explanation.get("expected_effect") or "").strip()
+        priority_reason = str(explanation.get("priority_reason") or "").strip()
         priority = classify_auto_action_priority({"kind": kind, "message": message, "command": raw_command})
         normalized_command = _normalize_recommended_command(raw_command)
         cmd, _ = _parse_command_string(normalized_command) if normalized_command else ("", [])
@@ -6980,17 +7072,25 @@ async def command_auto(update: Any, context: Any) -> None:
         before_snapshot = _auto_progress_snapshot(analysis)
 
         lines.append(f"Step {idx}")
+        if reason_summary:
+            lines.append(f"- Why: {reason_summary}")
+        if expected_effect:
+            lines.append(f"- Expected effect: {expected_effect}")
+        if priority_reason:
+            lines.append(f"- Priority reason: {priority_reason}")
         if not actionable_supported:
             if _auto_is_good_enough_mvp(analysis):
                 lines.append("- Result: STOP (good enough MVP reached)")
                 stop_reason = "good enough MVP reached"
+                stop_explanation = _auto_stop_explanation(stop_reason, analysis)
+                lines.append(f"- Why stop: {stop_explanation}")
                 append_execution_event(
                     project_path,
                     project_name=project_path.name,
                     source="telegram-auto",
                     command=normalized_command or raw_command or "",
                     status="stop",
-                    message="Good enough MVP reached.",
+                    message=f"Good enough MVP reached. {stop_explanation}",
                     run_id=run_id,
                     step_no=idx,
                     stop_reason=stop_reason,
@@ -6999,13 +7099,15 @@ async def command_auto(update: Any, context: Any) -> None:
             if priority == "none":
                 lines.append("- No immediate next action.")
                 stop_reason = "no immediate next action"
+                stop_explanation = _auto_stop_explanation(stop_reason, analysis)
+                lines.append(f"- Why stop: {stop_explanation}")
                 append_execution_event(
                     project_path,
                     project_name=project_path.name,
                     source="telegram-auto",
                     command=normalized_command or raw_command or "",
                     status="stop",
-                    message="No immediate next action.",
+                    message=f"No immediate next action. {stop_explanation}",
                     run_id=run_id,
                     step_no=idx,
                     stop_reason=stop_reason,
@@ -7016,6 +7118,8 @@ async def command_auto(update: Any, context: Any) -> None:
                 lines.append(f"- Next: {raw_command or '(empty)'}")
                 lines.append("- Result: STOP (empty or malformed command)")
                 stop_reason = "empty or malformed command"
+                stop_explanation = _auto_stop_explanation(stop_reason, analysis)
+                lines.append(f"- Why stop: {stop_explanation}")
                 append_execution_event(
                     project_path,
                     project_name=project_path.name,
@@ -7033,6 +7137,8 @@ async def command_auto(update: Any, context: Any) -> None:
             if cmd not in AUTO_ALLOWED_COMMANDS:
                 lines.append("- Result: STOP (unsupported command)")
                 stop_reason = f"unsupported command: {cmd or normalized_command}"
+                stop_explanation = _auto_stop_explanation(stop_reason, analysis)
+                lines.append(f"- Why stop: {stop_explanation}")
                 append_execution_event(
                     project_path,
                     project_name=project_path.name,
@@ -7049,6 +7155,8 @@ async def command_auto(update: Any, context: Any) -> None:
             if priority == "low":
                 lines.append("- Result: STOP (low-priority next action)")
                 stop_reason = "low-priority next action"
+                stop_explanation = _auto_stop_explanation(stop_reason, analysis)
+                lines.append(f"- Why stop: {stop_explanation}")
                 append_execution_event(
                     project_path,
                     project_name=project_path.name,
@@ -7067,6 +7175,8 @@ async def command_auto(update: Any, context: Any) -> None:
         if _auto_command_already_satisfied(analysis, normalized_command):
             lines.append("- Result: STOP (already satisfied in canonical state)")
             stop_reason = "already satisfied command"
+            stop_explanation = _auto_stop_explanation(stop_reason, analysis)
+            lines.append(f"- Why stop: {stop_explanation}")
             append_execution_event(
                 project_path,
                 project_name=project_path.name,
@@ -7084,6 +7194,8 @@ async def command_auto(update: Any, context: Any) -> None:
         if state_key in seen_command_states:
             lines.append("- Result: STOP (repeated command without state change)")
             stop_reason = "repeated command without state change"
+            stop_explanation = _auto_stop_explanation(stop_reason, analysis)
+            lines.append(f"- Why stop: {stop_explanation}")
             append_execution_event(
                 project_path,
                 project_name=project_path.name,
@@ -7101,6 +7213,8 @@ async def command_auto(update: Any, context: Any) -> None:
         if normalized_command in seen_commands:
             lines.append("- Result: STOP (repeated-command protection)")
             stop_reason = "repeated command detected"
+            stop_explanation = _auto_stop_explanation(stop_reason, analysis)
+            lines.append(f"- Why stop: {stop_explanation}")
             append_execution_event(
                 project_path,
                 project_name=project_path.name,
@@ -7143,6 +7257,8 @@ async def command_auto(update: Any, context: Any) -> None:
                 else:
                     lines.append("- Result: STOP (no material progress)")
                     stop_reason = "no material progress"
+                    stop_explanation = _auto_stop_explanation(stop_reason, next_analysis)
+                    lines.append(f"- Why stop: {stop_explanation}")
                     append_execution_event(
                         project_path,
                         project_name=project_path.name,
@@ -7159,6 +7275,8 @@ async def command_auto(update: Any, context: Any) -> None:
             else:
                 lines.append("- Result: STOP (no material state change)")
                 stop_reason = "no material state change after command"
+                stop_explanation = _auto_stop_explanation(stop_reason, next_analysis)
+                lines.append(f"- Why stop: {stop_explanation}")
                 append_execution_event(
                     project_path,
                     project_name=project_path.name,
@@ -7182,6 +7300,8 @@ async def command_auto(update: Any, context: Any) -> None:
             ).strip()
             lines.append(f"- Result: FAIL ({detail})")
             stop_reason = f"command failed: {detail}"
+            stop_explanation = _auto_stop_explanation(stop_reason, analysis)
+            lines.append(f"- Why stop: {stop_explanation}")
             append_execution_event(
                 project_path,
                 project_name=project_path.name,
@@ -7204,6 +7324,7 @@ async def command_auto(update: Any, context: Any) -> None:
     final_snapshot = _auto_progress_snapshot(analysis)
     command_lines = ", ".join(executed_commands) if executed_commands else "(none)"
     progress_text = "yes" if progress_made else "no"
+    stop_explanation = _auto_stop_explanation(stop_reason, analysis)
     repo_sync: dict[str, Any] = {"status": "NOT_ATTEMPTED", "reason": "no executed changes"}
     if executed_commands:
         repo_sync = sync_repo_after_auto_batch(project_path, executed_commands)
@@ -7213,6 +7334,7 @@ async def command_auto(update: Any, context: Any) -> None:
         f"- Executed: {executed}",
         f"- Commands: {command_lines}",
         f"- Stopped: {stop_reason}",
+        f"- Stop explanation: {stop_explanation}",
         f"- Progress made: {progress_text}",
         f"- Progress score: {total_progress_score}",
         (
