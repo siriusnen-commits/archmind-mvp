@@ -32,6 +32,9 @@ export default function ProjectList({ projects, selectedName }: Props) {
   const router = useRouter();
   const [settingCurrentName, setSettingCurrentName] = useState("");
   const [setCurrentError, setSetCurrentError] = useState("");
+  const [runningCommandProject, setRunningCommandProject] = useState("");
+  const [runningCommandLabel, setRunningCommandLabel] = useState("");
+  const [commandFeedbackByProject, setCommandFeedbackByProject] = useState<Record<string, { status: "OK" | "FAILED"; message: string }>>({});
 
   async function handleSetCurrent(projectName: string) {
     const target = String(projectName || "").trim();
@@ -59,6 +62,49 @@ export default function ProjectList({ projects, selectedName }: Props) {
       setSetCurrentError("Failed to set current project");
     } finally {
       setSettingCurrentName("");
+    }
+  }
+
+  async function runQuickCommand(projectName: string, command: "/auto" | "/fix") {
+    const target = String(projectName || "").trim();
+    if (!target) {
+      return;
+    }
+    setRunningCommandProject(target);
+    setRunningCommandLabel(command);
+    setCommandFeedbackByProject((prev) => {
+      const next = { ...prev };
+      delete next[target];
+      return next;
+    });
+    try {
+      const response = await fetch(`${UI_API_BASE}/projects/${encodeURIComponent(target)}/commands`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; detail?: string; error?: string };
+      const detail = String(payload.error || payload.detail || "").trim();
+      if (!response.ok || !Boolean(payload.ok)) {
+        setCommandFeedbackByProject((prev) => ({
+          ...prev,
+          [target]: { status: "FAILED", message: detail || "Command failed" },
+        }));
+        return;
+      }
+      setCommandFeedbackByProject((prev) => ({
+        ...prev,
+        [target]: { status: "OK", message: detail || "Completed" },
+      }));
+      router.refresh();
+    } catch {
+      setCommandFeedbackByProject((prev) => ({
+        ...prev,
+        [target]: { status: "FAILED", message: "Command failed" },
+      }));
+    } finally {
+      setRunningCommandProject("");
+      setRunningCommandLabel("");
     }
   }
 
@@ -108,6 +154,8 @@ export default function ProjectList({ projects, selectedName }: Props) {
           const isSelected = Boolean(selectedName && selectedName === name);
           const repositoryUrl = String(project.repository?.url || "").trim();
           const healthStatus = normalizeBadge(String(project.project_health_status || ""));
+          const feedback = commandFeedbackByProject[name];
+          const isCommandRunning = runningCommandProject === name;
           return (
             <li key={name || displayName}>
               <div
@@ -134,6 +182,46 @@ export default function ProjectList({ projects, selectedName }: Props) {
                 </div>
                 <p className="mt-1 break-all text-xs text-slate-300">ID: {name || "(unknown)"}</p>
                 <p className="text-xs text-slate-300">Status: {String(project.status || "unknown")}</p>
+                {name ? (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Link
+                      href={`/projects/${encodeURIComponent(name)}`}
+                      className="rounded-md border border-slate-500 px-2 py-1 text-xs text-slate-100 hover:bg-slate-800"
+                    >
+                      Open
+                    </Link>
+                    <Link
+                      href={`/projects/${encodeURIComponent(name)}`}
+                      className="rounded-md border border-cyan-600 px-2 py-1 text-xs text-cyan-200 hover:bg-cyan-900/30"
+                    >
+                      Inspect
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => void runQuickCommand(name, "/auto")}
+                      disabled={isCommandRunning}
+                      className="rounded-md border border-violet-500 px-2 py-1 text-xs text-violet-200 hover:bg-violet-900/30 disabled:opacity-60"
+                    >
+                      Auto
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void runQuickCommand(name, "/fix")}
+                      disabled={isCommandRunning}
+                      className="rounded-md border border-amber-500 px-2 py-1 text-xs text-amber-200 hover:bg-amber-900/30 disabled:opacity-60"
+                    >
+                      Fix
+                    </button>
+                  </div>
+                ) : null}
+                {isCommandRunning ? (
+                  <p className="mt-1 text-xs text-cyan-300">Running... {runningCommandLabel || "command"}</p>
+                ) : null}
+                {feedback ? (
+                  <p className={`mt-1 text-xs ${feedback.status === "OK" ? "text-emerald-300" : "text-rose-300"}`}>
+                    {feedback.status}: {feedback.message}
+                  </p>
+                ) : null}
                 <div className="mt-2">
                   {isCurrent ? (
                     <p className="text-xs text-emerald-300">Current project</p>
