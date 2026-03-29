@@ -16,6 +16,10 @@ class RuntimeSummary(BaseModel):
     frontend_status: str = "STOPPED"
     backend_url: str = ""
     frontend_url: str = ""
+    backend_reason: str = ""
+    frontend_reason: str = ""
+    backend_reason_detail: str = ""
+    frontend_reason_detail: str = ""
     backend_last_known_url: str = ""
     frontend_last_known_url: str = ""
     backend_urls: list[str] = Field(default_factory=list)

@@ -3691,6 +3691,144 @@ def test_inspect_command_labels_stale_frontend_url_as_last_known_when_not_runnin
     assert "http://127.0.0.1:3011" in out
 
 
+def _prepare_runtime_inspect_project(tmp_path: Path, name: str, *, shape: str = "backend", template: str = "fastapi") -> Path:
+    project_dir = tmp_path / name
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps({"shape": shape, "template": template, "modules": [], "entities": [], "api_endpoints": [], "frontend_pages": []}),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(json.dumps({}), encoding="utf-8")
+    return project_dir
+
+
+def test_inspect_runtime_reason_backend_not_started(tmp_path: Path, monkeypatch) -> None:
+    project_dir = _prepare_runtime_inspect_project(tmp_path, "inspect_runtime_reason_backend_not_started")
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p, **_kwargs: {
+            "backend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Backend: NOT RUNNING" in out
+    assert "Backend Reason: not started" in out
+
+
+def test_inspect_runtime_reason_frontend_build_failed(tmp_path: Path, monkeypatch) -> None:
+    project_dir = _prepare_runtime_inspect_project(
+        tmp_path,
+        "inspect_runtime_reason_frontend_build_failed",
+        shape="fullstack",
+        template="fullstack-ddd",
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p, **_kwargs: {
+            "backend": {"status": "RUNNING", "pid": 9211, "url": "http://127.0.0.1:8000"},
+            "frontend": {"status": "FAIL", "pid": None, "url": ""},
+            "services": {
+                "frontend": {
+                    "detail": "vite build failed: TypeScript compile error",
+                    "status": "FAIL",
+                    "pid": None,
+                    "url": "",
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Frontend: FAIL" in out
+    assert "Frontend Reason: build failed" in out
+
+
+def test_inspect_runtime_reason_restart_failed(tmp_path: Path, monkeypatch) -> None:
+    project_dir = _prepare_runtime_inspect_project(tmp_path, "inspect_runtime_reason_restart_failed")
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p, **_kwargs: {
+            "backend": {"status": "RUNNING", "pid": 6122, "url": "http://127.0.0.1:8000"},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+            "detail": "local runtime restart failed: frontend startup timeout",
+        },
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Frontend: NOT RUNNING" in out
+    assert "Frontend Reason: restart failed" in out
+
+
+def test_inspect_runtime_reason_hides_stale_failure_when_running_now(tmp_path: Path, monkeypatch) -> None:
+    project_dir = _prepare_runtime_inspect_project(tmp_path, "inspect_runtime_reason_running_hides_stale")
+    (project_dir / ".archmind" / "state.json").write_text(
+        json.dumps({"runtime": {"backend_status": "FAIL", "failure_class": "runtime-execution-error", "detail": "startup failed"}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p, **_kwargs: {
+            "backend": {"status": "RUNNING", "pid": 7777, "url": "http://127.0.0.1:8000"},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Backend: RUNNING" in out
+    assert "Backend Reason:" not in out
+
+
+def test_inspect_runtime_reason_unknown_when_evidence_missing(tmp_path: Path, monkeypatch) -> None:
+    project_dir = _prepare_runtime_inspect_project(tmp_path, "inspect_runtime_reason_unknown")
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p, **_kwargs: {
+            "backend": {"status": "WARNING", "pid": None, "url": ""},
+            "frontend": {"status": "NOT RUNNING", "pid": None, "url": ""},
+        },
+    )
+    monkeypatch.setattr(
+        "archmind.telegram_bot.detect_backend_runtime_entry",
+        lambda _p, port=8000: {"ok": True, "backend_entry": "app.main:app", "backend_run_mode": "asgi-direct"},
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Backend: WARNING" in out
+    assert "Backend Reason: unknown failure" in out
+
+
 def test_improve_command_without_project_shows_guidance(monkeypatch) -> None:
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: None)
     msg = DummyMessage()
