@@ -4842,7 +4842,7 @@ def test_add_field_auto_restart_when_backend_running(tmp_path: Path, monkeypatch
     assert "Backend: RESTARTED" in out
 
 
-def test_add_field_auto_restart_skipped_when_backend_not_running(tmp_path: Path, monkeypatch) -> None:
+def test_add_field_auto_restart_attempts_backend_start_when_backend_not_running(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "task_tracker"
     archmind = project_dir / ".archmind"
     archmind.mkdir(parents=True, exist_ok=True)
@@ -4864,12 +4864,14 @@ def test_add_field_auto_restart_skipped_when_backend_not_running(tmp_path: Path,
         encoding="utf-8",
     )
     monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
-    calls = {"restart": 0}
+    calls = {"restart": 0, "runtime": 0}
 
-    monkeypatch.setattr(
-        "archmind.deploy.get_local_runtime_status",
-        lambda _p, **_kwargs: {"backend": {"status": "NOT RUNNING", "url": ""}, "frontend": {"status": "NOT RUNNING", "url": ""}},
-    )
+    def fake_runtime(_p, **_kwargs):  # type: ignore[no-untyped-def]
+        calls["runtime"] += 1
+        return {"backend": {"status": "RUNNING", "url": "http://127.0.0.1:8011"}, "frontend": {"status": "NOT RUNNING", "url": ""}}
+
+    monkeypatch.setattr("archmind.deploy.get_local_runtime_status", fake_runtime)
+    monkeypatch.setattr("archmind.deploy.detect_deploy_kind", lambda _p, **_kwargs: "backend")
 
     def fake_restart(_p):  # type: ignore[no-untyped-def]
         calls["restart"] += 1
@@ -4881,9 +4883,10 @@ def test_add_field_auto_restart_skipped_when_backend_not_running(tmp_path: Path,
     update = DummyUpdate(message=msg, effective_chat=DummyChat())
     asyncio.run(command_add_field(update, DummyContext(args=["Task", "priority:int"])))
     out = msg.sent[-1]
-    assert calls["restart"] == 0
+    assert calls["restart"] == 1
     assert "Auto-restart:" in out
-    assert "Skipped (backend not running)" in out
+    assert "Attempted: yes" in out
+    assert "Backend: RESTARTED" in out
 
 
 def test_add_field_unknown_type_shows_available_types(tmp_path: Path, monkeypatch) -> None:
@@ -5041,6 +5044,55 @@ def test_add_api_normalizes_singular_resource_path_to_plural(tmp_path: Path, mon
     assert "GET /tasks" in (payload.get("api_endpoints") or [])
 
 
+def test_add_api_auto_restart_failure_is_reported(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "add_api_restart_failure"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "template": "fastapi",
+                "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": ["GET /tasks", "POST /tasks"],
+                "frontend_pages": [],
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr("archmind.deploy.detect_deploy_kind", lambda _p, **_kwargs: "backend")
+    calls = {"restart": 0}
+
+    monkeypatch.setattr(
+        "archmind.deploy.get_local_runtime_status",
+        lambda _p, **_kwargs: {"backend": {"status": "NOT RUNNING", "url": ""}, "frontend": {"status": "NOT RUNNING", "url": ""}},
+    )
+
+    def fake_restart(_p):  # type: ignore[no-untyped-def]
+        calls["restart"] += 1
+        return {
+            "backend": {"status": "FAIL", "detail": "uvicorn import error"},
+            "frontend": {"status": "NOT RUNNING", "detail": ""},
+            "detail": "restart failed",
+        }
+
+    monkeypatch.setattr("archmind.deploy.restart_local_services", fake_restart)
+
+    msg = DummyMessage()
+    asyncio.run(command_add_api(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext(args=["GET", "/tasks/by_status"])))
+    out = msg.sent[-1]
+    assert calls["restart"] == 1
+    assert "Auto-restart:" in out
+    assert "Attempted: yes" in out
+    assert "Backend: FAILED" in out
+    assert "uvicorn import error" in out
+
+
 def test_add_page_updates_spec_and_generates_frontend_page(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "task_tracker"
     archmind = project_dir / ".archmind"
@@ -5176,6 +5228,94 @@ def test_add_page_normalizes_single_token_to_plural_list_route(tmp_path: Path, m
 
     payload = json.loads((archmind / "project_spec.json").read_text(encoding="utf-8"))
     assert "tests/list" in (payload.get("frontend_pages") or [])
+
+
+def test_add_page_auto_restart_attempts_frontend_when_frontend_is_down(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "add_page_frontend_restart"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": ["GET /tasks", "POST /tasks"],
+                "frontend_pages": ["tasks/list"],
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr("archmind.deploy.detect_deploy_kind", lambda _p, **_kwargs: "fullstack")
+    calls = {"restart": 0, "runtime": 0}
+
+    def fake_runtime(_p, **_kwargs):  # type: ignore[no-untyped-def]
+        calls["runtime"] += 1
+        return {"backend": {"status": "RUNNING", "url": "http://127.0.0.1:8011"}, "frontend": {"status": "RUNNING", "url": "http://127.0.0.1:3011"}}
+
+    def fake_restart(_p):  # type: ignore[no-untyped-def]
+        calls["restart"] += 1
+        return {
+            "backend": {"status": "RESTARTED", "url": "http://127.0.0.1:8011", "detail": "ok"},
+            "frontend": {"status": "RESTARTED", "url": "http://127.0.0.1:3011", "detail": "ok"},
+            "detail": "services restarted",
+        }
+
+    monkeypatch.setattr("archmind.deploy.get_local_runtime_status", fake_runtime)
+    monkeypatch.setattr("archmind.deploy.restart_local_services", fake_restart)
+
+    msg = DummyMessage()
+    asyncio.run(command_add_page(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext(args=["reports/list"])))
+    out = msg.sent[-1]
+    assert calls["restart"] == 1
+    assert "Auto-restart:" in out
+    assert "Attempted: yes" in out
+    assert "Frontend: RESTARTED" in out
+
+
+def test_add_page_auto_restart_legitimate_skip_when_project_has_no_frontend(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "add_page_no_frontend_skip"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "template": "fastapi",
+                "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": ["GET /tasks", "POST /tasks"],
+                "frontend_pages": [],
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr("archmind.deploy.detect_deploy_kind", lambda _p, **_kwargs: "backend")
+    calls = {"restart": 0}
+
+    def fake_restart(_p):  # type: ignore[no-untyped-def]
+        calls["restart"] += 1
+        return {}
+
+    monkeypatch.setattr("archmind.deploy.restart_local_services", fake_restart)
+
+    msg = DummyMessage()
+    asyncio.run(command_add_page(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext(args=["reports/list"])))
+    out = msg.sent[-1]
+    assert calls["restart"] == 0
+    assert "Auto-restart:" in out
+    assert "Skipped (project has no frontend)" in out
 
 
 def test_implement_page_upgrades_placeholder_page(tmp_path: Path, monkeypatch) -> None:
@@ -6471,6 +6611,85 @@ def test_auto_command_executes_relation_aware_next_action_when_available(tmp_pat
     assert executed_commands == ["/add_page cards/by_board"]
     assert "- Result: OK" in out
     assert "- Stopped: no immediate next action" in out
+
+
+def test_auto_command_attempts_runtime_recovery_and_reports_final_runtime_state(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "auto_runtime_recovery"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "backend",
+                "template": "fastapi",
+                "entities": [{"name": "Board", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": ["GET /boards", "POST /boards"],
+                "frontend_pages": [],
+                "evolution": {"version": 1, "added_modules": [], "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr("archmind.deploy.detect_deploy_kind", lambda _p, **_kwargs: "backend")
+    sequence = iter(
+        [
+            {
+                "next_action": {
+                    "kind": "relation_scoped_api",
+                    "message": "Relation-scoped API is missing for Board-Card: list Card by Board.",
+                    "command": "/add_api GET /boards/{id}/cards",
+                },
+                "entities": ["Board"],
+                "entity_crud_status": {"Board": {"missing_api": [], "missing_pages": []}},
+                "fields_by_entity": {"Board": [{"name": "title", "type": "string"}]},
+                "apis": [{"method": "GET", "path": "/boards"}, {"method": "POST", "path": "/boards"}],
+                "pages": [],
+                "placeholder_pages": [],
+            },
+            {
+                "next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""},
+                "entities": ["Board"],
+                "entity_crud_status": {"Board": {"missing_api": [], "missing_pages": []}},
+                "fields_by_entity": {"Board": [{"name": "title", "type": "string"}]},
+                "apis": [
+                    {"method": "GET", "path": "/boards"},
+                    {"method": "POST", "path": "/boards"},
+                    {"method": "GET", "path": "/boards/{id}/cards"},
+                ],
+                "pages": [],
+                "placeholder_pages": [],
+            },
+        ]
+    )
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p, **_kwargs: next(sequence))
+    calls = {"restart": 0, "runtime": 0}
+
+    def fake_runtime(_p, **_kwargs):  # type: ignore[no-untyped-def]
+        calls["runtime"] += 1
+        if calls["restart"] == 0:
+            return {"backend": {"status": "NOT RUNNING", "url": ""}, "frontend": {"status": "NOT RUNNING", "url": ""}}
+        return {"backend": {"status": "RUNNING", "url": "http://127.0.0.1:8011"}, "frontend": {"status": "NOT RUNNING", "url": ""}}
+
+    def fake_restart(_p):  # type: ignore[no-untyped-def]
+        calls["restart"] += 1
+        return {
+            "backend": {"status": "RESTARTED", "url": "http://127.0.0.1:8011", "detail": "ok"},
+            "frontend": {"status": "NOT RUNNING", "url": "", "detail": ""},
+            "detail": "services restarted",
+        }
+
+    monkeypatch.setattr("archmind.deploy.get_local_runtime_status", fake_runtime)
+    monkeypatch.setattr("archmind.deploy.restart_local_services", fake_restart)
+
+    msg = DummyMessage()
+    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert calls["restart"] >= 1
+    assert "- Runtime state: backend=RUNNING, frontend=NOT RUNNING" in out
 
 
 def test_auto_command_does_not_stop_good_enough_when_actionable_relation_scoped_api_exists_board_card(
