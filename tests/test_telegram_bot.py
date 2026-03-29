@@ -321,6 +321,46 @@ def test_build_completion_message_includes_github_repo_url_when_present(tmp_path
     assert "https://github.com/siriusnen-commits/repo_msg" in msg
 
 
+def test_build_completion_message_preserves_repo_existence_when_result_marks_creation_skipped(tmp_path: Path) -> None:
+    project_dir = tmp_path / "repo_persisted_completion"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "result.json").write_text(
+        json.dumps(
+            {
+                "status": "SUCCESS",
+                "repository": {
+                    "status": "SKIPPED",
+                    "url": "",
+                    "reason": "repository creation is only attempted for generated ideas",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "last_status": "DONE",
+                "repository": {
+                    "status": "SKIPPED",
+                    "repo_status": "NONE",
+                    "url": "https://github.com/siriusnen-commits/repo_persisted_completion",
+                    "repo_url": "https://github.com/siriusnen-commits/repo_persisted_completion",
+                },
+                "github_repo_url": "https://github.com/siriusnen-commits/repo_persisted_completion",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind / "evaluation.json").write_text(json.dumps({"status": "DONE"}), encoding="utf-8")
+
+    msg = build_completion_message(project_dir, tmp_path / "unused.log")
+    assert "GitHub Repo:" in msg
+    assert "SKIPPED" not in msg
+    assert "https://github.com/siriusnen-commits/repo_persisted_completion" in msg
+
+
 def test_build_completion_message_shows_repository_failed_independently_of_runtime(tmp_path: Path) -> None:
     project_dir = tmp_path / "repo_failed_runtime_not_done"
     archmind = project_dir / ".archmind"
@@ -6744,6 +6784,44 @@ def test_auto_command_skips_repository_sync_when_no_steps_executed(tmp_path: Pat
     out = msg.sent[-1]
     assert called["sync"] == 0
     assert "- Repo sync: NOT_ATTEMPTED" in out
+
+
+def test_sync_repo_after_auto_batch_uses_persisted_repo_existence_even_if_status_is_skipped(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_dir = tmp_path / "auto_repo_persisted_guard"
+    archmind_dir = project_dir / ".archmind"
+    archmind_dir.mkdir(parents=True, exist_ok=True)
+    (archmind_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "repository": {
+                    "status": "SKIPPED",
+                    "repo_status": "NONE",
+                    "url": "https://github.com/example/auto_repo_persisted_guard",
+                    "repo_url": "https://github.com/example/auto_repo_persisted_guard",
+                },
+                "github_repo_url": "https://github.com/example/auto_repo_persisted_guard",
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "archmind.telegram_bot.sync_repository_changes",
+        lambda _p, commit_message: calls.append(commit_message) or {"status": "SYNCED", "working_tree_state": "clean"},
+    )
+
+    result = telegram_bot.sync_repo_after_auto_batch(project_dir, ["/add_api GET /tasks"])
+    assert result.get("status") == "SYNCED"
+    assert len(calls) == 1
+    assert "add_api GET /tasks" in calls[0]
+
+    state_payload = telegram_bot.load_state(project_dir) or {}
+    repository = state_payload.get("repository") or {}
+    assert repository.get("repo_url") == "https://github.com/example/auto_repo_persisted_guard"
+    assert repository.get("status") in {"CREATED", "EXISTS"}
+    assert repository.get("sync_status") == "SYNCED"
 
 
 def test_auto_command_multi_entity_relation_project_can_run_beyond_old_default_budget(tmp_path: Path, monkeypatch) -> None:

@@ -87,6 +87,69 @@ def _repository_default_payload(
     }
 
 
+def _repository_payload_from_state(state_payload: dict[str, Any]) -> dict[str, Any]:
+    repository = state_payload.get("repository") if isinstance(state_payload.get("repository"), dict) else {}
+    url = str(
+        (repository.get("repo_url") if isinstance(repository, dict) else "")
+        or (repository.get("url") if isinstance(repository, dict) else "")
+        or state_payload.get("github_repo_url")
+        or ""
+    ).strip()
+    status = str(
+        (repository.get("repo_status") if isinstance(repository, dict) else "")
+        or (repository.get("status") if isinstance(repository, dict) else "")
+        or ""
+    ).strip().upper()
+    if url:
+        if status not in {"CREATED", "EXISTS"}:
+            status = "EXISTS"
+    else:
+        status = "NONE"
+    return _repository_default_payload(
+        status=status,
+        url=url,
+        name=str((repository.get("name") if isinstance(repository, dict) else "") or "").strip(),
+        reason=str((repository.get("reason") if isinstance(repository, dict) else "") or "").strip(),
+        attempted=bool((repository.get("attempted") if isinstance(repository, dict) else False)),
+    )
+
+
+def _preserve_repository_existence(repository_payload: dict[str, Any], persisted_payload: dict[str, Any]) -> dict[str, Any]:
+    current = _repository_default_payload(
+        status=str(repository_payload.get("status") or ""),
+        url=str(repository_payload.get("url") or ""),
+        name=str(repository_payload.get("name") or ""),
+        reason=str(repository_payload.get("reason") or ""),
+        attempted=bool(repository_payload.get("attempted")),
+    )
+    persisted = _repository_default_payload(
+        status=str(persisted_payload.get("status") or ""),
+        url=str(persisted_payload.get("url") or ""),
+        name=str(persisted_payload.get("name") or ""),
+        reason=str(persisted_payload.get("reason") or ""),
+        attempted=bool(persisted_payload.get("attempted")),
+    )
+    if current.get("url"):
+        status = str(current.get("status") or "").strip().upper()
+        if status not in {"CREATED", "EXISTS", "FAILED"}:
+            current["status"] = "EXISTS"
+        return current
+    if persisted.get("url"):
+        # Hard guard: once repository metadata exists, never downgrade to NONE/SKIPPED.
+        merged = dict(current)
+        merged["url"] = str(persisted.get("url") or "").strip()
+        merged["name"] = str(merged.get("name") or persisted.get("name") or "").strip()
+        merged["status"] = str(persisted.get("status") or "EXISTS").strip().upper() or "EXISTS"
+        if merged["status"] not in {"CREATED", "EXISTS"}:
+            merged["status"] = "EXISTS"
+        if not str(merged.get("reason") or "").strip():
+            merged["reason"] = str(persisted.get("reason") or "").strip()
+        return merged
+    if str(current.get("status") or "").strip().upper() in {"CREATED", "EXISTS"} and not str(current.get("url") or "").strip():
+        current["status"] = "NONE"
+    return current
+
+
 def _filter_kwargs_for_callable(fn, kwargs: dict[str, Any]) -> dict[str, Any]:
     sig = inspect.signature(fn)
     accepted = set(sig.parameters.keys())
@@ -982,6 +1045,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
     except Exception as exc:
         print(f"[WARN] state initialization failed: {exc}", file=sys.stderr)
 
+    persisted_repository = _repository_payload_from_state(load_state(project_dir) or {})
     repository_result = _repository_default_payload(
         status="SKIPPED",
         reason="repository creation is only attempted for generated ideas",
@@ -1011,6 +1075,7 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
             write_state(project_dir, state_for_repo)
         except Exception as exc:
             print(f"[WARN] repository state sync failed: {exc}", file=sys.stderr)
+    repository_result = _preserve_repository_existence(repository_result, persisted_repository)
 
     run_config = _build_run_config(opts, project_dir)
     command = _build_command(opts)
@@ -1350,8 +1415,10 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
 
     try:
         synced_state = load_state(project_dir) or {}
-        synced_state["repository"] = repository_result
-        synced_state["github_repo_url"] = str(repository_result.get("url") or "")
+        persisted_for_sync = _repository_payload_from_state(synced_state)
+        merged_repository = _preserve_repository_existence(repository_result, persisted_for_sync)
+        synced_state["repository"] = merged_repository
+        synced_state["github_repo_url"] = str(merged_repository.get("url") or "")
         write_state(project_dir, synced_state)
     except Exception as exc:
         print(f"[WARN] state repository sync failed: {exc}", file=sys.stderr)

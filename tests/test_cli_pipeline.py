@@ -14,6 +14,7 @@ from archmind.generator import (
 )
 from archmind.project_analysis import analyze_project
 from archmind.project_query import build_project_analysis, build_project_detail
+from archmind.state import write_state
 import json
 import subprocess
 import sys
@@ -1233,6 +1234,52 @@ def test_pipeline_generation_failure_marks_repository_skipped(monkeypatch, tmp_p
     result_payload = json.loads((tmp_path / "repo_skipped_generation_fail" / ".archmind" / "result.json").read_text(encoding="utf-8"))
     repository = result_payload.get("repository") or {}
     assert repository.get("status") == "SKIPPED"
+
+
+def test_pipeline_path_preserves_existing_repository_metadata(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "continue_repo_preserve"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    _write_backend_project(project_dir)
+    write_state(
+        project_dir,
+        {
+            "repository": {
+                "status": "CREATED",
+                "repo_status": "CREATED",
+                "url": "https://github.com/siriusnen-commits/continue_repo_preserve",
+                "repo_url": "https://github.com/siriusnen-commits/continue_repo_preserve",
+                "attempted": True,
+            },
+            "github_repo_url": "https://github.com/siriusnen-commits/continue_repo_preserve",
+        },
+    )
+
+    # non-idea pipeline run (/continue-like) must not downgrade persisted repository existence.
+    exit_code = main(
+        [
+            "pipeline",
+            "--path",
+            str(project_dir),
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code in (0, 1)
+
+    state_payload = json.loads((project_dir / ".archmind" / "state.json").read_text(encoding="utf-8"))
+    repository = state_payload.get("repository") or {}
+    assert repository.get("url") == "https://github.com/siriusnen-commits/continue_repo_preserve"
+    assert repository.get("status") in {"CREATED", "EXISTS"}
+    assert repository.get("status") not in {"NONE", "SKIPPED"}
+    assert state_payload.get("github_repo_url") == "https://github.com/siriusnen-commits/continue_repo_preserve"
+
+    result_payload = json.loads((project_dir / ".archmind" / "result.json").read_text(encoding="utf-8"))
+    result_repository = result_payload.get("repository") or {}
+    assert result_repository.get("url") == "https://github.com/siriusnen-commits/continue_repo_preserve"
+    assert result_repository.get("status") in {"CREATED", "EXISTS"}
 
 
 def test_pipeline_final_status_done_when_detect_ok_and_no_failure(monkeypatch, tmp_path: Path) -> None:
