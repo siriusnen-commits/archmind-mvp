@@ -43,6 +43,31 @@ def test_execute_command_add_api_valid(monkeypatch) -> None:
     assert out["error"] is None
 
 
+def test_execute_command_single_evolution_triggers_repository_sync(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: Path("/tmp/demo"))
+
+    def fake_add_api(project_dir: Path, method: str, path: str, auto_restart_backend: bool = True):  # type: ignore[no-untyped-def]
+        assert project_dir == Path("/tmp/demo")
+        assert method == "GET"
+        assert path == "/tasks"
+        assert auto_restart_backend is True
+        return {"ok": True, "detail": "API added", "method": method, "path": path}
+
+    sync_calls: list[str] = []
+
+    def fake_sync(project_dir: Path, command_label: str):  # type: ignore[no-untyped-def]
+        assert project_dir == Path("/tmp/demo")
+        sync_calls.append(command_label)
+        return {"status": "SYNCED", "reason": "", "last_commit_hash": "abc1234", "working_tree_state": "clean"}
+
+    monkeypatch.setattr("archmind.telegram_bot.add_api_to_project", fake_add_api)
+    monkeypatch.setattr("archmind.telegram_bot.sync_repo_after_evolution_command", fake_sync)
+    out = execute_command("/add_api GET /tasks", "demo")
+    assert out["ok"] is True
+    assert sync_calls == ["/add_api GET /tasks"]
+    assert out["repository_sync"]["status"] == "SYNCED"
+
+
 def test_execute_command_add_api_patch_valid(monkeypatch) -> None:
     monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: Path("/tmp/demo"))
 
@@ -178,3 +203,28 @@ def test_execute_command_failure_creates_history_entry(tmp_path: Path, monkeypat
     assert events[0]["command"] == "/add_api GET /tasks"
     assert events[0]["run_id"] == "r1"
     assert events[0]["step_no"] == 2
+
+
+def test_execute_command_push_failure_does_not_fail_evolution(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: Path("/tmp/demo"))
+
+    def fake_add_api(project_dir: Path, method: str, path: str, auto_restart_backend: bool = True):  # type: ignore[no-untyped-def]
+        assert project_dir == Path("/tmp/demo")
+        assert method == "GET"
+        assert path == "/tasks"
+        return {"ok": True, "detail": "API added", "method": method, "path": path}
+
+    monkeypatch.setattr("archmind.telegram_bot.add_api_to_project", fake_add_api)
+    monkeypatch.setattr(
+        "archmind.telegram_bot.sync_repo_after_evolution_command",
+        lambda *_args, **_kwargs: {
+            "status": "PUSH_FAILED",
+            "reason": "authentication failed",
+            "last_commit_hash": "fff111",
+            "working_tree_state": "clean",
+        },
+    )
+    out = execute_command("/add_api GET /tasks", "demo")
+    assert out["ok"] is True
+    assert out["repository_sync"]["status"] == "PUSH_FAILED"
+    assert "Repository sync: PUSH_FAILED (authentication failed)" in str(out["message_text"])

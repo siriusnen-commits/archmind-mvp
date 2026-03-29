@@ -2271,6 +2271,9 @@ def _clear_saved_github_repo_url(project_dir: Path) -> None:
     repository = payload.get("repository") if isinstance(payload.get("repository"), dict) else {}
     if repository:
         repository["url"] = ""
+        repository["repo_url"] = ""
+        repository["status"] = "NONE"
+        repository["repo_status"] = "NONE"
         payload["repository"] = repository
     try:
         write_state(project_dir, payload)

@@ -3367,6 +3367,72 @@ def test_inspect_command_shows_repository_status_section(tmp_path: Path, monkeyp
     assert "Reason: gh auth missing" in out
 
 
+def test_inspect_repository_status_prefers_existing_repo_url_over_skipped_status(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect_repo_persistence"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps({"shape": "backend", "template": "fastapi", "modules": [], "entities": [], "api_endpoints": [], "frontend_pages": []}),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "github_repo_url": "https://github.com/example/persisted-repo",
+                "repository": {"status": "SKIPPED", "url": "https://github.com/example/persisted-repo"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Repository:" in out
+    assert "Status: EXISTS" in out
+    assert "https://github.com/example/persisted-repo" in out
+
+
+def test_inspect_command_shows_repository_sync_section(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect_repo_sync_section"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "requirements.txt").write_text("fastapi\nuvicorn\n", encoding="utf-8")
+    (archmind / "project_spec.json").write_text(
+        json.dumps({"shape": "backend", "template": "fastapi", "modules": [], "entities": [], "api_endpoints": [], "frontend_pages": []}),
+        encoding="utf-8",
+    )
+    (archmind / "state.json").write_text(
+        json.dumps(
+            {
+                "repository": {
+                    "repo_status": "EXISTS",
+                    "repo_url": "https://github.com/example/repo-sync",
+                    "sync_status": "PUSH_FAILED",
+                    "sync_reason": "authentication failed",
+                    "last_commit_hash": "abc1234",
+                    "working_tree_state": "dirty",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Sync:" in out
+    assert "Status: PUSH_FAILED" in out
+    assert "Last commit: abc1234" in out
+    assert "Working tree: dirty" in out
+    assert "Reason: authentication failed" in out
+
+
 def test_inspect_command_hides_stale_runtime_failure_when_detection_ok(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "inspect_stale_runtime_class"
     archmind = project_dir / ".archmind"
@@ -6603,6 +6669,81 @@ def test_auto_command_executes_valid_next_actions(tmp_path: Path, monkeypatch) -
     assert "- Commands: /add_api GET /tasks, /add_page tasks/list" in out
     assert "- Progress made: yes" in out
     assert "- Stopped: no immediate next action" in out
+
+
+def test_auto_command_batches_repository_sync_once_after_multiple_steps(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "auto_repo_batch_sync_once"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    sequence = iter(
+        [
+            {
+                "next_action": {"kind": "missing_crud_api", "message": "add list", "command": "/add_api GET /tasks"},
+                "entities": ["Task"],
+                "fields_by_entity": {"Task": [{"name": "title", "type": "string"}]},
+                "apis": [],
+                "pages": [],
+                "placeholder_pages": [],
+            },
+            {
+                "next_action": {"kind": "missing_page", "message": "add list page", "command": "/add_page tasks/list"},
+                "entities": ["Task"],
+                "fields_by_entity": {"Task": [{"name": "title", "type": "string"}]},
+                "apis": [{"method": "GET", "path": "/tasks"}],
+                "pages": [],
+                "placeholder_pages": [],
+            },
+            {
+                "next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""},
+                "entities": ["Task"],
+                "fields_by_entity": {"Task": [{"name": "title", "type": "string"}]},
+                "apis": [{"method": "GET", "path": "/tasks"}],
+                "pages": ["tasks/list"],
+                "placeholder_pages": [],
+            },
+        ]
+    )
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda _p, **_kwargs: next(sequence))
+    monkeypatch.setattr("archmind.telegram_bot.execute_command", lambda _c, _p, **_kwargs: {"ok": True, "message": "ok"})
+    sync_calls: list[list[str]] = []
+    monkeypatch.setattr(
+        "archmind.telegram_bot.sync_repo_after_auto_batch",
+        lambda _p, commands: sync_calls.append(list(commands)) or {"status": "SYNCED", "working_tree_state": "clean"},
+    )
+
+    msg = DummyMessage()
+    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert len(sync_calls) == 1
+    assert sync_calls[0] == ["/add_api GET /tasks", "/add_page tasks/list"]
+    assert "- Repo sync: SYNCED" in out
+
+
+def test_auto_command_skips_repository_sync_when_no_steps_executed(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "auto_repo_no_changes"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.telegram_bot._build_project_analysis",
+        lambda _p, **_kwargs: {
+            "next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""},
+            "entities": ["Task"],
+            "fields_by_entity": {"Task": [{"name": "title", "type": "string"}]},
+            "apis": [{"method": "GET", "path": "/tasks"}],
+            "pages": ["tasks/list"],
+            "placeholder_pages": [],
+        },
+    )
+    called = {"sync": 0}
+    monkeypatch.setattr(
+        "archmind.telegram_bot.sync_repo_after_auto_batch",
+        lambda *_args, **_kwargs: called.__setitem__("sync", called["sync"] + 1) or {"status": "SYNCED"},
+    )
+    msg = DummyMessage()
+    asyncio.run(command_auto(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert called["sync"] == 0
+    assert "- Repo sync: NOT_ATTEMPTED" in out
 
 
 def test_auto_command_multi_entity_relation_project_can_run_beyond_old_default_budget(tmp_path: Path, monkeypatch) -> None:

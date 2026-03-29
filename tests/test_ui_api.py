@@ -310,7 +310,7 @@ def test_ui_project_detail_recent_runs_empty_when_history_missing(monkeypatch, t
 
 def test_ui_projects_response_includes_safe_repository_when_missing(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
-    _make_project(projects_root, "no-repo", repository={"status": "SKIPPED", "url": ""})
+    _make_project(projects_root, "no-repo", repository={"status": "NONE", "url": ""})
     monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
     client = TestClient(create_ui_app())
 
@@ -318,7 +318,7 @@ def test_ui_projects_response_includes_safe_repository_when_missing(monkeypatch,
     assert response.status_code == 200
     item = response.json()["projects"][0]
     assert "repository" in item
-    assert item["repository"]["status"] == "SKIPPED"
+    assert item["repository"]["status"] == "NONE"
     assert item["repository"]["url"] == ""
 
 
@@ -378,7 +378,7 @@ def test_ui_projects_response_tolerates_malformed_repository_metadata(monkeypatc
     response = client.get("/ui/projects")
     assert response.status_code == 200
     item = response.json()["projects"][0]
-    assert item["repository"]["status"] == "CREATED"
+    assert item["repository"]["status"] == "EXISTS"
     assert item["repository"]["url"] == "12345"
 
 
@@ -403,7 +403,7 @@ def test_ui_repository_visibility_is_consistent_between_list_and_detail_with_rep
 
 def test_ui_repository_visibility_is_consistent_between_list_and_detail_without_repo(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
-    _make_project(projects_root, "repo-missing", repository={"status": "SKIPPED", "url": ""})
+    _make_project(projects_root, "repo-missing", repository={"status": "NONE", "url": ""})
     monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
     client = TestClient(create_ui_app())
 

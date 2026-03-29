@@ -42,6 +42,7 @@ from archmind.generator import (
     has_frontend_structure,
 )
 from archmind.idea_normalizer import normalize_idea
+from archmind.git_utils import sync_repository_changes
 from archmind.next_suggester import analyze_spec_progression, suggest_next_commands, suggest_spec_improvements
 from archmind.plan_suggester import build_plan_from_project_spec, build_plan_from_suggestion
 from archmind.project_type import detect_project_type, normalize_project_type
@@ -4455,13 +4456,26 @@ async def command_inspect(update: Any, context: Any) -> None:
     repository_status = str(repository_info.get("status") or "").strip()
     repository_url = str(repository_info.get("url") or "").strip()
     repository_reason = str(repository_info.get("reason") or "").strip()
+    repository_sync_status = str(repository_info.get("sync_status") or "").strip()
+    repository_sync_reason = str(repository_info.get("sync_reason") or "").strip()
+    repository_last_commit = str(repository_info.get("last_commit_hash") or "").strip()
+    repository_working_tree = str(repository_info.get("working_tree_state") or "").strip()
     if repository_status or repository_url or repository_reason:
         lines += ["", "Repository:"]
-        lines.append(f"Status: {repository_status or 'SKIPPED'}")
+        lines.append(f"Status: {repository_status or 'NONE'}")
         if repository_url:
             lines.append(f"URL: {repository_url}")
         if repository_reason:
             lines.append(f"Reason: {repository_reason}")
+    if repository_sync_status or repository_last_commit or repository_working_tree or repository_sync_reason:
+        lines += ["", "Sync:"]
+        lines.append(f"Status: {repository_sync_status or 'NOT_ATTEMPTED'}")
+        if repository_last_commit:
+            lines.append(f"Last commit: {repository_last_commit}")
+        if repository_working_tree:
+            lines.append(f"Working tree: {repository_working_tree}")
+        if repository_sync_reason:
+            lines.append(f"Reason: {repository_sync_reason}")
     if runtime_failure_class:
         lines += ["", f"Failure Class: {runtime_failure_class}"]
     elif runtime_detect_ok or backend_entry or backend_run_mode or has_backend:
@@ -4694,13 +4708,26 @@ def _build_selected_project_summary(project_path: Path) -> str:
     repository_status = str(repository_info.get("status") or "").strip()
     repository_url = str(repository_info.get("url") or "").strip()
     repository_reason = str(repository_info.get("reason") or "").strip()
+    repository_sync_status = str(repository_info.get("sync_status") or "").strip()
+    repository_sync_reason = str(repository_info.get("sync_reason") or "").strip()
+    repository_last_commit = str(repository_info.get("last_commit_hash") or "").strip()
+    repository_working_tree = str(repository_info.get("working_tree_state") or "").strip()
     if repository_status or repository_url or repository_reason:
         lines += ["", "Repository:"]
-        lines.append(f"Status: {repository_status or 'SKIPPED'}")
+        lines.append(f"Status: {repository_status or 'NONE'}")
         if repository_url:
             lines.append(f"URL: {repository_url}")
         if repository_reason:
             lines.append(f"Reason: {repository_reason}")
+    if repository_sync_status or repository_last_commit or repository_working_tree or repository_sync_reason:
+        lines += ["", "Sync:"]
+        lines.append(f"Status: {repository_sync_status or 'NOT_ATTEMPTED'}")
+        if repository_last_commit:
+            lines.append(f"Last commit: {repository_last_commit}")
+        if repository_working_tree:
+            lines.append(f"Working tree: {repository_working_tree}")
+        if repository_sync_reason:
+            lines.append(f"Reason: {repository_sync_reason}")
     if runtime_failure_class:
         lines.append(f"Failure Class: {runtime_failure_class}")
     elif runtime_detect_ok or backend_entry or backend_run_mode or has_backend:
@@ -4745,20 +4772,92 @@ def _extract_project_idea_hint(reasoning: dict[str, Any], state_payload: dict[st
 
 def _repository_summary_from_state(state_payload: dict[str, Any]) -> dict[str, str]:
     repository_block = state_payload.get("repository") if isinstance(state_payload.get("repository"), dict) else {}
-    status = str((repository_block.get("status") if isinstance(repository_block, dict) else "") or "").strip().upper()
+    repo_status = str((repository_block.get("repo_status") if isinstance(repository_block, dict) else "") or "").strip().upper()
+    raw_status = str((repository_block.get("status") if isinstance(repository_block, dict) else "") or "").strip().upper()
+    status = repo_status if repo_status not in {"", "NONE", "SKIPPED", "FAILED"} else raw_status
     url = str(
-        (repository_block.get("url") if isinstance(repository_block, dict) else "")
+        (repository_block.get("repo_url") if isinstance(repository_block, dict) else "")
+        or (repository_block.get("url") if isinstance(repository_block, dict) else "")
         or state_payload.get("github_repo_url")
         or ""
     ).strip()
     reason = str((repository_block.get("reason") if isinstance(repository_block, dict) else "") or "").strip()
+    sync_status = str((repository_block.get("sync_status") if isinstance(repository_block, dict) else "") or "").strip().upper()
+    sync_reason = str((repository_block.get("sync_reason") if isinstance(repository_block, dict) else "") or "").strip()
+    last_commit_hash = str((repository_block.get("last_commit_hash") if isinstance(repository_block, dict) else "") or "").strip()
+    working_tree_state = str((repository_block.get("working_tree_state") if isinstance(repository_block, dict) else "") or "").strip()
+    if status in {"SKIPPED", "NONE"}:
+        status = ""
+    if status == "FAILED" and url:
+        status = ""
     if not status:
-        status = "CREATED" if url else "SKIPPED"
+        status = "EXISTS" if url else "NONE"
     return {
         "status": status,
         "url": url,
         "reason": reason,
+        "sync_status": sync_status or "NOT_ATTEMPTED",
+        "sync_reason": sync_reason,
+        "last_commit_hash": last_commit_hash,
+        "working_tree_state": working_tree_state or ("clean" if status == "NONE" else ""),
     }
+
+
+def _repository_exists(state_payload: dict[str, Any]) -> bool:
+    info = _repository_summary_from_state(state_payload if isinstance(state_payload, dict) else {})
+    return bool(str(info.get("url") or "").strip())
+
+
+def _persist_repository_sync_state(project_path: Path, sync: dict[str, Any], *, command_label: str = "") -> None:
+    payload = load_state(project_path) or {}
+    repository = payload.get("repository") if isinstance(payload.get("repository"), dict) else {}
+    repo_url = str(repository.get("repo_url") or repository.get("url") or payload.get("github_repo_url") or "").strip()
+    repo_status = str(repository.get("repo_status") or repository.get("status") or "").strip().upper()
+    if repo_url:
+        if repo_status in {"", "NONE", "SKIPPED", "FAILED"}:
+            repo_status = "EXISTS"
+    else:
+        repo_status = "NONE"
+    repository["repo_url"] = repo_url
+    repository["url"] = repo_url
+    repository["repo_status"] = repo_status
+    repository["status"] = repo_status
+    repository["sync_status"] = str(sync.get("status") or repository.get("sync_status") or "NOT_ATTEMPTED").strip().upper()
+    repository["sync_reason"] = str(sync.get("reason") or "").strip()[:220]
+    repository["last_commit_hash"] = str(sync.get("last_commit_hash") or repository.get("last_commit_hash") or "").strip()[:40]
+    repository["working_tree_state"] = str(sync.get("working_tree_state") or repository.get("working_tree_state") or "").strip()[:20]
+    if command_label:
+        repository["reason"] = str(repository.get("reason") or "").strip()[:220]
+    payload["repository"] = repository
+    payload["github_repo_url"] = repo_url
+    write_state(project_path, payload)
+
+
+def sync_repo_after_evolution_command(project_path: Path, command_label: str) -> dict[str, Any]:
+    root = project_path.expanduser().resolve()
+    state_payload = load_state(root) or {}
+    if not _repository_exists(state_payload):
+        snapshot = {"attempted": False, "status": "NOT_ATTEMPTED", "reason": "repository not configured"}
+        _persist_repository_sync_state(root, snapshot, command_label=command_label)
+        return snapshot
+    message = f"archmind: {str(command_label or 'evolution update').strip()}"
+    sync_result = sync_repository_changes(root, commit_message=message)
+    _persist_repository_sync_state(root, sync_result, command_label=command_label)
+    return sync_result
+
+
+def sync_repo_after_auto_batch(project_path: Path, executed_commands: list[str]) -> dict[str, Any]:
+    root = project_path.expanduser().resolve()
+    state_payload = load_state(root) or {}
+    if not _repository_exists(state_payload):
+        snapshot = {"attempted": False, "status": "NOT_ATTEMPTED", "reason": "repository not configured"}
+        _persist_repository_sync_state(root, snapshot, command_label="/auto")
+        return snapshot
+    body = "\n".join(f"- {str(item or '').replace('/', '', 1)}" for item in executed_commands if str(item).strip())
+    commit_message = "archmind(auto):\n" + (body if body else "- evolution updates")
+    sync_result = sync_repository_changes(root, commit_message=commit_message)
+    _persist_repository_sync_state(root, sync_result, command_label="/auto")
+    return sync_result
 
 
 def _state_block_value(block: dict[str, Any], key: str, fallback: Any) -> Any:
@@ -6910,6 +7009,7 @@ async def command_auto(update: Any, context: Any) -> None:
             source="telegram-auto",
             run_id=run_id,
             step_no=idx,
+            enable_git_sync=False,
         )
         ok = bool(result.get("ok"))
         if ok:
@@ -6992,6 +7092,9 @@ async def command_auto(update: Any, context: Any) -> None:
     final_snapshot = _auto_progress_snapshot(analysis)
     command_lines = ", ".join(executed_commands) if executed_commands else "(none)"
     progress_text = "yes" if progress_made else "no"
+    repo_sync: dict[str, Any] = {"status": "NOT_ATTEMPTED", "reason": "no executed changes"}
+    if executed_commands:
+        repo_sync = sync_repo_after_auto_batch(project_path, executed_commands)
     lines.extend([
         "",
         "Summary",
@@ -7010,7 +7113,14 @@ async def command_auto(update: Any, context: Any) -> None:
             f"placeholders {initial_snapshot['placeholders']}->{final_snapshot['placeholders']}"
         ),
         f"- Current: {_auto_analysis_brief(analysis)}",
+        f"- Repo sync: {str(repo_sync.get('status') or 'NOT_ATTEMPTED').strip().upper()}",
     ])
+    if str(repo_sync.get("reason") or "").strip():
+        lines.append(f"- Repo sync reason: {str(repo_sync.get('reason') or '').strip()}")
+    if str(repo_sync.get("last_commit_hash") or "").strip():
+        lines.append(f"- Repo last commit: {str(repo_sync.get('last_commit_hash') or '').strip()}")
+    if str(repo_sync.get("working_tree_state") or "").strip():
+        lines.append(f"- Repo working tree: {str(repo_sync.get('working_tree_state') or '').strip()}")
     lines.extend(_auto_runtime_state_lines(project_path))
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 
