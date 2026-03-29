@@ -212,6 +212,7 @@ class ProjectAnalysisResponse(BaseModel):
     nav_visible_pages: list[str] = Field(default_factory=list)
     runtime_status: dict[str, Any] = Field(default_factory=dict)
     suggestions: list[dict[str, str]] = Field(default_factory=list)
+    next_candidates: list[dict[str, Any]] = Field(default_factory=list)
     next_action: dict[str, str] = Field(default_factory=dict)
     next_action_explanation: dict[str, str] = Field(default_factory=dict)
 

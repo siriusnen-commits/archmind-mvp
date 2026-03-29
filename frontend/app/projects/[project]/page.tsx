@@ -7,6 +7,7 @@ import AddApiCard from "@/components/AddApiCard";
 import AddPageCard from "@/components/AddPageCard";
 import DangerZoneCard from "@/components/DangerZoneCard";
 import NextActionCard from "@/components/NextActionCard";
+import NextCandidatesCard from "@/components/NextCandidatesCard";
 import ProjectSummaryCard from "@/components/ProjectSummaryCard";
 import ProviderCard from "@/components/ProviderCard";
 import RecentRunsCard from "@/components/RecentRunsCard";
@@ -44,8 +45,18 @@ type AnalysisNextAction = {
   command?: string;
 };
 
+type AnalysisNextCandidate = {
+  command?: string;
+  gap_type?: string;
+  priority?: string;
+  reason?: string;
+  reason_summary?: string;
+  expected_effect?: string;
+};
+
 type ProjectAnalysis = {
   next_action?: AnalysisNextAction;
+  next_candidates?: AnalysisNextCandidate[];
   entity_graph?: {
     nodes?: Array<{
       id?: string;
@@ -166,6 +177,7 @@ export default async function ProjectDetailPage({ params }: PageProps) {
         <section className="space-y-3">
           <ProjectSummaryCard project={detail} />
           <NextActionCard projectName={detail.name} nextAction={analysis?.next_action} />
+          <NextCandidatesCard projectName={detail.name} candidates={analysis?.next_candidates} />
           <StructureVisualizationCard
             projectName={detail.name}
             entityGraph={analysis?.entity_graph}

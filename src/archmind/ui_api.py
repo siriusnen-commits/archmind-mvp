@@ -122,6 +122,24 @@ def get_ui_project_analysis(project_name: str) -> ProjectAnalysisResponse:
         if project_dir is None:
             raise HTTPException(status_code=404, detail="Project not found")
         payload = build_project_analysis(project_dir)
+        raw_next_candidates = payload.get("next_candidates") if isinstance(payload.get("next_candidates"), list) else []
+        next_candidates = []
+        for row in raw_next_candidates:
+            if not isinstance(row, dict):
+                continue
+            command = str(row.get("command") or "").strip()
+            if not command:
+                continue
+            next_candidates.append(
+                {
+                    "command": command,
+                    "gap_type": str(row.get("gap_type") or "").strip(),
+                    "priority": str(row.get("priority") or "").strip().lower(),
+                    "reason": str(row.get("reason") or row.get("reason_summary") or "").strip(),
+                    "reason_summary": str(row.get("reason_summary") or row.get("reason") or "").strip(),
+                    "expected_effect": str(row.get("expected_effect") or "").strip(),
+                }
+            )
         return ProjectAnalysisResponse(
             project_name=str(payload.get("project_name") or project_name),
             entities=[str(x) for x in (payload.get("entities") or []) if str(x).strip()],
@@ -139,6 +157,7 @@ def get_ui_project_analysis(project_name: str) -> ProjectAnalysisResponse:
             nav_visible_pages=[str(x) for x in (payload.get("nav_visible_pages") or []) if str(x).strip()],
             runtime_status=payload.get("runtime_status") if isinstance(payload.get("runtime_status"), dict) else {},
             suggestions=[x for x in (payload.get("suggestions") or []) if isinstance(x, dict)][:3],
+            next_candidates=next_candidates[:3],
             next_action=payload.get("next_action") if isinstance(payload.get("next_action"), dict) else {},
             next_action_explanation=payload.get("next_action_explanation")
             if isinstance(payload.get("next_action_explanation"), dict)
