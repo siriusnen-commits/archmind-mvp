@@ -405,6 +405,105 @@ def test_single_entity_detail_page_has_no_relation_surface(tmp_path: Path) -> No
     assert "/tasks/by_task" not in detail_text
 
 
+def test_relation_create_page_card_uses_query_prefill_and_parent_selector(tmp_path: Path) -> None:
+    project_dir = tmp_path / "relation_create_board_card"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "entities": [
+                    {"name": "Board", "fields": [{"name": "title", "type": "string"}]},
+                    {"name": "Card", "fields": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    apply_page_scaffold(project_dir, "cards/new")
+    apply_page_scaffold(project_dir, "cards/by_board")
+    create_text = (project_dir / "frontend" / "app" / "cards" / "new" / "page.tsx").read_text(encoding="utf-8")
+    relation_text = (project_dir / "frontend" / "app" / "cards" / "by_board" / "page.tsx").read_text(encoding="utf-8")
+    assert 'searchParams.get("board_id")' in create_text
+    assert "Prefilled from parent context." in create_text
+    assert "fetch(`${apiBaseUrl}/boards`" in create_text
+    assert "Option fetch unavailable. Raw input fallback." in create_text
+    assert 'method: "POST"' in create_text
+    assert 'fetch(`${apiBaseUrl}/cards`' in create_text
+    assert "/cards/new?board_id=${relationValue}" in relation_text
+
+
+def test_relation_create_page_tag_respects_entry_context_and_has_fallback(tmp_path: Path) -> None:
+    project_dir = tmp_path / "relation_create_entry_tag"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "entities": [
+                    {"name": "Entry", "fields": [{"name": "title", "type": "string"}]},
+                    {"name": "Tag", "fields": [{"name": "name", "type": "string"}, {"name": "entry_id", "type": "int"}]},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    apply_page_scaffold(project_dir, "tags/new")
+    create_text = (project_dir / "frontend" / "app" / "tags" / "new" / "page.tsx").read_text(encoding="utf-8")
+    assert 'searchParams.get("entry_id")' in create_text
+    assert "fetch(`${apiBaseUrl}/entries`" in create_text
+    assert "Option fetch unavailable. Raw input fallback." in create_text
+
+
+def test_relation_create_and_detail_page_bookmark_category_surface_relation_meaningfully(tmp_path: Path) -> None:
+    project_dir = tmp_path / "relation_create_bookmark_category"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "entities": [
+                    {"name": "Category", "fields": [{"name": "name", "type": "string"}]},
+                    {"name": "Bookmark", "fields": [{"name": "title", "type": "string"}, {"name": "category_id", "type": "int"}]},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    apply_frontend_page_scaffold(project_dir, "Bookmark")
+    apply_page_scaffold(project_dir, "bookmarks/new")
+    create_text = (project_dir / "frontend" / "app" / "bookmarks" / "new" / "page.tsx").read_text(encoding="utf-8")
+    detail_text = (project_dir / "frontend" / "app" / "bookmarks" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+    assert 'searchParams.get("category_id")' in create_text
+    assert "fetch(`${apiBaseUrl}/categories`" in create_text
+    assert "Select parent" in create_text
+    assert "Relations" in detail_text
+    assert "Category" in detail_text
+
+
+def test_single_entity_create_page_remains_simple_without_relation_selector(tmp_path: Path) -> None:
+    project_dir = tmp_path / "single_create_no_relation"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps({"entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}]}),
+        encoding="utf-8",
+    )
+
+    apply_page_scaffold(project_dir, "tasks/new")
+    create_text = (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").read_text(encoding="utf-8")
+    assert "Select parent" not in create_text
+    assert "Prefilled from parent context." not in create_text
+    assert 'fetch(`${apiBaseUrl}/tasks`' in create_text
+
+
 def test_apply_frontend_page_scaffold_updates_navigation_with_new_entity_route(tmp_path: Path) -> None:
     project_dir = tmp_path / "fullstack_demo"
     (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
