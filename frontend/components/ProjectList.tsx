@@ -98,7 +98,7 @@ export default function ProjectList({ projects, selectedName }: Props) {
                   </Link>
                   {isCurrent ? (
                     <span className="rounded-full border border-emerald-400 bg-emerald-900/50 px-2 py-0.5 text-[11px] font-medium text-emerald-200">
-                      current
+                      CURRENT
                     </span>
                   ) : null}
                 </div>

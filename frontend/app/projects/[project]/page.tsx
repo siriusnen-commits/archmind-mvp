@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import CurrentProjectIndicator from "@/components/CurrentProjectIndicator";
 import EvolutionCard from "@/components/EvolutionCard";
 import EvolutionHistoryCard from "@/components/EvolutionHistoryCard";
 import LogsViewerCard from "@/components/LogsViewerCard";
@@ -216,6 +217,12 @@ export default async function ProjectDetailPage({ params }: PageProps) {
           <RefreshButton className="rounded-md border border-slate-500 px-3 py-1.5 text-sm text-slate-100 hover:bg-slate-800" />
         </div>
       </header>
+      <CurrentProjectIndicator
+        projectName={detail?.name || projectName}
+        displayName={detail?.display_name || detail?.name || projectName}
+        setOnMount
+        className="mb-3"
+      />
 
       {result.error ? <p className="mb-3 rounded-md border border-rose-700 bg-rose-950/50 p-3 text-sm text-rose-200">{result.error}</p> : null}
 
