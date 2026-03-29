@@ -1034,6 +1034,99 @@ def test_project_analysis_relation_diagnostics_warn_when_relation_page_exists_bu
     assert "cards/by_board" not in warnings
 
 
+def test_project_analysis_next_action_explains_missing_relation_page(tmp_path: Path) -> None:
+    project_dir = tmp_path / "next-explain-missing-relation-page"
+    spec = {
+        "entities": [
+            {"name": "Board", "fields": [{"name": "title", "type": "string"}]},
+            {"name": "Card", "fields": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+        ],
+        "api_endpoints": [
+            "GET /boards",
+            "POST /boards",
+            "GET /boards/{id}",
+            "PATCH /boards/{id}",
+            "DELETE /boards/{id}",
+            "GET /cards",
+            "POST /cards",
+            "GET /cards/{id}",
+            "PATCH /cards/{id}",
+            "DELETE /cards/{id}",
+        ],
+        "frontend_pages": ["boards/list", "boards/detail", "cards/list", "cards/new", "cards/detail"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    next_action = out["next_action"]
+    assert next_action["kind"] == "relation_page_behavior"
+    assert next_action["gap_type"] == "relation_page_behavior_missing"
+    assert next_action["priority"] == "high"
+    assert "relation-aware page flow" in next_action["expected_effect"].lower()
+
+
+def test_project_analysis_next_action_explains_missing_relation_scoped_api(tmp_path: Path) -> None:
+    project_dir = tmp_path / "next-explain-missing-relation-api"
+    spec = {
+        "entities": [
+            {"name": "Entry", "fields": [{"name": "title", "type": "string"}]},
+            {"name": "Tag", "fields": [{"name": "name", "type": "string"}, {"name": "entry_id", "type": "int"}]},
+        ],
+        "api_endpoints": [
+            "GET /entries",
+            "POST /entries",
+            "GET /entries/{id}",
+            "PATCH /entries/{id}",
+            "DELETE /entries/{id}",
+            "GET /tags",
+            "POST /tags",
+            "GET /tags/{id}",
+            "PATCH /tags/{id}",
+            "DELETE /tags/{id}",
+        ],
+        "frontend_pages": ["entries/list", "entries/detail", "tags/list", "tags/new", "tags/detail", "tags/by_entry"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    next_action = out["next_action"]
+    assert next_action["kind"] == "relation_scoped_api"
+    assert next_action["gap_type"] == "relation_scoped_api_missing"
+    assert next_action["priority"] == "high"
+    assert "scoped relation fetch" in next_action["expected_effect"].lower()
+
+
+def test_project_analysis_next_action_explanation_for_single_entity_missing_crud_api(tmp_path: Path) -> None:
+    project_dir = tmp_path / "next-explain-single-entity-crud"
+    spec = {
+        "entities": [{"name": "Entry", "fields": [{"name": "title", "type": "string"}]}],
+        "api_endpoints": ["GET /entries", "POST /entries"],
+        "frontend_pages": ["entries/list", "entries/new", "entries/detail"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    next_action = out["next_action"]
+    assert next_action["kind"] == "missing_crud_api"
+    assert next_action["gap_type"] == "crud_api_missing"
+    assert next_action["priority"] == "high"
+    assert "adds missing api capability" in next_action["expected_effect"].lower()
+
+
+def test_project_analysis_next_action_explanation_for_no_action_is_none(tmp_path: Path) -> None:
+    project_dir = tmp_path / "next-explain-none"
+    spec = {
+        "entities": [{"name": "Note", "fields": [{"name": "title", "type": "string"}, {"name": "content", "type": "string"}]}],
+        "api_endpoints": [
+            "GET /notes",
+            "POST /notes",
+            "GET /notes/{id}",
+            "PATCH /notes/{id}",
+            "DELETE /notes/{id}",
+        ],
+        "frontend_pages": ["notes/list", "notes/detail"],
+    }
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    next_action = out["next_action"]
+    assert next_action["kind"] == "none"
+    assert next_action["priority"] == "none"
+    assert next_action["priority_reason"] == "No actionable gap remains."
+
+
 def test_project_analysis_visualization_single_entity_graph_and_maps(tmp_path: Path) -> None:
     project_dir = tmp_path / "single-entity-visualization"
     spec = {

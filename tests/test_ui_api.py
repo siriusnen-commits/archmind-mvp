@@ -473,8 +473,11 @@ def test_ui_project_analysis_endpoint_response_shape(monkeypatch, tmp_path: Path
     assert isinstance(payload["runtime_status"], dict)
     assert isinstance(payload["suggestions"], list)
     assert isinstance(payload["next_action"], dict)
+    assert isinstance(payload["next_action_explanation"], dict)
     for key in ("kind", "message", "command"):
         assert key in payload["next_action"]
+    for key in ("gap_type", "reason_summary", "priority_reason", "expected_effect"):
+        assert key in payload["next_action_explanation"]
 
 
 def test_ui_project_analysis_visualization_matches_relation_aware_canonical_state(monkeypatch, tmp_path: Path) -> None:

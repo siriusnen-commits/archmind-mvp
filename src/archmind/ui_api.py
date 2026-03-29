@@ -139,6 +139,9 @@ def get_ui_project_analysis(project_name: str) -> ProjectAnalysisResponse:
             runtime_status=payload.get("runtime_status") if isinstance(payload.get("runtime_status"), dict) else {},
             suggestions=[x for x in (payload.get("suggestions") or []) if isinstance(x, dict)][:3],
             next_action=payload.get("next_action") if isinstance(payload.get("next_action"), dict) else {},
+            next_action_explanation=payload.get("next_action_explanation")
+            if isinstance(payload.get("next_action_explanation"), dict)
+            else {},
         )
     except HTTPException:
         raise

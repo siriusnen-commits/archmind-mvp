@@ -3141,6 +3141,44 @@ def test_inspect_includes_relation_summary_and_artifacts_for_entry_tag(tmp_path:
     assert "- GET /entries/{id}/tags" in out
 
 
+def test_inspect_includes_compact_why_next_when_actionable(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "inspect_why_next"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "entities": [
+                    {"name": "Board", "fields": [{"name": "title", "type": "string"}]},
+                    {"name": "Card", "fields": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+                ],
+                "api_endpoints": [
+                    "GET /boards",
+                    "POST /boards",
+                    "GET /boards/{id}",
+                    "PATCH /boards/{id}",
+                    "DELETE /boards/{id}",
+                    "GET /cards",
+                    "POST /cards",
+                    "GET /cards/{id}",
+                    "PATCH /cards/{id}",
+                    "DELETE /cards/{id}",
+                ],
+                "frontend_pages": ["boards/list", "boards/detail", "cards/list", "cards/new", "cards/detail"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    msg = DummyMessage()
+    asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Why next?:" in out
+    assert "relation" in out.lower()
+
+
 def test_inspect_includes_inferred_relation_and_create_flow_for_bookmark_category(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "inspect_bookmark_category_relation"
     archmind = project_dir / ".archmind"
@@ -6501,6 +6539,50 @@ def test_next_command_uses_single_analysis_next_action_only(tmp_path: Path, monk
     assert "/add_page tasks/list" not in out
 
 
+def test_next_command_includes_explanation_block_for_relation_gap(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "next_explanation_relation_gap"
+    archmind = project_dir / ".archmind"
+    archmind.mkdir(parents=True, exist_ok=True)
+    (archmind / "project_spec.json").write_text(
+        json.dumps({"shape": "fullstack", "template": "fullstack-ddd", "entities": [], "api_endpoints": [], "frontend_pages": []}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.telegram_bot._resolve_target_project", lambda: project_dir)
+    monkeypatch.setattr(
+        "archmind.telegram_bot._build_project_analysis",
+        lambda _p, **_kwargs: {
+            "next_action": {
+                "kind": "relation_scoped_api",
+                "message": "Relation-scoped API is missing for Entry-Tag: list Tag by Entry.",
+                "command": "/add_api GET /entries/{id}/tags",
+                "gap_type": "relation_scoped_api_missing",
+                "reason_summary": "Relation-scoped API is missing for Entry-Tag.",
+                "priority": "high",
+                "priority_reason": "This blocks meaningful app structure or user flow.",
+                "expected_effect": "Enables scoped relation fetch for tags under entries.",
+            },
+            "next_action_explanation": {
+                "gap_type": "relation_scoped_api_missing",
+                "reason_summary": "Relation-scoped API is missing for Entry-Tag.",
+                "priority": "high",
+                "priority_reason": "This blocks meaningful app structure or user flow.",
+                "expected_effect": "Enables scoped relation fetch for tags under entries.",
+            },
+        },
+    )
+    msg = DummyMessage()
+    asyncio.run(command_next(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
+    out = msg.sent[-1]
+    assert "Reason:" in out
+    assert "- Relation-scoped API is missing for Entry-Tag." in out
+    assert "- Gap type: relation_scoped_api_missing" in out
+    assert "Priority:" in out
+    assert "- high" in out
+    assert "Expected effect:" in out
+    assert "Enables scoped relation fetch" in out
+    assert "Command: /add_api GET /entries/{id}/tags" in out
+
+
 def test_next_command_no_suggestions_shows_guidance(tmp_path: Path, monkeypatch) -> None:
     project_dir = tmp_path / "next_done_proj"
     archmind = project_dir / ".archmind"
@@ -6708,6 +6790,7 @@ def test_auto_command_stops_on_good_enough_mvp_for_single_entity_complete(tmp_pa
     out = msg.sent[-1]
     assert "- Result: STOP (good enough MVP reached)" in out
     assert "- Stopped: good enough MVP reached" in out
+    assert "- Stop explanation: Core CRUD and baseline pages are complete with no higher-priority canonical gap remaining." in out
 
 
 def test_auto_command_executes_valid_next_actions(tmp_path: Path, monkeypatch) -> None:
@@ -7520,6 +7603,7 @@ def test_auto_command_stops_on_low_priority_next_action(tmp_path: Path, monkeypa
     assert executed == []
     assert "- Result: STOP (low-priority next action)" in out
     assert "- Stopped: low-priority next action" in out
+    assert "- Stop explanation: Only optional low-value improvements remain, so auto stopped to avoid churn." in out
 
 
 def test_auto_command_stops_when_command_makes_no_material_state_change(tmp_path: Path, monkeypatch) -> None:
@@ -7582,6 +7666,7 @@ def test_auto_command_stops_when_state_changes_but_progress_score_is_zero(tmp_pa
     assert executed == ["/add_field Task archived:boolean"]
     assert "- Result: STOP (no material progress)" in out
     assert "- Stopped: no material progress" in out
+    assert "- Stop explanation: The latest actionable command did not change canonical entities/APIs/pages/relations." in out
 
 
 def test_auto_progress_delta_scores_material_changes() -> None:
