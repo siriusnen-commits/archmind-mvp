@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import sys
 from pathlib import Path
@@ -302,6 +303,106 @@ def test_apply_frontend_page_scaffold_note_entity_is_usable_crud_mvp(tmp_path: P
     assert "method: \"PATCH\"" in detail_text
     assert "Delete note" in detail_text
     assert "method: \"DELETE\"" in detail_text
+
+
+def test_relation_surface_board_detail_includes_card_section(tmp_path: Path) -> None:
+    project_dir = tmp_path / "relation_board_card"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "entities": [
+                    {"name": "Board", "fields": [{"name": "title", "type": "string"}]},
+                    {"name": "Card", "fields": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    apply_frontend_page_scaffold(project_dir, "Board")
+    apply_frontend_page_scaffold(project_dir, "Card")
+    detail_text = (project_dir / "frontend" / "app" / "boards" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+    assert "Cards" in detail_text
+    assert "fetch(`${apiBaseUrl}/boards/${id}/cards`" in detail_text
+    assert "fetch(`${apiBaseUrl}/cards`" in detail_text
+    assert '["board_id"]' in detail_text
+    assert "/cards/by_board?board_id=${id}" in detail_text
+    assert "/cards/new?board_id=${id}" in detail_text
+
+
+def test_relation_surface_entry_detail_includes_tag_section(tmp_path: Path) -> None:
+    project_dir = tmp_path / "relation_entry_tag"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "entities": [
+                    {"name": "Entry", "fields": [{"name": "title", "type": "string"}]},
+                    {"name": "Tag", "fields": [{"name": "name", "type": "string"}, {"name": "entry_id", "type": "int"}]},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    apply_frontend_page_scaffold(project_dir, "Entry")
+    apply_frontend_page_scaffold(project_dir, "Tag")
+    detail_text = (project_dir / "frontend" / "app" / "entries" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+    assert "Tags" in detail_text
+    assert "fetch(`${apiBaseUrl}/entries/${id}/tags`" in detail_text
+    assert "fetch(`${apiBaseUrl}/tags`" in detail_text
+    assert '["entry_id"]' in detail_text
+    assert "/tags/by_entry?entry_id=${id}" in detail_text
+
+
+def test_relation_surface_category_detail_includes_bookmark_section(tmp_path: Path) -> None:
+    project_dir = tmp_path / "relation_category_bookmark"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "entities": [
+                    {"name": "Category", "fields": [{"name": "name", "type": "string"}]},
+                    {"name": "Bookmark", "fields": [{"name": "title", "type": "string"}, {"name": "category_id", "type": "int"}]},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    apply_frontend_page_scaffold(project_dir, "Category")
+    apply_frontend_page_scaffold(project_dir, "Bookmark")
+    detail_text = (project_dir / "frontend" / "app" / "categories" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+    assert "Bookmarks" in detail_text
+    assert "fetch(`${apiBaseUrl}/categories/${id}/bookmarks`" in detail_text
+    assert "fetch(`${apiBaseUrl}/bookmarks`" in detail_text
+    assert '["category_id"]' in detail_text
+    assert "/bookmarks/by_category?category_id=${id}" in detail_text
+    assert "/bookmarks/new?category_id=${id}" in detail_text
+
+
+def test_single_entity_detail_page_has_no_relation_surface(tmp_path: Path) -> None:
+    project_dir = tmp_path / "single_entity_no_relation"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps({"entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}]}),
+        encoding="utf-8",
+    )
+
+    apply_frontend_page_scaffold(project_dir, "Task")
+    detail_text = (project_dir / "frontend" / "app" / "tasks" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+    assert "Loading related items..." not in detail_text
+    assert "View all" not in detail_text
+    assert "/tasks/by_task" not in detail_text
 
 
 def test_apply_frontend_page_scaffold_updates_navigation_with_new_entity_route(tmp_path: Path) -> None:
