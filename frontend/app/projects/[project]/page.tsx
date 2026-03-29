@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import EvolutionCard from "@/components/EvolutionCard";
+import EvolutionHistoryCard from "@/components/EvolutionHistoryCard";
 import AddEntityCard from "@/components/AddEntityCard";
 import AddFieldCard from "@/components/AddFieldCard";
 import AddApiCard from "@/components/AddApiCard";
@@ -119,6 +120,16 @@ type ProjectDetail = {
     message?: string;
     stop_reason?: string;
   }>;
+  evolution_history?: Array<{
+    timestamp?: string;
+    title?: string;
+    status?: string;
+    summary?: string;
+    action_type?: string;
+    command?: string;
+    source?: string;
+    stop_reason?: string;
+  }>;
   auto_summary?: {
     run_id?: string;
     executed?: number;
@@ -198,6 +209,7 @@ export default async function ProjectDetailPage({ params }: PageProps) {
           <NextActionCard projectName={detail.name} nextAction={analysis?.next_action} />
           <NextCandidatesCard projectName={detail.name} candidates={analysis?.next_candidates} />
           <AutoControlPanel projectName={detail.name} autoSummary={detail.auto_summary} />
+          <EvolutionHistoryCard items={Array.isArray(detail.evolution_history) ? detail.evolution_history : []} />
           <StructureVisualizationCard
             projectName={detail.name}
             entityGraph={analysis?.entity_graph}

@@ -263,6 +263,77 @@ def _extract_entity_names(spec_payload: dict[str, Any]) -> list[str]:
     return names
 
 
+def _normalize_evolution_status(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text == "ok":
+        return "OK"
+    if text == "fail":
+        return "FAILED"
+    if text == "stop":
+        return "STOPPED"
+    if text in {"synced", "commit_only", "push_failed"}:
+        return text.upper()
+    return "UNKNOWN"
+
+
+def _action_type_from_command(command: str) -> str:
+    text = str(command or "").strip().lower()
+    if not text:
+        return "command"
+    if text.startswith("/auto"):
+        return "auto"
+    if text.startswith("/fix"):
+        return "fix"
+    if text.startswith("/continue"):
+        return "continue"
+    if text.startswith("/add_api"):
+        return "add_api"
+    if text.startswith("/add_page"):
+        return "add_page"
+    if text.startswith("/implement_page"):
+        return "implement_page"
+    if text.startswith("/add_field"):
+        return "add_field"
+    if text.startswith("/add_entity"):
+        return "add_entity"
+    return "command"
+
+
+def _build_evolution_history(recent_runs: list[dict[str, Any]], _recent_evolution: list[str]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen_keys: set[str] = set()
+
+    for item in recent_runs:
+        if not isinstance(item, dict):
+            continue
+        command = str(item.get("command") or "").strip()
+        status = _normalize_evolution_status(item.get("status"))
+        stop_reason = str(item.get("stop_reason") or "").strip()
+        message = str(item.get("message") or "").strip()
+        timestamp = str(item.get("timestamp") or "").strip()
+        source = str(item.get("source") or "").strip()
+        title = command or (source if source else "Command run")
+        summary = stop_reason or message
+        key = "|".join([timestamp, title, status, summary])
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        rows.append(
+            {
+                "timestamp": timestamp,
+                "title": title,
+                "status": status,
+                "summary": summary,
+                "action_type": _action_type_from_command(command),
+                "command": command,
+                "source": source,
+                "stop_reason": stop_reason,
+            }
+        )
+
+    return rows[:20]
+
+
 def _empty_project_detail(project_dir: Path, warning: str = "") -> ProjectDetailResponse:
     return ProjectDetailResponse(
         name=project_dir.name,
@@ -276,6 +347,7 @@ def _empty_project_detail(project_dir: Path, warning: str = "") -> ProjectDetail
         runtime=RuntimeSummary(),
         recent_evolution=[],
         recent_runs=[],
+        evolution_history=[],
         auto_summary={},
         repository=RepositorySummary(),
         analysis=analyze_project(project_dir, project_name=project_dir.name, spec_payload={}, runtime_payload={}),
@@ -463,6 +535,8 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
                 }
             )
         auto_summary = state_payload.get("auto_last_result") if isinstance(state_payload.get("auto_last_result"), dict) else {}
+        recent_evolution = summarize_recent_evolution(spec, limit=5)
+        evolution_history = _build_evolution_history(recent_runs, recent_evolution)
         return ProjectDetailResponse(
             name=project_dir.name,
             display_name=_display_name_from_payloads(project_dir, state_payload, spec if isinstance(spec, dict) else {}),
@@ -492,8 +566,9 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
                 backend_last_known_url=str(backend_runtime.get("last_known_url") or "").strip(),
                 frontend_last_known_url=str(frontend_runtime.get("last_known_url") or "").strip(),
             ),
-            recent_evolution=summarize_recent_evolution(spec, limit=5),
+            recent_evolution=recent_evolution,
             recent_runs=recent_runs,
+            evolution_history=evolution_history,
             auto_summary=auto_summary,
             repository=repository,
             analysis=analysis,
