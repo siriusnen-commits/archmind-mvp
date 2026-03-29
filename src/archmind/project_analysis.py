@@ -13,6 +13,7 @@ ESSENTIAL_FIELDS = {"title", "name", "content"}
 USEFUL_DOMAIN_FIELDS = {"description", "status", "priority"}
 LOW_VALUE_FIELDS = {"created_at", "updated_at", "timestamp", "deleted_at"}
 CRUD_KEYS = ("list", "create", "detail", "update", "delete")
+RELATION_HINT_ENTITY_TOKENS = {"tag", "tags", "category", "categories", "label", "labels", "group", "groups"}
 
 
 def _normalize_entity_name(value: Any) -> str:
@@ -54,6 +55,19 @@ def _entity_resource(entity_name: str) -> str:
     if not slug:
         return ""
     return _pluralize_resource_name(slug)
+
+
+def _singularize_resource_name(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    if raw.endswith("ies") and len(raw) > 3:
+        return f"{raw[:-3]}y"
+    if raw.endswith("es") and len(raw) > 2 and raw[:-2].endswith(("s", "x", "z", "ch", "sh")):
+        return raw[:-2]
+    if raw.endswith("s") and len(raw) > 1:
+        return raw[:-1]
+    return raw
 
 
 def _canonicalize_page_path(value: Any) -> str:
@@ -488,18 +502,6 @@ def _compute_entity_crud_status(
     canonical_resources = sorted(str(resource or "").strip().lower() for resource in crud_coverage.keys() if str(resource or "").strip())
     status: dict[str, dict[str, Any]] = {}
 
-    def _singularize_resource_name(value: str) -> str:
-        raw = str(value or "").strip().lower()
-        if not raw:
-            return ""
-        if raw.endswith("ies") and len(raw) > 3:
-            return f"{raw[:-3]}y"
-        if raw.endswith("es") and len(raw) > 2 and raw[:-2].endswith(("s", "x", "z", "ch", "sh")):
-            return raw[:-2]
-        if raw.endswith("s") and len(raw) > 1:
-            return raw[:-1]
-        return raw
-
     def _entity_resource_aliases(entity_name: str) -> set[str]:
         slug = _entity_slug(entity_name)
         if not slug:
@@ -619,6 +621,222 @@ def _compute_entity_crud_status(
             "missing_low_value_fields": missing_low_value_fields,
         }
     return status
+
+
+def _entity_relation_aliases(entity_name: str, resource: str) -> set[str]:
+    aliases: set[str] = set()
+    slug = _entity_slug(entity_name)
+    if slug:
+        aliases.add(slug)
+        aliases.update(part for part in slug.split("_") if part)
+        aliases.add(_singularize_resource_name(slug))
+    normalized_resource = str(resource or "").strip().lower()
+    if normalized_resource:
+        aliases.add(normalized_resource)
+        aliases.add(_singularize_resource_name(normalized_resource))
+    return {token for token in aliases if token}
+
+
+def _build_entity_relation_index(entity_crud_status: dict[str, dict[str, Any]]) -> dict[str, dict[str, str]]:
+    relation_index: dict[str, dict[str, str]] = {}
+    for entity, info in entity_crud_status.items():
+        if not isinstance(info, dict):
+            continue
+        entity_name = _normalize_entity_name(entity)
+        resource = str(info.get("resource") or "").strip().lower() or _entity_resource(entity_name)
+        if not entity_name or not resource:
+            continue
+        relation_index[entity_name] = {
+            "entity": entity_name,
+            "resource": resource,
+            "singular_resource": _singularize_resource_name(resource),
+        }
+    return relation_index
+
+
+def _infer_relation_pairs(
+    entities: list[str],
+    fields_by_entity: dict[str, list[dict[str, str]]],
+    entity_crud_status: dict[str, dict[str, Any]],
+) -> list[dict[str, str]]:
+    relation_index = _build_entity_relation_index(entity_crud_status)
+    parent_candidates_by_alias: dict[str, dict[str, str]] = {}
+    for entity in entities:
+        entity_name = _normalize_entity_name(entity)
+        info = relation_index.get(entity_name) or {}
+        resource = str(info.get("resource") or _entity_resource(entity_name)).strip().lower()
+        aliases = _entity_relation_aliases(entity_name, resource)
+        for alias in aliases:
+            parent_candidates_by_alias.setdefault(alias, {"entity": entity_name, "resource": resource})
+
+    seen_pairs: set[tuple[str, str]] = set()
+    pairs: list[dict[str, str]] = []
+
+    for child in entities:
+        child_name = _normalize_entity_name(child)
+        child_info = relation_index.get(child_name) or {}
+        child_resource = str(child_info.get("resource") or _entity_resource(child_name)).strip().lower()
+        if not child_name or not child_resource:
+            continue
+        for field in (fields_by_entity.get(child_name) or []):
+            if not isinstance(field, dict):
+                continue
+            field_name = str(field.get("name") or "").strip().lower()
+            if not field_name.endswith("_id"):
+                continue
+            base = field_name[:-3].strip("_")
+            if not base:
+                continue
+            parent_candidate = parent_candidates_by_alias.get(base)
+            if not parent_candidate:
+                continue
+            parent_name = str(parent_candidate.get("entity") or "").strip()
+            parent_resource = str(parent_candidate.get("resource") or "").strip().lower()
+            if not parent_name or not parent_resource or parent_name.lower() == child_name.lower():
+                continue
+            key = (parent_name.lower(), child_name.lower())
+            if key in seen_pairs:
+                continue
+            seen_pairs.add(key)
+            pairs.append(
+                {
+                    "parent_entity": parent_name,
+                    "parent_resource": parent_resource,
+                    "parent_singular": _singularize_resource_name(parent_resource),
+                    "child_entity": child_name,
+                    "child_resource": child_resource,
+                }
+            )
+
+    if pairs:
+        return pairs
+
+    if len(entities) < 2:
+        return []
+
+    category_entities: list[str] = []
+    other_entities: list[str] = []
+    for entity in entities:
+        entity_name = _normalize_entity_name(entity)
+        slug = _entity_slug(entity_name)
+        tokens = {slug, _singularize_resource_name(slug)}
+        if tokens & RELATION_HINT_ENTITY_TOKENS:
+            category_entities.append(entity_name)
+        else:
+            other_entities.append(entity_name)
+    if not category_entities or not other_entities:
+        return []
+
+    parent_name = category_entities[0]
+    child_name = other_entities[0]
+    parent_resource = str((relation_index.get(parent_name) or {}).get("resource") or _entity_resource(parent_name)).strip().lower()
+    child_resource = str((relation_index.get(child_name) or {}).get("resource") or _entity_resource(child_name)).strip().lower()
+    if not parent_resource or not child_resource:
+        return []
+    return [
+        {
+            "parent_entity": parent_name,
+            "parent_resource": parent_resource,
+            "parent_singular": _singularize_resource_name(parent_resource),
+            "child_entity": child_name,
+            "child_resource": child_resource,
+        }
+    ]
+
+
+def _all_entities_have_basic_crud_and_pages(entity_crud_status: dict[str, dict[str, Any]]) -> bool:
+    if not entity_crud_status:
+        return False
+    for info in entity_crud_status.values():
+        if not isinstance(info, dict):
+            return False
+        if info.get("missing_api"):
+            return False
+        if info.get("missing_pages"):
+            return False
+    return True
+
+
+def _relation_scoped_get_exists(apis: list[dict[str, str]], parent_resource: str, child_resource: str) -> bool:
+    target = _canonicalize_api_path(f"/{parent_resource}/{{id}}/{child_resource}")
+    for item in apis:
+        if not isinstance(item, dict):
+            continue
+        method = str(item.get("method") or "").strip().upper()
+        path = str(item.get("path") or "").strip()
+        if method == "GET" and path == target:
+            return True
+    return False
+
+
+def _build_relation_aware_suggestions(
+    entities: list[str],
+    fields_by_entity: dict[str, list[dict[str, str]]],
+    entity_crud_status: dict[str, dict[str, Any]],
+    apis: list[dict[str, str]],
+    pages: list[str],
+    placeholder_pages: list[str],
+) -> tuple[list[dict[str, str]], list[dict[str, str]], list[dict[str, str]]]:
+    missing_page_behavior: list[dict[str, str]] = []
+    missing_scoped_api: list[dict[str, str]] = []
+    placeholder_relation_page: list[dict[str, str]] = []
+    if len(entities) < 2:
+        return missing_page_behavior, missing_scoped_api, placeholder_relation_page
+    if not _all_entities_have_basic_crud_and_pages(entity_crud_status):
+        return missing_page_behavior, missing_scoped_api, placeholder_relation_page
+
+    page_set = {str(page).strip() for page in pages if str(page).strip()}
+    placeholder_set = {str(page).strip() for page in placeholder_pages if str(page).strip()}
+
+    for rel in _infer_relation_pairs(entities, fields_by_entity, entity_crud_status):
+        parent_entity = str(rel.get("parent_entity") or "").strip()
+        parent_resource = str(rel.get("parent_resource") or "").strip().lower()
+        parent_singular = str(rel.get("parent_singular") or "").strip().lower()
+        child_entity = str(rel.get("child_entity") or "").strip()
+        child_resource = str(rel.get("child_resource") or "").strip().lower()
+        if not parent_entity or not parent_resource or not parent_singular or not child_entity or not child_resource:
+            continue
+
+        relation_page = _normalize_page(f"{child_resource}/by_{parent_singular}")
+        parent_detail_page = _normalize_page(f"{parent_resource}/detail")
+        if relation_page and parent_detail_page in page_set and relation_page not in page_set:
+            missing_page_behavior.append(
+                {
+                    "kind": "relation_page_behavior",
+                    "message": (
+                        f"Relation-aware view is missing for {parent_entity}-{child_entity}: "
+                        f"show {child_entity} records from {parent_entity} detail flow."
+                    ),
+                    "command": f"/add_page {relation_page}",
+                }
+            )
+
+        if not _relation_scoped_get_exists(apis, parent_resource, child_resource):
+            missing_scoped_api.append(
+                {
+                    "kind": "relation_scoped_api",
+                    "message": (
+                        f"Relation-scoped API is missing for {parent_entity}-{child_entity}: "
+                        f"list {child_entity} by {parent_entity}."
+                    ),
+                    "command": f"/add_api GET /{parent_resource}/{{id}}/{child_resource}",
+                }
+            )
+
+        if relation_page and relation_page in placeholder_set:
+            placeholder_relation_page.append(
+                {
+                    "kind": "relation_placeholder_page",
+                    "message": f"Relation page {relation_page} is still placeholder-level. Implement usable linkage UI.",
+                    "command": f"/implement_page {relation_page}",
+                }
+            )
+
+    return (
+        _dedupe_suggestions(missing_page_behavior),
+        _dedupe_suggestions(missing_scoped_api),
+        _dedupe_suggestions(placeholder_relation_page),
+    )
 
 
 def _crud_gap_to_command(resource: str, missing_api: list[str]) -> tuple[str, str]:
@@ -767,8 +985,11 @@ def _normalize_runtime_status(runtime_payload: dict[str, Any] | None) -> dict[st
 def _build_suggestions(
     project_dir: Path,
     entities: list[str],
+    fields_by_entity: dict[str, list[dict[str, str]]],
     entity_crud_status: dict[str, dict[str, Any]],
     final_crud_coverage: dict[str, dict[str, bool]],
+    apis: list[dict[str, str]],
+    pages: list[str],
     placeholder_pages: list[str],
 ) -> tuple[list[dict[str, str]], dict[str, str]]:
     recent_commands = _recent_suggested_or_executed_commands(project_dir, limit=80)
@@ -777,6 +998,9 @@ def _build_suggestions(
     high_crud: list[dict[str, str]] = []
     high_page: list[dict[str, str]] = []
     high_placeholder: list[dict[str, str]] = []
+    relation_page: list[dict[str, str]] = []
+    relation_api: list[dict[str, str]] = []
+    relation_placeholder: list[dict[str, str]] = []
     medium: list[dict[str, str]] = []
     low: list[dict[str, str]] = []
     added_field_suggestion = False
@@ -903,6 +1127,15 @@ def _build_suggestions(
             f"/implement_page {target}",
         )
 
+    relation_page, relation_api, relation_placeholder = _build_relation_aware_suggestions(
+        entities,
+        fields_by_entity,
+        entity_crud_status,
+        apis,
+        pages,
+        placeholder_pages,
+    )
+
     suggestions = []
     for bucket in (
         high_entity,
@@ -910,6 +1143,9 @@ def _build_suggestions(
         high_crud,
         high_page,
         high_placeholder,
+        relation_page,
+        relation_api,
+        relation_placeholder,
     ):
         for item in _dedupe_suggestions(bucket):
             if len(suggestions) >= 3:
@@ -973,7 +1209,15 @@ def _suggestion_priority(row: dict[str, str] | None) -> str:
         if field_name in USEFUL_DOMAIN_FIELDS:
             return "medium"
         return "low"
-    if kind in {"missing_crud_api", "missing_page", "placeholder_page", "missing_entity"}:
+    if kind in {
+        "missing_crud_api",
+        "missing_page",
+        "placeholder_page",
+        "missing_entity",
+        "relation_page_behavior",
+        "relation_scoped_api",
+        "relation_placeholder_page",
+    }:
         return "high"
     return "medium"
 
@@ -1144,8 +1388,11 @@ def analyze_project(
     suggestions, next_action = _build_suggestions(
         project_dir,
         entities,
+        fields_by_entity,
         entity_crud_status,
         final_crud_coverage,
+        apis,
+        pages,
         placeholder_pages,
     )
 

@@ -6249,7 +6249,14 @@ def classify_auto_action_priority(next_action: dict[str, Any] | None) -> str:
     if kind == "missing_entity":
         return "high"
 
-    if kind in {"missing_crud_api", "missing_page", "placeholder_page"}:
+    if kind in {
+        "missing_crud_api",
+        "missing_page",
+        "placeholder_page",
+        "relation_page_behavior",
+        "relation_scoped_api",
+        "relation_placeholder_page",
+    }:
         return "high"
 
     if command.startswith("/add_field "):
