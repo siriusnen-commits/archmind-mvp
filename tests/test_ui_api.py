@@ -1301,6 +1301,14 @@ def test_project_detail_source_renders_auto_control_panel() -> None:
     assert "&& <AutoControlPanel" not in project_detail_source
 
 
+def test_project_detail_source_renders_command_console_panel() -> None:
+    project_detail_source = Path("frontend/app/projects/[project]/page.tsx").read_text(encoding="utf-8")
+    assert 'import CommandConsole from "@/components/CommandConsole"' in project_detail_source
+    assert "<CommandConsole" in project_detail_source
+    assert "projectName={detail.name}" in project_detail_source
+    assert "&& <CommandConsole" not in project_detail_source
+
+
 def test_project_detail_source_renders_evolution_history_panel() -> None:
     project_detail_source = Path("frontend/app/projects/[project]/page.tsx").read_text(encoding="utf-8")
     assert 'import EvolutionHistoryCard from "@/components/EvolutionHistoryCard"' in project_detail_source
@@ -1357,6 +1365,24 @@ def test_auto_control_panel_renders_states_and_uses_auto_command_path() -> None:
     assert "Progress score:" in source
     assert "Strategy: {strategy}" in source
     assert "Runtime: backend=" in source
+    assert "return null" not in source
+
+
+def test_command_console_component_renders_input_and_uses_commands_execution_path() -> None:
+    source = Path("frontend/components/CommandConsole.tsx").read_text(encoding="utf-8")
+    assert '"use client";' in source
+    assert "Command Console" in source
+    assert "Enter command (e.g. /add_api GET /boards/{id}/cards)" in source
+    assert "/commands" in source
+    assert "JSON.stringify({ command })" in source
+    assert "Running..." in source
+    assert "Execute" in source
+    assert "Command: {result.command}" in source
+    assert "Status: {result.status}" in source
+    assert "Summary: {result.summary || \"No summary available\"}" in source
+    assert "Enter a command." in source
+    assert "onSubmit={handleSubmit}" in source
+    assert "No summary available" in source
     assert "return null" not in source
 
 
