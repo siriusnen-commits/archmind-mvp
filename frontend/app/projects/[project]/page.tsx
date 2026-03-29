@@ -13,6 +13,7 @@ import RecentRunsCard from "@/components/RecentRunsCard";
 import RefreshButton from "@/components/RefreshButton";
 import RuntimeActionsCard from "@/components/RuntimeActionsCard";
 import RuntimeCard from "@/components/RuntimeCard";
+import StructureVisualizationCard from "@/components/StructureVisualizationCard";
 import { resolveUiApiBaseUrl } from "@/app/_lib/uiApiBase";
 
 type SpecSummary = {
@@ -45,6 +46,38 @@ type AnalysisNextAction = {
 
 type ProjectAnalysis = {
   next_action?: AnalysisNextAction;
+  entity_graph?: {
+    nodes?: Array<{
+      id?: string;
+      label?: string;
+      resource?: string;
+      crud_complete?: boolean;
+    }>;
+    edges?: Array<{
+      from?: string;
+      to?: string;
+      label?: string;
+      inferred?: boolean;
+    }>;
+  };
+  api_map?: {
+    groups?: Array<{
+      resource?: string;
+      entity?: string;
+      core_crud?: string[];
+      relation_scoped?: string[];
+      other?: string[];
+    }>;
+  };
+  page_map?: {
+    groups?: Array<{
+      resource?: string;
+      entity?: string;
+      core_pages?: string[];
+      relation_pages?: string[];
+      other_pages?: string[];
+    }>;
+  };
 };
 
 type ProjectDetail = {
@@ -124,6 +157,11 @@ export default async function ProjectDetailPage({ params }: PageProps) {
         <section className="space-y-3">
           <ProjectSummaryCard project={detail} />
           <NextActionCard projectName={detail.name} nextAction={detail.analysis?.next_action} />
+          <StructureVisualizationCard
+            entityGraph={detail.analysis?.entity_graph}
+            apiMap={detail.analysis?.api_map}
+            pageMap={detail.analysis?.page_map}
+          />
           <RecentRunsCard items={Array.isArray(detail.recent_runs) ? detail.recent_runs : []} />
           <RuntimeCard runtime={detail.runtime} />
           <RuntimeActionsCard projectName={detail.name} />
