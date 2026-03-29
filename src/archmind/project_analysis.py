@@ -886,6 +886,219 @@ def _collect_relation_diagnostics(
     }
 
 
+def _build_entity_graph(
+    entities: list[str],
+    entity_crud_status: dict[str, dict[str, Any]],
+    relations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    nodes: list[dict[str, Any]] = []
+    for entity_name in entities:
+        name = _normalize_entity_name(entity_name)
+        if not name:
+            continue
+        resource = _entity_resource(name)
+        status = entity_crud_status.get(name) if isinstance(entity_crud_status, dict) else {}
+        missing_api = list(status.get("missing_api") or []) if isinstance(status, dict) else []
+        missing_pages = list(status.get("missing_pages") or []) if isinstance(status, dict) else []
+        nodes.append(
+            {
+                "id": name,
+                "label": name,
+                "resource": resource,
+                "crud_complete": not missing_api and not missing_pages,
+            }
+        )
+
+    edges: list[dict[str, Any]] = []
+    seen_edges: set[tuple[str, str, str, bool]] = set()
+    for raw in relations:
+        if not isinstance(raw, dict):
+            continue
+        parent_entity = _normalize_entity_name(raw.get("parent_entity"))
+        child_entity = _normalize_entity_name(raw.get("child_entity"))
+        relation_field = str(raw.get("field") or "").strip().lower()
+        inferred_kind = str(raw.get("inferred") or "").strip().lower()
+        inferred = not relation_field or inferred_kind == "hint"
+        label = relation_field or "inferred"
+        if not parent_entity or not child_entity:
+            continue
+        key = (parent_entity, child_entity, label, inferred)
+        if key in seen_edges:
+            continue
+        seen_edges.add(key)
+        edges.append(
+            {
+                "from": parent_entity,
+                "to": child_entity,
+                "label": label,
+                "field": relation_field,
+                "inferred": inferred,
+            }
+        )
+
+    nodes.sort(key=lambda item: str(item.get("label") or "").lower())
+    edges.sort(
+        key=lambda item: (
+            str(item.get("from") or "").lower(),
+            str(item.get("to") or "").lower(),
+            str(item.get("label") or "").lower(),
+        )
+    )
+    return {"nodes": nodes, "edges": edges}
+
+
+def _build_api_map(entities: list[str], apis: list[dict[str, str]]) -> dict[str, Any]:
+    entity_by_resource: dict[str, str] = {}
+    for entity_name in entities:
+        name = _normalize_entity_name(entity_name)
+        resource = _entity_resource(name)
+        if name and resource and resource not in entity_by_resource:
+            entity_by_resource[resource] = name
+
+    groups: dict[str, dict[str, Any]] = {}
+
+    def _ensure_group(resource: str) -> dict[str, Any]:
+        row = groups.get(resource)
+        if isinstance(row, dict):
+            return row
+        row = {
+            "resource": resource,
+            "entity": entity_by_resource.get(resource, ""),
+            "core_crud": [],
+            "relation_scoped": [],
+            "other": [],
+        }
+        groups[resource] = row
+        return row
+
+    for item in apis:
+        if not isinstance(item, dict):
+            continue
+        method = str(item.get("method") or "").strip().upper()
+        path = _canonicalize_api_path(str(item.get("path") or "").strip())
+        if not method or not path:
+            continue
+        parts = [segment for segment in path.split("/") if segment]
+        if not parts:
+            continue
+
+        endpoint = f"{method} {path}"
+        primary_resource = _canonical_resource_segment(parts[0])
+        if not primary_resource:
+            continue
+
+        target_resource = primary_resource
+        bucket = "other"
+        if len(parts) == 1 and method in {"GET", "POST"}:
+            bucket = "core_crud"
+        elif len(parts) == 2 and parts[1] == "{id}" and method in {"GET", "PATCH", "PUT", "DELETE"}:
+            bucket = "core_crud"
+        elif len(parts) == 3 and parts[1] == "{id}":
+            relation_child = _canonical_resource_segment(parts[2])
+            if relation_child:
+                target_resource = relation_child
+                bucket = "relation_scoped"
+
+        group = _ensure_group(target_resource)
+        values = group.get(bucket) if isinstance(group.get(bucket), list) else []
+        if endpoint not in values:
+            values.append(endpoint)
+        group[bucket] = values
+
+    for resource in sorted(entity_by_resource):
+        _ensure_group(resource)
+
+    rows: list[dict[str, Any]] = []
+    for resource in sorted(groups):
+        row = groups[resource]
+        core = [str(x) for x in (row.get("core_crud") or []) if str(x).strip()]
+        relation = [str(x) for x in (row.get("relation_scoped") or []) if str(x).strip()]
+        other = [str(x) for x in (row.get("other") or []) if str(x).strip()]
+        rows.append(
+            {
+                "resource": resource,
+                "entity": str(row.get("entity") or "").strip(),
+                "core_crud": core,
+                "relation_scoped": relation,
+                "other": other,
+                "total": len(core) + len(relation) + len(other),
+            }
+        )
+
+    return {"groups": rows}
+
+
+def _build_page_map(entities: list[str], pages: list[str]) -> dict[str, Any]:
+    entity_by_resource: dict[str, str] = {}
+    for entity_name in entities:
+        name = _normalize_entity_name(entity_name)
+        resource = _entity_resource(name)
+        if name and resource and resource not in entity_by_resource:
+            entity_by_resource[resource] = name
+
+    groups: dict[str, dict[str, Any]] = {}
+
+    def _ensure_group(resource: str) -> dict[str, Any]:
+        row = groups.get(resource)
+        if isinstance(row, dict):
+            return row
+        row = {
+            "resource": resource,
+            "entity": entity_by_resource.get(resource, ""),
+            "core_pages": [],
+            "relation_pages": [],
+            "other_pages": [],
+        }
+        groups[resource] = row
+        return row
+
+    for raw_page in pages:
+        page = _normalize_page(raw_page)
+        if not page:
+            continue
+        parts = page.split("/", 1)
+        if len(parts) != 2:
+            continue
+        resource = _canonical_resource_segment(parts[0])
+        action = parts[1].strip().lower()
+        if not resource or not action:
+            continue
+        group = _ensure_group(resource)
+
+        if action in {"list", "new", "detail", "edit"}:
+            bucket = "core_pages"
+        elif action.startswith("by_"):
+            bucket = "relation_pages"
+        else:
+            bucket = "other_pages"
+        values = group.get(bucket) if isinstance(group.get(bucket), list) else []
+        if page not in values:
+            values.append(page)
+        group[bucket] = values
+
+    for resource in sorted(entity_by_resource):
+        _ensure_group(resource)
+
+    rows: list[dict[str, Any]] = []
+    for resource in sorted(groups):
+        row = groups[resource]
+        core = [str(x) for x in (row.get("core_pages") or []) if str(x).strip()]
+        relation = [str(x) for x in (row.get("relation_pages") or []) if str(x).strip()]
+        other = [str(x) for x in (row.get("other_pages") or []) if str(x).strip()]
+        rows.append(
+            {
+                "resource": resource,
+                "entity": str(row.get("entity") or "").strip(),
+                "core_pages": core,
+                "relation_pages": relation,
+                "other_pages": other,
+                "total": len(core) + len(relation) + len(other),
+            }
+        )
+
+    return {"groups": rows}
+
+
 def _all_entities_have_basic_crud_and_pages(entity_crud_status: dict[str, dict[str, Any]]) -> bool:
     if not entity_crud_status:
         return False
@@ -1562,6 +1775,14 @@ def analyze_project(
         apis,
         pages,
     )
+    relation_pairs = (
+        relation_diagnostics.get("relations")
+        if isinstance(relation_diagnostics, dict) and isinstance(relation_diagnostics.get("relations"), list)
+        else []
+    )
+    entity_graph = _build_entity_graph(entities, entity_crud_status, relation_pairs)
+    api_map = _build_api_map(entities, apis)
+    page_map = _build_page_map(entities, pages)
     suggestions, next_action = _build_suggestions(
         project_dir,
         entities,
@@ -1633,6 +1854,9 @@ def analyze_project(
             relation_diagnostics.get("relation_create_flows") if isinstance(relation_diagnostics, dict) else []
         ),
         "drift_warnings": relation_diagnostics.get("drift_warnings") if isinstance(relation_diagnostics, dict) else [],
+        "entity_graph": entity_graph,
+        "api_map": api_map,
+        "page_map": page_map,
         "runtime_status": runtime_status,
         "repository_status": repository_status,
         "suggestions": suggestions,

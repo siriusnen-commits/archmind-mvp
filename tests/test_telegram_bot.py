@@ -3098,6 +3098,11 @@ def test_inspect_includes_relation_summary_and_relation_artifacts_for_board_card
     msg = DummyMessage()
     asyncio.run(command_inspect(DummyUpdate(message=msg, effective_chat=DummyChat()), DummyContext()))
     out = msg.sent[-1]
+    assert "Structure Map:" in out
+    assert "- Entities: Board, Card" in out
+    assert "- Relations: Board -> Card (board_id)" in out
+    assert "- API groups: boards(5), cards(6)" in out
+    assert "- Page groups: boards(2), cards(4)" in out
     assert "Relation Summary:" in out
     assert "- Board -> Card (field: board_id)" in out
     assert "Relation Pages:" in out

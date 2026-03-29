@@ -336,6 +336,9 @@ def test_ui_project_analysis_endpoint_response_shape(monkeypatch, tmp_path: Path
     assert isinstance(payload["fields_by_entity"], dict)
     assert isinstance(payload["apis"], list)
     assert isinstance(payload["pages"], list)
+    assert isinstance(payload["entity_graph"], dict)
+    assert isinstance(payload["api_map"], dict)
+    assert isinstance(payload["page_map"], dict)
     assert isinstance(payload["entity_crud_status"], dict)
     assert isinstance(payload["placeholder_pages"], list)
     assert isinstance(payload["nav_visible_pages"], list)
@@ -344,6 +347,57 @@ def test_ui_project_analysis_endpoint_response_shape(monkeypatch, tmp_path: Path
     assert isinstance(payload["next_action"], dict)
     for key in ("kind", "message", "command"):
         assert key in payload["next_action"]
+
+
+def test_ui_project_analysis_visualization_matches_relation_aware_canonical_state(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "analysis-visualization")
+    spec_path = project_dir / ".archmind" / "project_spec.json"
+    payload = json.loads(spec_path.read_text(encoding="utf-8"))
+    payload["entities"] = [
+        {"name": "Entry", "fields": [{"name": "title", "type": "string"}]},
+        {"name": "Tag", "fields": [{"name": "name", "type": "string"}, {"name": "entry_id", "type": "int"}]},
+    ]
+    payload["api_endpoints"] = [
+        "GET /entries",
+        "POST /entries",
+        "GET /entries/{id}",
+        "PATCH /entries/{id}",
+        "DELETE /entries/{id}",
+        "GET /tags",
+        "POST /tags",
+        "GET /tags/{id}",
+        "PATCH /tags/{id}",
+        "DELETE /tags/{id}",
+        "GET /entries/{id}/tags",
+    ]
+    payload["frontend_pages"] = [
+        "entries/list",
+        "entries/new",
+        "entries/detail",
+        "tags/list",
+        "tags/new",
+        "tags/detail",
+        "tags/by_entry",
+    ]
+    spec_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/analysis-visualization/analysis")
+    assert response.status_code == 200
+    analysis = response.json()
+
+    graph_edges = analysis["entity_graph"]["edges"]
+    assert any(edge["from"] == "Entry" and edge["to"] == "Tag" and edge["label"] == "entry_id" for edge in graph_edges)
+
+    api_groups = {group["resource"]: group for group in analysis["api_map"]["groups"]}
+    assert "GET /entries/{id}/tags" in api_groups["tags"]["relation_scoped"]
+    assert "GET /tags" in api_groups["tags"]["core_crud"]
+
+    page_groups = {group["resource"]: group for group in analysis["page_map"]["groups"]}
+    assert "tags/by_entry" in page_groups["tags"]["relation_pages"]
+    assert "tags/detail" in page_groups["tags"]["core_pages"]
 
 
 def test_ui_project_analysis_uses_canonical_expanded_apis_for_next_action(monkeypatch, tmp_path: Path) -> None:
