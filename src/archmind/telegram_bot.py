@@ -4459,6 +4459,9 @@ async def command_inspect(update: Any, context: Any) -> None:
     repository_sync_status = str(repository_info.get("sync_status") or "").strip()
     repository_sync_reason = str(repository_info.get("sync_reason") or "").strip()
     repository_sync_hint = str(repository_info.get("sync_hint") or "").strip()
+    repository_sync_dirty_detail = str(repository_info.get("sync_dirty_detail") or "").strip()
+    repository_sync_remote_url = str(repository_info.get("sync_remote_url") or "").strip()
+    repository_sync_remote_type = str(repository_info.get("sync_remote_type") or "").strip()
     repository_last_commit = str(repository_info.get("last_commit_hash") or "").strip()
     repository_working_tree = str(repository_info.get("working_tree_state") or "").strip()
     if repository_status or repository_url or repository_reason:
@@ -4468,13 +4471,28 @@ async def command_inspect(update: Any, context: Any) -> None:
             lines.append(f"URL: {repository_url}")
         if repository_reason:
             lines.append(f"Reason: {repository_reason}")
-    if repository_sync_status or repository_last_commit or repository_working_tree or repository_sync_reason or repository_sync_hint:
+    if (
+        repository_sync_status
+        or repository_last_commit
+        or repository_working_tree
+        or repository_sync_reason
+        or repository_sync_hint
+        or repository_sync_dirty_detail
+        or repository_sync_remote_url
+        or repository_sync_remote_type
+    ):
         lines += ["", "Sync:"]
         lines.append(f"Status: {repository_sync_status or 'NOT_ATTEMPTED'}")
+        if repository_sync_remote_type:
+            lines.append(f"Remote type: {repository_sync_remote_type}")
+        if repository_sync_remote_url:
+            lines.append(f"Remote URL: {repository_sync_remote_url}")
         if repository_last_commit:
             lines.append(f"Last commit: {repository_last_commit}")
         if repository_working_tree:
             lines.append(f"Working tree: {repository_working_tree}")
+        if repository_sync_dirty_detail:
+            lines.append(f"Dirty detail: {repository_sync_dirty_detail}")
         if repository_sync_reason:
             lines.append(f"Reason: {repository_sync_reason}")
         if repository_sync_hint:
@@ -4714,6 +4732,9 @@ def _build_selected_project_summary(project_path: Path) -> str:
     repository_sync_status = str(repository_info.get("sync_status") or "").strip()
     repository_sync_reason = str(repository_info.get("sync_reason") or "").strip()
     repository_sync_hint = str(repository_info.get("sync_hint") or "").strip()
+    repository_sync_dirty_detail = str(repository_info.get("sync_dirty_detail") or "").strip()
+    repository_sync_remote_url = str(repository_info.get("sync_remote_url") or "").strip()
+    repository_sync_remote_type = str(repository_info.get("sync_remote_type") or "").strip()
     repository_last_commit = str(repository_info.get("last_commit_hash") or "").strip()
     repository_working_tree = str(repository_info.get("working_tree_state") or "").strip()
     if repository_status or repository_url or repository_reason:
@@ -4723,13 +4744,28 @@ def _build_selected_project_summary(project_path: Path) -> str:
             lines.append(f"URL: {repository_url}")
         if repository_reason:
             lines.append(f"Reason: {repository_reason}")
-    if repository_sync_status or repository_last_commit or repository_working_tree or repository_sync_reason or repository_sync_hint:
+    if (
+        repository_sync_status
+        or repository_last_commit
+        or repository_working_tree
+        or repository_sync_reason
+        or repository_sync_hint
+        or repository_sync_dirty_detail
+        or repository_sync_remote_url
+        or repository_sync_remote_type
+    ):
         lines += ["", "Sync:"]
         lines.append(f"Status: {repository_sync_status or 'NOT_ATTEMPTED'}")
+        if repository_sync_remote_type:
+            lines.append(f"Remote type: {repository_sync_remote_type}")
+        if repository_sync_remote_url:
+            lines.append(f"Remote URL: {repository_sync_remote_url}")
         if repository_last_commit:
             lines.append(f"Last commit: {repository_last_commit}")
         if repository_working_tree:
             lines.append(f"Working tree: {repository_working_tree}")
+        if repository_sync_dirty_detail:
+            lines.append(f"Dirty detail: {repository_sync_dirty_detail}")
         if repository_sync_reason:
             lines.append(f"Reason: {repository_sync_reason}")
         if repository_sync_hint:
@@ -4791,6 +4827,9 @@ def _repository_summary_from_state(state_payload: dict[str, Any]) -> dict[str, s
     sync_status = str((repository_block.get("sync_status") if isinstance(repository_block, dict) else "") or "").strip().upper()
     sync_reason = str((repository_block.get("sync_reason") if isinstance(repository_block, dict) else "") or "").strip()
     sync_hint = str((repository_block.get("sync_hint") if isinstance(repository_block, dict) else "") or "").strip()
+    sync_dirty_detail = str((repository_block.get("sync_dirty_detail") if isinstance(repository_block, dict) else "") or "").strip()
+    sync_remote_url = str((repository_block.get("sync_remote_url") if isinstance(repository_block, dict) else "") or "").strip()
+    sync_remote_type = str((repository_block.get("sync_remote_type") if isinstance(repository_block, dict) else "") or "").strip()
     last_commit_hash = str((repository_block.get("last_commit_hash") if isinstance(repository_block, dict) else "") or "").strip()
     working_tree_state = str((repository_block.get("working_tree_state") if isinstance(repository_block, dict) else "") or "").strip()
     if status in {"SKIPPED", "NONE"}:
@@ -4816,6 +4855,9 @@ def _repository_summary_from_state(state_payload: dict[str, Any]) -> dict[str, s
         "sync_status": sync_status or "NOT_ATTEMPTED",
         "sync_reason": sync_reason,
         "sync_hint": sync_hint,
+        "sync_dirty_detail": sync_dirty_detail,
+        "sync_remote_url": sync_remote_url,
+        "sync_remote_type": sync_remote_type,
         "last_commit_hash": last_commit_hash,
         "working_tree_state": working_tree_state or ("clean" if status == "NONE" else ""),
     }
@@ -4843,6 +4885,9 @@ def _persist_repository_sync_state(project_path: Path, sync: dict[str, Any], *, 
     repository["sync_status"] = str(sync.get("status") or repository.get("sync_status") or "NOT_ATTEMPTED").strip().upper()
     repository["sync_reason"] = str(sync.get("reason") or "").strip()[:220]
     repository["sync_hint"] = str(sync.get("hint") or "").strip()[:220]
+    repository["sync_dirty_detail"] = str(sync.get("dirty_detail") or "").strip()[:220]
+    repository["sync_remote_url"] = str(sync.get("remote_url") or "").strip()[:300]
+    repository["sync_remote_type"] = str(sync.get("remote_type") or "").strip()[:20]
     repository["last_commit_hash"] = str(sync.get("last_commit_hash") or repository.get("last_commit_hash") or "").strip()[:40]
     repository["working_tree_state"] = str(sync.get("working_tree_state") or repository.get("working_tree_state") or "").strip()[:20]
     if repo_url and repo_status in {"CREATED", "EXISTS"}:
@@ -7140,10 +7185,16 @@ async def command_auto(update: Any, context: Any) -> None:
         lines.append(f"- Repo sync reason: {str(repo_sync.get('reason') or '').strip()}")
     if str(repo_sync.get("hint") or "").strip():
         lines.append(f"- Repo sync hint: {str(repo_sync.get('hint') or '').strip()}")
+    if str(repo_sync.get("remote_type") or "").strip():
+        lines.append(f"- Repo remote type: {str(repo_sync.get('remote_type') or '').strip()}")
+    if str(repo_sync.get("remote_url") or "").strip():
+        lines.append(f"- Repo remote URL: {str(repo_sync.get('remote_url') or '').strip()}")
     if str(repo_sync.get("last_commit_hash") or "").strip():
         lines.append(f"- Repo last commit: {str(repo_sync.get('last_commit_hash') or '').strip()}")
     if str(repo_sync.get("working_tree_state") or "").strip():
         lines.append(f"- Repo working tree: {str(repo_sync.get('working_tree_state') or '').strip()}")
+    if str(repo_sync.get("dirty_detail") or "").strip():
+        lines.append(f"- Repo dirty detail: {str(repo_sync.get('dirty_detail') or '').strip()}")
     lines.extend(_auto_runtime_state_lines(project_path))
     await update.message.reply_text(_truncate_message("\n".join(lines)))
 

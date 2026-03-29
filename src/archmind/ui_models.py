@@ -42,6 +42,9 @@ class RepositorySummary(BaseModel):
     sync_status: str = "NOT_ATTEMPTED"
     sync_reason: str = ""
     sync_hint: str = ""
+    sync_dirty_detail: str = ""
+    sync_remote_url: str = ""
+    sync_remote_type: str = ""
     last_commit_hash: str = ""
     working_tree_state: str = ""
 
