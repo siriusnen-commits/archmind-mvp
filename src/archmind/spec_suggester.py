@@ -181,6 +181,173 @@ def _is_auth_page(page: str) -> bool:
     return lower.startswith("users/") or lower.startswith("profiles/") or lower.startswith("auth/")
 
 
+def _has_word(text: str, word: str) -> bool:
+    return bool(re.search(rf"\b{re.escape(str(word or '').strip().lower())}\b", str(text or "").strip().lower()))
+
+
+def _build_crud_endpoints(resource_plural: str, *, full: bool) -> list[str]:
+    resource = str(resource_plural or "").strip().lower().strip("/")
+    if not resource:
+        return []
+    if full:
+        return [
+            f"GET /{resource}",
+            f"POST /{resource}",
+            f"GET /{resource}/{{id}}",
+            f"PATCH /{resource}/{{id}}",
+            f"DELETE /{resource}/{{id}}",
+        ]
+    return [
+        f"GET /{resource}",
+        f"POST /{resource}",
+        f"GET /{resource}/{{id}}",
+    ]
+
+
+def _build_core_pages(resource_plural: str) -> list[str]:
+    resource = str(resource_plural or "").strip().lower().strip("/")
+    if not resource:
+        return []
+    return [f"{resource}/list", f"{resource}/new", f"{resource}/detail"]
+
+
+def _build_starter_profile(text: str, domains: list[str], frontend_needed: bool) -> dict[str, Any]:
+    normalized = str(text or "").strip().lower()
+    domain_set = {str(item).strip().lower() for item in domains if str(item).strip()}
+    has_board = any(_has_word(normalized, token) for token in ("board", "boards", "kanban")) or "boards" in domain_set
+    has_task = any(_has_word(normalized, token) for token in ("todo", "todos", "task", "tasks")) or "tasks" in domain_set
+    has_memo = any(_has_word(normalized, token) for token in ("memo", "memos", "note", "notes")) or "notes" in domain_set
+    has_diary_signal = any(_has_word(normalized, token) for token in ("diary", "journal", "entry", "entries"))
+
+    if has_board:
+        entities = ["Board", "Card"]
+        entity_fields = {
+            "Board": [
+                {"name": "title", "type": "string"},
+                {"name": "description", "type": "string"},
+            ],
+            "Card": [
+                {"name": "title", "type": "string"},
+                {"name": "description", "type": "string"},
+                {"name": "board_id", "type": "int"},
+            ],
+        }
+        api_endpoints = _build_crud_endpoints("boards", full=False) + _build_crud_endpoints("cards", full=False)
+        pages = _build_core_pages("boards") + _build_core_pages("cards") if frontend_needed else []
+        return {
+            "family": "board_kanban",
+            "entities": entities,
+            "entity_fields": entity_fields,
+            "required_api_endpoints": api_endpoints,
+            "required_frontend_pages": pages,
+        }
+
+    if has_task:
+        task_fields = [
+            {"name": "title", "type": "string"},
+            {"name": "status", "type": "string"},
+        ]
+        if any(_has_word(normalized, token) for token in ("description", "details")):
+            task_fields.append({"name": "description", "type": "string"})
+        if any(_has_word(normalized, token) for token in ("due", "deadline", "schedule")):
+            task_fields.append({"name": "due_date", "type": "datetime"})
+        return {
+            "family": "todo_tasks",
+            "entities": ["Task"],
+            "entity_fields": {"Task": task_fields[:6]},
+            "required_api_endpoints": _build_crud_endpoints("tasks", full=True),
+            "required_frontend_pages": _build_core_pages("tasks") if frontend_needed else [],
+        }
+
+    if has_memo and not has_diary_signal:
+        note_fields = [
+            {"name": "title", "type": "string"},
+            {"name": "content", "type": "string"},
+        ]
+        if any(_has_word(normalized, token) for token in ("tag", "tags", "label", "labels", "keyword", "keywords")):
+            note_fields.append({"name": "tags", "type": "string"})
+        if any(_has_word(normalized, token) for token in ("category", "categories", "folder", "folders")):
+            note_fields.append({"name": "category", "type": "string"})
+        return {
+            "family": "memo_notes",
+            "entities": ["Note"],
+            "entity_fields": {"Note": note_fields[:6]},
+            "required_api_endpoints": _build_crud_endpoints("notes", full=True),
+            "required_frontend_pages": _build_core_pages("notes") if frontend_needed else [],
+        }
+
+    return {}
+
+
+def _enforce_starter_profile(out: dict[str, Any], starter_profile: dict[str, Any], *, frontend_needed: bool) -> None:
+    if not isinstance(starter_profile, dict) or not starter_profile:
+        return
+
+    required_entities = [str(x).strip() for x in (starter_profile.get("entities") or []) if str(x).strip()]
+    required_entity_fields = (
+        starter_profile.get("entity_fields") if isinstance(starter_profile.get("entity_fields"), dict) else {}
+    )
+    required_apis = [str(x).strip() for x in (starter_profile.get("required_api_endpoints") or []) if str(x).strip()]
+    required_pages = [str(x).strip() for x in (starter_profile.get("required_frontend_pages") or []) if str(x).strip()]
+
+    entities = out.get("entities") if isinstance(out.get("entities"), list) else []
+    entity_rows: list[dict[str, Any]] = [row for row in entities if isinstance(row, dict)]
+    by_name: dict[str, dict[str, Any]] = {
+        str(row.get("name") or "").strip().lower(): row
+        for row in entity_rows
+        if str(row.get("name") or "").strip()
+    }
+    for entity_name in required_entities:
+        key = entity_name.lower()
+        row = by_name.get(key)
+        if not isinstance(row, dict):
+            row = {"name": entity_name, "fields": []}
+            entity_rows.append(row)
+            by_name[key] = row
+        existing_fields = row.get("fields") if isinstance(row.get("fields"), list) else []
+        existing_names = {
+            str(field.get("name") or "").strip().lower()
+            for field in existing_fields
+            if isinstance(field, dict) and str(field.get("name") or "").strip()
+        }
+        required_fields = required_entity_fields.get(entity_name) if isinstance(required_entity_fields, dict) else []
+        for field in required_fields if isinstance(required_fields, list) else []:
+            if not isinstance(field, dict):
+                continue
+            field_name = str(field.get("name") or "").strip()
+            field_type = str(field.get("type") or "").strip().lower()
+            if not field_name or not field_type or field_name.lower() in existing_names:
+                continue
+            existing_fields.append({"name": field_name, "type": field_type})
+            existing_names.add(field_name.lower())
+        row["fields"] = existing_fields[:6]
+
+    out["entities"] = entity_rows[:3]
+
+    current_apis = out.get("api_endpoints") if isinstance(out.get("api_endpoints"), list) else []
+    api_rows = [str(x).strip() for x in current_apis if str(x).strip()]
+    seen_api = {row.lower() for row in api_rows}
+    for endpoint in required_apis:
+        key = endpoint.lower()
+        if key in seen_api:
+            continue
+        api_rows.append(endpoint)
+        seen_api.add(key)
+    out["api_endpoints"] = api_rows[:12]
+
+    current_pages = out.get("frontend_pages") if isinstance(out.get("frontend_pages"), list) else []
+    page_rows = [str(x).strip() for x in current_pages if str(x).strip()]
+    seen_page = {row.lower() for row in page_rows}
+    if frontend_needed:
+        for page in required_pages:
+            key = page.lower()
+            if key in seen_page:
+                continue
+            page_rows.append(page)
+            seen_page.add(key)
+    out["frontend_pages"] = page_rows[:12]
+
+
 def suggest_project_spec(
     idea: str,
     reasoning: dict[str, Any],
@@ -190,8 +357,18 @@ def suggest_project_spec(
     text = str(idea or "").strip().lower()
     auth_signal = _has_auth_signal(text, reasoning)
     domains = [str(x).strip().lower() for x in (reasoning.get("domains") or []) if str(x).strip()]
+    frontend_needed = bool(reasoning.get("frontend_needed"))
+    starter_profile = _build_starter_profile(text, domains, frontend_needed)
     selected_entities: list[str] = []
     seen: set[str] = set()
+
+    if isinstance(starter_profile, dict) and starter_profile:
+        for entity_name in starter_profile.get("entities") if isinstance(starter_profile.get("entities"), list) else []:
+            entity_text = str(entity_name).strip()
+            if not entity_text or entity_text in seen:
+                continue
+            seen.add(entity_text)
+            selected_entities.append(entity_text)
 
     for domain in domains:
         entity = DOMAIN_ENTITY_MAP.get(domain)
@@ -228,7 +405,7 @@ def suggest_project_spec(
     if any(k in text for k in ("recipe", "meal plan", "cooking")) and "Recipe" not in seen:
         seen.add("Recipe")
         selected_entities.append("Recipe")
-    if any(k in text for k in ("board", "kanban")) and "Board" not in seen:
+    if any(_has_word(text, k) for k in ("board", "boards", "kanban")) and "Board" not in seen:
         seen.add("Board")
         selected_entities.append("Board")
     if any(k in text for k in ("memo", "note")) and "Note" not in seen and "Entry" not in seen:
@@ -262,22 +439,22 @@ def suggest_project_spec(
 
     api_endpoints: list[str] = []
     pages: list[str] = []
-    frontend_needed = bool(reasoning.get("frontend_needed"))
     for entity in entities:
-        _, plural = _entity_slug_and_plural(str(entity.get("name") or ""))
+        entity_name = str(entity.get("name") or "")
+        _, plural = _entity_slug_and_plural(entity_name)
         if not plural:
             continue
-        api_endpoints.append(f"GET /{plural}")
-        api_endpoints.append(f"POST /{plural}")
+        full_crud = entity_name in {"Task", "Note"}
+        api_endpoints.extend(_build_crud_endpoints(plural, full=full_crud))
         if frontend_needed:
-            pages.append(f"{plural}/list")
-            pages.append(f"{plural}/new")
+            pages.extend(_build_core_pages(plural))
 
     fallback_spec = {
         "entities": entities[:3],
-        "api_endpoints": api_endpoints[:6],
-        "frontend_pages": pages[:6],
+        "api_endpoints": api_endpoints[:12],
+        "frontend_pages": pages[:12],
     }
+    _enforce_starter_profile(fallback_spec, starter_profile, frontend_needed=frontend_needed)
     provider_prompt = (
         "Suggest a compact project spec JSON for the idea.\n"
         "Return JSON object with keys: entities, api_endpoints, frontend_pages.\n"
@@ -345,7 +522,7 @@ def suggest_project_spec(
             seen_apis.add(key)
             normalized_apis.append(endpoint)
         if normalized_apis:
-            out["api_endpoints"] = normalized_apis[:6]
+            out["api_endpoints"] = normalized_apis[:12]
 
     raw_pages = provider_spec.get("frontend_pages")
     if isinstance(raw_pages, list):
@@ -363,6 +540,8 @@ def suggest_project_spec(
             seen_pages.add(key)
             normalized_pages.append(page)
         if normalized_pages:
-            out["frontend_pages"] = normalized_pages[:6]
+            out["frontend_pages"] = normalized_pages[:12]
+
+    _enforce_starter_profile(out, starter_profile, frontend_needed=frontend_needed)
 
     return out

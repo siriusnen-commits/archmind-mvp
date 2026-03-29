@@ -107,3 +107,73 @@ def test_suggest_project_spec_bookmark_category_preserves_both_entities() -> Non
     assert "Category" in names
     assert "GET /bookmarks" in out["api_endpoints"]
     assert "GET /categories" in out["api_endpoints"]
+
+
+def test_starter_pack_memo_notes_routes_to_note_with_useful_defaults() -> None:
+    out = suggest_project_spec("quick personal notes app", {"domains": [], "frontend_needed": True})
+    entities = [entity for entity in out["entities"] if isinstance(entity, dict)]
+    names = [str(entity.get("name") or "") for entity in entities]
+    assert "Note" in names
+    note = next(entity for entity in entities if str(entity.get("name") or "") == "Note")
+    field_names = {
+        str(field.get("name") or "")
+        for field in (note.get("fields") if isinstance(note.get("fields"), list) else [])
+        if isinstance(field, dict)
+    }
+    assert {"title", "content"}.issubset(field_names)
+    assert "notes/list" in out["frontend_pages"]
+    assert "notes/new" in out["frontend_pages"]
+    assert "notes/detail" in out["frontend_pages"]
+
+
+def test_starter_pack_todo_tasks_routes_to_task_with_status_and_crud() -> None:
+    out = suggest_project_spec("simple todo app for task management", {"domains": [], "frontend_needed": True})
+    entities = [entity for entity in out["entities"] if isinstance(entity, dict)]
+    names = [str(entity.get("name") or "") for entity in entities]
+    assert "Task" in names
+    task = next(entity for entity in entities if str(entity.get("name") or "") == "Task")
+    field_names = {
+        str(field.get("name") or "")
+        for field in (task.get("fields") if isinstance(task.get("fields"), list) else [])
+        if isinstance(field, dict)
+    }
+    assert {"title", "status"}.issubset(field_names)
+    assert "GET /tasks" in out["api_endpoints"]
+    assert "POST /tasks" in out["api_endpoints"]
+    assert "GET /tasks/{id}" in out["api_endpoints"]
+    assert "PATCH /tasks/{id}" in out["api_endpoints"]
+    assert "DELETE /tasks/{id}" in out["api_endpoints"]
+    assert "tasks/list" in out["frontend_pages"]
+    assert "tasks/new" in out["frontend_pages"]
+    assert "tasks/detail" in out["frontend_pages"]
+
+
+def test_starter_pack_board_kanban_routes_to_board_card_with_relation_defaults() -> None:
+    out = suggest_project_spec("project kanban board app", {"domains": [], "frontend_needed": True})
+    entities = [entity for entity in out["entities"] if isinstance(entity, dict)]
+    names = [str(entity.get("name") or "") for entity in entities]
+    assert "Board" in names
+    assert "Card" in names
+    card = next(entity for entity in entities if str(entity.get("name") or "") == "Card")
+    card_fields = card.get("fields") if isinstance(card.get("fields"), list) else []
+    card_field_names = {str(field.get("name") or "") for field in card_fields if isinstance(field, dict)}
+    assert "board_id" in card_field_names
+    assert "GET /boards" in out["api_endpoints"]
+    assert "GET /cards" in out["api_endpoints"]
+    assert "GET /boards/{id}" in out["api_endpoints"]
+    assert "GET /cards/{id}" in out["api_endpoints"]
+    assert "boards/list" in out["frontend_pages"]
+    assert "boards/new" in out["frontend_pages"]
+    assert "boards/detail" in out["frontend_pages"]
+    assert "cards/list" in out["frontend_pages"]
+    assert "cards/new" in out["frontend_pages"]
+    assert "cards/detail" in out["frontend_pages"]
+
+
+def test_starter_pack_unrelated_idea_is_not_misclassified() -> None:
+    out = suggest_project_spec("expense dashboard app", {"domains": ["expenses"], "frontend_needed": True})
+    names = [str(entity.get("name") or "") for entity in out["entities"] if isinstance(entity, dict)]
+    assert "Expense" in names
+    assert "Task" not in names
+    assert "Note" not in names
+    assert "Board" not in names
