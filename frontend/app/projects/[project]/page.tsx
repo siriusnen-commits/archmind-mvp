@@ -78,6 +78,14 @@ type ProjectAnalysis = {
       other_pages?: string[];
     }>;
   };
+  visualization_gaps?: Array<{
+    gap_type?: string;
+    resource?: string;
+    expected?: string;
+    command?: string;
+    priority?: string;
+    actionable?: string;
+  }>;
 };
 
 type ProjectDetail = {
@@ -159,9 +167,11 @@ export default async function ProjectDetailPage({ params }: PageProps) {
           <ProjectSummaryCard project={detail} />
           <NextActionCard projectName={detail.name} nextAction={analysis?.next_action} />
           <StructureVisualizationCard
+            projectName={detail.name}
             entityGraph={analysis?.entity_graph}
             apiMap={analysis?.api_map}
             pageMap={analysis?.page_map}
+            visualizationGaps={analysis?.visualization_gaps}
           />
           <RecentRunsCard items={Array.isArray(detail.recent_runs) ? detail.recent_runs : []} />
           <RuntimeCard runtime={detail.runtime} />

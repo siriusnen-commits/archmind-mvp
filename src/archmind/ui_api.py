@@ -131,6 +131,7 @@ def get_ui_project_analysis(project_name: str) -> ProjectAnalysisResponse:
             entity_graph=payload.get("entity_graph") if isinstance(payload.get("entity_graph"), dict) else {},
             api_map=payload.get("api_map") if isinstance(payload.get("api_map"), dict) else {},
             page_map=payload.get("page_map") if isinstance(payload.get("page_map"), dict) else {},
+            visualization_gaps=[x for x in (payload.get("visualization_gaps") or []) if isinstance(x, dict)],
             entity_crud_status=payload.get("entity_crud_status")
             if isinstance(payload.get("entity_crud_status"), dict)
             else {},

@@ -467,6 +467,7 @@ def test_ui_project_analysis_endpoint_response_shape(monkeypatch, tmp_path: Path
     assert isinstance(payload["entity_graph"], dict)
     assert isinstance(payload["api_map"], dict)
     assert isinstance(payload["page_map"], dict)
+    assert isinstance(payload["visualization_gaps"], list)
     assert isinstance(payload["entity_crud_status"], dict)
     assert isinstance(payload["placeholder_pages"], list)
     assert isinstance(payload["nav_visible_pages"], list)
@@ -529,6 +530,7 @@ def test_ui_project_analysis_visualization_matches_relation_aware_canonical_stat
     page_groups = {group["resource"]: group for group in analysis["page_map"]["groups"]}
     assert "tags/by_entry" in page_groups["tags"]["relation_pages"]
     assert "tags/detail" in page_groups["tags"]["core_pages"]
+    assert isinstance(analysis["visualization_gaps"], list)
 
 
 def test_ui_project_analysis_uses_canonical_expanded_apis_for_next_action(monkeypatch, tmp_path: Path) -> None:
@@ -581,6 +583,109 @@ def test_ui_project_analysis_visualization_defaults_when_payload_fields_are_inva
     assert payload["entity_graph"] == {}
     assert payload["api_map"] == {}
     assert payload["page_map"] == {}
+    assert payload["visualization_gaps"] == []
+
+
+def test_ui_project_detail_visualization_gap_action_for_missing_board_card_relation_page(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "board-card-gap-page-ui")
+    spec_path = project_dir / ".archmind" / "project_spec.json"
+    payload = json.loads(spec_path.read_text(encoding="utf-8"))
+    payload["entities"] = [
+        {"name": "Board", "fields": [{"name": "title", "type": "string"}]},
+        {"name": "Card", "fields": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+    ]
+    payload["api_endpoints"] = [
+        "GET /boards",
+        "POST /boards",
+        "GET /boards/{id}",
+        "PATCH /boards/{id}",
+        "DELETE /boards/{id}",
+        "GET /cards",
+        "POST /cards",
+        "GET /cards/{id}",
+        "PATCH /cards/{id}",
+        "DELETE /cards/{id}",
+        "GET /boards/{id}/cards",
+    ]
+    payload["frontend_pages"] = ["boards/list", "boards/detail", "cards/list", "cards/new", "cards/detail"]
+    spec_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/board-card-gap-page-ui")
+    assert response.status_code == 200
+    analysis = response.json()["analysis"]
+    gaps = [row for row in analysis["visualization_gaps"] if row.get("gap_type") == "missing_relation_page"]
+    assert any(row.get("expected") == "cards/by_board" for row in gaps)
+    assert any(row.get("command") == "/add_page cards/by_board" for row in gaps)
+
+
+def test_ui_project_detail_visualization_gap_action_for_missing_board_card_relation_api(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "board-card-gap-api-ui")
+    spec_path = project_dir / ".archmind" / "project_spec.json"
+    payload = json.loads(spec_path.read_text(encoding="utf-8"))
+    payload["entities"] = [
+        {"name": "Board", "fields": [{"name": "title", "type": "string"}]},
+        {"name": "Card", "fields": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+    ]
+    payload["api_endpoints"] = [
+        "GET /boards",
+        "POST /boards",
+        "GET /boards/{id}",
+        "PATCH /boards/{id}",
+        "DELETE /boards/{id}",
+        "GET /cards",
+        "POST /cards",
+        "GET /cards/{id}",
+        "PATCH /cards/{id}",
+        "DELETE /cards/{id}",
+    ]
+    payload["frontend_pages"] = ["boards/list", "boards/detail", "cards/list", "cards/new", "cards/detail", "cards/by_board"]
+    spec_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/board-card-gap-api-ui")
+    assert response.status_code == 200
+    analysis = response.json()["analysis"]
+    gaps = [row for row in analysis["visualization_gaps"] if row.get("gap_type") == "missing_relation_scoped_api"]
+    assert any(row.get("expected") == "GET /boards/{id}/cards" for row in gaps)
+    assert any(row.get("command") == "/add_api GET /boards/{id}/cards" for row in gaps)
+
+
+def test_ui_project_detail_visualization_gap_disappears_when_resolved(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "board-card-gap-resolved-ui")
+    spec_path = project_dir / ".archmind" / "project_spec.json"
+    payload = json.loads(spec_path.read_text(encoding="utf-8"))
+    payload["entities"] = [
+        {"name": "Board", "fields": [{"name": "title", "type": "string"}]},
+        {"name": "Card", "fields": [{"name": "title", "type": "string"}, {"name": "board_id", "type": "int"}]},
+    ]
+    payload["api_endpoints"] = [
+        "GET /boards",
+        "POST /boards",
+        "GET /boards/{id}",
+        "PATCH /boards/{id}",
+        "DELETE /boards/{id}",
+        "GET /cards",
+        "POST /cards",
+        "GET /cards/{id}",
+        "PATCH /cards/{id}",
+        "DELETE /cards/{id}",
+        "GET /boards/{id}/cards",
+    ]
+    payload["frontend_pages"] = ["boards/list", "boards/detail", "cards/list", "cards/new", "cards/detail", "cards/by_board"]
+    spec_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/board-card-gap-resolved-ui")
+    assert response.status_code == 200
+    analysis = response.json()["analysis"]
+    assert analysis["visualization_gaps"] == []
 
 
 def test_ui_projects_response_tolerates_malformed_repository_metadata(monkeypatch, tmp_path: Path) -> None:
@@ -1083,6 +1188,14 @@ def test_project_detail_source_always_renders_structure_visualization_card() -> 
 
 def test_structure_visualization_component_has_robust_empty_states_and_no_null_bailout() -> None:
     source = Path("frontend/components/StructureVisualizationCard.tsx").read_text(encoding="utf-8")
+    assert '"use client";' in source
+    assert "/commands" in source
+    assert "JSON.stringify({ command: normalizedCommand })" in source
+    assert "Relation-scoped Gaps" in source
+    assert "Relation Page Gaps" in source
+    assert "Missing:" in source
+    assert "Fixing..." in source
+    assert "Fixed" in source
     assert "Structure visualization is not available yet." in source
     assert "No entities available." in source
     assert "No relations detected." in source

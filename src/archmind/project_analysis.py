@@ -1099,6 +1099,107 @@ def _build_page_map(entities: list[str], pages: list[str]) -> dict[str, Any]:
     return {"groups": rows}
 
 
+def _build_visualization_gaps(
+    relations: list[dict[str, Any]],
+    apis: list[dict[str, str]],
+    pages: list[str],
+    placeholder_pages: list[str],
+) -> list[dict[str, str]]:
+    page_set = {str(page).strip() for page in pages if str(page).strip()}
+    placeholder_set = {str(page).strip() for page in placeholder_pages if str(page).strip()}
+    rows: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    for rel in relations:
+        if not isinstance(rel, dict):
+            continue
+        parent_entity = str(rel.get("parent_entity") or "").strip()
+        parent_resource = str(rel.get("parent_resource") or "").strip().lower()
+        parent_singular = str(rel.get("parent_singular") or "").strip().lower()
+        child_entity = str(rel.get("child_entity") or "").strip()
+        child_resource = str(rel.get("child_resource") or "").strip().lower()
+        relation_field = str(rel.get("field") or "").strip().lower()
+        if not parent_entity or not parent_resource or not parent_singular or not child_entity or not child_resource:
+            continue
+
+        relation_page = _normalize_page(f"{child_resource}/by_{parent_singular}")
+        parent_detail_page = _normalize_page(f"{parent_resource}/detail")
+        relation_context_present = parent_detail_page in page_set or relation_page in page_set
+
+        if relation_page and parent_detail_page in page_set and relation_page not in page_set:
+            command = f"/add_page {relation_page}"
+            key = ("missing_relation_page", child_resource, command)
+            if key not in seen:
+                seen.add(key)
+                rows.append(
+                    {
+                        "gap_type": "missing_relation_page",
+                        "resource": child_resource,
+                        "parent_entity": parent_entity,
+                        "parent_resource": parent_resource,
+                        "child_entity": child_entity,
+                        "child_resource": child_resource,
+                        "relation_field": relation_field or f"{parent_singular}_id",
+                        "expected": relation_page,
+                        "command": command,
+                        "priority": "high",
+                        "actionable": "true",
+                    }
+                )
+
+        if relation_context_present and not _relation_scoped_get_exists(apis, parent_resource, child_resource):
+            expected_api = f"GET /{parent_resource}/{{id}}/{child_resource}"
+            command = f"/add_api {expected_api}"
+            key = ("missing_relation_scoped_api", child_resource, command)
+            if key not in seen:
+                seen.add(key)
+                rows.append(
+                    {
+                        "gap_type": "missing_relation_scoped_api",
+                        "resource": child_resource,
+                        "parent_entity": parent_entity,
+                        "parent_resource": parent_resource,
+                        "child_entity": child_entity,
+                        "child_resource": child_resource,
+                        "relation_field": relation_field or f"{parent_singular}_id",
+                        "expected": expected_api,
+                        "command": command,
+                        "priority": "high",
+                        "actionable": "true",
+                    }
+                )
+
+        if relation_page and relation_page in placeholder_set:
+            command = f"/implement_page {relation_page}"
+            key = ("relation_page_placeholder", child_resource, command)
+            if key not in seen:
+                seen.add(key)
+                rows.append(
+                    {
+                        "gap_type": "relation_page_placeholder",
+                        "resource": child_resource,
+                        "parent_entity": parent_entity,
+                        "parent_resource": parent_resource,
+                        "child_entity": child_entity,
+                        "child_resource": child_resource,
+                        "relation_field": relation_field or f"{parent_singular}_id",
+                        "expected": relation_page,
+                        "command": command,
+                        "priority": "medium",
+                        "actionable": "true",
+                    }
+                )
+
+    rows.sort(
+        key=lambda item: (
+            str(item.get("resource") or "").lower(),
+            str(item.get("gap_type") or "").lower(),
+            str(item.get("expected") or "").lower(),
+        )
+    )
+    return rows
+
+
 def _all_entities_have_basic_crud_and_pages(entity_crud_status: dict[str, dict[str, Any]]) -> bool:
     if not entity_crud_status:
         return False
@@ -1901,6 +2002,7 @@ def analyze_project(
     entity_graph = _build_entity_graph(entities, entity_crud_status, relation_pairs)
     api_map = _build_api_map(entities, apis)
     page_map = _build_page_map(entities, pages)
+    visualization_gaps = _build_visualization_gaps(relation_pairs, apis, pages, placeholder_pages)
     suggestions, next_action = _build_suggestions(
         project_dir,
         entities,
@@ -1982,6 +2084,7 @@ def analyze_project(
         "entity_graph": entity_graph,
         "api_map": api_map,
         "page_map": page_map,
+        "visualization_gaps": visualization_gaps,
         "runtime_status": runtime_status,
         "repository_status": repository_status,
         "suggestions": suggestions,
