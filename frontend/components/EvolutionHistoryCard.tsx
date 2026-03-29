@@ -23,18 +23,6 @@ function normalizeStatus(value: string): string {
   return "UNKNOWN";
 }
 
-function toDisplayTime(value: string): string {
-  const raw = String(value || "").trim();
-  if (!raw) {
-    return "";
-  }
-  const dt = new Date(raw);
-  if (Number.isNaN(dt.getTime())) {
-    return raw;
-  }
-  return dt.toLocaleString();
-}
-
 function statusBadgeClass(status: string): string {
   if (status === "OK" || status === "SYNCED") {
     return "border-emerald-500/50 text-emerald-200";
@@ -65,7 +53,7 @@ export default function EvolutionHistoryCard({ items }: Props) {
             const source = String(item.source || "").trim();
             const actionType = String(item.action_type || "").trim();
             const stopReason = String(item.stop_reason || "").trim();
-            const timestamp = toDisplayTime(String(item.timestamp || ""));
+            const timestamp = String(item.timestamp || "").trim();
             return (
               <article key={`${index}-${title.slice(0, 24)}`} className="rounded-md border border-slate-700 bg-slate-950/60 p-3">
                 <p className="break-words text-sm text-slate-100">
@@ -77,7 +65,11 @@ export default function EvolutionHistoryCard({ items }: Props) {
                 {command && command !== title ? <p className="mt-1 break-words text-xs text-slate-300">Command: {command}</p> : null}
                 {source ? <p className="mt-1 text-xs text-slate-400">Source: {source}</p> : null}
                 {stopReason && stopReason !== summary ? <p className="mt-1 break-words text-xs text-amber-300">Stop: {stopReason}</p> : null}
-                {timestamp ? <p className="mt-1 text-xs text-slate-400">{timestamp}</p> : null}
+                {timestamp ? (
+                  <p className="mt-1 text-xs text-slate-400" suppressHydrationWarning>
+                    {timestamp}
+                  </p>
+                ) : null}
               </article>
             );
           })}
@@ -86,4 +78,3 @@ export default function EvolutionHistoryCard({ items }: Props) {
     </section>
   );
 }
-

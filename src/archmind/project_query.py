@@ -4,6 +4,7 @@ import json
 import os
 import socket
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse, urlunparse
@@ -310,7 +311,7 @@ def _build_evolution_history(recent_runs: list[dict[str, Any]], _recent_evolutio
         status = _normalize_evolution_status(item.get("status"))
         stop_reason = str(item.get("stop_reason") or "").strip()
         message = str(item.get("message") or "").strip()
-        timestamp = str(item.get("timestamp") or "").strip()
+        timestamp = _normalize_ui_timestamp(item.get("timestamp"))
         source = str(item.get("source") or "").strip()
         title = command or (source if source else "Command run")
         summary = stop_reason or message
@@ -332,6 +333,36 @@ def _build_evolution_history(recent_runs: list[dict[str, Any]], _recent_evolutio
         )
 
     return rows[:20]
+
+
+def _normalize_ui_timestamp(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+
+    # Keep already-normalized UI format unchanged.
+    try:
+        normalized = datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
+        return normalized.strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        pass
+
+    parsed: datetime | None = None
+    try:
+        iso_input = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+        parsed = datetime.fromisoformat(iso_input)
+    except ValueError:
+        parsed = None
+
+    if parsed is None:
+        try:
+            parsed = datetime.fromtimestamp(float(raw), tz=timezone.utc)
+        except (TypeError, ValueError, OverflowError):
+            return ""
+
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _empty_project_detail(project_dir: Path, warning: str = "") -> ProjectDetailResponse:
@@ -526,7 +557,7 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
                 continue
             recent_runs.append(
                 {
-                    "timestamp": str(item.get("timestamp") or "").strip(),
+                    "timestamp": _normalize_ui_timestamp(item.get("timestamp")),
                     "source": str(item.get("source") or "").strip(),
                     "command": str(item.get("command") or "").strip(),
                     "status": str(item.get("status") or "").strip().lower(),

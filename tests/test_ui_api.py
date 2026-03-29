@@ -421,14 +421,17 @@ def test_ui_project_detail_includes_recent_runs_newest_first(monkeypatch, tmp_pa
     assert runs[0]["command"] == "/auto"
     assert runs[0]["status"] == "stop"
     assert runs[0]["stop_reason"] == "low-priority next action"
+    assert runs[0]["timestamp"] == "2026-03-22 00:00:02"
     assert runs[1]["command"] == "/add_field Task title:string"
     assert runs[1]["status"] == "ok"
+    assert runs[1]["timestamp"] == "2026-03-22 00:00:01"
     history = payload["evolution_history"]
     assert isinstance(history, list)
     assert history[0]["title"] == "/auto"
     assert history[0]["status"] == "STOPPED"
     assert history[0]["summary"] == "low-priority next action"
     assert history[0]["action_type"] == "auto"
+    assert history[0]["timestamp"] == "2026-03-22 00:00:02"
 
 
 def test_ui_project_detail_recent_runs_empty_when_history_missing(monkeypatch, tmp_path: Path) -> None:
@@ -1394,7 +1397,19 @@ def test_evolution_history_component_has_empty_state_and_partial_payload_safety(
     assert "Array.isArray(items)" in source
     assert "Unknown action" in source
     assert "rows.length === 0" in source
+    assert "suppressHydrationWarning" in source
+    assert "new Date(" not in source
+    assert "toLocaleString" not in source
+    assert "Intl.DateTimeFormat" not in source
     assert "return null" not in source
+
+
+def test_recent_runs_component_is_hydration_safe_for_server_timestamp_strings() -> None:
+    source = Path("frontend/components/RecentRunsCard.tsx").read_text(encoding="utf-8")
+    assert "suppressHydrationWarning" in source
+    assert "new Date(" not in source
+    assert "toLocaleString" not in source
+    assert "Intl.DateTimeFormat" not in source
 
 
 def test_ui_project_detail_includes_auto_summary_when_present(monkeypatch, tmp_path: Path) -> None:
