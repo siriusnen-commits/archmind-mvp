@@ -1546,6 +1546,25 @@ def test_project_list_component_renders_strong_current_badge() -> None:
     assert "Set current" in source
 
 
+def test_project_list_component_renders_quick_actions_and_uses_card_scoped_command_path() -> None:
+    source = Path("frontend/components/ProjectList.tsx").read_text(encoding="utf-8")
+    assert "Open" in source
+    assert "Inspect" in source
+    assert "href={`/projects/${encodeURIComponent(name)}`}" in source
+    assert "Auto" in source
+    assert "Fix" in source
+    assert "runQuickCommand" in source
+    assert 'runQuickCommand(name, "/auto")' in source
+    assert 'runQuickCommand(name, "/fix")' in source
+    assert "/projects/${encodeURIComponent(target)}/commands" in source
+    assert 'body: JSON.stringify({ command })' in source
+    assert "disabled={isCommandRunning}" in source
+    assert "name ? (" in source
+    assert "Running..." in source
+    assert "status: \"OK\"" in source
+    assert "status: \"FAILED\"" in source
+
+
 def test_project_detail_source_passes_project_name_to_command_panels_for_context_safety() -> None:
     source = Path("frontend/app/projects/[project]/page.tsx").read_text(encoding="utf-8")
     assert "NextActionCard projectName={detail.name}" in source
