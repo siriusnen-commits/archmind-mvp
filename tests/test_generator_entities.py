@@ -363,6 +363,38 @@ def test_apply_frontend_page_scaffold_note_entity_is_usable_crud_mvp(tmp_path: P
     assert "method: \"DELETE\"" in detail_text
 
 
+def test_apply_frontend_page_scaffold_diary_entry_has_search_empty_state_and_recent_first_ui(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_diary"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    generated = apply_frontend_page_scaffold(project_dir, "Entry")
+    assert "frontend/app/entries/page.tsx" in generated
+
+    list_text = (project_dir / "frontend" / "app" / "entries" / "page.tsx").read_text(encoding="utf-8")
+    assert "Search diary entries..." in list_text
+    assert "No diary entries yet. Start by writing your first entry." in list_text
+    assert "No entries match your search." in list_text
+    assert "Recent entries first. Search by title or content." in list_text
+    assert "createdAtMs(b) - createdAtMs(a)" in list_text
+    assert "previewText(item)" in list_text
+    assert "max-w-2xl" in list_text
+    assert "Open entry" in list_text
+
+
+def test_apply_frontend_page_scaffold_diary_entry_detail_is_readable(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_diary_detail"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    apply_frontend_page_scaffold(project_dir, "Entry")
+    detail_text = (project_dir / "frontend" / "app" / "entries" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+    assert "whitespace-pre-wrap" in detail_text
+    assert "Entry #${id}" in detail_text
+    assert "Created time unavailable" in detail_text
+    assert "No content yet." in detail_text
+
+
 def test_relation_surface_board_detail_includes_card_section(tmp_path: Path) -> None:
     project_dir = tmp_path / "relation_board_card"
     (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)

@@ -1395,3 +1395,15 @@ def test_starter_pack_specs_remain_compatible_with_project_analysis_next_and_rel
     assert any(str(rel.get("parent_entity") or "") == "Board" and str(rel.get("child_entity") or "") == "Card" for rel in relations if isinstance(rel, dict))
     assert isinstance(board_out.get("next_action"), dict)
     assert "kind" in board_out["next_action"]
+
+    diary_dir = tmp_path / "starter-diary-analysis"
+    diary_spec = suggest_project_spec("journal app with tags", {"domains": [], "frontend_needed": True})
+    diary_out = analyze_project(diary_dir, spec_payload=diary_spec, runtime_payload={})
+    diary_relations = diary_out.get("relations") if isinstance(diary_out.get("relations"), list) else []
+    assert any(
+        str(rel.get("parent_entity") or "") == "Entry" and str(rel.get("child_entity") or "") == "Tag"
+        for rel in diary_relations
+        if isinstance(rel, dict)
+    )
+    assert isinstance(diary_out.get("next_action"), dict)
+    assert "kind" in diary_out["next_action"]

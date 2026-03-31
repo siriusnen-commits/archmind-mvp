@@ -20,7 +20,9 @@ DOMAIN_ENTITY_MAP: dict[str, str] = {
     "boards": "Board",
     "entries": "Entry",
     "diary": "Entry",
+    "journal": "Entry",
     "journals": "Entry",
+    "journaling": "Entry",
 }
 
 ENTITY_FIELD_MAP: dict[str, list[dict[str, str]]] = {
@@ -34,7 +36,11 @@ ENTITY_FIELD_MAP: dict[str, list[dict[str, str]]] = {
     "Expense": [{"name": "amount", "type": "float"}, {"name": "category", "type": "string"}],
     "Item": [{"name": "name", "type": "string"}, {"name": "quantity", "type": "int"}],
     "Note": [{"name": "title", "type": "string"}, {"name": "content", "type": "string"}],
-    "Entry": [{"name": "title", "type": "string"}, {"name": "content", "type": "string"}],
+    "Entry": [
+        {"name": "title", "type": "string"},
+        {"name": "content", "type": "string"},
+        {"name": "created_at", "type": "datetime"},
+    ],
     "Bookmark": [{"name": "title", "type": "string"}, {"name": "url", "type": "string"}],
     "Recipe": [{"name": "title", "type": "string"}, {"name": "instructions", "type": "string"}],
     "Board": [{"name": "title", "type": "string"}, {"name": "description", "type": "string"}],
@@ -47,6 +53,9 @@ ENTITY_FIELD_MAP: dict[str, list[dict[str, str]]] = {
     "Category": [{"name": "name", "type": "string"}],
     "User": [{"name": "name", "type": "string"}, {"name": "email", "type": "string"}],
 }
+
+DIARY_SIGNAL_WORDS = ("diary", "journal", "journaling")
+TAGGING_SIGNAL_WORDS = ("tag", "tags", "tagging", "label", "labels", "category", "categories")
 
 
 def _add_entity_once(out: list[str], seen: set[str], entity_name: str) -> None:
@@ -185,6 +194,10 @@ def _has_word(text: str, word: str) -> bool:
     return bool(re.search(rf"\b{re.escape(str(word or '').strip().lower())}\b", str(text or "").strip().lower()))
 
 
+def _has_any_word(text: str, words: tuple[str, ...]) -> bool:
+    return any(_has_word(text, token) for token in words)
+
+
 def _build_crud_endpoints(resource_plural: str, *, full: bool) -> list[str]:
     resource = str(resource_plural or "").strip().lower().strip("/")
     if not resource:
@@ -217,7 +230,10 @@ def _build_starter_profile(text: str, domains: list[str], frontend_needed: bool)
     has_board = any(_has_word(normalized, token) for token in ("board", "boards", "kanban")) or "boards" in domain_set
     has_task = any(_has_word(normalized, token) for token in ("todo", "todos", "task", "tasks")) or "tasks" in domain_set
     has_memo = any(_has_word(normalized, token) for token in ("memo", "memos", "note", "notes")) or "notes" in domain_set
-    has_diary_signal = any(_has_word(normalized, token) for token in ("diary", "journal", "entry", "entries"))
+    has_diary_signal = _has_any_word(normalized, DIARY_SIGNAL_WORDS) or any(
+        token in domain_set for token in ("diary", "journal", "journals", "journaling", "entries")
+    )
+    has_tagging_signal = _has_any_word(normalized, TAGGING_SIGNAL_WORDS)
 
     if has_board:
         entities = ["Board", "Card"]
@@ -240,6 +256,38 @@ def _build_starter_profile(text: str, domains: list[str], frontend_needed: bool)
             "entity_fields": entity_fields,
             "required_api_endpoints": api_endpoints,
             "required_frontend_pages": pages,
+        }
+
+    if has_diary_signal:
+        diary_entities = ["Entry"]
+        diary_fields: dict[str, list[dict[str, str]]] = {
+            "Entry": [
+                {"name": "title", "type": "string"},
+                {"name": "content", "type": "string"},
+                {"name": "created_at", "type": "datetime"},
+            ]
+        }
+        diary_apis = _build_crud_endpoints("entries", full=True)
+        diary_pages = _build_core_pages("entries") if frontend_needed else []
+
+        if has_tagging_signal:
+            diary_entities.append("Tag")
+            diary_fields["Tag"] = [
+                {"name": "name", "type": "string"},
+                {"name": "entry_id", "type": "int"},
+            ]
+            diary_apis.extend(_build_crud_endpoints("tags", full=True))
+            diary_apis.append("GET /entries/{id}/tags")
+            if frontend_needed:
+                diary_pages.extend(_build_core_pages("tags"))
+                diary_pages.append("tags/by_entry")
+
+        return {
+            "family": "diary_entries_v2",
+            "entities": diary_entities,
+            "entity_fields": diary_fields,
+            "required_api_endpoints": diary_apis,
+            "required_frontend_pages": diary_pages,
         }
 
     if has_task:
@@ -396,7 +444,7 @@ def suggest_project_spec(
     if any(k in text for k in ("defect", "bug", "issue")) and "Defect" not in seen:
         seen.add("Defect")
         selected_entities.append("Defect")
-    if any(k in text for k in ("diary", "journal", "daily log", "entry")) and "Entry" not in seen:
+    if _has_any_word(text, DIARY_SIGNAL_WORDS) and "Entry" not in seen:
         seen.add("Entry")
         selected_entities.append("Entry")
     if any(k in text for k in ("bookmark", "reading list", "saved link", "link saver")) and "Bookmark" not in seen:
@@ -425,7 +473,7 @@ def suggest_project_spec(
             if any(k in text for k in ("card", "cards", "kanban", "column")):
                 _add_entity_once(expanded_entities, expanded_seen, "Card")
         if entity_name == "Entry":
-            if any(k in text for k in ("tag", "tags", "label", "labels")):
+            if _has_any_word(text, TAGGING_SIGNAL_WORDS):
                 _add_entity_once(expanded_entities, expanded_seen, "Tag")
         if entity_name == "Bookmark":
             if any(k in text for k in ("category", "categories", "folder", "folders")):
@@ -444,7 +492,7 @@ def suggest_project_spec(
         _, plural = _entity_slug_and_plural(entity_name)
         if not plural:
             continue
-        full_crud = entity_name in {"Task", "Note"}
+        full_crud = entity_name in {"Task", "Note", "Entry", "Tag"}
         api_endpoints.extend(_build_crud_endpoints(plural, full=full_crud))
         if frontend_needed:
             pages.extend(_build_core_pages(plural))
