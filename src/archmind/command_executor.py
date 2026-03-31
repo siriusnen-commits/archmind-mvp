@@ -129,7 +129,9 @@ def _execute_auto_command(
         _extract_next_action_explanation,
         _normalize_recommended_command,
         _parse_command_string,
+        auto_plan_goal_satisfied,
         auto_progress_delta,
+        build_auto_evolution_plan,
         classify_auto_action_priority,
         sync_repo_after_auto_batch,
     )
@@ -153,6 +155,10 @@ def _execute_auto_command(
     iteration_budget = _strategy_adjust_budget(base_budget, strategy)
     total_progress_score = 0
     dynamic_extensions = 0
+    plan_goal = "none"
+    plan_reason = ""
+    goal_satisfied = False
+    executed_steps: list[dict[str, str]] = []
 
     summary_lines.extend(
         [
@@ -167,18 +173,50 @@ def _execute_auto_command(
     while idx <= iteration_budget:
         kind, message, raw_command = _extract_next_action(analysis)
         explanation = _extract_next_action_explanation(analysis)
-        reason_summary = str(explanation.get("reason_summary") or "").strip() or message
-        expected_effect = str(explanation.get("expected_effect") or "").strip()
-        priority_reason = str(explanation.get("priority_reason") or "").strip()
-        priority = classify_auto_action_priority({"kind": kind, "message": message, "command": raw_command})
-        normalized_command = _normalize_recommended_command(raw_command)
-        cmd, _ = _parse_command_string(normalized_command) if normalized_command else ("", [])
+        fallback_reason_summary = str(explanation.get("reason_summary") or "").strip() or message
+        fallback_expected_effect = str(explanation.get("expected_effect") or "").strip()
+        fallback_priority_reason = str(explanation.get("priority_reason") or "").strip()
+        fallback_priority = classify_auto_action_priority({"kind": kind, "message": message, "command": raw_command})
+        fallback_normalized_command = _normalize_recommended_command(raw_command)
+        fallback_cmd, _ = _parse_command_string(fallback_normalized_command) if fallback_normalized_command else ("", [])
+
+        plan = build_auto_evolution_plan(analysis)
+        current_goal = str(plan.get("goal") or "none").strip().lower() or "none"
+        current_reason = str(plan.get("reason") or "").strip()
+        plan_steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
+        step = plan_steps[0] if plan_steps else {}
+        use_plan_step = isinstance(step, dict) and bool(step)
+
+        if plan_goal == "none" and current_goal != "none":
+            plan_goal = current_goal
+            plan_reason = current_reason
+
+        reason_summary = fallback_reason_summary
+        expected_effect = fallback_expected_effect
+        priority_reason = fallback_priority_reason
+        priority = fallback_priority
+        normalized_command = fallback_normalized_command
+        cmd = fallback_cmd
+        if use_plan_step:
+            reason_summary = str(step.get("reason_summary") or "").strip() or str(step.get("message") or "").strip() or current_reason
+            expected_effect = str(step.get("expected_effect") or "").strip()
+            priority_reason = str(step.get("priority_reason") or "").strip()
+            priority = str(step.get("priority") or "").strip().lower() or fallback_priority
+            normalized_command = str(step.get("command") or "").strip()
+            cmd = str(step.get("cmd") or "").strip().lower()
+            if not cmd and normalized_command:
+                cmd, _ = _parse_command_string(normalized_command)
+
         priority_allowed = _strategy_allows_priority(strategy, priority)
         actionable_supported = priority_allowed and bool(normalized_command) and cmd in AUTO_ALLOWED_COMMANDS
         state_signature = _analysis_progress_signature(analysis)
         before_snapshot = _auto_progress_snapshot(analysis)
 
         summary_lines.append(f"Step {idx}")
+        if use_plan_step and current_goal != "none":
+            summary_lines.append(f"- Plan goal: {current_goal}")
+            if current_reason:
+                summary_lines.append(f"- Plan reason: {current_reason}")
         if reason_summary:
             summary_lines.append(f"- Why: {reason_summary}")
         if expected_effect:
@@ -196,7 +234,7 @@ def _execute_auto_command(
                     project_dir,
                     project_name=project_name,
                     source=source,
-                    command=normalized_command or raw_command or "",
+                    command=normalized_command or fallback_normalized_command or raw_command or "",
                     status="stop",
                     message=f"Good enough MVP reached. {stop_explanation}",
                     run_id=run_key,
@@ -213,7 +251,7 @@ def _execute_auto_command(
                     project_dir,
                     project_name=project_name,
                     source=source,
-                    command=normalized_command or raw_command or "",
+                    command=normalized_command or fallback_normalized_command or raw_command or "",
                     status="stop",
                     message=f"No immediate next action. {stop_explanation}",
                     run_id=run_key,
@@ -361,6 +399,13 @@ def _execute_auto_command(
             summary_lines.append("- Result: OK")
             executed += 1
             executed_commands.append(normalized_command)
+            executed_steps.append(
+                {
+                    "command": normalized_command,
+                    "goal": current_goal if current_goal != "none" else (plan_goal if plan_goal != "none" else ""),
+                    "priority": str(priority or "").strip().lower() or "unknown",
+                }
+            )
             next_analysis = _build_project_analysis(project_dir, use_canonical_spec=True)
             if _analysis_progress_signature(next_analysis) != state_signature:
                 delta = auto_progress_delta(before_snapshot, _auto_progress_snapshot(next_analysis))
@@ -423,6 +468,25 @@ def _execute_auto_command(
                 analysis = next_analysis
                 break
             analysis = next_analysis
+            tracked_goal = plan_goal if plan_goal != "none" else current_goal
+            if tracked_goal != "none" and auto_plan_goal_satisfied(tracked_goal, analysis):
+                goal_satisfied = True
+                stop_reason = "plan goal satisfied"
+                stop_explanation = f"Plan goal '{tracked_goal}' is satisfied by canonical re-analysis."
+                summary_lines.append("- Result: STOP (plan goal satisfied)")
+                summary_lines.append(f"- Why stop: {stop_explanation}")
+                append_execution_event(
+                    project_dir,
+                    project_name=project_name,
+                    source=source,
+                    command=normalized_command,
+                    status="stop",
+                    message=stop_explanation,
+                    run_id=run_key,
+                    step_no=idx,
+                    stop_reason=stop_reason,
+                )
+                break
         else:
             detail = str(step_result.get("error") or step_result.get("detail") or step_result.get("message") or "execution failed").strip()
             stop_reason = f"command failed: {detail}"
@@ -450,9 +514,14 @@ def _execute_auto_command(
     if summary_lines and summary_lines[-1] == "":
         summary_lines.pop()
     final_snapshot = _auto_progress_snapshot(analysis)
+    if not goal_satisfied and plan_goal != "none" and auto_plan_goal_satisfied(plan_goal, analysis):
+        goal_satisfied = True
     if str(stop_reason).startswith("strategy guard:"):
         blocked_priority = str(stop_reason).split(" blocks ", 1)[-1].split("-priority", 1)[0].strip()
         stop_explanation = _strategy_stop_explanation(strategy, blocked_priority)
+    elif stop_reason == "plan goal satisfied":
+        tracked_goal = plan_goal if plan_goal != "none" else "current_plan_goal"
+        stop_explanation = f"Plan goal '{tracked_goal}' is satisfied by canonical re-analysis."
     else:
         stop_explanation = _auto_stop_explanation(stop_reason, analysis)
     repo_sync: dict[str, Any] = {"status": "NOT_ATTEMPTED", "reason": "no executed changes"}
@@ -486,6 +555,9 @@ def _execute_auto_command(
             f"- Commands: {', '.join(executed_commands) if executed_commands else '(none)'}",
             f"- Stopped: {stop_reason}",
             f"- Stop explanation: {stop_explanation}",
+            f"- Plan goal: {plan_goal}",
+            f"- Plan reason: {plan_reason or '(n/a)'}",
+            f"- Goal satisfied: {'yes' if goal_satisfied else 'no'}",
             f"- Progress made: {'yes' if progress_made else 'no'}",
             f"- Progress score: {total_progress_score}",
             (
@@ -510,6 +582,10 @@ def _execute_auto_command(
         "commands": executed_commands,
         "stop_reason": stop_reason,
         "stop_explanation": stop_explanation,
+        "plan_goal": plan_goal,
+        "plan_reason": plan_reason,
+        "executed_steps": executed_steps,
+        "goal_satisfied": goal_satisfied,
         "progress_made": progress_made,
         "progress_score": total_progress_score,
         "metrics_before": initial_snapshot,
