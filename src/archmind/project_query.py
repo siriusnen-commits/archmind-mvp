@@ -305,9 +305,60 @@ def _action_type_from_command(command: str) -> str:
     return "command"
 
 
-def _build_evolution_history(recent_runs: list[dict[str, Any]], _recent_evolution: list[str]) -> list[dict[str, Any]]:
+def _normalize_auto_summary(auto_summary: dict[str, Any] | None) -> dict[str, Any]:
+    row = auto_summary if isinstance(auto_summary, dict) else {}
+    planned_steps = [
+        {
+            "command": str(item.get("command") or "").strip(),
+            "priority": str(item.get("priority") or "").strip().lower() or "unknown",
+            "kind": str(item.get("kind") or "").strip().lower(),
+        }
+        for item in (row.get("planned_steps") or [])
+        if isinstance(item, dict) and str(item.get("command") or "").strip()
+    ]
+    executed_steps = [
+        {
+            "command": str(item.get("command") or "").strip(),
+            "priority": str(item.get("priority") or "").strip().lower() or "unknown",
+            "goal": str(item.get("goal") or "").strip().lower(),
+        }
+        for item in (row.get("executed_steps") or [])
+        if isinstance(item, dict) and str(item.get("command") or "").strip()
+    ]
+    skipped_steps = [
+        {
+            "command": str(item.get("command") or "").strip(),
+            "reason": str(item.get("reason") or "").strip().lower() or "unknown",
+        }
+        for item in (row.get("skipped_steps") or [])
+        if isinstance(item, dict) and str(item.get("command") or "").strip()
+    ]
+    plan_goal = str(row.get("plan_goal") or "").strip().lower()
+    plan_reason = str(row.get("plan_reason") or "").strip()
+    goal_satisfied_raw = row.get("goal_satisfied")
+    goal_satisfied = bool(goal_satisfied_raw) if isinstance(goal_satisfied_raw, bool) else False
+    normalized = dict(row)
+    normalized["plan_goal"] = plan_goal
+    normalized["plan_reason"] = plan_reason
+    normalized["planned_steps"] = planned_steps
+    normalized["executed_steps"] = executed_steps
+    normalized["skipped_steps"] = skipped_steps
+    normalized["goal_satisfied"] = goal_satisfied
+    return normalized
+
+
+def _build_evolution_history(
+    recent_runs: list[dict[str, Any]],
+    _recent_evolution: list[str],
+    *,
+    auto_summary: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     seen_keys: set[str] = set()
+    auto_row = _normalize_auto_summary(auto_summary)
+    auto_goal = str(auto_row.get("plan_goal") or "").strip()
+    auto_stop_reason = str(auto_row.get("stop_reason") or "").strip()
+    auto_goal_satisfied = bool(auto_row.get("goal_satisfied")) if isinstance(auto_row.get("goal_satisfied"), bool) else False
 
     for item in recent_runs:
         if not isinstance(item, dict):
@@ -320,6 +371,13 @@ def _build_evolution_history(recent_runs: list[dict[str, Any]], _recent_evolutio
         source = str(item.get("source") or "").strip()
         title = command or (source if source else "Command run")
         summary = stop_reason or message
+        if _action_type_from_command(command) == "auto":
+            if auto_goal and auto_goal_satisfied:
+                summary = f"{auto_goal} - goal satisfied"
+            elif auto_goal and auto_stop_reason:
+                summary = f"{auto_goal} - stopped: {auto_stop_reason}"
+            elif auto_goal:
+                summary = f"{auto_goal} - stopped"
         key = "|".join([timestamp, title, status, summary])
         if key in seen_keys:
             continue
@@ -814,9 +872,10 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
                     "stop_reason": str(item.get("stop_reason") or "").strip(),
                 }
             )
-        auto_summary = state_payload.get("auto_last_result") if isinstance(state_payload.get("auto_last_result"), dict) else {}
+        auto_summary_raw = state_payload.get("auto_last_result") if isinstance(state_payload.get("auto_last_result"), dict) else {}
+        auto_summary = _normalize_auto_summary(auto_summary_raw)
         recent_evolution = summarize_recent_evolution(spec, limit=5)
-        evolution_history = _build_evolution_history(recent_runs, recent_evolution)
+        evolution_history = _build_evolution_history(recent_runs, recent_evolution, auto_summary=auto_summary)
         architecture = {
             "app_shape": str(state_payload.get("architecture_app_shape") or spec.get("shape") or "unknown").strip() or "unknown",
             "recommended_template": (

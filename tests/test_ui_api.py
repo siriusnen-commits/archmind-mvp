@@ -1621,6 +1621,12 @@ def test_auto_control_panel_renders_states_and_uses_auto_command_path() -> None:
     assert "Auto failed:" in source
     assert "Progress score:" in source
     assert "Strategy: {strategy}" in source
+    assert "Plan Goal:" in source
+    assert "Plan Reason:" in source
+    assert "Planned Steps:" in source
+    assert "Executed Steps:" in source
+    assert "Skipped Steps:" in source
+    assert "Goal satisfied:" in source
     assert "Runtime: backend=" in source
     assert "return null" not in source
 
@@ -1713,6 +1719,15 @@ def test_ui_project_detail_includes_auto_summary_when_present(monkeypatch, tmp_p
                 "strategy": "balanced",
                 "executed": 2,
                 "commands": ["/add_page cards/by_board", "/add_api GET /boards/{id}/cards"],
+                "plan_goal": "complete_relation_flow",
+                "plan_reason": "Board -> Card relation starter is incomplete",
+                "planned_steps": [
+                    {"command": "/add_api GET /boards/{id}/cards", "priority": "high"},
+                    {"command": "/add_page cards/by_board", "priority": "high"},
+                ],
+                "executed_steps": [{"command": "/add_api GET /boards/{id}/cards", "priority": "high"}],
+                "skipped_steps": [{"command": "/add_page cards/by_board", "reason": "stale_after_reanalysis"}],
+                "goal_satisfied": True,
                 "stop_reason": "good enough MVP reached",
                 "stop_explanation": "Core CRUD and relation flow are complete.",
                 "progress_made": True,
@@ -1729,6 +1744,9 @@ def test_ui_project_detail_includes_auto_summary_when_present(monkeypatch, tmp_p
     payload = response.json()
     assert payload["auto_summary"]["executed"] == 2
     assert payload["auto_summary"]["strategy"] == "balanced"
+    assert payload["auto_summary"]["plan_goal"] == "complete_relation_flow"
+    assert payload["auto_summary"]["goal_satisfied"] is True
+    assert payload["auto_summary"]["planned_steps"][0]["command"] == "/add_api GET /boards/{id}/cards"
     assert payload["auto_summary"]["stop_reason"] == "good enough MVP reached"
 
 
@@ -1783,6 +1801,8 @@ def test_ui_run_command_auto_response_includes_auto_result(monkeypatch, tmp_path
                 "strategy": "safe",
                 "executed": 1,
                 "commands": ["/add_api GET /boards/{id}/cards"],
+                "plan_goal": "complete_relation_flow",
+                "goal_satisfied": False,
                 "stop_reason": "no immediate next action",
                 "stop_explanation": "Canonical analysis no longer returns an actionable next command.",
                 "progress_made": True,
@@ -1800,6 +1820,71 @@ def test_ui_run_command_auto_response_includes_auto_result(monkeypatch, tmp_path
     assert payload["auto_result"]["run_id"] == "auto-2"
     assert payload["auto_result"]["strategy"] == "safe"
     assert payload["auto_result"]["executed"] == 1
+    assert payload["auto_result"]["plan_goal"] == "complete_relation_flow"
+    assert payload["auto_result"]["goal_satisfied"] is False
+
+
+def test_ui_project_detail_normalizes_partial_auto_summary_plan_fields(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "partial-auto-summary")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    state = {
+        "auto_last_result": {
+            "run_id": "auto-partial",
+            "plan_goal": "complete_crud_gap",
+            "goal_satisfied": True,
+            "planned_steps": [{"command": "/add_api GET /tasks"}],
+            "executed_steps": [],
+            "skipped_steps": [{"command": "/add_page tasks/list"}],
+            "stop_explanation": "Goal satisfied by first step.",
+        }
+    }
+    write_state(project_dir, state)
+
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/partial-auto-summary")
+    assert response.status_code == 200
+    payload = response.json()
+    summary = payload["auto_summary"]
+    assert summary["plan_goal"] == "complete_crud_gap"
+    assert summary["goal_satisfied"] is True
+    assert summary["planned_steps"][0]["command"] == "/add_api GET /tasks"
+    assert isinstance(summary["executed_steps"], list)
+    assert isinstance(summary["skipped_steps"], list)
+
+
+def test_ui_evolution_history_auto_summary_is_enriched_when_plan_context_exists(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "auto-history-enriched")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    assert append_execution_event(
+        project_dir,
+        project_name="auto-history-enriched",
+        source="telegram-auto",
+        command="/auto",
+        status="stop",
+        message="Stopped",
+        stop_reason="no material progress",
+        timestamp="2026-03-22T01:00:02Z",
+    )
+    write_state(
+        project_dir,
+        {
+            "auto_last_result": {
+                "plan_goal": "complete_crud_gap",
+                "goal_satisfied": False,
+                "stop_reason": "no material progress",
+            }
+        },
+    )
+
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/auto-history-enriched")
+    assert response.status_code == 200
+    payload = response.json()
+    history = payload["evolution_history"]
+    assert history[0]["title"] == "/auto"
+    assert history[0]["summary"] == "complete_crud_gap - stopped: no material progress"
 
 
 def test_ui_project_detail_tolerates_partial_visualization_analysis_payload(monkeypatch, tmp_path: Path) -> None:

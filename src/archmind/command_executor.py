@@ -159,6 +159,7 @@ def _execute_auto_command(
     plan_reason = ""
     plan_priority = "none"
     plan_stop_conditions: list[str] = []
+    planned_steps: list[dict[str, str]] = []
     goal_satisfied = False
     executed_steps: list[dict[str, str]] = []
     skipped_steps: list[dict[str, str]] = []
@@ -203,6 +204,16 @@ def _execute_auto_command(
             plan_priority = current_priority
         if not plan_stop_conditions and current_stop_conditions:
             plan_stop_conditions = current_stop_conditions
+        if not planned_steps and plan_steps:
+            planned_steps = [
+                {
+                    "command": str(row.get("command") or "").strip(),
+                    "priority": str(row.get("priority") or "").strip().lower() or "unknown",
+                    "kind": str(row.get("kind") or "").strip().lower(),
+                }
+                for row in plan_steps
+                if isinstance(row, dict) and str(row.get("command") or "").strip()
+            ]
 
         reason_summary = fallback_reason_summary
         expected_effect = fallback_expected_effect
@@ -583,6 +594,7 @@ def _execute_auto_command(
             f"- Plan goal: {plan_goal}",
             f"- Plan reason: {plan_reason or '(n/a)'}",
             f"- Plan priority: {plan_priority}",
+            f"- Planned steps: {', '.join(row['command'] for row in planned_steps) if planned_steps else '(none)'}",
             f"- Goal satisfied: {'yes' if goal_satisfied else 'no'}",
             f"- Skipped stale steps: {', '.join(item['command'] for item in skipped_steps) if skipped_steps else '(none)'}",
             f"- Progress made: {'yes' if progress_made else 'no'}",
@@ -613,6 +625,7 @@ def _execute_auto_command(
         "plan_reason": plan_reason,
         "plan_priority": plan_priority,
         "plan_stop_conditions": plan_stop_conditions,
+        "planned_steps": planned_steps,
         "executed_steps": executed_steps,
         "skipped_steps": skipped_steps,
         "goal_satisfied": goal_satisfied,
