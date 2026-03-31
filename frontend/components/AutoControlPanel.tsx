@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { classifyActionFailure, classifyNetworkFailure } from "@/components/actionError";
 import { UI_API_BASE } from "@/components/uiApi";
 
 type AutoStrategy = "safe" | "balanced" | "aggressive";
@@ -39,6 +40,22 @@ type Props = {
 
 type RunState = "idle" | "running" | "success" | "error";
 
+function suggestNextAction(stopReason: string, failureReason: string, goalSatisfied: boolean): string {
+  if (goalSatisfied) return "";
+  const normalizedStop = String(stopReason || "").trim().toLowerCase();
+  const normalizedFailure = String(failureReason || "").trim().toLowerCase();
+  if (normalizedFailure || normalizedStop.includes("failed")) {
+    return "Open Logs Viewer below, then run /fix or retry /auto.";
+  }
+  if (normalizedStop.includes("no material progress")) {
+    return "Review Inspect Overview and apply the top next candidate before retrying /auto.";
+  }
+  if (normalizedStop.includes("strategy")) {
+    return "If appropriate, retry with Balanced or Aggressive strategy.";
+  }
+  return "";
+}
+
 function metricValue(row: Record<string, number> | undefined, key: string): number {
   if (!row || typeof row !== "object") {
     return 0;
@@ -61,6 +78,7 @@ export default function AutoControlPanel({ projectName, autoSummary }: Props) {
       : "balanced";
   const [runState, setRunState] = useState<RunState>("idle");
   const [message, setMessage] = useState("");
+  const [recoveryHint, setRecoveryHint] = useState("");
   const [selectedStrategy, setSelectedStrategy] = useState<AutoStrategy>(initialStrategy);
   const [lastAutoResult, setLastAutoResult] = useState<AutoSummary | undefined>(
     autoSummary && typeof autoSummary === "object" ? autoSummary : undefined,
@@ -77,10 +95,12 @@ export default function AutoControlPanel({ projectName, autoSummary }: Props) {
   const executed = Number.isFinite(Number(display.executed)) ? Number(display.executed) : commands.length;
   const stopReason = String(display.stop_reason || "").trim();
   const stopExplanation = String(display.stop_explanation || "").trim();
+  const failureReason = String((display as { failure_reason?: string }).failure_reason || "").trim();
   const planGoal = String(display.plan_goal || "").trim();
   const planReason = String(display.plan_reason || "").trim();
   const goalSatisfiedRaw = display.goal_satisfied;
   const goalSatisfied = typeof goalSatisfiedRaw === "boolean" ? (goalSatisfiedRaw ? "yes" : "no") : "";
+  const goalSatisfiedBool = Boolean(goalSatisfiedRaw === true);
   const plannedSteps = Array.isArray(display.planned_steps)
     ? display.planned_steps
         .map((item) => (item && typeof item === "object" ? String(item.command || "").trim() : ""))
@@ -101,6 +121,8 @@ export default function AutoControlPanel({ projectName, autoSummary }: Props) {
   const progressMade =
     typeof progressMadeRaw === "boolean" ? (progressMadeRaw ? "yes" : "no") : "";
   const progressScore = Number.isFinite(Number(display.progress_score)) ? Number(display.progress_score) : 0;
+  const lastSuccessfulStep = executedStepCommands.length ? executedStepCommands[executedStepCommands.length - 1] : "";
+  const suggestedNextAction = suggestNextAction(stopReason, failureReason, goalSatisfiedBool);
   const currentSummary = String(display.current || "").trim();
   const runtime = display.runtime && typeof display.runtime === "object" ? display.runtime : {};
   const backendStatus = String(runtime.backend_status || "").trim();
@@ -129,6 +151,7 @@ export default function AutoControlPanel({ projectName, autoSummary }: Props) {
     }
     setRunState("running");
     setMessage("");
+    setRecoveryHint("");
     try {
       const response = await fetch(`${UI_API_BASE}/projects/${encodeURIComponent(targetProject)}/commands`, {
         method: "POST",
@@ -143,8 +166,13 @@ export default function AutoControlPanel({ projectName, autoSummary }: Props) {
       };
       const detail = String(payload.error || payload.detail || "").trim();
       if (!response.ok || !Boolean(payload.ok)) {
+        const classified = classifyActionFailure(response, payload, {
+          actionLabel: "Auto run",
+          includeLogsHint: true,
+        });
         setRunState("error");
-        setMessage(detail ? `Auto failed: ${detail}` : "Auto failed");
+        setMessage(`Auto failed: ${detail || classified.message}`);
+        setRecoveryHint(classified.hint);
         return;
       }
       if (payload.auto_result && typeof payload.auto_result === "object") {
@@ -158,9 +186,13 @@ export default function AutoControlPanel({ projectName, autoSummary }: Props) {
       setMessage(detail || "Auto completed");
       router.refresh();
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error || "unknown error");
+      const classified = classifyNetworkFailure(error, {
+        actionLabel: "Auto run",
+        includeLogsHint: true,
+      });
       setRunState("error");
-      setMessage(`Auto failed: ${detail}`);
+      setMessage(`Auto failed: ${classified.message}`);
+      setRecoveryHint(classified.hint);
     }
   }
 
@@ -202,6 +234,7 @@ export default function AutoControlPanel({ projectName, autoSummary }: Props) {
       {message ? (
         <p className={runState === "error" ? "mt-2 text-xs text-rose-300" : "mt-2 text-xs text-emerald-300"}>{message}</p>
       ) : null}
+      {recoveryHint ? <p className="mt-1 text-xs text-cyan-300">{recoveryHint}</p> : null}
 
       <div className="mt-4 rounded-md border border-slate-700 bg-slate-950/70 p-3">
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-300">Latest Auto Result</p>
@@ -230,8 +263,11 @@ export default function AutoControlPanel({ projectName, autoSummary }: Props) {
               <p>Skipped Steps: {skippedStepCommands.join(", ")}</p>
             ) : null}
             {goalSatisfied ? <p>Goal satisfied: {goalSatisfied}</p> : null}
+            {failureReason ? <p>Failure reason: {failureReason}</p> : null}
             {stopReason ? <p>Stopped: {stopReason}</p> : null}
             {stopExplanation ? <p>Why stop: {stopExplanation}</p> : null}
+            {lastSuccessfulStep ? <p>Last successful step: {lastSuccessfulStep}</p> : null}
+            {suggestedNextAction ? <p>Suggested next action: {suggestedNextAction}</p> : null}
             {progressMade ? <p>Progress made: {progressMade}</p> : null}
             <p>Progress score: {progressScore}</p>
             <p>

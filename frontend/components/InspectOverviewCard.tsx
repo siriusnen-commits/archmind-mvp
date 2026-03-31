@@ -7,6 +7,7 @@ type SpecSummary = {
 };
 
 type RuntimeInfo = {
+  overall_status?: string;
   backend_status?: string;
   frontend_status?: string;
   backend_url?: string;
@@ -46,6 +47,8 @@ type ProjectAnalysis = {
     priority_reason?: string;
     expected_effect?: string;
   };
+  data_consistency_notice?: string;
+  data_source?: string;
 };
 
 type ProjectDetail = {
@@ -140,6 +143,7 @@ export default function InspectOverviewCard({ project }: Props) {
   const nextCommand = String(nextAction.command || "").trim();
 
   const hasNext = nextKind !== "none" && Boolean(nextCommand);
+  const dataConsistencyNotice = String(analysis.data_consistency_notice || "").trim();
 
   return (
     <section className="rounded-md border border-slate-700 bg-slate-900 p-4">
@@ -147,6 +151,12 @@ export default function InspectOverviewCard({ project }: Props) {
       <p className="mt-1 text-xs text-slate-400">Full inspect-grade summary for spec, structure, relations, runtime, and sync state.</p>
 
       <div className="mt-4 grid gap-4 md:grid-cols-2">
+        {dataConsistencyNotice ? (
+          <div className="md:col-span-2 rounded border border-amber-700 bg-amber-950/30 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-amber-200">Data Fallback Notice</p>
+            <p className="mt-1 text-xs text-amber-100">{dataConsistencyNotice}</p>
+          </div>
+        ) : null}
         <div className="space-y-2 rounded border border-slate-700 bg-slate-950/30 p-3">
           <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">Spec Overview</h4>
           <p className="text-sm text-slate-200">Shape: {String(detail.shape || "unknown")}</p>
@@ -227,6 +237,7 @@ export default function InspectOverviewCard({ project }: Props) {
 
         <div className="space-y-2 rounded border border-slate-700 bg-slate-950/30 p-3">
           <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">Runtime / Repository / Sync</h4>
+          <p className="text-sm text-slate-200">Overall: {String(runtime.overall_status || "NOT_RUNNING")}</p>
           <p className="text-sm text-slate-200">Backend: {String(runtime.backend_status || "STOPPED")}</p>
           <p className="text-xs text-slate-400">{String(runtime.backend_reason || "").trim() || "No backend reason"}</p>
           <p className="text-sm text-slate-200">Frontend: {String(runtime.frontend_status || "STOPPED")}</p>

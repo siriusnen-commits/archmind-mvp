@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { classifyActionFailure, classifyNetworkFailure } from "@/components/actionError";
 import { UI_API_BASE } from "@/components/uiApi";
 
 export type ProjectListItem = {
@@ -15,6 +16,9 @@ export type ProjectListItem = {
   template?: string;
   backend_url?: string;
   frontend_url?: string;
+  backend_urls?: string[];
+  frontend_urls?: string[];
+  runtime_state?: string;
   repository?: {
     status?: string;
     url?: string;
@@ -34,7 +38,7 @@ export default function ProjectList({ projects, selectedName }: Props) {
   const [setCurrentError, setSetCurrentError] = useState("");
   const [runningCommandProject, setRunningCommandProject] = useState("");
   const [runningCommandLabel, setRunningCommandLabel] = useState("");
-  const [commandFeedbackByProject, setCommandFeedbackByProject] = useState<Record<string, { status: "OK" | "FAILED"; message: string }>>({});
+  const [commandFeedbackByProject, setCommandFeedbackByProject] = useState<Record<string, { status: "OK" | "FAILED"; message: string; hint?: string }>>({});
 
   async function handleSetCurrent(projectName: string) {
     const target = String(projectName || "").trim();
@@ -53,13 +57,14 @@ export default function ProjectList({ projects, selectedName }: Props) {
         error?: string;
       };
       if (!response.ok || !Boolean(payload.ok)) {
-        const detail = String(payload.error || payload.detail || "").trim();
-        setSetCurrentError(detail ? `Failed to set current project: ${detail}` : "Failed to set current project");
+        const classified = classifyActionFailure(response, payload, { actionLabel: "Set current project" });
+        setSetCurrentError(classified.message);
         return;
       }
       router.refresh();
-    } catch {
-      setSetCurrentError("Failed to set current project");
+    } catch (error) {
+      const classified = classifyNetworkFailure(error, { actionLabel: "Set current project" });
+      setSetCurrentError(classified.message);
     } finally {
       setSettingCurrentName("");
     }
@@ -84,11 +89,14 @@ export default function ProjectList({ projects, selectedName }: Props) {
         body: JSON.stringify({ command }),
       });
       const payload = (await response.json().catch(() => ({}))) as { ok?: boolean; detail?: string; error?: string };
-      const detail = String(payload.error || payload.detail || "").trim();
       if (!response.ok || !Boolean(payload.ok)) {
+        const classified = classifyActionFailure(response, payload, {
+          actionLabel: `${command} execution`,
+          includeLogsHint: true,
+        });
         setCommandFeedbackByProject((prev) => ({
           ...prev,
-          [target]: { status: "FAILED", message: detail || "Command failed" },
+          [target]: { status: "FAILED", message: classified.message, hint: classified.hint },
         }));
         return;
       }
@@ -97,10 +105,14 @@ export default function ProjectList({ projects, selectedName }: Props) {
         [target]: { status: "OK", message: detail || "Completed" },
       }));
       router.refresh();
-    } catch {
+    } catch (error) {
+      const classified = classifyNetworkFailure(error, {
+        actionLabel: `${command} execution`,
+        includeLogsHint: true,
+      });
       setCommandFeedbackByProject((prev) => ({
         ...prev,
-        [target]: { status: "FAILED", message: "Command failed" },
+        [target]: { status: "FAILED", message: classified.message, hint: classified.hint },
       }));
     } finally {
       setRunningCommandProject("");
@@ -218,9 +230,12 @@ export default function ProjectList({ projects, selectedName }: Props) {
                   <p className="mt-1 text-xs text-cyan-300">Running... {runningCommandLabel || "command"}</p>
                 ) : null}
                 {feedback ? (
-                  <p className={`mt-1 text-xs ${feedback.status === "OK" ? "text-emerald-300" : "text-rose-300"}`}>
-                    {feedback.status}: {feedback.message}
-                  </p>
+                  <div className={`mt-1 text-xs ${feedback.status === "OK" ? "text-emerald-300" : "text-rose-300"}`}>
+                    <p>
+                      {feedback.status}: {feedback.message}
+                    </p>
+                    {feedback.hint ? <p className="mt-1 text-cyan-300">{feedback.hint}</p> : null}
+                  </div>
                 ) : null}
                 <div className="mt-2">
                   {isCurrent ? (

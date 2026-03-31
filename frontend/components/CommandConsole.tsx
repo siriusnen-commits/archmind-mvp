@@ -2,6 +2,7 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
+import { classifyActionFailure, classifyNetworkFailure } from "@/components/actionError";
 import { UI_API_BASE } from "@/components/uiApi";
 
 type Props = {
@@ -33,6 +34,7 @@ export default function CommandConsole({ projectName }: Props) {
   const [validation, setValidation] = useState("");
   const [result, setResult] = useState<ConsoleResult | null>(null);
   const [inlineError, setInlineError] = useState("");
+  const [recoveryHint, setRecoveryHint] = useState("");
 
   const targetProject = String(projectName || "").trim();
   const normalizedInput = normalizeCommand(commandInput);
@@ -46,6 +48,7 @@ export default function CommandConsole({ projectName }: Props) {
     }
     setValidation("");
     setInlineError("");
+    setRecoveryHint("");
     setRunState("running");
     try {
       const response = await fetch(`${UI_API_BASE}/projects/${encodeURIComponent(targetProject)}/commands`, {
@@ -70,16 +73,26 @@ export default function CommandConsole({ projectName }: Props) {
       setRunState(ok ? "success" : "error");
       if (ok) {
         router.refresh();
-      } else if (!summary) {
-        setInlineError("Command failed.");
+      } else {
+        const classified = classifyActionFailure(response, payload, {
+          actionLabel: "Command execution",
+          includeLogsHint: true,
+        });
+        setInlineError(classified.message);
+        setRecoveryHint(classified.hint);
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error || "unknown error");
+      const classified = classifyNetworkFailure(error, {
+        actionLabel: "Command execution",
+        includeLogsHint: true,
+      });
       setResult({
         command,
         status: "FAILED",
-        summary: message || "No summary available",
+        summary: classified.message || "No summary available",
       });
+      setInlineError(classified.message);
+      setRecoveryHint(classified.hint);
       setRunState("error");
     }
   }
@@ -114,6 +127,7 @@ export default function CommandConsole({ projectName }: Props) {
       </form>
       {validation ? <p className="mt-2 text-xs text-amber-300">{validation}</p> : null}
       {inlineError ? <p className="mt-2 text-xs text-rose-300">{inlineError}</p> : null}
+      {recoveryHint ? <p className="mt-2 text-xs text-cyan-300">{recoveryHint}</p> : null}
       {result ? (
         <div className="mt-3 rounded-md border border-slate-700 bg-slate-950/70 p-3 text-xs text-slate-200">
           <p className="break-all">Command: {result.command}</p>
@@ -126,4 +140,3 @@ export default function CommandConsole({ projectName }: Props) {
     </section>
   );
 }
-
