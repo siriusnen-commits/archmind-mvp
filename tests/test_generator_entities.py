@@ -248,8 +248,12 @@ def test_apply_frontend_page_scaffold_creates_pages_for_frontend_structure(tmp_p
     helper_text = (project_dir / "frontend" / "app" / "_lib" / "apiBase.ts").read_text(encoding="utf-8")
     list_text = (project_dir / "frontend" / "app" / "tasks" / "page.tsx").read_text(encoding="utf-8")
     detail_text = (project_dir / "frontend" / "app" / "tasks" / "[id]" / "page.tsx").read_text(encoding="utf-8")
-    assert "Loading..." in list_text
-    assert "No items found." in list_text
+    assert "Loading tasks..." in list_text
+    assert "Search tasks..." in list_text
+    assert "No tasks yet. Add your first task." in list_text
+    assert "statusTone(item.status)" in list_text
+    assert "statusRank(a.status) - statusRank(b.status)" in list_text
+    assert "Open task" in list_text
     assert "fetch(`${apiBaseUrl}/tasks`" in list_text
     assert 'from "../_lib/apiBase"' in list_text
     assert "useApiBaseUrl()" in list_text
@@ -270,9 +274,12 @@ def test_apply_frontend_page_scaffold_creates_pages_for_frontend_structure(tmp_p
     assert "return normalizeApiBase(parsed.toString());" in helper_text
     assert "if (browserHost)" in helper_text
     assert 'return "http://127.0.0.1:8000";' in helper_text
-    assert "placeholder" not in list_text.lower()
+    assert "page placeholder for" not in list_text.lower()
     assert "Missing item id." in detail_text
     assert "Item not found." in detail_text
+    assert "No details provided." in detail_text
+    assert "Task #${id}" in detail_text
+    assert "status ?? \"unknown\"" in detail_text
     assert "fetch(`${apiBaseUrl}/tasks/${id}`" in detail_text
     assert 'from "../../_lib/apiBase"' in detail_text
     assert "useApiBaseUrl()" in detail_text
@@ -393,6 +400,17 @@ def test_apply_frontend_page_scaffold_diary_entry_detail_is_readable(tmp_path: P
     assert "Entry #${id}" in detail_text
     assert "Created time unavailable" in detail_text
     assert "No content yet." in detail_text
+
+
+def test_apply_frontend_page_scaffold_task_detail_shows_due_date_when_present(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_task_detail"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    apply_frontend_page_scaffold(project_dir, "Task")
+    detail_text = (project_dir / "frontend" / "app" / "tasks" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+    assert 'due_date || (item as Record<string, unknown>).due' in detail_text
+    assert "Due:" in detail_text
 
 
 def test_relation_surface_board_detail_includes_card_section(tmp_path: Path) -> None:

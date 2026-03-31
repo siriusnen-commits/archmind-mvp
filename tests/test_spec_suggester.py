@@ -155,6 +155,30 @@ def test_starter_pack_todo_tasks_routes_to_task_with_status_and_crud() -> None:
     assert "tasks/detail" in out["frontend_pages"]
 
 
+def test_starter_pack_todo_includes_due_date_when_due_signal_exists() -> None:
+    out = suggest_project_spec("todo app with due date and deadlines", {"domains": [], "frontend_needed": True})
+    entities = [entity for entity in out["entities"] if isinstance(entity, dict)]
+    task = next(entity for entity in entities if str(entity.get("name") or "") == "Task")
+    field_names = {
+        str(field.get("name") or "")
+        for field in (task.get("fields") if isinstance(task.get("fields"), list) else [])
+        if isinstance(field, dict)
+    }
+    assert "due_date" in field_names
+
+
+def test_starter_pack_task_tracker_with_details_includes_description() -> None:
+    out = suggest_project_spec("task tracker with details", {"domains": [], "frontend_needed": True})
+    entities = [entity for entity in out["entities"] if isinstance(entity, dict)]
+    task = next(entity for entity in entities if str(entity.get("name") or "") == "Task")
+    field_names = {
+        str(field.get("name") or "")
+        for field in (task.get("fields") if isinstance(task.get("fields"), list) else [])
+        if isinstance(field, dict)
+    }
+    assert "description" in field_names
+
+
 def test_starter_pack_board_kanban_routes_to_board_card_with_relation_defaults() -> None:
     out = suggest_project_spec("project kanban board app", {"domains": [], "frontend_needed": True})
     entities = [entity for entity in out["entities"] if isinstance(entity, dict)]
