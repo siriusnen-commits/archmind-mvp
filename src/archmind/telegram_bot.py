@@ -6582,6 +6582,8 @@ AUTO_HIGH_VALUE_FIELDS = {"title", "name", "content"}
 AUTO_USEFUL_FIELDS = {"description", "status", "priority"}
 AUTO_LOW_VALUE_FIELDS = {"created_at", "updated_at", "timestamp", "deleted_at"}
 AUTO_RELATION_KINDS = {"relation_page_behavior", "relation_scoped_api", "relation_placeholder_page"}
+AUTO_CRUD_KINDS = {"missing_crud_api", "missing_page"}
+AUTO_PLACEHOLDER_KINDS = {"placeholder_page", "relation_placeholder_page"}
 AUTO_HARD_MAX_STEPS = 8
 
 
@@ -6702,6 +6704,197 @@ def classify_auto_action_priority(next_action: dict[str, Any] | None) -> str:
         return "low"
 
     return "high"
+
+
+def _auto_plan_goal_for_kind(kind: str) -> str:
+    normalized = str(kind or "").strip().lower()
+    if normalized in AUTO_RELATION_KINDS:
+        return "complete_relation_flow"
+    if normalized in AUTO_CRUD_KINDS:
+        return "complete_crud_gap"
+    if normalized in AUTO_PLACEHOLDER_KINDS:
+        return "resolve_placeholder_or_incomplete_page"
+    return ""
+
+
+def _auto_plan_rank_for_command(goal: str, cmd: str, path: str) -> int:
+    normalized_goal = str(goal or "").strip().lower()
+    normalized_cmd = str(cmd or "").strip().lower()
+    normalized_path = str(path or "").strip().lower()
+    relation_like_path = "/{id}/" in normalized_path or "/by_" in normalized_path
+    if normalized_goal == "complete_relation_flow":
+        if normalized_cmd == "/add_api" and relation_like_path:
+            return 0
+        if normalized_cmd == "/add_page" and "/by_" in normalized_path:
+            return 1
+        if normalized_cmd == "/implement_page" and "/by_" in normalized_path:
+            return 2
+        if normalized_cmd == "/add_api":
+            return 3
+        if normalized_cmd == "/add_page":
+            return 4
+        if normalized_cmd == "/implement_page":
+            return 5
+        return 6
+    if normalized_goal == "resolve_placeholder_or_incomplete_page":
+        if normalized_cmd == "/implement_page":
+            return 0
+        if normalized_cmd == "/add_page":
+            return 1
+        if normalized_cmd == "/add_api":
+            return 2
+        if normalized_cmd == "/add_field":
+            return 3
+        return 4
+    # complete_crud_gap and fallback
+    if normalized_cmd == "/add_api":
+        return 0
+    if normalized_cmd == "/add_page":
+        return 1
+    if normalized_cmd == "/implement_page":
+        return 2
+    if normalized_cmd == "/add_field":
+        return 3
+    return 4
+
+
+def build_auto_evolution_plan(analysis: dict[str, Any]) -> dict[str, Any]:
+    next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
+    explanation = _extract_next_action_explanation(analysis)
+    suggestions = [row for row in (analysis.get("suggestions") or []) if isinstance(row, dict)]
+    candidates: list[dict[str, Any]] = []
+
+    next_kind = str(next_action.get("kind") or "").strip().lower()
+    next_message = str(next_action.get("message") or "").strip()
+    next_command = _normalize_recommended_command(str(next_action.get("command") or "").strip())
+    if next_message or next_command:
+        cmd, args = _parse_command_string(next_command) if next_command else ("", [])
+        path_hint = str(args[0] if cmd in {"/add_page", "/implement_page"} and args else (args[1] if cmd == "/add_api" and len(args) >= 2 else "")).strip()
+        candidates.append(
+            {
+                "source": "next_action",
+                "kind": next_kind,
+                "message": next_message,
+                "reason_summary": str(explanation.get("reason_summary") or "").strip() or next_message,
+                "priority_reason": str(explanation.get("priority_reason") or "").strip(),
+                "expected_effect": str(explanation.get("expected_effect") or "").strip(),
+                "command": next_command,
+                "cmd": cmd,
+                "path_hint": path_hint,
+                "priority": classify_auto_action_priority(
+                    {"kind": next_kind, "message": next_message, "command": next_command}
+                ),
+                "index": 0,
+            }
+        )
+
+    for idx, row in enumerate(suggestions, start=1):
+        kind = str(row.get("kind") or "").strip().lower()
+        message = str(row.get("message") or "").strip()
+        command = _normalize_recommended_command(str(row.get("command") or "").strip())
+        cmd, args = _parse_command_string(command) if command else ("", [])
+        path_hint = str(args[0] if cmd in {"/add_page", "/implement_page"} and args else (args[1] if cmd == "/add_api" and len(args) >= 2 else "")).strip()
+        candidates.append(
+            {
+                "source": "suggestion",
+                "kind": kind,
+                "message": message,
+                "reason_summary": str(row.get("reason_summary") or "").strip() or message,
+                "priority_reason": str(row.get("priority_reason") or "").strip(),
+                "expected_effect": str(row.get("expected_effect") or "").strip(),
+                "command": command,
+                "cmd": cmd,
+                "path_hint": path_hint,
+                "priority": classify_auto_action_priority({"kind": kind, "message": message, "command": command}),
+                "index": idx,
+            }
+        )
+
+    relation_gap = any(str(row.get("kind") or "").strip().lower() in AUTO_RELATION_KINDS for row in candidates)
+    if not relation_gap:
+        drift_warnings = [str(x).strip().lower() for x in (analysis.get("drift_warnings") or []) if str(x).strip()]
+        relation_gap = any("relation" in warning and "missing" in warning for warning in drift_warnings)
+    placeholder_gap = any(str(row.get("kind") or "").strip().lower() in AUTO_PLACEHOLDER_KINDS for row in candidates)
+    crud_gap = any(str(row.get("kind") or "").strip().lower() in AUTO_CRUD_KINDS for row in candidates)
+
+    goal = "none"
+    if relation_gap:
+        goal = "complete_relation_flow"
+    elif crud_gap:
+        goal = "complete_crud_gap"
+    elif placeholder_gap:
+        goal = "resolve_placeholder_or_incomplete_page"
+    elif next_kind:
+        goal = _auto_plan_goal_for_kind(next_kind) or "none"
+
+    def _goal_accepts(row: dict[str, Any]) -> bool:
+        kind = str(row.get("kind") or "").strip().lower()
+        cmd = str(row.get("cmd") or "").strip().lower()
+        path_hint = str(row.get("path_hint") or "").strip().lower()
+        if goal == "complete_relation_flow":
+            if kind in AUTO_RELATION_KINDS:
+                return True
+            if cmd == "/add_api" and "/{id}/" in path_hint:
+                return True
+            if cmd in {"/add_page", "/implement_page"} and "/by_" in path_hint:
+                return True
+            return False
+        if goal == "complete_crud_gap":
+            return kind in AUTO_CRUD_KINDS or cmd in {"/add_api", "/add_page"}
+        if goal == "resolve_placeholder_or_incomplete_page":
+            return kind in AUTO_PLACEHOLDER_KINDS or cmd == "/implement_page"
+        return True
+
+    filtered = [row for row in candidates if _goal_accepts(row)]
+    if not filtered:
+        filtered = list(candidates)
+
+    actionable: list[dict[str, Any]] = []
+    seen_commands: set[str] = set()
+    for row in filtered:
+        command = str(row.get("command") or "").strip()
+        cmd = str(row.get("cmd") or "").strip()
+        if not command or not cmd or cmd not in AUTO_ALLOWED_COMMANDS:
+            continue
+        if command in seen_commands:
+            continue
+        seen_commands.add(command)
+        actionable.append(row)
+
+    priority_order = {"high": 0, "medium": 1, "low": 2, "none": 3}
+    actionable.sort(
+        key=lambda row: (
+            _auto_plan_rank_for_command(goal, str(row.get("cmd") or ""), str(row.get("path_hint") or "")),
+            priority_order.get(str(row.get("priority") or "").strip().lower(), 4),
+            int(row.get("index") or 0),
+        )
+    )
+
+    priority = "none"
+    for level in ("high", "medium", "low"):
+        if any(str(row.get("priority") or "").strip().lower() == level for row in actionable):
+            priority = level
+            break
+    reason = ""
+    if actionable:
+        reason = str(actionable[0].get("reason_summary") or "").strip() or str(actionable[0].get("message") or "").strip()
+    if not reason:
+        reason = str(explanation.get("reason_summary") or "").strip() or next_message
+
+    return {
+        "goal": goal,
+        "reason": reason,
+        "priority": priority,
+        "steps": actionable,
+    }
+
+
+def auto_plan_goal_satisfied(goal: str, analysis: dict[str, Any]) -> bool:
+    normalized_goal = str(goal or "").strip().lower()
+    if not normalized_goal or normalized_goal == "none":
+        return False
+    plan = build_auto_evolution_plan(analysis)
+    return str(plan.get("goal") or "").strip().lower() != normalized_goal or not bool(plan.get("steps"))
 
 
 def _analysis_progress_signature(analysis: dict[str, Any]) -> tuple[Any, ...]:
