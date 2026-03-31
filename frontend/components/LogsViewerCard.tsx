@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { classifyActionFailure, classifyNetworkFailure } from "@/components/actionError";
 import { UI_API_BASE } from "@/components/uiApi";
 
 type LogSource = {
@@ -63,6 +64,7 @@ export default function LogsViewerCard({ projectName, initialLogs }: Props) {
   const [selectedSource, setSelectedSource] = useState<string>(normalized.defaultSource);
   const [fetchState, setFetchState] = useState<FetchState>("idle");
   const [fetchError, setFetchError] = useState("");
+  const [recoveryHint, setRecoveryHint] = useState("");
 
   const targetProject = String(projectName || "").trim();
   const sources = Array.isArray(logs.sources) ? logs.sources : [];
@@ -79,6 +81,7 @@ export default function LogsViewerCard({ projectName, initialLogs }: Props) {
       return;
     }
     setFetchError("");
+    setRecoveryHint("");
     setFetchState("loading");
     try {
       const response = await fetch(`${UI_API_BASE}/projects/${encodeURIComponent(targetProject)}/logs`, {
@@ -86,8 +89,12 @@ export default function LogsViewerCard({ projectName, initialLogs }: Props) {
       });
       const payload = (await response.json().catch(() => ({}))) as LogsPayload & { detail?: unknown; error?: unknown };
       if (!response.ok) {
-        const detail = String(payload?.detail || payload?.error || "").trim();
-        setFetchError(detail || "Failed to load logs.");
+        const classified = classifyActionFailure(response, payload, {
+          actionLabel: "Logs refresh",
+          includeLogsHint: false,
+        });
+        setFetchError(classified.message);
+        setRecoveryHint(classified.hint);
         setFetchState("error");
         return;
       }
@@ -99,8 +106,12 @@ export default function LogsViewerCard({ projectName, initialLogs }: Props) {
       setSelectedSource(nextSelected);
       setFetchState("idle");
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error || "unknown error");
-      setFetchError(message || "Failed to load logs.");
+      const classified = classifyNetworkFailure(error, {
+        actionLabel: "Logs refresh",
+        includeLogsHint: false,
+      });
+      setFetchError(classified.message);
+      setRecoveryHint(classified.hint);
       setFetchState("error");
     }
   }
@@ -129,9 +140,10 @@ export default function LogsViewerCard({ projectName, initialLogs }: Props) {
                 key={key}
                 type="button"
                 onClick={() => setSelectedSource(key)}
+                disabled={fetchState === "loading"}
                 className={`rounded border px-2.5 py-1 text-xs ${
                   selectedNow ? "border-cyan-500 text-cyan-200" : "border-slate-600 text-slate-300 hover:bg-slate-800"
-                }`}
+                } disabled:opacity-60`}
               >
                 {sourceLabel(source)}
               </button>
@@ -141,8 +153,9 @@ export default function LogsViewerCard({ projectName, initialLogs }: Props) {
       ) : null}
 
       {fetchError ? <p className="mt-3 text-xs text-rose-300">Failed to load logs: {fetchError}</p> : null}
+      {recoveryHint ? <p className="mt-1 text-xs text-cyan-300">{recoveryHint}</p> : null}
       {sources.length === 0 ? (
-        <p className="mt-3 text-sm text-slate-300">No logs available yet.</p>
+        <p className="mt-3 text-sm text-slate-300">No logs yet. Run a command or start runtime to generate logs.</p>
       ) : selectedAvailable ? (
         <div className="mt-3 space-y-2">
           <p className="text-xs text-slate-400">
@@ -156,7 +169,7 @@ export default function LogsViewerCard({ projectName, initialLogs }: Props) {
       ) : selectedError ? (
         <p className="mt-3 text-sm text-rose-300">{selectedError}</p>
       ) : (
-        <p className="mt-3 text-sm text-slate-300">No {selectedLabel.toLowerCase()} logs available.</p>
+        <p className="mt-3 text-sm text-slate-300">No {selectedLabel.toLowerCase()} logs yet.</p>
       )}
     </section>
   );

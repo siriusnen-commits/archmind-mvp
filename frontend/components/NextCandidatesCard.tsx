@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { classifyActionFailure, classifyNetworkFailure } from "@/components/actionError";
 import { UI_API_BASE } from "@/components/uiApi";
 
 type NextCandidate = {
@@ -41,6 +42,7 @@ export default function NextCandidatesCard({ projectName, candidates }: Props) {
   const [runStateByCommand, setRunStateByCommand] = useState<Record<string, RunState>>({});
   const [messageByCommand, setMessageByCommand] = useState<Record<string, string>>({});
   const [messageTypeByCommand, setMessageTypeByCommand] = useState<Record<string, MessageType>>({});
+  const [hintByCommand, setHintByCommand] = useState<Record<string, string>>({});
   const [executedCommand, setExecutedCommand] = useState("");
 
   const rows = (Array.isArray(candidates) ? candidates : [])
@@ -67,6 +69,7 @@ export default function NextCandidatesCard({ projectName, candidates }: Props) {
     setExecutedCommand(normalizedCommand);
     setRunStateByCommand((prev) => ({ ...prev, [key]: "running" }));
     setMessageByCommand((prev) => ({ ...prev, [key]: "" }));
+    setHintByCommand((prev) => ({ ...prev, [key]: "" }));
     setMessageTypeByCommand((prev) => ({ ...prev, [key]: "success" }));
     try {
       const response = await fetch(`${UI_API_BASE}/projects/${encodeURIComponent(targetProject)}/commands`, {
@@ -79,25 +82,34 @@ export default function NextCandidatesCard({ projectName, candidates }: Props) {
         detail?: string;
         error?: string;
       };
-      const detail = String(payload.error || payload.detail || "").trim();
       if (!response.ok || !Boolean(payload.ok)) {
+        const classified = classifyActionFailure(response, payload, {
+          actionLabel: "Next candidate run",
+          includeLogsHint: true,
+        });
         setRunStateByCommand((prev) => ({ ...prev, [key]: "error" }));
         setMessageTypeByCommand((prev) => ({ ...prev, [key]: "error" }));
         setMessageByCommand((prev) => ({
           ...prev,
-          [key]: detail ? `Failed to run candidate: ${detail}` : "Failed to run candidate",
+          [key]: classified.message,
         }));
+        setHintByCommand((prev) => ({ ...prev, [key]: classified.hint }));
         return;
       }
+      const detail = String(payload.error || payload.detail || "").trim();
       setRunStateByCommand((prev) => ({ ...prev, [key]: "success" }));
       setMessageTypeByCommand((prev) => ({ ...prev, [key]: "success" }));
       setMessageByCommand((prev) => ({ ...prev, [key]: detail || "Completed" }));
       router.refresh();
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error || "unknown error");
+      const classified = classifyNetworkFailure(error, {
+        actionLabel: "Next candidate run",
+        includeLogsHint: true,
+      });
       setRunStateByCommand((prev) => ({ ...prev, [key]: "error" }));
       setMessageTypeByCommand((prev) => ({ ...prev, [key]: "error" }));
-      setMessageByCommand((prev) => ({ ...prev, [key]: `Failed to run candidate: ${detail}` }));
+      setMessageByCommand((prev) => ({ ...prev, [key]: classified.message }));
+      setHintByCommand((prev) => ({ ...prev, [key]: classified.hint }));
     } finally {
       setRunningKey("");
     }
@@ -106,7 +118,7 @@ export default function NextCandidatesCard({ projectName, candidates }: Props) {
   return (
     <section className="rounded-md border border-slate-700 bg-slate-900 p-4">
       <h3 className="text-sm font-semibold text-slate-100">Next Candidates</h3>
-      {!rows.length ? <p className="mt-2 text-sm text-slate-300">No immediate next action.</p> : null}
+      {!rows.length ? <p className="mt-2 text-sm text-slate-300">No recommended next step right now.</p> : null}
       {rows.length ? (
         <div className="mt-3 space-y-3">
           {rows.map((row, idx) => {
@@ -115,6 +127,7 @@ export default function NextCandidatesCard({ projectName, candidates }: Props) {
             const isRunning = runningKey === key;
             const disabled = !Boolean(String(projectName || "").trim()) || Boolean(runningKey) || !Boolean(row.command);
             const message = String(messageByCommand[key] || "").trim();
+            const hint = String(hintByCommand[key] || "").trim();
             const messageType = messageTypeByCommand[key] || "success";
             return (
               <article key={`${row.command}-${idx}`} className="rounded-md border border-slate-700 bg-slate-950/70 p-3">
@@ -142,6 +155,7 @@ export default function NextCandidatesCard({ projectName, candidates }: Props) {
                     {message}
                   </p>
                 ) : null}
+                {hint ? <p className="mt-1 text-xs text-cyan-300">{hint}</p> : null}
               </article>
             );
           })}
@@ -151,4 +165,3 @@ export default function NextCandidatesCard({ projectName, candidates }: Props) {
     </section>
   );
 }
-

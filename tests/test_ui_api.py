@@ -1636,6 +1636,8 @@ def test_project_list_component_renders_strong_current_badge() -> None:
     source = Path("frontend/components/ProjectList.tsx").read_text(encoding="utf-8")
     assert "CURRENT" in source
     assert "Set current" in source
+    assert "Setting..." in source
+    assert "disabled={settingCurrentName === name || isCommandRunning}" in source
 
 
 def test_project_list_component_renders_quick_actions_and_uses_card_scoped_command_path() -> None:
@@ -1688,11 +1690,12 @@ def test_next_candidates_component_renders_empty_state_and_uses_command_executio
     source = Path("frontend/components/NextCandidatesCard.tsx").read_text(encoding="utf-8")
     assert '"use client";' in source
     assert "Next Candidates" in source
-    assert "No immediate next action." in source
+    assert "No recommended next step right now." in source
     assert "/commands" in source
     assert "JSON.stringify({ command: normalizedCommand })" in source
     assert "Running..." in source
     assert "Completed" in source
+    assert "hintByCommand" in source
     assert "Executed: {executedCommand}" in source
     assert "return null" not in source
 
@@ -1769,7 +1772,7 @@ def test_evolution_history_component_has_empty_state_and_partial_payload_safety(
     source = Path("frontend/components/EvolutionHistoryCard.tsx").read_text(encoding="utf-8")
     assert '"use client";' in source
     assert "Evolution History" in source
-    assert "No evolution history yet." in source
+    assert "No history yet. Run Auto, Fix, or a command to start tracking changes." in source
     assert "Array.isArray(items)" in source
     assert "Unknown action" in source
     assert "rows.length === 0" in source
@@ -1795,8 +1798,10 @@ def test_logs_viewer_component_handles_sources_refresh_and_empty_states() -> Non
     assert "Refresh Logs" in source
     assert "Refreshing..." in source
     assert "/logs" in source
-    assert "No logs available yet." in source
-    assert "No " in source and "logs available." in source
+    assert "No logs yet. Run a command or start runtime to generate logs." in source
+    assert "No " in source and "logs yet." in source
+    assert "recoveryHint" in source
+    assert "disabled={fetchState === \"loading\"}" in source
     assert "max-h-80 overflow-auto" in source
     assert "return null" not in source
 
@@ -2885,3 +2890,89 @@ def test_ui_runtime_action_route_handles_unexpected_exception(monkeypatch, tmp_p
     assert payload["status"] == "FAIL"
     assert payload["detail"] == "Failed to run action"
     assert "start exploded" in payload["error"]
+
+
+def test_ui_phase1_smoke_flow_create_open_auto_logs_and_switch_project(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "alpha")
+    _make_project(projects_root, "beta")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    calls: list[tuple[str, str]] = []
+
+    def _fake_execute(command: str, project_name: str, **_kwargs):  # type: ignore[no-untyped-def]
+        calls.append((project_name, command))
+        return {
+            "ok": True,
+            "project_name": project_name,
+            "command": command,
+            "detail": "done",
+            "error": "",
+            "auto_result": {"executed": 1, "commands": [command], "stop_reason": "no_more_actions"},
+            "spec_summary": {"stage": "Stage 1", "entities": 1, "apis": 1, "pages": 1, "history_count": 0},
+            "recent_evolution": [f"executed {command}"],
+        }
+
+    monkeypatch.setattr("archmind.ui_api.execute_command", _fake_execute)
+    client = TestClient(create_ui_app())
+
+    projects = client.get("/ui/projects")
+    assert projects.status_code == 200
+    assert len(projects.json().get("projects", [])) == 2
+
+    select_alpha = client.post("/ui/projects/alpha/select")
+    assert select_alpha.status_code == 200
+    assert select_alpha.json()["ok"] is True
+
+    detail_alpha = client.get("/ui/projects/alpha")
+    assert detail_alpha.status_code == 200
+    assert detail_alpha.json()["name"] == "alpha"
+
+    auto_alpha = client.post("/ui/projects/alpha/commands", json={"command": "/auto", "strategy": "balanced"})
+    assert auto_alpha.status_code == 200
+    assert auto_alpha.json()["ok"] is True
+
+    logs_alpha = client.get("/ui/projects/alpha/logs")
+    assert logs_alpha.status_code == 200
+    assert "sources" in logs_alpha.json()
+
+    select_beta = client.post("/ui/projects/beta/select")
+    assert select_beta.status_code == 200
+    assert select_beta.json()["ok"] is True
+
+    fix_beta = client.post("/ui/projects/beta/commands", json={"command": "/fix"})
+    assert fix_beta.status_code == 200
+    assert fix_beta.json()["ok"] is True
+
+    assert calls == [("alpha", "/auto"), ("beta", "/fix")]
+
+
+def test_ui_multi_project_command_isolation_keeps_card_targeting(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "alpha")
+    _make_project(projects_root, "beta")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    captured: list[str] = []
+
+    def _fake_execute(command: str, project_name: str, **_kwargs):  # type: ignore[no-untyped-def]
+        captured.append(project_name)
+        return {
+            "ok": True,
+            "project_name": project_name,
+            "command": command,
+            "detail": "done",
+            "error": "",
+            "auto_result": {},
+            "spec_summary": {"stage": "Stage 0", "entities": 0, "apis": 0, "pages": 0, "history_count": 0},
+            "recent_evolution": [],
+        }
+
+    monkeypatch.setattr("archmind.ui_api.execute_command", _fake_execute)
+    client = TestClient(create_ui_app())
+
+    res_a = client.post("/ui/projects/alpha/commands", json={"command": "/auto"})
+    res_b = client.post("/ui/projects/beta/commands", json={"command": "/fix"})
+    assert res_a.status_code == 200
+    assert res_b.status_code == 200
+    assert captured == ["alpha", "beta"]

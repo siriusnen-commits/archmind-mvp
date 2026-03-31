@@ -244,9 +244,10 @@ export default function ProjectList({ projects, selectedName }: Props) {
                     <button
                       type="button"
                       onClick={() => void handleSetCurrent(name)}
+                      disabled={settingCurrentName === name || isCommandRunning}
                       className="rounded-md border border-cyan-600 px-2 py-1 text-xs text-cyan-200 hover:bg-cyan-900/30"
                     >
-                      Set current
+                      {settingCurrentName === name ? "Setting..." : "Set current"}
                     </button>
                   )}
                 </div>
