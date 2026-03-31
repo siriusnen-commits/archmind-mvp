@@ -1521,9 +1521,29 @@ def test_project_detail_source_renders_logs_viewer_panel() -> None:
 def test_dashboard_source_renders_current_project_indicator() -> None:
     source = Path("frontend/app/dashboard/page.tsx").read_text(encoding="utf-8")
     assert 'import CurrentProjectIndicator from "@/components/CurrentProjectIndicator"' in source
+    assert 'import NewProjectWizard from "@/components/NewProjectWizard"' in source
+    assert "<NewProjectWizard />" in source
     assert "<CurrentProjectIndicator" in source
     assert "projectName={currentProjectName}" in source
     assert "displayName={String(currentProject?.display_name || currentProjectName || \"\")}" in source
+
+
+def test_new_project_wizard_source_renders_fields_and_submit_contract() -> None:
+    source = Path("frontend/components/NewProjectWizard.tsx").read_text(encoding="utf-8")
+    assert '"use client";' in source
+    assert "New Project" in source
+    assert "Generate Project" in source
+    assert "Generation Mode" in source
+    assert "Project Language" in source
+    assert "LLM Mode" in source
+    assert "localStorage.getItem" in source
+    assert "/projects/idea_local" in source
+    assert "template," in source
+    assert "mode," in source
+    assert "language," in source
+    assert "llm_mode: llmMode" in source
+    assert 'router.push(`/projects/${encodeURIComponent(name)}`)' in source
+    assert "Generating..." in source
 
 
 def test_current_project_indicator_component_tracks_local_context_and_syncs_current_project() -> None:
@@ -1822,6 +1842,90 @@ def test_ui_run_command_auto_response_includes_auto_result(monkeypatch, tmp_path
     assert payload["auto_result"]["executed"] == 1
     assert payload["auto_result"]["plan_goal"] == "complete_relation_flow"
     assert payload["auto_result"]["goal_satisfied"] is False
+
+
+def test_ui_idea_local_accepts_extended_payload_and_returns_project_info(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    projects_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    captured: dict[str, str] = {}
+
+    def _fake_start(*, idea: str, template: str, mode: str, language: str, llm_mode: str):  # type: ignore[no-untyped-def]
+        captured["idea"] = idea
+        captured["template"] = template
+        captured["mode"] = mode
+        captured["language"] = language
+        captured["llm_mode"] = llm_mode
+        return True, "demo_project", ""
+
+    monkeypatch.setattr("archmind.ui_api._start_wizard_generation", _fake_start)
+    client = TestClient(create_ui_app())
+    response = client.post(
+        "/ui/projects/idea_local",
+        json={
+            "idea": "todo app with deadlines",
+            "template": "todo",
+            "mode": "high_quality",
+            "language": "korean",
+            "llm_mode": "hybrid",
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["status"] == "STARTED"
+    assert payload["project_name"] == "demo_project"
+    assert captured["template"] == "todo"
+    assert captured["mode"] == "high_quality"
+    assert captured["language"] == "korean"
+    assert captured["llm_mode"] == "hybrid"
+
+
+def test_ui_idea_local_defaults_apply_when_optional_fields_missing(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    projects_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    captured: dict[str, str] = {}
+
+    def _fake_start(*, idea: str, template: str, mode: str, language: str, llm_mode: str):  # type: ignore[no-untyped-def]
+        captured["idea"] = idea
+        captured["template"] = template
+        captured["mode"] = mode
+        captured["language"] = language
+        captured["llm_mode"] = llm_mode
+        return True, "demo_defaults", ""
+
+    monkeypatch.setattr("archmind.ui_api._start_wizard_generation", _fake_start)
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/idea_local", json={"idea": "personal diary app"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["request"]["template"] == "auto"
+    assert payload["request"]["mode"] == "balanced"
+    assert payload["request"]["language"] == "english"
+    assert payload["request"]["llm_mode"] == "local"
+    assert captured["template"] == "auto"
+    assert captured["mode"] == "balanced"
+    assert captured["language"] == "english"
+    assert captured["llm_mode"] == "local"
+
+
+def test_ui_idea_local_invalid_request_is_handled_safely(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    projects_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    monkeypatch.setattr("archmind.ui_api._start_wizard_generation", lambda **_kwargs: (True, "unused", ""))
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/idea_local", json={"idea": ""})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["status"] == "INVALID"
+    assert "idea is required" in str(payload["error"]).lower()
 
 
 def test_ui_project_detail_normalizes_partial_auto_summary_plan_fields(monkeypatch, tmp_path: Path) -> None:

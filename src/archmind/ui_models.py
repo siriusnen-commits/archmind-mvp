@@ -238,6 +238,23 @@ class RunCommandResponse(BaseModel):
     recent_evolution: list[str] = Field(default_factory=list)
 
 
+class NewProjectWizardRequest(BaseModel):
+    idea: str = ""
+    template: str = "auto"
+    mode: str = "balanced"
+    language: str = "english"
+    llm_mode: str = "local"
+
+
+class NewProjectWizardResponse(BaseModel):
+    ok: bool = False
+    project_name: str = ""
+    detail: str = ""
+    error: str = ""
+    status: str = "UNKNOWN"
+    request: dict[str, str] = Field(default_factory=dict)
+
+
 class ProjectLogsResponse(BaseModel):
     project_name: str = ""
     default_source: str = "latest"

@@ -1,5 +1,6 @@
 import CurrentProjectIndicator from "@/components/CurrentProjectIndicator";
 import EvolutionCard from "@/components/EvolutionCard";
+import NewProjectWizard from "@/components/NewProjectWizard";
 import ProjectList, { ProjectListItem } from "@/components/ProjectList";
 import ProjectSummaryCard from "@/components/ProjectSummaryCard";
 import ProviderCard from "@/components/ProviderCard";
@@ -104,9 +105,12 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     <main className="mx-auto w-full max-w-6xl p-6">
       <header className="mb-5 flex items-center justify-between gap-3">
         <h1 className="text-xl font-semibold text-slate-100">ArchMind Dashboard</h1>
-        <RefreshButton
-          className="rounded-md border border-slate-500 px-3 py-1.5 text-sm text-slate-100 hover:bg-slate-800"
-        />
+        <div className="flex items-center gap-2">
+          <NewProjectWizard />
+          <RefreshButton
+            className="rounded-md border border-slate-500 px-3 py-1.5 text-sm text-slate-100 hover:bg-slate-800"
+          />
+        </div>
       </header>
       <CurrentProjectIndicator
         projectName={currentProjectName}

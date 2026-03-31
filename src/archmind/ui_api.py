@@ -24,6 +24,7 @@ from archmind.project_query import (
     select_current_project,
     stop_project_runtime,
     update_project_provider_mode,
+    resolve_ui_projects_dir,
 )
 from archmind.deploy import get_local_runtime_status
 from archmind.runtime_status import build_runtime_snapshot
@@ -51,10 +52,90 @@ from archmind.ui_models import (
     RuntimeActionResponse,
     RunCommandRequest,
     RunCommandResponse,
+    NewProjectWizardRequest,
+    NewProjectWizardResponse,
 )
 
 router = APIRouter(prefix="/ui", tags=["ui"])
 logger = logging.getLogger(__name__)
+
+
+def _normalize_wizard_mode(value: str) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"fast", "balanced", "high_quality"}:
+        return text
+    if text == "high quality":
+        return "high_quality"
+    return "balanced"
+
+
+def _normalize_wizard_language(value: str) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"english", "korean", "japanese"}:
+        return text
+    return "english"
+
+
+def _normalize_wizard_llm_mode(value: str) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"local", "cloud", "hybrid"}:
+        return text
+    return "local"
+
+
+def _normalize_wizard_template(value: str) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"auto", "diary", "todo", "kanban", "bookmark"}:
+        return text
+    return "auto"
+
+
+def _build_wizard_idea_text(idea: str, template: str, language: str) -> str:
+    base = str(idea or "").strip()
+    if not base:
+        return ""
+    text = base
+    normalized_template = _normalize_wizard_template(template)
+    if normalized_template != "auto" and normalized_template not in text.lower():
+        text = f"{text} {normalized_template} app"
+    normalized_language = _normalize_wizard_language(language)
+    if normalized_language == "korean":
+        text = f"{text} (Korean language project)"
+    elif normalized_language == "japanese":
+        text = f"{text} (Japanese language project)"
+    return text
+
+
+def _max_iterations_for_mode(mode: str) -> int:
+    normalized = _normalize_wizard_mode(mode)
+    if normalized == "fast":
+        return 1
+    if normalized == "high_quality":
+        return 3
+    return 2
+
+
+def _start_wizard_generation(
+    *,
+    idea: str,
+    template: str,
+    mode: str,
+    language: str,
+    llm_mode: str,
+) -> tuple[bool, str, str]:
+    from archmind.telegram_bot import build_pipeline_command, planned_project_dir, start_pipeline_process
+
+    idea_text = _build_wizard_idea_text(idea, template, language)
+    if not idea_text:
+        return False, "", "Idea is required"
+    base_dir = resolve_ui_projects_dir()
+    project_dir = planned_project_dir(base_dir, idea_text)
+    cmd = build_pipeline_command(idea_text, base_dir, project_dir.name)
+    cmd += ["--max-iterations", str(_max_iterations_for_mode(mode))]
+    # v1: llm_mode is accepted for forward compatibility; actual provider wiring remains backend defaults.
+    _ = _normalize_wizard_llm_mode(llm_mode)
+    start_pipeline_process(cmd, base_dir=base_dir, project_name=project_dir.name)
+    return True, project_dir.name, ""
 
 
 @router.get("/projects", response_model=ProjectListResponse)
@@ -495,6 +576,77 @@ def post_ui_project_run_command(project_name: str, body: RunCommandRequest) -> R
             command=str(body.command or ""),
             detail="Failed to run command",
             error=str(exc),
+        )
+
+
+@router.post("/projects/idea_local", response_model=NewProjectWizardResponse)
+def post_ui_projects_idea_local(body: NewProjectWizardRequest) -> NewProjectWizardResponse:
+    try:
+        idea = str(body.idea or "").strip()
+        if not idea:
+            return NewProjectWizardResponse(
+                ok=False,
+                project_name="",
+                status="INVALID",
+                detail="Idea is required",
+                error="idea is required",
+                request={
+                    "idea": "",
+                    "template": _normalize_wizard_template(body.template),
+                    "mode": _normalize_wizard_mode(body.mode),
+                    "language": _normalize_wizard_language(body.language),
+                    "llm_mode": _normalize_wizard_llm_mode(body.llm_mode),
+                },
+            )
+        template = _normalize_wizard_template(body.template)
+        mode = _normalize_wizard_mode(body.mode)
+        language = _normalize_wizard_language(body.language)
+        llm_mode = _normalize_wizard_llm_mode(body.llm_mode)
+        ok, project_name, error = _start_wizard_generation(
+            idea=idea,
+            template=template,
+            mode=mode,
+            language=language,
+            llm_mode=llm_mode,
+        )
+        if not ok:
+            return NewProjectWizardResponse(
+                ok=False,
+                project_name="",
+                status="FAILED",
+                detail="Failed to start generation",
+                error=str(error or "failed to start generation"),
+                request={
+                    "idea": idea,
+                    "template": template,
+                    "mode": mode,
+                    "language": language,
+                    "llm_mode": llm_mode,
+                },
+            )
+        return NewProjectWizardResponse(
+            ok=True,
+            project_name=project_name,
+            status="STARTED",
+            detail=f"Started generation for project: {project_name}",
+            error="",
+            request={
+                "idea": idea,
+                "template": template,
+                "mode": mode,
+                "language": language,
+                "llm_mode": llm_mode,
+            },
+        )
+    except Exception as exc:
+        logger.exception("Failed to start idea_local generation")
+        return NewProjectWizardResponse(
+            ok=False,
+            project_name="",
+            status="FAILED",
+            detail="Failed to start generation",
+            error=str(exc),
+            request={},
         )
 
 
