@@ -1383,6 +1383,14 @@ def test_project_analysis_visualization_inferred_relation_in_entity_graph(tmp_pa
 def test_starter_pack_specs_remain_compatible_with_project_analysis_next_and_relation_logic(tmp_path: Path) -> None:
     todo_dir = tmp_path / "starter-todo-analysis"
     todo_spec = suggest_project_spec("simple todo app", {"domains": [], "frontend_needed": True})
+    todo_entities = [entity for entity in (todo_spec.get("entities") or []) if isinstance(entity, dict)]
+    task = next(entity for entity in todo_entities if str(entity.get("name") or "") == "Task")
+    task_field_names = {
+        str(field.get("name") or "")
+        for field in (task.get("fields") if isinstance(task.get("fields"), list) else [])
+        if isinstance(field, dict)
+    }
+    assert {"title", "status"}.issubset(task_field_names)
     todo_out = analyze_project(todo_dir, spec_payload=todo_spec, runtime_payload={})
     assert isinstance(todo_out.get("next_action"), dict)
     assert "kind" in todo_out["next_action"]

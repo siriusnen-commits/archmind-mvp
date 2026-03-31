@@ -295,9 +295,9 @@ def _build_starter_profile(text: str, domains: list[str], frontend_needed: bool)
             {"name": "title", "type": "string"},
             {"name": "status", "type": "string"},
         ]
-        if any(_has_word(normalized, token) for token in ("description", "details")):
+        if any(_has_word(normalized, token) for token in ("description", "details", "notes")):
             task_fields.append({"name": "description", "type": "string"})
-        if any(_has_word(normalized, token) for token in ("due", "deadline", "schedule")):
+        if any(_has_word(normalized, token) for token in ("due", "deadline", "schedule", "date")):
             task_fields.append({"name": "due_date", "type": "datetime"})
         return {
             "family": "todo_tasks",
