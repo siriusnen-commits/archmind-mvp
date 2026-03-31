@@ -2545,6 +2545,7 @@ def _render_frontend_entity_detail_page(
     is_task_like = _is_task_like_entity_path(entity_path)
     is_board_like = _is_board_like_entity_path(entity_path)
     is_card_like = _is_card_like_entity_path(entity_path)
+    is_bookmark_like = _is_bookmark_like_entity_path(entity_path)
     relation_field_rows = relation_fields if isinstance(relation_fields, list) else []
     import_link_line = 'import Link from "next/link";\n' if sections else ""
     helper_extract_rows = ""
@@ -2770,7 +2771,28 @@ def _render_frontend_entity_detail_page(
             "          </div>\n"
             "        </article>\n"
             if is_diary_like
+            else
+            (
+            "        <article className=\"space-y-3 rounded-xl border border-slate-700 bg-slate-950/50 p-4\">\n"
+            "          <h2 className=\"text-xl font-semibold text-slate-100\">{String((item as Record<string, unknown>).title ?? `Bookmark #${id}`)}</h2>\n"
+            "          {((item as Record<string, unknown>).url) ? (\n"
+            "            <a href={String((item as Record<string, unknown>).url)} target=\"_blank\" rel=\"noreferrer\" className=\"inline-block break-all text-xs text-cyan-300 underline\">\n"
+            "              {String((item as Record<string, unknown>).url)}\n"
+            "            </a>\n"
+            "          ) : <p className=\"text-xs text-slate-400\">URL unavailable.</p>}\n"
+            "          {((item as Record<string, unknown>).category) ? (\n"
+            "            <p className=\"text-xs text-slate-400\">Category: {String((item as Record<string, unknown>).category)}</p>\n"
+            "          ) : null}\n"
+            "          {((item as Record<string, unknown>).created_at) ? (\n"
+            "            <p className=\"text-xs text-slate-400\">Saved: {String((item as Record<string, unknown>).created_at)}</p>\n"
+            "          ) : null}\n"
+            "          <div className=\"whitespace-pre-wrap text-sm leading-7 text-slate-200\">\n"
+            "            {String((item as Record<string, unknown>).note ?? (item as Record<string, unknown>).description ?? (item as Record<string, unknown>).content ?? \"No note yet.\")}\n"
+            "          </div>\n"
+            "        </article>\n"
+            if is_bookmark_like
             else "        <pre className=\"overflow-x-auto text-xs text-slate-300\">{JSON.stringify(item, null, 2)}</pre>\n"
+            )
             )
             )
             )
@@ -3232,6 +3254,9 @@ def _render_frontend_bookmark_list_page(
         "  id?: number | string;\n"
         "  title?: string;\n"
         "  url?: string;\n"
+        "  note?: string;\n"
+        "  category?: string;\n"
+        "  created_at?: string;\n"
         "  description?: string;\n"
         "};\n\n"
         "function extractItems(payload: unknown): BookmarkItem[] {\n"
@@ -3241,9 +3266,15 @@ def _render_frontend_bookmark_list_page(
         "  }\n"
         "  return [];\n"
         "}\n\n"
+        "function createdAtMs(item: BookmarkItem): number {\n"
+        "  const raw = String(item.created_at ?? item.updated_at ?? \"\").trim();\n"
+        "  if (!raw) return 0;\n"
+        "  const ms = Date.parse(raw);\n"
+        "  return Number.isFinite(ms) ? ms : 0;\n"
+        "}\n\n"
         "function previewText(item: BookmarkItem): string {\n"
-        "  const text = String(item.description ?? item.content ?? \"\").trim();\n"
-        "  if (!text) return \"No description yet.\";\n"
+        "  const text = String(item.note ?? item.description ?? item.content ?? \"\").trim();\n"
+        "  if (!text) return \"No note yet.\";\n"
         "  if (text.length <= 140) return text;\n"
         "  return `${text.slice(0, 140)}...`;\n"
         "}\n\n"
@@ -3266,7 +3297,11 @@ def _render_frontend_bookmark_list_page(
         f'        const response = await fetch(`${{apiBaseUrl}}{api_path}`, {{ cache: "no-store" }});\n'
         "        if (!response.ok) throw new Error(`HTTP ${response.status}`);\n"
         "        const rows = extractItems(await response.json());\n"
-        "        const sorted = [...rows].sort((a, b) => Number(String(b.id ?? 0)) - Number(String(a.id ?? 0)));\n"
+        "        const sorted = [...rows].sort((a, b) => {\n"
+        "          const byCreatedAt = createdAtMs(b) - createdAtMs(a);\n"
+        "          if (byCreatedAt !== 0) return byCreatedAt;\n"
+        "          return Number(String(b.id ?? 0)) - Number(String(a.id ?? 0));\n"
+        "        });\n"
         "        if (mounted) setItems(sorted);\n"
         "      } catch (e) {\n"
         "        const message = e instanceof Error ? e.message : String(e || \"unknown error\");\n"
@@ -3288,8 +3323,9 @@ def _render_frontend_bookmark_list_page(
         "    return items.filter((item) => {\n"
         "      const titleText = String(item.title ?? \"\").toLowerCase();\n"
         "      const urlText = String(item.url ?? \"\").toLowerCase();\n"
-        "      const descText = String(item.description ?? item.content ?? \"\").toLowerCase();\n"
-        "      return titleText.includes(needle) || urlText.includes(needle) || descText.includes(needle);\n"
+        "      const noteText = String(item.note ?? item.description ?? item.content ?? \"\").toLowerCase();\n"
+        "      const categoryText = String(item.category ?? \"\").toLowerCase();\n"
+        "      return titleText.includes(needle) || urlText.includes(needle) || noteText.includes(needle) || categoryText.includes(needle);\n"
         "    });\n"
         "  }, [items, query]);\n\n"
         "  return (\n"
@@ -3314,6 +3350,12 @@ def _render_frontend_bookmark_list_page(
         "          {filtered.map((item, index) => (\n"
         '            <li key={String(item.id ?? index)} className="space-y-2 rounded-lg border border-slate-700 bg-slate-950/50 p-4">\n'
         '              <h2 className="text-base font-semibold text-slate-100">{String(item.title || `Untitled bookmark #${item.id ?? index}`)}</h2>\n'
+        '              {(item.category || item.created_at) ? (\n'
+        '                <div className="flex flex-wrap items-center gap-2">\n'
+        '                  {item.category ? <span className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-cyan-200">{String(item.category)}</span> : null}\n'
+        '                  {item.created_at ? <span className="text-xs text-slate-400">Saved: {String(item.created_at)}</span> : null}\n'
+        "                </div>\n"
+        "              ) : null}\n"
         "              {item.url ? (\n"
         '                <a href={String(item.url)} target="_blank" rel="noreferrer" className="inline-block break-all text-xs text-cyan-300 underline">\n'
         "                  {String(item.url)}\n"

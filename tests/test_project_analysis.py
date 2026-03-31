@@ -1424,3 +1424,27 @@ def test_starter_pack_specs_remain_compatible_with_project_analysis_next_and_rel
     )
     assert isinstance(diary_out.get("next_action"), dict)
     assert "kind" in diary_out["next_action"]
+
+    bookmark_dir = tmp_path / "starter-bookmark-analysis"
+    bookmark_spec = suggest_project_spec("bookmark app with tags and search", {"domains": [], "frontend_needed": True})
+    bookmark_entities = [entity for entity in (bookmark_spec.get("entities") or []) if isinstance(entity, dict)]
+    bookmark = next(entity for entity in bookmark_entities if str(entity.get("name") or "") == "Bookmark")
+    bookmark_field_names = {
+        str(field.get("name") or "")
+        for field in (bookmark.get("fields") if isinstance(bookmark.get("fields"), list) else [])
+        if isinstance(field, dict)
+    }
+    assert {"title", "url", "note"}.issubset(bookmark_field_names)
+    bookmark_modules = [str(x).strip().lower() for x in (bookmark_spec.get("modules") or []) if str(x).strip()]
+    assert "tagging" in bookmark_modules
+    assert "search" in bookmark_modules
+    assert "GET /bookmarks/{id}/categories" in {str(x).strip() for x in (bookmark_spec.get("api_endpoints") or []) if str(x).strip()}
+    bookmark_out = analyze_project(bookmark_dir, spec_payload=bookmark_spec, runtime_payload={})
+    bookmark_relations = bookmark_out.get("relations") if isinstance(bookmark_out.get("relations"), list) else []
+    assert any(
+        str(rel.get("parent_entity") or "") == "Bookmark" and str(rel.get("child_entity") or "") == "Category"
+        for rel in bookmark_relations
+        if isinstance(rel, dict)
+    )
+    assert isinstance(bookmark_out.get("next_action"), dict)
+    assert "kind" in bookmark_out["next_action"]

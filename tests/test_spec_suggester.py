@@ -75,11 +75,22 @@ def test_suggest_project_spec_diary_without_auth_does_not_inject_user_profile() 
 
 def test_suggest_project_spec_bookmark_infers_primary_resource_with_plural_convention() -> None:
     out = suggest_project_spec("bookmark manager web app", {"domains": [], "frontend_needed": True})
-    names = [entity["name"] for entity in out["entities"]]
+    entities = [entity for entity in out["entities"] if isinstance(entity, dict)]
+    names = [str(entity.get("name") or "") for entity in entities]
     assert "Bookmark" in names
+    bookmark = next(entity for entity in entities if str(entity.get("name") or "") == "Bookmark")
+    field_names = {
+        str(field.get("name") or "")
+        for field in (bookmark.get("fields") if isinstance(bookmark.get("fields"), list) else [])
+        if isinstance(field, dict)
+    }
+    assert {"title", "url", "note"}.issubset(field_names)
     assert "GET /bookmarks" in out["api_endpoints"]
+    assert "PATCH /bookmarks/{id}" in out["api_endpoints"]
+    assert "DELETE /bookmarks/{id}" in out["api_endpoints"]
     assert "bookmarks/list" in out["frontend_pages"]
     assert "bookmarks/new" in out["frontend_pages"]
+    assert "bookmarks/detail" in out["frontend_pages"]
 
 
 def test_suggest_project_spec_kanban_infers_board_and_card_with_relation_field() -> None:
@@ -111,12 +122,20 @@ def test_suggest_project_spec_diary_tags_preserves_entry_and_tag() -> None:
 
 def test_suggest_project_spec_bookmark_category_preserves_both_entities() -> None:
     out = suggest_project_spec("bookmark manager with categories", {"domains": [], "frontend_needed": True})
-    names = [entity["name"] for entity in out["entities"]]
+    entities = [entity for entity in out["entities"] if isinstance(entity, dict)]
+    names = [str(entity.get("name") or "") for entity in entities]
     assert "Bookmark" in names
     assert "Category" in names
+    bookmark = next(entity for entity in entities if str(entity.get("name") or "") == "Bookmark")
+    bookmark_field_names = {
+        str(field.get("name") or "")
+        for field in (bookmark.get("fields") if isinstance(bookmark.get("fields"), list) else [])
+        if isinstance(field, dict)
+    }
+    assert "category" in bookmark_field_names
     modules = [str(x).strip().lower() for x in (out.get("modules") or []) if str(x).strip()]
     assert "tagging" in modules
-    category = next(entity for entity in out["entities"] if str(entity.get("name") or "") == "Category")
+    category = next(entity for entity in entities if str(entity.get("name") or "") == "Category")
     field_names = {
         str(field.get("name") or "")
         for field in (category.get("fields") if isinstance(category.get("fields"), list) else [])
@@ -127,6 +146,59 @@ def test_suggest_project_spec_bookmark_category_preserves_both_entities() -> Non
     assert "GET /categories" in out["api_endpoints"]
     assert "GET /bookmarks/{id}/categories" in out["api_endpoints"]
     assert "categories/by_bookmark" in out["frontend_pages"]
+
+
+def test_starter_pack_bookmark_with_folder_signal_includes_category_field() -> None:
+    out = suggest_project_spec("link saver app with folder groups", {"domains": [], "frontend_needed": True})
+    entities = [entity for entity in out["entities"] if isinstance(entity, dict)]
+    bookmark = next(entity for entity in entities if str(entity.get("name") or "") == "Bookmark")
+    field_names = {
+        str(field.get("name") or "")
+        for field in (bookmark.get("fields") if isinstance(bookmark.get("fields"), list) else [])
+        if isinstance(field, dict)
+    }
+    assert "category" in field_names
+
+
+def test_starter_pack_bookmark_with_search_applies_search_module_expectations() -> None:
+    out = suggest_project_spec("bookmark app with search", {"domains": [], "frontend_needed": True})
+    entities = [entity for entity in out["entities"] if isinstance(entity, dict)]
+    names = [str(entity.get("name") or "") for entity in entities]
+    assert "Bookmark" in names
+    modules = [str(x).strip().lower() for x in (out.get("modules") or []) if str(x).strip()]
+    assert "search" in modules
+    expectations = [str(x).strip().lower() for x in (out.get("frontend_expectations") or []) if str(x).strip()]
+    assert "list_search_input" in expectations
+    assert "search_empty_state" in expectations
+
+
+def test_starter_pack_bookmark_with_history_includes_created_at() -> None:
+    out = suggest_project_spec("reading list app with recent saved date history", {"domains": [], "frontend_needed": True})
+    entities = [entity for entity in out["entities"] if isinstance(entity, dict)]
+    bookmark = next(entity for entity in entities if str(entity.get("name") or "") == "Bookmark")
+    field_names = {
+        str(field.get("name") or "")
+        for field in (bookmark.get("fields") if isinstance(bookmark.get("fields"), list) else [])
+        if isinstance(field, dict)
+    }
+    assert "created_at" in field_names
+
+
+def test_starter_pack_bookmark_with_tags_preserves_tagging_path_without_entity_duplication() -> None:
+    out = suggest_project_spec("bookmark app with tags", {"domains": [], "frontend_needed": True})
+    entities = [entity for entity in out["entities"] if isinstance(entity, dict)]
+    names = [str(entity.get("name") or "") for entity in entities]
+    assert names.count("Category") <= 1
+    modules = [str(x).strip().lower() for x in (out.get("modules") or []) if str(x).strip()]
+    assert "tagging" in modules
+    assert "GET /categories" in out["api_endpoints"]
+    assert "GET /bookmarks/{id}/categories" in out["api_endpoints"]
+
+
+def test_bookmark_signal_does_not_misclassify_unrelated_dashboard_idea() -> None:
+    out = suggest_project_spec("analytics dashboard for sales", {"domains": [], "frontend_needed": True})
+    names = [str(entity.get("name") or "") for entity in out["entities"] if isinstance(entity, dict)]
+    assert "Bookmark" not in names
 
 
 def test_starter_pack_memo_notes_routes_to_note_with_useful_defaults() -> None:
