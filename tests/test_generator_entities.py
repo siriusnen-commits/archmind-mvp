@@ -403,6 +403,24 @@ def test_apply_frontend_page_scaffold_bookmark_list_has_search_readability(tmp_p
     assert "No bookmarks match your search." in list_text
     assert "Search bookmarks by title, URL, or keywords." in list_text
     assert "Open bookmark" in list_text
+    assert "No note yet." in list_text
+    assert "Saved: {String(item.created_at)}" in list_text
+    assert "{String(item.category)}" in list_text
+    assert "createdAtMs(b) - createdAtMs(a)" in list_text
+
+
+def test_apply_frontend_page_scaffold_bookmark_detail_is_readable(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_bookmark_detail"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    apply_frontend_page_scaffold(project_dir, "Bookmark")
+    detail_text = (project_dir / "frontend" / "app" / "bookmarks" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+    assert "Bookmark #${id}" in detail_text
+    assert "URL unavailable." in detail_text
+    assert "Category:" in detail_text
+    assert "Saved:" in detail_text
+    assert "No note yet." in detail_text
 
 
 def test_apply_frontend_page_scaffold_diary_entry_detail_is_readable(tmp_path: Path) -> None:

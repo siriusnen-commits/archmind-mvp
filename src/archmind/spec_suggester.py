@@ -42,7 +42,11 @@ ENTITY_FIELD_MAP: dict[str, list[dict[str, str]]] = {
         {"name": "content", "type": "string"},
         {"name": "created_at", "type": "datetime"},
     ],
-    "Bookmark": [{"name": "title", "type": "string"}, {"name": "url", "type": "string"}],
+    "Bookmark": [
+        {"name": "title", "type": "string"},
+        {"name": "url", "type": "string"},
+        {"name": "note", "type": "string"},
+    ],
     "Recipe": [{"name": "title", "type": "string"}, {"name": "instructions", "type": "string"}],
     "Board": [{"name": "title", "type": "string"}, {"name": "description", "type": "string"}],
     "Card": [
@@ -232,7 +236,10 @@ def _build_starter_profile(text: str, domains: list[str], frontend_needed: bool)
     has_board = any(_has_word(normalized, token) for token in ("board", "boards", "kanban")) or "boards" in domain_set
     has_task = any(_has_word(normalized, token) for token in ("todo", "todos", "task", "tasks")) or "tasks" in domain_set
     has_memo = any(_has_word(normalized, token) for token in ("memo", "memos", "note", "notes")) or "notes" in domain_set
-    has_bookmark = any(_has_word(normalized, token) for token in ("bookmark", "bookmarks", "reading list", "saved link", "link saver")) or "bookmarks" in domain_set
+    has_bookmark = any(
+        _has_word(normalized, token)
+        for token in ("bookmark", "bookmarks", "bookmark manager", "reading list", "saved link", "saved links", "link saver")
+    ) or "bookmarks" in domain_set
     has_diary_signal = _has_any_word(normalized, DIARY_SIGNAL_WORDS) or any(
         token in domain_set for token in ("diary", "journal", "journals", "journaling", "entries")
     )
@@ -310,10 +317,19 @@ def _build_starter_profile(text: str, domains: list[str], frontend_needed: bool)
         }
 
     if has_bookmark:
+        bookmark_fields = [
+            {"name": "title", "type": "string"},
+            {"name": "url", "type": "string"},
+            {"name": "note", "type": "string"},
+        ]
+        if any(_has_word(normalized, token) for token in ("category", "categories", "folder", "group")):
+            bookmark_fields.append({"name": "category", "type": "string"})
+        if any(_has_word(normalized, token) for token in ("history", "recent", "saved date", "saved time", "saved-date", "saved-time")):
+            bookmark_fields.append({"name": "created_at", "type": "datetime"})
         return {
             "family": "bookmark_links",
             "entities": ["Bookmark"],
-            "entity_fields": {"Bookmark": [{"name": "title", "type": "string"}, {"name": "url", "type": "string"}]},
+            "entity_fields": {"Bookmark": bookmark_fields},
             "required_api_endpoints": _build_crud_endpoints("bookmarks", full=True),
             "required_frontend_pages": _build_core_pages("bookmarks") if frontend_needed else [],
         }
