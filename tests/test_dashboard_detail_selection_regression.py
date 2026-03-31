@@ -12,7 +12,8 @@ def test_project_list_keeps_detail_link_and_separate_set_current_action() -> Non
     assert 'onClick={() => void handleSetCurrent(name)}' in source
     assert 'import { UI_API_BASE } from "@/components/uiApi";' in source
     assert 'fetch(`${UI_API_BASE}/projects/${encodeURIComponent(target)}/select`' in source
-    assert '>\n                      Set current\n                    </button>' in source
+    assert '"Set current"' in source
+    assert 'settingCurrentName === name ? "Setting..." : "Set current"' in source
 
 
 def test_project_detail_page_keeps_detail_only_cards_reachable() -> None:

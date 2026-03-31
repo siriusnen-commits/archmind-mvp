@@ -269,7 +269,7 @@ export default async function ProjectDetailPage({ params }: PageProps) {
           <DangerZoneCard projectName={detail.name} repositoryUrl={detail.repository?.url} />
         </section>
       ) : (
-        <p className="rounded-md border border-slate-700 bg-slate-900 p-4 text-sm text-slate-300">Project not found</p>
+        <p className="rounded-md border border-slate-700 bg-slate-900 p-4 text-sm text-slate-300">Project not found. Go back to Dashboard and select another project.</p>
       )}
     </main>
   );

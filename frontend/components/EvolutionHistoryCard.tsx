@@ -42,7 +42,7 @@ export default function EvolutionHistoryCard({ items }: Props) {
     <section className="rounded-md border border-slate-700 bg-slate-900 p-4">
       <h3 className="text-sm font-semibold text-slate-100">Evolution History</h3>
       {rows.length === 0 ? (
-        <p className="mt-3 text-sm text-slate-300">No evolution history yet.</p>
+        <p className="mt-3 text-sm text-slate-300">No history yet. Run Auto, Fix, or a command to start tracking changes.</p>
       ) : (
         <div className="mt-3 space-y-3">
           {rows.map((item, index) => {

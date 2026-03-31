@@ -124,7 +124,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
 
         <section className="space-y-3">
           {projectsResult.error ? <p className="rounded-md border border-rose-700 bg-rose-950/50 p-3 text-sm text-rose-200">{projectsResult.error}</p> : null}
-          {!projects.length ? <p className="rounded-md border border-slate-700 bg-slate-900 p-4 text-sm text-slate-300">No projects found</p> : null}
+          {!projects.length ? <p className="rounded-md border border-slate-700 bg-slate-900 p-4 text-sm text-slate-300">No projects yet. Create one with New Project to get started.</p> : null}
           {detailResult.error ? <p className="rounded-md border border-rose-700 bg-rose-950/50 p-3 text-sm text-rose-200">{detailResult.error}</p> : null}
 
           {detail ? (
@@ -135,7 +135,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
               <EvolutionCard items={Array.isArray(detail.recent_evolution) ? detail.recent_evolution : []} />
             </>
           ) : projects.length ? (
-            <p className="rounded-md border border-slate-700 bg-slate-900 p-4 text-sm text-slate-300">No current project selected</p>
+            <p className="rounded-md border border-slate-700 bg-slate-900 p-4 text-sm text-slate-300">Select a project from the list to view details.</p>
           ) : null}
         </section>
       </div>
