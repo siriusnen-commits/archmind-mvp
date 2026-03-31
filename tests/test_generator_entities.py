@@ -402,6 +402,44 @@ def test_apply_frontend_page_scaffold_diary_entry_detail_is_readable(tmp_path: P
     assert "No content yet." in detail_text
 
 
+def test_apply_frontend_page_scaffold_board_and_card_have_kanban_quality_ui(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_kanban"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    board_generated = apply_frontend_page_scaffold(project_dir, "Board")
+    card_generated = apply_frontend_page_scaffold(project_dir, "Card")
+    assert "frontend/app/boards/page.tsx" in board_generated
+    assert "frontend/app/cards/page.tsx" in card_generated
+
+    board_list_text = (project_dir / "frontend" / "app" / "boards" / "page.tsx").read_text(encoding="utf-8")
+    card_list_text = (project_dir / "frontend" / "app" / "cards" / "page.tsx").read_text(encoding="utf-8")
+    card_detail_text = (project_dir / "frontend" / "app" / "cards" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+
+    assert "Search boards..." in board_list_text
+    assert "No boards yet. Create your first board." in board_list_text
+    assert "Open board" in board_list_text
+    assert "Search cards..." in card_list_text
+    assert "statusTone(item.status)" in card_list_text
+    assert "Board: {String(item.board_id" in card_list_text
+    assert "Open card" in card_list_text
+    assert "Card #${id}" in card_detail_text
+    assert "Assignee:" in card_detail_text
+    assert "Board: {String((item as Record<string, unknown>).board_id" in card_detail_text
+
+
+def test_apply_frontend_page_scaffold_board_detail_surfaces_relation_context_text(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_board_detail"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    apply_frontend_page_scaffold(project_dir, "Board")
+    detail_text = (project_dir / "frontend" / "app" / "boards" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+    assert "Board #${id}" in detail_text
+    assert "No board description provided." in detail_text
+    assert "Cards linked to this board are listed below." in detail_text
+
+
 def test_apply_frontend_page_scaffold_task_detail_shows_due_date_when_present(tmp_path: Path) -> None:
     project_dir = tmp_path / "fullstack_task_detail"
     (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)

@@ -2390,6 +2390,20 @@ def _render_frontend_entity_list_page(
     api_helper_import: str = "../_lib/apiBase",
 ) -> str:
     api_path = f"/{str(entity_path or '').strip('/')}"
+    if _is_board_like_entity_path(entity_path):
+        return _render_frontend_board_list_page(
+            component_name=component_name,
+            title=title,
+            api_path=api_path,
+            api_helper_import=api_helper_import,
+        )
+    if _is_card_like_entity_path(entity_path):
+        return _render_frontend_card_list_page(
+            component_name=component_name,
+            title=title,
+            api_path=api_path,
+            api_helper_import=api_helper_import,
+        )
     if _is_task_like_entity_path(entity_path):
         return _render_frontend_task_list_page(
             component_name=component_name,
@@ -2522,6 +2536,8 @@ def _render_frontend_entity_detail_page(
     sections = relation_sections if isinstance(relation_sections, list) else []
     is_diary_like = _is_diary_like_entity_path(entity_path)
     is_task_like = _is_task_like_entity_path(entity_path)
+    is_board_like = _is_board_like_entity_path(entity_path)
+    is_card_like = _is_card_like_entity_path(entity_path)
     relation_field_rows = relation_fields if isinstance(relation_fields, list) else []
     import_link_line = 'import Link from "next/link";\n' if sections else ""
     helper_extract_rows = ""
@@ -2696,6 +2712,33 @@ def _render_frontend_entity_detail_page(
         "      {!loading && !notFound && !error && item ? (\n"
         + (
             "        <article className=\"space-y-3 rounded-xl border border-slate-700 bg-slate-950/50 p-4\">\n"
+            "          <h2 className=\"text-xl font-semibold text-slate-100\">{String((item as Record<string, unknown>).title ?? `Board #${id}`)}</h2>\n"
+            "          <p className=\"whitespace-pre-wrap text-sm leading-7 text-slate-200\">{String((item as Record<string, unknown>).description ?? \"No board description provided.\")}</p>\n"
+            "          <p className=\"text-xs text-slate-400\">Cards linked to this board are listed below.</p>\n"
+            "        </article>\n"
+            if is_board_like
+            else
+            (
+            "        <article className=\"space-y-3 rounded-xl border border-slate-700 bg-slate-950/50 p-4\">\n"
+            "          <div className=\"flex flex-wrap items-center gap-2\">\n"
+            "            <h2 className=\"text-xl font-semibold text-slate-100\">{String((item as Record<string, unknown>).title ?? `Card #${id}`)}</h2>\n"
+            "            <span className=\"rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-cyan-200\">{String((item as Record<string, unknown>).status ?? \"unknown\")}</span>\n"
+            "          </div>\n"
+            "          <p className=\"text-xs text-slate-400\">Board: {String((item as Record<string, unknown>).board_id ?? \"(unlinked)\")}</p>\n"
+            "          {((item as Record<string, unknown>).due_date || (item as Record<string, unknown>).due) ? (\n"
+            "            <p className=\"text-xs text-slate-400\">Due: {String((item as Record<string, unknown>).due_date ?? (item as Record<string, unknown>).due)}</p>\n"
+            "          ) : null}\n"
+            "          {((item as Record<string, unknown>).assignee || (item as Record<string, unknown>).owner || (item as Record<string, unknown>).member) ? (\n"
+            "            <p className=\"text-xs text-slate-400\">Assignee: {String((item as Record<string, unknown>).assignee ?? (item as Record<string, unknown>).owner ?? (item as Record<string, unknown>).member)}</p>\n"
+            "          ) : null}\n"
+            "          <div className=\"whitespace-pre-wrap text-sm leading-7 text-slate-200\">\n"
+            "            {String((item as Record<string, unknown>).description ?? (item as Record<string, unknown>).content ?? \"No details provided.\")}\n"
+            "          </div>\n"
+            "        </article>\n"
+            if is_card_like
+            else
+            (
+            "        <article className=\"space-y-3 rounded-xl border border-slate-700 bg-slate-950/50 p-4\">\n"
             "          <div className=\"flex flex-wrap items-center gap-2\">\n"
             "            <h2 className=\"text-xl font-semibold text-slate-100\">{String((item as Record<string, unknown>).title ?? `Task #${id}`)}</h2>\n"
             "            <span className=\"rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-cyan-200\">{String((item as Record<string, unknown>).status ?? \"unknown\")}</span>\n"
@@ -2722,6 +2765,8 @@ def _render_frontend_entity_detail_page(
             if is_diary_like
             else "        <pre className=\"overflow-x-auto text-xs text-slate-300\">{JSON.stringify(item, null, 2)}</pre>\n"
             )
+            )
+            )
         )
         + "      ) : null}\n"
         f"{relation_field_ui}"
@@ -2740,6 +2785,22 @@ def _is_note_like_entity_path(entity_path: str) -> bool:
     return leaf in {"note", "notes", "memo", "memos"}
 
 
+def _is_board_like_entity_path(entity_path: str) -> bool:
+    normalized = str(entity_path or "").strip("/").lower()
+    if not normalized:
+        return False
+    leaf = normalized.split("/")[-1]
+    return leaf in {"board", "boards"}
+
+
+def _is_card_like_entity_path(entity_path: str) -> bool:
+    normalized = str(entity_path or "").strip("/").lower()
+    if not normalized:
+        return False
+    leaf = normalized.split("/")[-1]
+    return leaf in {"card", "cards"}
+
+
 def _is_task_like_entity_path(entity_path: str) -> bool:
     normalized = str(entity_path or "").strip("/").lower()
     if not normalized:
@@ -2754,6 +2815,238 @@ def _is_diary_like_entity_path(entity_path: str) -> bool:
         return False
     leaf = normalized.split("/")[-1]
     return leaf in {"entry", "entries", "diary", "diaries", "journal", "journals"}
+
+
+def _render_frontend_board_list_page(
+    *,
+    component_name: str,
+    title: str,
+    api_path: str,
+    api_helper_import: str,
+) -> str:
+    return (
+        '"use client";\n\n'
+        'import Link from "next/link";\n'
+        'import { useEffect, useMemo, useState } from "react";\n'
+        f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n\n'
+        "type BoardItem = Record<string, unknown> & { id?: number | string; title?: string; description?: string };\n\n"
+        "function extractItems(payload: unknown): BoardItem[] {\n"
+        "  if (Array.isArray(payload)) return payload as BoardItem[];\n"
+        "  if (payload && typeof payload === \"object\" && Array.isArray((payload as { items?: unknown[] }).items)) {\n"
+        "    return ((payload as { items: unknown[] }).items ?? []) as BoardItem[];\n"
+        "  }\n"
+        "  return [];\n"
+        "}\n\n"
+        f"export default function {component_name}() {{\n"
+        "  const [items, setItems] = useState<BoardItem[]>([]);\n"
+        "  const [query, setQuery] = useState(\"\");\n"
+        "  const [loading, setLoading] = useState(true);\n"
+        "  const [error, setError] = useState(\"\");\n"
+        "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
+        "  useEffect(() => {\n"
+        "    if (apiBaseLoading || !apiBaseUrl) {\n"
+        "      setLoading(true);\n"
+        "      return;\n"
+        "    }\n"
+        "    let mounted = true;\n"
+        "    (async () => {\n"
+        "      setLoading(true);\n"
+        "      setError(\"\");\n"
+        "      try {\n"
+        f'        const response = await fetch(`${{apiBaseUrl}}{api_path}`, {{ cache: "no-store" }});\n'
+        "        if (!response.ok) throw new Error(`HTTP ${response.status}`);\n"
+        "        const rows = extractItems(await response.json());\n"
+        "        if (mounted) setItems(rows);\n"
+        "      } catch (e) {\n"
+        "        const message = e instanceof Error ? e.message : String(e || \"unknown error\");\n"
+        "        if (mounted) {\n"
+        "          setError(message);\n"
+        "          setItems([]);\n"
+        "        }\n"
+        "      } finally {\n"
+        "        if (mounted) setLoading(false);\n"
+        "      }\n"
+        "    })();\n"
+        "    return () => {\n"
+        "      mounted = false;\n"
+        "    };\n"
+        "  }, [apiBaseLoading, apiBaseUrl]);\n\n"
+        "  const filtered = useMemo(() => {\n"
+        "    const needle = query.trim().toLowerCase();\n"
+        "    if (!needle) return items;\n"
+        "    return items.filter((item) => {\n"
+        "      const titleText = String(item.title ?? \"\").toLowerCase();\n"
+        "      const descText = String(item.description ?? \"\").toLowerCase();\n"
+        "      return titleText.includes(needle) || descText.includes(needle);\n"
+        "    });\n"
+        "  }, [items, query]);\n\n"
+        "  return (\n"
+        '    <section className="mx-auto w-full max-w-2xl space-y-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4 sm:p-5">\n'
+        '      <div className="space-y-2">\n'
+        f'        <h1 className="text-lg font-semibold">{title}</h1>\n'
+        '        <p className="text-xs text-slate-400">Boards organize related cards. Open a board to manage its cards.</p>\n'
+        "      </div>\n"
+        '      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">\n'
+        '        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search boards..." className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100" />\n'
+        f'        <Link href="{api_path}/new" className="inline-flex items-center justify-center rounded-md bg-emerald-400 px-3 py-2 text-sm font-semibold text-emerald-950 hover:bg-emerald-300">New board</Link>\n'
+        "      </div>\n"
+        "      {loading ? <p className=\"text-sm text-slate-300\">{apiBaseLoading ? \"Resolving API base...\" : \"Loading boards...\"}</p> : null}\n"
+        "      {!loading && error ? <p className=\"text-sm text-rose-300\">Failed to load: {error}</p> : null}\n"
+        "      {!loading && !error && filtered.length === 0 ? (\n"
+        '        <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950/40 p-4 text-sm text-slate-300">\n'
+        "          {items.length === 0 ? \"No boards yet. Create your first board.\" : \"No boards match your search.\"}\n"
+        "        </div>\n"
+        "      ) : null}\n"
+        "      {!loading && !error && filtered.length > 0 ? (\n"
+        '        <ul className="space-y-3">\n'
+        "          {filtered.map((item, index) => (\n"
+        '            <li key={String(item.id ?? index)} className="space-y-2 rounded-lg border border-slate-700 bg-slate-950/50 p-4">\n'
+        '              <h2 className="text-base font-semibold text-slate-100">{String(item.title || `Untitled board #${item.id ?? index}`)}</h2>\n'
+        '              <p className="whitespace-pre-wrap text-sm text-slate-300">{String(item.description || "No board description.")}</p>\n'
+        "              {item.id !== undefined ? (\n"
+        '                <Link href={`/boards/${String(item.id)}`} className="inline-block text-xs font-medium text-cyan-300 underline">Open board</Link>\n'
+        "              ) : null}\n"
+        "            </li>\n"
+        "          ))}\n"
+        "        </ul>\n"
+        "      ) : null}\n"
+        "    </section>\n"
+        "  );\n"
+        "}\n"
+    )
+
+
+def _render_frontend_card_list_page(
+    *,
+    component_name: str,
+    title: str,
+    api_path: str,
+    api_helper_import: str,
+) -> str:
+    return (
+        '"use client";\n\n'
+        'import Link from "next/link";\n'
+        'import { useEffect, useMemo, useState } from "react";\n'
+        f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n\n'
+        "type CardItem = Record<string, unknown> & {\n"
+        "  id?: number | string;\n"
+        "  title?: string;\n"
+        "  description?: string;\n"
+        "  board_id?: string | number;\n"
+        "  status?: string;\n"
+        "  due_date?: string;\n"
+        "  assignee?: string;\n"
+        "};\n\n"
+        "function extractItems(payload: unknown): CardItem[] {\n"
+        "  if (Array.isArray(payload)) return payload as CardItem[];\n"
+        "  if (payload && typeof payload === \"object\" && Array.isArray((payload as { items?: unknown[] }).items)) {\n"
+        "    return ((payload as { items: unknown[] }).items ?? []) as CardItem[];\n"
+        "  }\n"
+        "  return [];\n"
+        "}\n\n"
+        "function statusRank(rawStatus: unknown): number {\n"
+        "  const status = String(rawStatus || \"\").trim().toLowerCase();\n"
+        "  if (status === \"todo\" || status === \"pending\" || status === \"open\") return 0;\n"
+        "  if (status === \"in_progress\" || status === \"in-progress\" || status === \"doing\") return 1;\n"
+        "  if (status === \"blocked\") return 2;\n"
+        "  if (status === \"done\" || status === \"completed\" || status === \"closed\") return 3;\n"
+        "  return 4;\n"
+        "}\n\n"
+        "function statusTone(rawStatus: unknown): string {\n"
+        "  const status = String(rawStatus || \"\").trim().toLowerCase();\n"
+        "  if (status === \"todo\" || status === \"pending\" || status === \"open\") return \"border-amber-500/40 bg-amber-500/10 text-amber-200\";\n"
+        "  if (status === \"in_progress\" || status === \"in-progress\" || status === \"doing\") return \"border-sky-500/40 bg-sky-500/10 text-sky-200\";\n"
+        "  if (status === \"blocked\") return \"border-rose-500/40 bg-rose-500/10 text-rose-200\";\n"
+        "  if (status === \"done\" || status === \"completed\" || status === \"closed\") return \"border-emerald-500/40 bg-emerald-500/10 text-emerald-200\";\n"
+        "  return \"border-slate-500/40 bg-slate-500/10 text-slate-200\";\n"
+        "}\n\n"
+        f"export default function {component_name}() {{\n"
+        "  const [items, setItems] = useState<CardItem[]>([]);\n"
+        "  const [query, setQuery] = useState(\"\");\n"
+        "  const [loading, setLoading] = useState(true);\n"
+        "  const [error, setError] = useState(\"\");\n"
+        "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
+        "  useEffect(() => {\n"
+        "    if (apiBaseLoading || !apiBaseUrl) {\n"
+        "      setLoading(true);\n"
+        "      return;\n"
+        "    }\n"
+        "    let mounted = true;\n"
+        "    (async () => {\n"
+        "      setLoading(true);\n"
+        "      setError(\"\");\n"
+        "      try {\n"
+        f'        const response = await fetch(`${{apiBaseUrl}}{api_path}`, {{ cache: "no-store" }});\n'
+        "        if (!response.ok) throw new Error(`HTTP ${response.status}`);\n"
+        "        const rows = extractItems(await response.json());\n"
+        "        const sorted = [...rows].sort((a, b) => {\n"
+        "          const rankDiff = statusRank(a.status) - statusRank(b.status);\n"
+        "          if (rankDiff !== 0) return rankDiff;\n"
+        "          return Number(String(b.id ?? 0)) - Number(String(a.id ?? 0));\n"
+        "        });\n"
+        "        if (mounted) setItems(sorted);\n"
+        "      } catch (e) {\n"
+        "        const message = e instanceof Error ? e.message : String(e || \"unknown error\");\n"
+        "        if (mounted) {\n"
+        "          setError(message);\n"
+        "          setItems([]);\n"
+        "        }\n"
+        "      } finally {\n"
+        "        if (mounted) setLoading(false);\n"
+        "      }\n"
+        "    })();\n"
+        "    return () => {\n"
+        "      mounted = false;\n"
+        "    };\n"
+        "  }, [apiBaseLoading, apiBaseUrl]);\n\n"
+        "  const filtered = useMemo(() => {\n"
+        "    const needle = query.trim().toLowerCase();\n"
+        "    if (!needle) return items;\n"
+        "    return items.filter((item) => {\n"
+        "      const titleText = String(item.title ?? \"\").toLowerCase();\n"
+        "      const descText = String(item.description ?? \"\").toLowerCase();\n"
+        "      const statusText = String(item.status ?? \"\").toLowerCase();\n"
+        "      return titleText.includes(needle) || descText.includes(needle) || statusText.includes(needle);\n"
+        "    });\n"
+        "  }, [items, query]);\n\n"
+        "  return (\n"
+        '    <section className="mx-auto w-full max-w-2xl space-y-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4 sm:p-5">\n'
+        '      <div className="space-y-2">\n'
+        f'        <h1 className="text-lg font-semibold">{title}</h1>\n'
+        '        <p className="text-xs text-slate-400">Cards are grouped by board and status.</p>\n'
+        "      </div>\n"
+        '      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">\n'
+        '        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search cards..." className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100" />\n'
+        f'        <Link href="{api_path}/new" className="inline-flex items-center justify-center rounded-md bg-emerald-400 px-3 py-2 text-sm font-semibold text-emerald-950 hover:bg-emerald-300">New card</Link>\n'
+        "      </div>\n"
+        "      {loading ? <p className=\"text-sm text-slate-300\">{apiBaseLoading ? \"Resolving API base...\" : \"Loading cards...\"}</p> : null}\n"
+        "      {!loading && error ? <p className=\"text-sm text-rose-300\">Failed to load: {error}</p> : null}\n"
+        "      {!loading && !error && filtered.length === 0 ? (\n"
+        '        <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950/40 p-4 text-sm text-slate-300">No cards found.</div>\n'
+        "      ) : null}\n"
+        "      {!loading && !error && filtered.length > 0 ? (\n"
+        '        <ul className="space-y-3">\n'
+        "          {filtered.map((item, index) => (\n"
+        '            <li key={String(item.id ?? index)} className="space-y-2 rounded-lg border border-slate-700 bg-slate-950/50 p-4">\n'
+        '              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">\n'
+        '                <h2 className="text-base font-semibold text-slate-100">{String(item.title || `Untitled card #${item.id ?? index}`)}</h2>\n'
+        '                <span className={`inline-flex w-fit items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${statusTone(item.status)}`}>{String(item.status || "unknown")}</span>\n'
+        "              </div>\n"
+        '              <p className="text-xs text-slate-400">Board: {String(item.board_id ?? "(unlinked)")}</p>\n'
+        '              {item.due_date || item.due ? <p className="text-xs text-slate-400">Due: {String(item.due_date ?? item.due)}</p> : null}\n'
+        '              {item.assignee || item.owner || item.member ? <p className="text-xs text-slate-400">Assignee: {String(item.assignee ?? item.owner ?? item.member)}</p> : null}\n'
+        '              <p className="whitespace-pre-wrap text-sm text-slate-200">{String(item.description || "No details provided.")}</p>\n'
+        "              {item.id !== undefined ? (\n"
+        '                <Link href={`/cards/${String(item.id)}`} className="inline-block text-xs font-medium text-cyan-300 underline">Open card</Link>\n'
+        "              ) : null}\n"
+        "            </li>\n"
+        "          ))}\n"
+        "        </ul>\n"
+        "      ) : null}\n"
+        "    </section>\n"
+        "  );\n"
+        "}\n"
+    )
 
 
 def _render_frontend_task_list_page(
