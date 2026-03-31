@@ -705,3 +705,133 @@ def test_auto_plan_preserves_repeated_command_protection(monkeypatch, tmp_path: 
     out = _execute_auto_command(project_dir, project_name="demo", source="ui-next-run")
     assert executed == ["/add_api GET /tasks/{id}"]
     assert "repeated command detected" in str(out["auto_result"]["stop_reason"])
+
+
+def test_auto_strategy_safe_stops_when_only_medium_plan_step_remains(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "demo-safe-medium-remains"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    analyses = [
+        {
+            "next_action": {"kind": "custom_high", "message": "Add initial list API", "command": "/add_api GET /tasks"},
+            "next_action_explanation": {"reason_summary": "initial API baseline"},
+            "suggestions": [],
+            "entities": ["Task"],
+            "fields_by_entity": {"Task": [{"name": "title"}]},
+            "apis": [],
+            "pages": [],
+            "placeholder_pages": [],
+            "entity_crud_status": {"Task": {"missing_api": [], "missing_pages": []}},
+        },
+        {
+            "next_action": {"kind": "useful_field", "message": "Add description", "command": "/add_field Task description:string"},
+            "next_action_explanation": {"reason_summary": "description improves readability"},
+            "suggestions": [],
+            "entities": ["Task"],
+            "fields_by_entity": {"Task": [{"name": "title"}]},
+            "apis": [{"method": "GET", "path": "/tasks"}],
+            "pages": [],
+            "placeholder_pages": [],
+            "entity_crud_status": {"Task": {"missing_api": [], "missing_pages": []}},
+        },
+    ]
+    call_idx = {"value": 0}
+
+    def _fake_build_analysis(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        idx = min(call_idx["value"], len(analyses) - 1)
+        call_idx["value"] += 1
+        return analyses[idx]
+
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", _fake_build_analysis)
+    monkeypatch.setattr("archmind.telegram_bot._compute_auto_iteration_budget", lambda *_args, **_kwargs: (3, ["base=3"]))
+    monkeypatch.setattr("archmind.telegram_bot._auto_runtime_state_lines", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("archmind.telegram_bot._auto_analysis_brief", lambda *_args, **_kwargs: "entities=1, apis=1, pages=0")
+    monkeypatch.setattr("archmind.telegram_bot._auto_is_good_enough_mvp", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr("archmind.telegram_bot.sync_repo_after_auto_batch", lambda *_args, **_kwargs: {"status": "SYNCED"})
+    monkeypatch.setattr("archmind.state.load_state", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("archmind.state.write_state", lambda *_args, **_kwargs: None)
+    executed: list[str] = []
+    monkeypatch.setattr(
+        "archmind.command_executor.execute_command",
+        lambda command, *_args, **_kwargs: (executed.append(command) or {"ok": True, "detail": "ok"}),
+    )
+
+    out = _execute_auto_command(project_dir, project_name="demo", source="ui-next-run", auto_strategy="safe")
+    assert out["ok"] is True
+    assert executed == ["/add_api GET /tasks"]
+    assert "strategy guard" in str(out["auto_result"]["stop_reason"]).lower()
+    assert "safe strategy allows only high-priority actions" in str(out["auto_result"]["stop_explanation"]).lower()
+
+
+def test_auto_plan_skips_stale_followup_steps_when_goal_satisfied_early(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "demo-stale-skip"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    analyses = [
+        {
+            "next_action": {
+                "kind": "relation_page_behavior",
+                "message": "Add tags by entry page",
+                "command": "/add_page tags/by_entry",
+            },
+            "next_action_explanation": {"reason_summary": "Entry->Tag relation flow is incomplete"},
+            "suggestions": [
+                {
+                    "kind": "relation_scoped_api",
+                    "message": "Add scoped relation API",
+                    "command": "/add_api GET /entries/{id}/tags",
+                },
+                {
+                    "kind": "relation_placeholder_page",
+                    "message": "Implement relation page",
+                    "command": "/implement_page tags/by_entry",
+                },
+            ],
+            "entities": ["Entry", "Tag"],
+            "fields_by_entity": {"Tag": [{"name": "entry_id"}]},
+            "apis": [{"method": "GET", "path": "/entries"}, {"method": "GET", "path": "/tags"}],
+            "pages": ["entries/list", "tags/list"],
+            "placeholder_pages": ["tags/by_entry"],
+            "entity_crud_status": {"Entry": {"missing_api": [], "missing_pages": []}, "Tag": {"missing_api": [], "missing_pages": []}},
+            "drift_warnings": ["Relation-scoped API GET /entries/{id}/tags is missing."],
+        },
+        {
+            "next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""},
+            "next_action_explanation": {},
+            "suggestions": [],
+            "entities": ["Entry", "Tag"],
+            "fields_by_entity": {"Tag": [{"name": "entry_id"}]},
+            "apis": [{"method": "GET", "path": "/entries"}, {"method": "GET", "path": "/tags"}, {"method": "GET", "path": "/entries/{id}/tags"}],
+            "pages": ["entries/list", "tags/list", "tags/by_entry"],
+            "placeholder_pages": [],
+            "entity_crud_status": {"Entry": {"missing_api": [], "missing_pages": []}, "Tag": {"missing_api": [], "missing_pages": []}},
+            "drift_warnings": [],
+        },
+    ]
+    call_idx = {"value": 0}
+
+    def _fake_build_analysis(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        idx = min(call_idx["value"], len(analyses) - 1)
+        call_idx["value"] += 1
+        return analyses[idx]
+
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", _fake_build_analysis)
+    monkeypatch.setattr("archmind.telegram_bot._compute_auto_iteration_budget", lambda *_args, **_kwargs: (3, ["base=3"]))
+    monkeypatch.setattr("archmind.telegram_bot._auto_runtime_state_lines", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("archmind.telegram_bot._auto_analysis_brief", lambda *_args, **_kwargs: "entities=2, apis=3, pages=3")
+    monkeypatch.setattr("archmind.telegram_bot.sync_repo_after_auto_batch", lambda *_args, **_kwargs: {"status": "SYNCED"})
+    monkeypatch.setattr("archmind.state.load_state", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("archmind.state.write_state", lambda *_args, **_kwargs: None)
+    executed: list[str] = []
+    monkeypatch.setattr(
+        "archmind.command_executor.execute_command",
+        lambda command, *_args, **_kwargs: (executed.append(command) or {"ok": True, "detail": "ok"}),
+    )
+
+    out = _execute_auto_command(project_dir, project_name="demo", source="ui-next-run")
+    assert out["ok"] is True
+    assert executed == ["/add_api GET /entries/{id}/tags"]
+    assert out["auto_result"]["goal_satisfied"] is True
+    skipped = out["auto_result"]["skipped_steps"]
+    assert any(step["command"] == "/add_page tags/by_entry" for step in skipped)
+    assert any(step["command"] == "/implement_page tags/by_entry" for step in skipped)
+    assert out["auto_result"]["plan_priority"] in {"high", "medium", "low", "none"}
+    assert "goal_satisfied_after_reanalysis" in out["auto_result"]["plan_stop_conditions"]

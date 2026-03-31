@@ -157,8 +157,11 @@ def _execute_auto_command(
     dynamic_extensions = 0
     plan_goal = "none"
     plan_reason = ""
+    plan_priority = "none"
+    plan_stop_conditions: list[str] = []
     goal_satisfied = False
     executed_steps: list[dict[str, str]] = []
+    skipped_steps: list[dict[str, str]] = []
 
     summary_lines.extend(
         [
@@ -183,6 +186,12 @@ def _execute_auto_command(
         plan = build_auto_evolution_plan(analysis)
         current_goal = str(plan.get("goal") or "none").strip().lower() or "none"
         current_reason = str(plan.get("reason") or "").strip()
+        current_priority = str(plan.get("priority") or "").strip().lower() or "none"
+        current_stop_conditions = [
+            str(item).strip()
+            for item in (plan.get("stop_conditions") or [])
+            if str(item).strip()
+        ]
         plan_steps = plan.get("steps") if isinstance(plan.get("steps"), list) else []
         step = plan_steps[0] if plan_steps else {}
         use_plan_step = isinstance(step, dict) and bool(step)
@@ -190,6 +199,10 @@ def _execute_auto_command(
         if plan_goal == "none" and current_goal != "none":
             plan_goal = current_goal
             plan_reason = current_reason
+        if plan_priority == "none" and current_priority != "none":
+            plan_priority = current_priority
+        if not plan_stop_conditions and current_stop_conditions:
+            plan_stop_conditions = current_stop_conditions
 
         reason_summary = fallback_reason_summary
         expected_effect = fallback_expected_effect
@@ -473,6 +486,18 @@ def _execute_auto_command(
                 goal_satisfied = True
                 stop_reason = "plan goal satisfied"
                 stop_explanation = f"Plan goal '{tracked_goal}' is satisfied by canonical re-analysis."
+                for pending in plan_steps[1:]:
+                    if not isinstance(pending, dict):
+                        continue
+                    pending_command = str(pending.get("command") or "").strip()
+                    if not pending_command:
+                        continue
+                    skipped_steps.append(
+                        {
+                            "command": pending_command,
+                            "reason": "stale_after_reanalysis",
+                        }
+                    )
                 summary_lines.append("- Result: STOP (plan goal satisfied)")
                 summary_lines.append(f"- Why stop: {stop_explanation}")
                 append_execution_event(
@@ -557,7 +582,9 @@ def _execute_auto_command(
             f"- Stop explanation: {stop_explanation}",
             f"- Plan goal: {plan_goal}",
             f"- Plan reason: {plan_reason or '(n/a)'}",
+            f"- Plan priority: {plan_priority}",
             f"- Goal satisfied: {'yes' if goal_satisfied else 'no'}",
+            f"- Skipped stale steps: {', '.join(item['command'] for item in skipped_steps) if skipped_steps else '(none)'}",
             f"- Progress made: {'yes' if progress_made else 'no'}",
             f"- Progress score: {total_progress_score}",
             (
@@ -584,7 +611,10 @@ def _execute_auto_command(
         "stop_explanation": stop_explanation,
         "plan_goal": plan_goal,
         "plan_reason": plan_reason,
+        "plan_priority": plan_priority,
+        "plan_stop_conditions": plan_stop_conditions,
         "executed_steps": executed_steps,
+        "skipped_steps": skipped_steps,
         "goal_satisfied": goal_satisfied,
         "progress_made": progress_made,
         "progress_score": total_progress_score,

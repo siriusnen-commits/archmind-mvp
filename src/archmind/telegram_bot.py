@@ -6886,6 +6886,11 @@ def build_auto_evolution_plan(analysis: dict[str, Any]) -> dict[str, Any]:
         "reason": reason,
         "priority": priority,
         "steps": actionable,
+        "stop_conditions": [
+            "goal_satisfied_after_reanalysis",
+            "no_material_progress",
+            "safety_protection_triggered",
+        ],
     }
 
 
