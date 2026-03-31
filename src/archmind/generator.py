@@ -2390,6 +2390,13 @@ def _render_frontend_entity_list_page(
     api_helper_import: str = "../_lib/apiBase",
 ) -> str:
     api_path = f"/{str(entity_path or '').strip('/')}"
+    if _is_diary_like_entity_path(entity_path):
+        return _render_frontend_diary_list_page(
+            component_name=component_name,
+            title=title,
+            api_path=api_path,
+            api_helper_import=api_helper_import,
+        )
     if _is_note_like_entity_path(entity_path):
         return _render_frontend_note_list_page(component_name=component_name, title=title, api_path=api_path, api_helper_import=api_helper_import)
     detail_base = detail_href_base or api_path
@@ -2506,6 +2513,7 @@ def _render_frontend_entity_detail_page(
     )
     hook = "const searchParams = useSearchParams();" if id_mode == "query" else "const params = useParams();"
     sections = relation_sections if isinstance(relation_sections, list) else []
+    is_diary_like = _is_diary_like_entity_path(entity_path)
     relation_field_rows = relation_fields if isinstance(relation_fields, list) else []
     import_link_line = 'import Link from "next/link";\n' if sections else ""
     helper_extract_rows = ""
@@ -2678,8 +2686,20 @@ def _render_frontend_entity_detail_page(
         "      {!loading && notFound ? <p className=\"text-sm text-slate-300\">Item not found.</p> : null}\n"
         "      {!loading && error ? <p className=\"text-sm text-rose-300\">Failed to load: {error}</p> : null}\n"
         "      {!loading && !notFound && !error && item ? (\n"
-        "        <pre className=\"overflow-x-auto text-xs text-slate-300\">{JSON.stringify(item, null, 2)}</pre>\n"
-        "      ) : null}\n"
+        + (
+            "        <article className=\"space-y-3 rounded-xl border border-slate-700 bg-slate-950/50 p-4\">\n"
+            "          <div className=\"space-y-1\">\n"
+            "            <h2 className=\"text-xl font-semibold text-slate-100\">{String((item as Record<string, unknown>).title ?? `Entry #${id}`)}</h2>\n"
+            "            <p className=\"text-xs text-slate-400\">{String((item as Record<string, unknown>).created_at ?? \"Created time unavailable\")}</p>\n"
+            "          </div>\n"
+            "          <div className=\"whitespace-pre-wrap text-sm leading-7 text-slate-200\">\n"
+            "            {String((item as Record<string, unknown>).content ?? \"No content yet.\")}\n"
+            "          </div>\n"
+            "        </article>\n"
+            if is_diary_like
+            else "        <pre className=\"overflow-x-auto text-xs text-slate-300\">{JSON.stringify(item, null, 2)}</pre>\n"
+        )
+        + "      ) : null}\n"
         f"{relation_field_ui}"
         f"{relation_ui_blocks}"
         "    </section>\n"
@@ -2694,6 +2714,143 @@ def _is_note_like_entity_path(entity_path: str) -> bool:
         return False
     leaf = normalized.split("/")[-1]
     return leaf in {"note", "notes", "memo", "memos"}
+
+
+def _is_diary_like_entity_path(entity_path: str) -> bool:
+    normalized = str(entity_path or "").strip("/").lower()
+    if not normalized:
+        return False
+    leaf = normalized.split("/")[-1]
+    return leaf in {"entry", "entries", "diary", "diaries", "journal", "journals"}
+
+
+def _render_frontend_diary_list_page(
+    *,
+    component_name: str,
+    title: str,
+    api_path: str,
+    api_helper_import: str,
+) -> str:
+    return (
+        '"use client";\n\n'
+        'import Link from "next/link";\n'
+        'import { useEffect, useMemo, useState } from "react";\n'
+        f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n\n'
+        "type EntryItem = Record<string, unknown> & {\n"
+        "  id?: number | string;\n"
+        "  title?: string;\n"
+        "  content?: string;\n"
+        "  created_at?: string;\n"
+        "};\n\n"
+        "function extractItems(payload: unknown): EntryItem[] {\n"
+        "  if (Array.isArray(payload)) return payload as EntryItem[];\n"
+        "  if (payload && typeof payload === \"object\" && Array.isArray((payload as { items?: unknown[] }).items)) {\n"
+        "    return ((payload as { items: unknown[] }).items ?? []) as EntryItem[];\n"
+        "  }\n"
+        "  return [];\n"
+        "}\n\n"
+        "function createdAtMs(item: EntryItem): number {\n"
+        "  const raw = String(item.created_at ?? item.updated_at ?? \"\").trim();\n"
+        "  if (!raw) return 0;\n"
+        "  const ms = Date.parse(raw);\n"
+        "  return Number.isFinite(ms) ? ms : 0;\n"
+        "}\n\n"
+        "function previewText(item: EntryItem): string {\n"
+        "  const text = String(item.content ?? \"\").trim();\n"
+        "  if (!text) return \"No content yet.\";\n"
+        "  if (text.length <= 180) return text;\n"
+        "  return `${text.slice(0, 180)}...`;\n"
+        "}\n\n"
+        f"export default function {component_name}() {{\n"
+        "  const [items, setItems] = useState<EntryItem[]>([]);\n"
+        "  const [query, setQuery] = useState(\"\");\n"
+        "  const [loading, setLoading] = useState(true);\n"
+        "  const [error, setError] = useState(\"\");\n"
+        "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
+        "  useEffect(() => {\n"
+        "    if (apiBaseLoading || !apiBaseUrl) {\n"
+        "      setLoading(true);\n"
+        "      return;\n"
+        "    }\n"
+        "    let mounted = true;\n"
+        "    (async () => {\n"
+        "      setLoading(true);\n"
+        "      setError(\"\");\n"
+        "      try {\n"
+        f'        const response = await fetch(`${{apiBaseUrl}}{api_path}`, {{ cache: "no-store" }});\n'
+        "        if (!response.ok) throw new Error(`HTTP ${response.status}`);\n"
+        "        const rows = extractItems(await response.json());\n"
+        "        const sorted = [...rows].sort((a, b) => {\n"
+        "          const byCreatedAt = createdAtMs(b) - createdAtMs(a);\n"
+        "          if (byCreatedAt !== 0) return byCreatedAt;\n"
+        "          return Number(String(b.id ?? 0)) - Number(String(a.id ?? 0));\n"
+        "        });\n"
+        "        if (mounted) setItems(sorted);\n"
+        "      } catch (e) {\n"
+        "        const message = e instanceof Error ? e.message : String(e || \"unknown error\");\n"
+        "        if (mounted) {\n"
+        "          setError(message);\n"
+        "          setItems([]);\n"
+        "        }\n"
+        "      } finally {\n"
+        "        if (mounted) setLoading(false);\n"
+        "      }\n"
+        "    })();\n"
+        "    return () => {\n"
+        "      mounted = false;\n"
+        "    };\n"
+        "  }, [apiBaseLoading, apiBaseUrl]);\n\n"
+        "  const filtered = useMemo(() => {\n"
+        "    const needle = query.trim().toLowerCase();\n"
+        "    if (!needle) return items;\n"
+        "    return items.filter((item) => {\n"
+        "      const titleText = String(item.title ?? \"\").toLowerCase();\n"
+        "      const contentText = String(item.content ?? \"\").toLowerCase();\n"
+        "      return titleText.includes(needle) || contentText.includes(needle);\n"
+        "    });\n"
+        "  }, [items, query]);\n\n"
+        "  return (\n"
+        '    <section className="mx-auto w-full max-w-2xl space-y-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4 sm:p-5">\n'
+        '      <div className="space-y-2">\n'
+        f'        <h1 className="text-lg font-semibold">{title}</h1>\n'
+        '        <p className="text-xs text-slate-400">Recent entries first. Search by title or content.</p>\n'
+        '        <p className="text-xs text-slate-500">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>\n'
+        "      </div>\n"
+        '      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">\n'
+        '        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search diary entries..." className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100" />\n'
+        f'        <Link href="{api_path}/new" className="inline-flex items-center justify-center rounded-md bg-emerald-400 px-3 py-2 text-sm font-semibold text-emerald-950 hover:bg-emerald-300">New entry</Link>\n'
+        "      </div>\n"
+        "      {loading ? <p className=\"text-sm text-slate-300\">{apiBaseLoading ? \"Resolving API base...\" : \"Loading entries...\"}</p> : null}\n"
+        "      {!loading && error ? <p className=\"text-sm text-rose-300\">Failed to load: {error}</p> : null}\n"
+        "      {!loading && !error && filtered.length === 0 ? (\n"
+        '        <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950/40 p-4 text-sm text-slate-300">\n'
+        "          {items.length === 0\n"
+        "            ? \"No diary entries yet. Start by writing your first entry.\"\n"
+        "            : \"No entries match your search.\"}\n"
+        "        </div>\n"
+        "      ) : null}\n"
+        "      {!loading && !error && filtered.length > 0 ? (\n"
+        '        <ul className="space-y-3">\n'
+        "          {filtered.map((item, index) => (\n"
+        '            <li key={String(item.id ?? index)} className="space-y-2 rounded-lg border border-slate-700 bg-slate-950/50 p-4">\n'
+        '              <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">\n'
+        '                <h2 className="text-base font-semibold text-slate-100">{String(item.title || `Untitled entry #${item.id ?? index}`)}</h2>\n'
+        '                <p className="text-xs text-slate-400">{String(item.created_at || "No date")}</p>\n'
+        "              </div>\n"
+        '              <p className="whitespace-pre-wrap text-sm leading-6 text-slate-200">{previewText(item)}</p>\n'
+        "              {item.id !== undefined ? (\n"
+        '                <Link href={`/entries/${String(item.id)}`} className="inline-block text-xs font-medium text-cyan-300 underline">\n'
+        "                  Open entry\n"
+        "                </Link>\n"
+        "              ) : null}\n"
+        "            </li>\n"
+        "          ))}\n"
+        "        </ul>\n"
+        "      ) : null}\n"
+        "    </section>\n"
+        "  );\n"
+        "}\n"
+    )
 
 
 def _render_frontend_note_list_page(

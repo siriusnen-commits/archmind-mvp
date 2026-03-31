@@ -56,6 +56,7 @@ def test_suggest_project_spec_keyword_inference_for_diary_entry_user() -> None:
     assert "Entry" in names
     assert "User" in names
     assert "GET /entries" in out["api_endpoints"]
+    assert "PATCH /entries/{id}" in out["api_endpoints"]
     assert "entries/list" in out["frontend_pages"]
 
 
@@ -64,8 +65,12 @@ def test_suggest_project_spec_diary_without_auth_does_not_inject_user_profile() 
     names = [entity["name"] for entity in out["entities"]]
     assert "Entry" in names
     assert "User" not in names
+    entry = next(entity for entity in out["entities"] if entity["name"] == "Entry")
+    field_names = {str(field.get("name") or "") for field in entry.get("fields", []) if isinstance(field, dict)}
+    assert {"title", "content", "created_at"}.issubset(field_names)
     assert "entries/list" in out["frontend_pages"]
     assert "entries/new" in out["frontend_pages"]
+    assert "entries/detail" in out["frontend_pages"]
 
 
 def test_suggest_project_spec_bookmark_infers_primary_resource_with_plural_convention() -> None:
@@ -98,6 +103,8 @@ def test_suggest_project_spec_diary_tags_preserves_entry_and_tag() -> None:
     assert "Tag" in names
     assert "GET /entries" in out["api_endpoints"]
     assert "GET /tags" in out["api_endpoints"]
+    assert "GET /entries/{id}/tags" in out["api_endpoints"]
+    assert "tags/by_entry" in out["frontend_pages"]
 
 
 def test_suggest_project_spec_bookmark_category_preserves_both_entities() -> None:
@@ -177,3 +184,46 @@ def test_starter_pack_unrelated_idea_is_not_misclassified() -> None:
     assert "Task" not in names
     assert "Note" not in names
     assert "Board" not in names
+
+
+def test_starter_pack_journal_routes_to_diary_v2_defaults() -> None:
+    out = suggest_project_spec("personal journal app", {"domains": [], "frontend_needed": True})
+    entities = [entity for entity in out["entities"] if isinstance(entity, dict)]
+    names = [str(entity.get("name") or "") for entity in entities]
+    assert "Entry" in names
+    entry = next(entity for entity in entities if str(entity.get("name") or "") == "Entry")
+    field_names = {
+        str(field.get("name") or "")
+        for field in (entry.get("fields") if isinstance(entry.get("fields"), list) else [])
+        if isinstance(field, dict)
+    }
+    assert {"title", "content", "created_at"}.issubset(field_names)
+    assert "GET /entries" in out["api_endpoints"]
+    assert "PATCH /entries/{id}" in out["api_endpoints"]
+    assert "DELETE /entries/{id}" in out["api_endpoints"]
+    assert "entries/list" in out["frontend_pages"]
+    assert "entries/new" in out["frontend_pages"]
+    assert "entries/detail" in out["frontend_pages"]
+
+
+def test_notes_only_does_not_accidentally_route_to_diary() -> None:
+    out = suggest_project_spec("simple notes app", {"domains": [], "frontend_needed": True})
+    names = [str(entity.get("name") or "") for entity in out["entities"] if isinstance(entity, dict)]
+    assert "Note" in names
+    assert "Entry" not in names
+
+
+def test_diary_with_categories_routes_tagging_module_path() -> None:
+    out = suggest_project_spec("diary app with categories", {"domains": [], "frontend_needed": True})
+    entities = [entity for entity in out["entities"] if isinstance(entity, dict)]
+    names = [str(entity.get("name") or "") for entity in entities]
+    assert "Entry" in names
+    assert "Tag" in names
+    tag = next(entity for entity in entities if str(entity.get("name") or "") == "Tag")
+    field_names = {
+        str(field.get("name") or "")
+        for field in (tag.get("fields") if isinstance(tag.get("fields"), list) else [])
+        if isinstance(field, dict)
+    }
+    assert {"name", "entry_id"}.issubset(field_names)
+    assert "GET /entries/{id}/tags" in out["api_endpoints"]
