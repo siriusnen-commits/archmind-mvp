@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .module_registry import apply_modules_to_starter_profile
 from .reasoning import try_generate_reasoning_json
 
 
@@ -231,10 +232,10 @@ def _build_starter_profile(text: str, domains: list[str], frontend_needed: bool)
     has_board = any(_has_word(normalized, token) for token in ("board", "boards", "kanban")) or "boards" in domain_set
     has_task = any(_has_word(normalized, token) for token in ("todo", "todos", "task", "tasks")) or "tasks" in domain_set
     has_memo = any(_has_word(normalized, token) for token in ("memo", "memos", "note", "notes")) or "notes" in domain_set
+    has_bookmark = any(_has_word(normalized, token) for token in ("bookmark", "bookmarks", "reading list", "saved link", "link saver")) or "bookmarks" in domain_set
     has_diary_signal = _has_any_word(normalized, DIARY_SIGNAL_WORDS) or any(
         token in domain_set for token in ("diary", "journal", "journals", "journaling", "entries")
     )
-    has_tagging_signal = _has_any_word(normalized, TAGGING_SIGNAL_WORDS)
 
     if has_board:
         entities = ["Board", "Card"]
@@ -268,35 +269,18 @@ def _build_starter_profile(text: str, domains: list[str], frontend_needed: bool)
         }
 
     if has_diary_signal:
-        diary_entities = ["Entry"]
-        diary_fields: dict[str, list[dict[str, str]]] = {
-            "Entry": [
-                {"name": "title", "type": "string"},
-                {"name": "content", "type": "string"},
-                {"name": "created_at", "type": "datetime"},
-            ]
-        }
-        diary_apis = _build_crud_endpoints("entries", full=True)
-        diary_pages = _build_core_pages("entries") if frontend_needed else []
-
-        if has_tagging_signal:
-            diary_entities.append("Tag")
-            diary_fields["Tag"] = [
-                {"name": "name", "type": "string"},
-                {"name": "entry_id", "type": "int"},
-            ]
-            diary_apis.extend(_build_crud_endpoints("tags", full=True))
-            diary_apis.append("GET /entries/{id}/tags")
-            if frontend_needed:
-                diary_pages.extend(_build_core_pages("tags"))
-                diary_pages.append("tags/by_entry")
-
         return {
             "family": "diary_entries_v2",
-            "entities": diary_entities,
-            "entity_fields": diary_fields,
-            "required_api_endpoints": diary_apis,
-            "required_frontend_pages": diary_pages,
+            "entities": ["Entry"],
+            "entity_fields": {
+                "Entry": [
+                    {"name": "title", "type": "string"},
+                    {"name": "content", "type": "string"},
+                    {"name": "created_at", "type": "datetime"},
+                ]
+            },
+            "required_api_endpoints": _build_crud_endpoints("entries", full=True),
+            "required_frontend_pages": _build_core_pages("entries") if frontend_needed else [],
         }
 
     if has_task:
@@ -317,20 +301,21 @@ def _build_starter_profile(text: str, domains: list[str], frontend_needed: bool)
         }
 
     if has_memo and not has_diary_signal:
-        note_fields = [
-            {"name": "title", "type": "string"},
-            {"name": "content", "type": "string"},
-        ]
-        if any(_has_word(normalized, token) for token in ("tag", "tags", "label", "labels", "keyword", "keywords")):
-            note_fields.append({"name": "tags", "type": "string"})
-        if any(_has_word(normalized, token) for token in ("category", "categories", "folder", "folders")):
-            note_fields.append({"name": "category", "type": "string"})
         return {
             "family": "memo_notes",
             "entities": ["Note"],
-            "entity_fields": {"Note": note_fields[:6]},
+            "entity_fields": {"Note": [{"name": "title", "type": "string"}, {"name": "content", "type": "string"}]},
             "required_api_endpoints": _build_crud_endpoints("notes", full=True),
             "required_frontend_pages": _build_core_pages("notes") if frontend_needed else [],
+        }
+
+    if has_bookmark:
+        return {
+            "family": "bookmark_links",
+            "entities": ["Bookmark"],
+            "entity_fields": {"Bookmark": [{"name": "title", "type": "string"}, {"name": "url", "type": "string"}]},
+            "required_api_endpoints": _build_crud_endpoints("bookmarks", full=True),
+            "required_frontend_pages": _build_core_pages("bookmarks") if frontend_needed else [],
         }
 
     return {}
@@ -346,6 +331,10 @@ def _enforce_starter_profile(out: dict[str, Any], starter_profile: dict[str, Any
     )
     required_apis = [str(x).strip() for x in (starter_profile.get("required_api_endpoints") or []) if str(x).strip()]
     required_pages = [str(x).strip() for x in (starter_profile.get("required_frontend_pages") or []) if str(x).strip()]
+    required_expectations = [
+        str(x).strip() for x in (starter_profile.get("required_frontend_expectations") or []) if str(x).strip()
+    ]
+    required_modules = [str(x).strip().lower() for x in (starter_profile.get("modules") or []) if str(x).strip()]
 
     entities = out.get("entities") if isinstance(out.get("entities"), list) else []
     entity_rows: list[dict[str, Any]] = [row for row in entities if isinstance(row, dict)]
@@ -404,6 +393,28 @@ def _enforce_starter_profile(out: dict[str, Any], starter_profile: dict[str, Any
             seen_page.add(key)
     out["frontend_pages"] = page_rows[:12]
 
+    current_expectations = out.get("frontend_expectations") if isinstance(out.get("frontend_expectations"), list) else []
+    expectation_rows = [str(x).strip() for x in current_expectations if str(x).strip()]
+    seen_expectation = {row.lower() for row in expectation_rows}
+    for item in required_expectations:
+        key = item.lower()
+        if key in seen_expectation:
+            continue
+        seen_expectation.add(key)
+        expectation_rows.append(item)
+    out["frontend_expectations"] = expectation_rows[:12]
+
+    current_modules = out.get("modules") if isinstance(out.get("modules"), list) else []
+    module_rows = [str(x).strip().lower() for x in current_modules if str(x).strip()]
+    seen_module = {row.lower() for row in module_rows}
+    for module_name in required_modules:
+        key = module_name.lower()
+        if key in seen_module:
+            continue
+        seen_module.add(key)
+        module_rows.append(module_name)
+    out["modules"] = module_rows[:8]
+
 
 def suggest_project_spec(
     idea: str,
@@ -416,6 +427,11 @@ def suggest_project_spec(
     domains = [str(x).strip().lower() for x in (reasoning.get("domains") or []) if str(x).strip()]
     frontend_needed = bool(reasoning.get("frontend_needed"))
     starter_profile = _build_starter_profile(text, domains, frontend_needed)
+    starter_profile = apply_modules_to_starter_profile(
+        starter_profile,
+        idea_text=text,
+        frontend_needed=frontend_needed,
+    )
     selected_entities: list[str] = []
     seen: set[str] = set()
 
@@ -510,6 +526,10 @@ def suggest_project_spec(
         "entities": entities[:3],
         "api_endpoints": api_endpoints[:12],
         "frontend_pages": pages[:12],
+        "modules": [str(x).strip().lower() for x in (starter_profile.get("modules") or []) if str(x).strip()],
+        "frontend_expectations": [
+            str(x).strip() for x in (starter_profile.get("required_frontend_expectations") or []) if str(x).strip()
+        ],
     }
     _enforce_starter_profile(fallback_spec, starter_profile, frontend_needed=frontend_needed)
     provider_prompt = (
