@@ -1398,6 +1398,10 @@ def test_starter_pack_specs_remain_compatible_with_project_analysis_next_and_rel
 
     board_dir = tmp_path / "starter-board-analysis"
     board_spec = suggest_project_spec("kanban board app", {"domains": [], "frontend_needed": True})
+    board_api_set = {str(x).strip() for x in (board_spec.get("api_endpoints") or []) if str(x).strip()}
+    board_page_set = {str(x).strip() for x in (board_spec.get("frontend_pages") or []) if str(x).strip()}
+    assert "GET /boards/{id}/cards" in board_api_set
+    assert "cards/by_board" in board_page_set
     board_out = analyze_project(board_dir, spec_payload=board_spec, runtime_payload={})
     relations = board_out.get("relations") if isinstance(board_out.get("relations"), list) else []
     assert any(str(rel.get("parent_entity") or "") == "Board" and str(rel.get("child_entity") or "") == "Card" for rel in relations if isinstance(rel, dict))

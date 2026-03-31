@@ -189,16 +189,23 @@ def test_starter_pack_board_kanban_routes_to_board_card_with_relation_defaults()
     card_fields = card.get("fields") if isinstance(card.get("fields"), list) else []
     card_field_names = {str(field.get("name") or "") for field in card_fields if isinstance(field, dict)}
     assert "board_id" in card_field_names
+    assert "status" in card_field_names
     assert "GET /boards" in out["api_endpoints"]
     assert "GET /cards" in out["api_endpoints"]
     assert "GET /boards/{id}" in out["api_endpoints"]
     assert "GET /cards/{id}" in out["api_endpoints"]
+    assert "PATCH /boards/{id}" in out["api_endpoints"]
+    assert "PATCH /cards/{id}" in out["api_endpoints"]
+    assert "DELETE /boards/{id}" in out["api_endpoints"]
+    assert "DELETE /cards/{id}" in out["api_endpoints"]
+    assert "GET /boards/{id}/cards" in out["api_endpoints"]
     assert "boards/list" in out["frontend_pages"]
     assert "boards/new" in out["frontend_pages"]
     assert "boards/detail" in out["frontend_pages"]
     assert "cards/list" in out["frontend_pages"]
     assert "cards/new" in out["frontend_pages"]
     assert "cards/detail" in out["frontend_pages"]
+    assert "cards/by_board" in out["frontend_pages"]
 
 
 def test_starter_pack_unrelated_idea_is_not_misclassified() -> None:
@@ -251,3 +258,34 @@ def test_diary_with_categories_routes_tagging_module_path() -> None:
     }
     assert {"name", "entry_id"}.issubset(field_names)
     assert "GET /entries/{id}/tags" in out["api_endpoints"]
+
+
+def test_starter_pack_kanban_due_signal_includes_card_due_date() -> None:
+    out = suggest_project_spec("kanban board app with card due dates", {"domains": [], "frontend_needed": True})
+    entities = [entity for entity in out["entities"] if isinstance(entity, dict)]
+    card = next(entity for entity in entities if str(entity.get("name") or "") == "Card")
+    field_names = {
+        str(field.get("name") or "")
+        for field in (card.get("fields") if isinstance(card.get("fields"), list) else [])
+        if isinstance(field, dict)
+    }
+    assert "due_date" in field_names
+
+
+def test_starter_pack_kanban_assignee_signal_includes_card_assignee() -> None:
+    out = suggest_project_spec("project board with assignee", {"domains": [], "frontend_needed": True})
+    entities = [entity for entity in out["entities"] if isinstance(entity, dict)]
+    card = next(entity for entity in entities if str(entity.get("name") or "") == "Card")
+    field_names = {
+        str(field.get("name") or "")
+        for field in (card.get("fields") if isinstance(card.get("fields"), list) else [])
+        if isinstance(field, dict)
+    }
+    assert "assignee" in field_names
+
+
+def test_dashboard_only_does_not_accidentally_route_to_board_card() -> None:
+    out = suggest_project_spec("analytics dashboard app", {"domains": ["expenses"], "frontend_needed": True})
+    names = [str(entity.get("name") or "") for entity in out["entities"] if isinstance(entity, dict)]
+    assert "Board" not in names
+    assert "Card" not in names

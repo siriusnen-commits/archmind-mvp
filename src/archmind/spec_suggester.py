@@ -47,7 +47,8 @@ ENTITY_FIELD_MAP: dict[str, list[dict[str, str]]] = {
     "Card": [
         {"name": "title", "type": "string"},
         {"name": "description", "type": "string"},
-        {"name": "board_id", "type": "int"},
+        {"name": "board_id", "type": "string"},
+        {"name": "status", "type": "string"},
     ],
     "Tag": [{"name": "name", "type": "string"}, {"name": "entry_id", "type": "int"}],
     "Category": [{"name": "name", "type": "string"}],
@@ -245,11 +246,19 @@ def _build_starter_profile(text: str, domains: list[str], frontend_needed: bool)
             "Card": [
                 {"name": "title", "type": "string"},
                 {"name": "description", "type": "string"},
-                {"name": "board_id", "type": "int"},
+                {"name": "board_id", "type": "string"},
+                {"name": "status", "type": "string"},
             ],
         }
-        api_endpoints = _build_crud_endpoints("boards", full=False) + _build_crud_endpoints("cards", full=False)
-        pages = _build_core_pages("boards") + _build_core_pages("cards") if frontend_needed else []
+        if any(_has_word(normalized, token) for token in ("due", "deadline", "schedule", "date")):
+            entity_fields["Card"].append({"name": "due_date", "type": "datetime"})
+        if any(_has_word(normalized, token) for token in ("assignee", "owner", "member")):
+            entity_fields["Card"].append({"name": "assignee", "type": "string"})
+        api_endpoints = _build_crud_endpoints("boards", full=True) + _build_crud_endpoints("cards", full=True)
+        api_endpoints.append("GET /boards/{id}/cards")
+        pages = (_build_core_pages("boards") + _build_core_pages("cards")) if frontend_needed else []
+        if frontend_needed:
+            pages.append("cards/by_board")
         return {
             "family": "board_kanban",
             "entities": entities,
