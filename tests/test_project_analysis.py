@@ -1409,7 +1409,12 @@ def test_starter_pack_specs_remain_compatible_with_project_analysis_next_and_rel
     assert "kind" in board_out["next_action"]
 
     diary_dir = tmp_path / "starter-diary-analysis"
-    diary_spec = suggest_project_spec("journal app with tags", {"domains": [], "frontend_needed": True})
+    diary_spec = suggest_project_spec("journal app with tags and search", {"domains": [], "frontend_needed": True})
+    diary_modules = [str(x).strip().lower() for x in (diary_spec.get("modules") or []) if str(x).strip()]
+    assert "tagging" in diary_modules
+    assert "search" in diary_modules
+    diary_expectations = [str(x).strip().lower() for x in (diary_spec.get("frontend_expectations") or []) if str(x).strip()]
+    assert "list_search_input" in diary_expectations
     diary_out = analyze_project(diary_dir, spec_payload=diary_spec, runtime_payload={})
     diary_relations = diary_out.get("relations") if isinstance(diary_out.get("relations"), list) else []
     assert any(

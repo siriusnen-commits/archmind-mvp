@@ -101,6 +101,8 @@ def test_suggest_project_spec_diary_tags_preserves_entry_and_tag() -> None:
     names = [entity["name"] for entity in out["entities"]]
     assert "Entry" in names
     assert "Tag" in names
+    modules = [str(x).strip().lower() for x in (out.get("modules") or []) if str(x).strip()]
+    assert "tagging" in modules
     assert "GET /entries" in out["api_endpoints"]
     assert "GET /tags" in out["api_endpoints"]
     assert "GET /entries/{id}/tags" in out["api_endpoints"]
@@ -112,8 +114,19 @@ def test_suggest_project_spec_bookmark_category_preserves_both_entities() -> Non
     names = [entity["name"] for entity in out["entities"]]
     assert "Bookmark" in names
     assert "Category" in names
+    modules = [str(x).strip().lower() for x in (out.get("modules") or []) if str(x).strip()]
+    assert "tagging" in modules
+    category = next(entity for entity in out["entities"] if str(entity.get("name") or "") == "Category")
+    field_names = {
+        str(field.get("name") or "")
+        for field in (category.get("fields") if isinstance(category.get("fields"), list) else [])
+        if isinstance(field, dict)
+    }
+    assert {"name", "bookmark_id"}.issubset(field_names)
     assert "GET /bookmarks" in out["api_endpoints"]
     assert "GET /categories" in out["api_endpoints"]
+    assert "GET /bookmarks/{id}/categories" in out["api_endpoints"]
+    assert "categories/by_bookmark" in out["frontend_pages"]
 
 
 def test_starter_pack_memo_notes_routes_to_note_with_useful_defaults() -> None:
@@ -257,7 +270,48 @@ def test_diary_with_categories_routes_tagging_module_path() -> None:
         if isinstance(field, dict)
     }
     assert {"name", "entry_id"}.issubset(field_names)
+    modules = [str(x).strip().lower() for x in (out.get("modules") or []) if str(x).strip()]
+    assert "tagging" in modules
     assert "GET /entries/{id}/tags" in out["api_endpoints"]
+
+
+def test_diary_with_search_routes_search_module_path() -> None:
+    out = suggest_project_spec("personal diary app with search", {"domains": [], "frontend_needed": True})
+    names = [str(entity.get("name") or "") for entity in out["entities"] if isinstance(entity, dict)]
+    assert "Entry" in names
+    modules = [str(x).strip().lower() for x in (out.get("modules") or []) if str(x).strip()]
+    assert "search" in modules
+    expectations = [str(x).strip().lower() for x in (out.get("frontend_expectations") or []) if str(x).strip()]
+    assert "list_search_input" in expectations
+    assert "entries/list" in out["frontend_pages"]
+
+
+def test_diary_with_tags_and_search_applies_both_modules_without_duplication() -> None:
+    out = suggest_project_spec("journal app with tags and search", {"domains": [], "frontend_needed": True})
+    names = [str(entity.get("name") or "") for entity in out["entities"] if isinstance(entity, dict)]
+    assert names.count("Tag") == 1
+    modules = [str(x).strip().lower() for x in (out.get("modules") or []) if str(x).strip()]
+    assert "tagging" in modules
+    assert "search" in modules
+    expectations = [str(x).strip().lower() for x in (out.get("frontend_expectations") or []) if str(x).strip()]
+    assert "list_search_input" in expectations
+
+
+def test_notes_with_search_applies_search_module_without_overwriting_basics() -> None:
+    out = suggest_project_spec("simple notes app with keyword search", {"domains": [], "frontend_needed": True})
+    names = [str(entity.get("name") or "") for entity in out["entities"] if isinstance(entity, dict)]
+    assert "Note" in names
+    modules = [str(x).strip().lower() for x in (out.get("modules") or []) if str(x).strip()]
+    assert "search" in modules
+    expectations = [str(x).strip().lower() for x in (out.get("frontend_expectations") or []) if str(x).strip()]
+    assert "list_search_input" in expectations
+
+
+def test_unrelated_app_does_not_overtrigger_modules() -> None:
+    out = suggest_project_spec("internal analytics dashboard", {"domains": ["expenses"], "frontend_needed": True})
+    modules = [str(x).strip().lower() for x in (out.get("modules") or []) if str(x).strip()]
+    assert "tagging" not in modules
+    assert "search" not in modules
 
 
 def test_starter_pack_kanban_due_signal_includes_card_due_date() -> None:

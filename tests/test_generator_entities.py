@@ -389,6 +389,22 @@ def test_apply_frontend_page_scaffold_diary_entry_has_search_empty_state_and_rec
     assert "Open entry" in list_text
 
 
+def test_apply_frontend_page_scaffold_bookmark_list_has_search_readability(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_bookmarks"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    generated = apply_frontend_page_scaffold(project_dir, "Bookmark")
+    assert "frontend/app/bookmarks/page.tsx" in generated
+
+    list_text = (project_dir / "frontend" / "app" / "bookmarks" / "page.tsx").read_text(encoding="utf-8")
+    assert "Search bookmarks..." in list_text
+    assert "No bookmarks yet. Save your first link." in list_text
+    assert "No bookmarks match your search." in list_text
+    assert "Search bookmarks by title, URL, or keywords." in list_text
+    assert "Open bookmark" in list_text
+
+
 def test_apply_frontend_page_scaffold_diary_entry_detail_is_readable(tmp_path: Path) -> None:
     project_dir = tmp_path / "fullstack_diary_detail"
     (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
