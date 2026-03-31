@@ -75,10 +75,13 @@ def test_ui_projects_response_shape(monkeypatch, tmp_path: Path) -> None:
         "path",
         "status",
         "runtime",
+        "runtime_state",
         "type",
         "template",
         "backend_url",
         "frontend_url",
+        "backend_urls",
+        "frontend_urls",
         "repository",
         "project_health_status",
         "is_current",
@@ -87,8 +90,11 @@ def test_ui_projects_response_shape(monkeypatch, tmp_path: Path) -> None:
         assert key in item
     assert item["display_name"] == "alpha"
     assert item["status"] in {"RUNNING", "STOPPED", "FAIL"}
+    assert item["runtime_state"] in {"RUNNING", "NOT_RUNNING", "FAIL"}
     assert item["backend_url"] == ""
     assert item["frontend_url"] == ""
+    assert isinstance(item["backend_urls"], list)
+    assert isinstance(item["frontend_urls"], list)
     assert item["project_health_status"] in {"RUNNING", "BROKEN", "NEEDS FIX", "IDLE"}
     assert item["repository"]["status"] == "CREATED"
     assert item["repository"]["url"] == "https://github.com/example/alpha"
@@ -338,6 +344,38 @@ def test_ui_project_detail_summary_counts_match_analysis_lists(monkeypatch, tmp_
     assert payload["spec_summary"]["pages"] == len(analysis["pages"])
     assert payload["spec_summary"]["apis"] == 5
     assert payload["spec_summary"]["pages"] == 3
+    assert payload["runtime"]["overall_status"] in {"RUNNING", "NOT_RUNNING", "FAIL"}
+
+
+def test_ui_project_detail_uses_spec_fallback_when_canonical_analysis_is_temporarily_empty(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "spec-fallback")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    def _empty_analysis(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return {
+            "project_name": "spec-fallback",
+            "entities": [],
+            "fields_by_entity": {},
+            "apis": [],
+            "pages": [],
+            "suggestions": [],
+            "next_candidates": [],
+            "next_action": {"kind": "none", "message": "none", "command": ""},
+            "next_action_explanation": {},
+        }
+
+    monkeypatch.setattr("archmind.project_query.analyze_project", _empty_analysis)
+    client = TestClient(create_ui_app())
+    payload = client.get("/ui/projects/spec-fallback").json()
+    assert payload["spec_summary"]["entities"] >= 1
+    assert payload["spec_summary"]["apis"] >= 1
+    assert payload["spec_summary"]["pages"] >= 1
+    assert payload["analysis"]["data_source"] == "spec_fallback"
+    assert payload["analysis"]["entities"] != []
+    assert payload["analysis"]["apis"] != []
+    assert payload["analysis"]["pages"] != []
+    assert "Canonical analysis was incomplete" in payload["warning"]
 
 
 def test_ui_project_detail_includes_visualization_for_single_entity(monkeypatch, tmp_path: Path) -> None:
@@ -1673,6 +1711,10 @@ def test_auto_control_panel_renders_states_and_uses_auto_command_path() -> None:
     assert 'JSON.stringify({ command: "/auto", strategy: selectedStrategy })' in source
     assert "Running Auto..." in source
     assert "Auto failed:" in source
+    assert "Failure reason:" in source
+    assert "Last successful step:" in source
+    assert "Suggested next action:" in source
+    assert "Open Logs Viewer below, then run /fix or retry /auto." in source
     assert "Progress score:" in source
     assert "Strategy: {strategy}" in source
     assert "Plan Goal:" in source
@@ -1700,7 +1742,27 @@ def test_command_console_component_renders_input_and_uses_commands_execution_pat
     assert "Enter a command." in source
     assert "onSubmit={handleSubmit}" in source
     assert "No summary available" in source
+    assert "classifyActionFailure" in source
+    assert "classifyNetworkFailure" in source
+    assert "recoveryHint" in source
     assert "return null" not in source
+
+
+def test_project_list_component_surfaces_actionable_failure_messages_and_hints() -> None:
+    source = Path("frontend/components/ProjectList.tsx").read_text(encoding="utf-8")
+    assert "classifyActionFailure" in source
+    assert "classifyNetworkFailure" in source
+    assert "feedback.hint" in source
+
+
+def test_frontend_action_error_helper_distinguishes_failure_kinds() -> None:
+    source = Path("frontend/components/actionError.ts").read_text(encoding="utf-8")
+    assert "backend_unavailable" in source
+    assert "request_failure" in source
+    assert "malformed_response" in source
+    assert "execution_failure" in source
+    assert "classifyActionFailure" in source
+    assert "classifyNetworkFailure" in source
 
 
 def test_evolution_history_component_has_empty_state_and_partial_payload_safety() -> None:

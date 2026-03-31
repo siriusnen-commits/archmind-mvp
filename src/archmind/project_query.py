@@ -269,6 +269,51 @@ def _extract_entity_names(spec_payload: dict[str, Any]) -> list[str]:
     return names
 
 
+def _extract_spec_api_endpoints(spec_payload: dict[str, Any]) -> list[str]:
+    endpoints = spec_payload.get("api_endpoints")
+    if not isinstance(endpoints, list):
+        return []
+    rows: list[str] = []
+    seen: set[str] = set()
+    for item in endpoints:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(text)
+    return rows
+
+
+def _extract_spec_pages(spec_payload: dict[str, Any]) -> list[str]:
+    pages = spec_payload.get("frontend_pages")
+    if not isinstance(pages, list):
+        return []
+    rows: list[str] = []
+    seen: set[str] = set()
+    for item in pages:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(text)
+    return rows
+
+
+def _runtime_state_from_status(status: str) -> str:
+    normalized = str(status or "").strip().upper()
+    if normalized == "RUNNING":
+        return "RUNNING"
+    if normalized == "FAIL":
+        return "FAIL"
+    return "NOT_RUNNING"
+
+
 def _normalize_evolution_status(value: Any) -> str:
     text = str(value or "").strip().lower()
     if text == "ok":
@@ -751,7 +796,7 @@ def build_project_list_item(project_dir: Path) -> ProjectListItem:
         snapshot = build_runtime_snapshot(runtime_payload if isinstance(runtime_payload, dict) else {}, state_payload)
         backend_runtime = snapshot.get("backend") if isinstance(snapshot.get("backend"), dict) else {}
         frontend_runtime = snapshot.get("frontend") if isinstance(snapshot.get("frontend"), dict) else {}
-        backend_url, frontend_url, _, _ = _runtime_urls_for_display(status, runtime_payload, state_payload)
+        backend_url, frontend_url, backend_urls, frontend_urls = _runtime_urls_for_display(status, runtime_payload, state_payload)
         if status == "RUNNING":
             if str(backend_runtime.get("status") or "").strip().upper() == "RUNNING" and str(frontend_runtime.get("status") or "").strip().upper() == "RUNNING":
                 runtime = "RUNNING (backend+frontend)"
@@ -781,6 +826,9 @@ def build_project_list_item(project_dir: Path) -> ProjectListItem:
             template=str(state_payload.get("effective_template") or "unknown").strip() or "unknown",
             backend_url=backend_url,
             frontend_url=frontend_url,
+            backend_urls=backend_urls,
+            frontend_urls=frontend_urls,
+            runtime_state=_runtime_state_from_status(status),
             repository=repository,
             project_health_status=_derive_project_health_status(
                 status=status,
@@ -841,6 +889,51 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
             if isinstance(item, dict) and str(item.get("method") or "").strip() and str(item.get("path") or "").strip()
         ]
         canonical_pages = [str(x) for x in (analysis.get("pages") or []) if str(x).strip()]
+        spec_entities_seed = _extract_entity_names(spec if isinstance(spec, dict) else {})
+        spec_api_seed = _extract_spec_api_endpoints(spec if isinstance(spec, dict) else {})
+        spec_page_seed = _extract_spec_pages(spec if isinstance(spec, dict) else {})
+        fallback_reasons: list[str] = []
+        if not canonical_entities and spec_entities_seed:
+            canonical_entities = spec_entities_seed
+            fallback_reasons.append("entities from spec seed")
+            analysis["entities"] = canonical_entities
+        if not canonical_api_endpoints and spec_api_seed:
+            canonical_api_endpoints = spec_api_seed
+            fallback_reasons.append("apis from spec seed")
+            if not isinstance(analysis.get("apis"), list) or not analysis.get("apis"):
+                fallback_api_rows: list[dict[str, str]] = []
+                for endpoint in spec_api_seed:
+                    method, _, path = str(endpoint).partition(" ")
+                    method_text = str(method or "").strip().upper()
+                    path_text = str(path or "").strip()
+                    if not method_text or not path_text:
+                        continue
+                    fallback_api_rows.append({"method": method_text, "path": path_text})
+                if fallback_api_rows:
+                    analysis["apis"] = fallback_api_rows
+        if not canonical_pages and spec_page_seed:
+            canonical_pages = spec_page_seed
+            fallback_reasons.append("pages from spec seed")
+            analysis["pages"] = canonical_pages
+        canonical_entity_rows = []
+        for entity_name in canonical_entities:
+            fields = canonical_fields_by_entity.get(entity_name) if isinstance(canonical_fields_by_entity, dict) else []
+            canonical_entity_rows.append(
+                {
+                    "name": entity_name,
+                    "fields": fields if isinstance(fields, list) else [],
+                }
+            )
+        consistency_notice = ""
+        if fallback_reasons:
+            consistency_notice = (
+                "Canonical analysis was incomplete while spec seed exists; "
+                f"using fallback for {', '.join(fallback_reasons)}."
+            )
+            analysis["data_consistency_notice"] = consistency_notice
+            analysis["data_source"] = "spec_fallback"
+        else:
+            analysis["data_source"] = "canonical"
         progression = analyze_spec_progression(
             {
                 "shape": str(spec.get("shape") or state_payload.get("architecture_app_shape") or "unknown").strip() or "unknown",
@@ -902,6 +995,7 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
             ),
             entities=canonical_entities,
             runtime=RuntimeSummary(
+                overall_status=_runtime_state_from_status(status),
                 backend_status=str(backend_runtime.get("status") or "STOPPED").strip().upper() or "STOPPED",
                 frontend_status=str(frontend_runtime.get("status") or "STOPPED").strip().upper() or "STOPPED",
                 backend_url=backend_url,
@@ -923,7 +1017,7 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
             auto_summary=auto_summary,
             repository=repository,
             analysis=analysis,
-            warning="",
+            warning=consistency_notice,
             safe=True,
         )
     except Exception as exc:

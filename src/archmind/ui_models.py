@@ -12,6 +12,7 @@ class ProviderUpdateRequest(BaseModel):
 
 
 class RuntimeSummary(BaseModel):
+    overall_status: str = "NOT_RUNNING"
     backend_status: str = "STOPPED"
     frontend_status: str = "STOPPED"
     backend_url: str = ""
@@ -59,6 +60,9 @@ class ProjectListItem(BaseModel):
     template: str = "unknown"
     backend_url: str = ""
     frontend_url: str = ""
+    backend_urls: list[str] = Field(default_factory=list)
+    frontend_urls: list[str] = Field(default_factory=list)
+    runtime_state: str = "NOT_RUNNING"
     repository: RepositorySummary = Field(default_factory=RepositorySummary)
     project_health_status: str = "IDLE"
     is_current: bool = False

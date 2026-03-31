@@ -1,4 +1,5 @@
 type RuntimeInfo = {
+  overall_status?: string;
   backend_status?: string;
   frontend_status?: string;
   backend_url?: string;
@@ -13,6 +14,7 @@ type Props = {
 
 export default function RuntimeCard({ runtime }: Props) {
   const data = runtime || {};
+  const overallStatus = String(data.overall_status || "").trim() || "NOT_RUNNING";
   const backendStatus = String(data.backend_status || "STOPPED");
   const frontendStatus = String(data.frontend_status || "STOPPED");
   const backendUrl = String(data.backend_url || "").trim();
@@ -24,6 +26,10 @@ export default function RuntimeCard({ runtime }: Props) {
     <section className="rounded-md border border-slate-700 bg-slate-900 p-4">
       <h3 className="text-sm font-semibold text-slate-100">Runtime</h3>
       <dl className="mt-3 space-y-2 text-sm">
+        <div>
+          <dt className="text-slate-300">Overall</dt>
+          <dd className="text-slate-100">{overallStatus}</dd>
+        </div>
         <div>
           <dt className="text-slate-300">Backend</dt>
           <dd className="text-slate-100">{backendStatus}</dd>
