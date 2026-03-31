@@ -1522,7 +1522,9 @@ def test_dashboard_source_renders_current_project_indicator() -> None:
     source = Path("frontend/app/dashboard/page.tsx").read_text(encoding="utf-8")
     assert 'import CurrentProjectIndicator from "@/components/CurrentProjectIndicator"' in source
     assert 'import NewProjectWizard from "@/components/NewProjectWizard"' in source
+    assert 'import SettingsPanel from "@/components/SettingsPanel"' in source
     assert "<NewProjectWizard />" in source
+    assert "<SettingsPanel />" in source
     assert "<CurrentProjectIndicator" in source
     assert "projectName={currentProjectName}" in source
     assert "displayName={String(currentProject?.display_name || currentProjectName || \"\")}" in source
@@ -1536,7 +1538,11 @@ def test_new_project_wizard_source_renders_fields_and_submit_contract() -> None:
     assert "Generation Mode" in source
     assert "Project Language" in source
     assert "LLM Mode" in source
-    assert "localStorage.getItem" in source
+    assert "readArchmindSettings" in source
+    assert "setTemplate(defaults.defaultTemplate)" in source
+    assert "setMode(defaults.defaultMode)" in source
+    assert "setLanguage(defaults.defaultLanguage)" in source
+    assert "setLlmMode(defaults.defaultLLM)" in source
     assert "/projects/idea_local" in source
     assert "template," in source
     assert "mode," in source
@@ -1544,6 +1550,34 @@ def test_new_project_wizard_source_renders_fields_and_submit_contract() -> None:
     assert "llm_mode: llmMode" in source
     assert 'router.push(`/projects/${encodeURIComponent(name)}`)' in source
     assert "Generating..." in source
+
+
+def test_settings_panel_source_renders_sections_and_persists_to_local_storage() -> None:
+    source = Path("frontend/components/SettingsPanel.tsx").read_text(encoding="utf-8")
+    assert '"use client";' in source
+    assert "Settings" in source
+    assert "UI Language" in source
+    assert "Layout Density" in source
+    assert "Preview Mode" in source
+    assert "Generation Defaults" in source
+    assert "Default Template" in source
+    assert "Default Generation Mode" in source
+    assert "Default Project Language" in source
+    assert "Default LLM Mode" in source
+    assert "Advanced" in source
+    assert "Developer Mode" in source
+    assert "writeArchmindSettings(next)" in source
+    assert "Settings saved" in source
+
+
+def test_settings_store_source_uses_archmind_settings_key_with_safe_fallbacks() -> None:
+    source = Path("frontend/components/settingsStore.ts").read_text(encoding="utf-8")
+    assert "ARCHMIND_SETTINGS_KEY = \"archmind.settings\"" in source
+    assert "window.localStorage.getItem(ARCHMIND_SETTINGS_KEY)" in source
+    assert "window.localStorage.setItem(ARCHMIND_SETTINGS_KEY" in source
+    assert "archmind.settings.generation_mode" in source
+    assert "archmind.settings.project_language" in source
+    assert "archmind.settings.llm_mode" in source
 
 
 def test_current_project_indicator_component_tracks_local_context_and_syncs_current_project() -> None:

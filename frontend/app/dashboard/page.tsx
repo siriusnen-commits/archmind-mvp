@@ -6,6 +6,7 @@ import ProjectSummaryCard from "@/components/ProjectSummaryCard";
 import ProviderCard from "@/components/ProviderCard";
 import RefreshButton from "@/components/RefreshButton";
 import RuntimeCard from "@/components/RuntimeCard";
+import SettingsPanel from "@/components/SettingsPanel";
 import { resolveUiApiBaseUrl } from "@/app/_lib/uiApiBase";
 
 type SpecSummary = {
@@ -138,6 +139,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
           ) : null}
         </section>
       </div>
+      <SettingsPanel />
     </main>
   );
 }
