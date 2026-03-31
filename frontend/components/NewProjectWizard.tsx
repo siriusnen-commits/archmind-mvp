@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { UI_API_BASE } from "@/components/uiApi";
+import { readArchmindSettings } from "@/components/settingsStore";
 
 type TemplateOption = "auto" | "diary" | "todo" | "kanban" | "bookmark";
 type ModeOption = "fast" | "balanced" | "high_quality";
@@ -16,27 +17,6 @@ type WizardResponse = {
   error?: string;
 };
 
-const SETTINGS_KEYS = {
-  mode: ["archmind.settings.generation_mode", "archmind.settings.generationMode"],
-  language: ["archmind.settings.project_language", "archmind.settings.projectLanguage"],
-  llmMode: ["archmind.settings.llm_mode", "archmind.settings.llmMode"],
-} as const;
-
-function readLocalDefault(keys: readonly string[]): string {
-  if (typeof window === "undefined") {
-    return "";
-  }
-  for (const key of keys) {
-    try {
-      const value = String(window.localStorage.getItem(key) || "").trim();
-      if (value) return value;
-    } catch {
-      continue;
-    }
-  }
-  return "";
-}
-
 export default function NewProjectWizard() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -47,20 +27,16 @@ export default function NewProjectWizard() {
   const [llmMode, setLlmMode] = useState<LlmModeOption>("local");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [defaultsLoaded, setDefaultsLoaded] = useState(false);
-
   useEffect(() => {
-    if (!open || defaultsLoaded || typeof window === "undefined") {
+    if (!open || typeof window === "undefined") {
       return;
     }
-    const rawMode = readLocalDefault(SETTINGS_KEYS.mode).toLowerCase();
-    const rawLanguage = readLocalDefault(SETTINGS_KEYS.language).toLowerCase();
-    const rawLlmMode = readLocalDefault(SETTINGS_KEYS.llmMode).toLowerCase();
-    if (rawMode === "fast" || rawMode === "balanced" || rawMode === "high_quality") setMode(rawMode);
-    if (rawLanguage === "english" || rawLanguage === "korean" || rawLanguage === "japanese") setLanguage(rawLanguage);
-    if (rawLlmMode === "local" || rawLlmMode === "cloud" || rawLlmMode === "hybrid") setLlmMode(rawLlmMode);
-    setDefaultsLoaded(true);
-  }, [open, defaultsLoaded]);
+    const defaults = readArchmindSettings();
+    setTemplate(defaults.defaultTemplate);
+    setMode(defaults.defaultMode);
+    setLanguage(defaults.defaultLanguage);
+    setLlmMode(defaults.defaultLLM);
+  }, [open]);
 
   async function onSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
