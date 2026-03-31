@@ -13,6 +13,12 @@ type AutoSummary = {
   commands?: string[];
   stop_reason?: string;
   stop_explanation?: string;
+  plan_goal?: string;
+  plan_reason?: string;
+  planned_steps?: Array<{ command?: string; priority?: string; kind?: string }>;
+  executed_steps?: Array<{ command?: string; priority?: string; goal?: string }>;
+  skipped_steps?: Array<{ command?: string; reason?: string }>;
+  goal_satisfied?: boolean;
   progress_made?: boolean;
   progress_score?: number;
   metrics_before?: Record<string, number>;
@@ -71,6 +77,25 @@ export default function AutoControlPanel({ projectName, autoSummary }: Props) {
   const executed = Number.isFinite(Number(display.executed)) ? Number(display.executed) : commands.length;
   const stopReason = String(display.stop_reason || "").trim();
   const stopExplanation = String(display.stop_explanation || "").trim();
+  const planGoal = String(display.plan_goal || "").trim();
+  const planReason = String(display.plan_reason || "").trim();
+  const goalSatisfiedRaw = display.goal_satisfied;
+  const goalSatisfied = typeof goalSatisfiedRaw === "boolean" ? (goalSatisfiedRaw ? "yes" : "no") : "";
+  const plannedSteps = Array.isArray(display.planned_steps)
+    ? display.planned_steps
+        .map((item) => (item && typeof item === "object" ? String(item.command || "").trim() : ""))
+        .filter((item) => item.length > 0)
+    : [];
+  const executedStepCommands = Array.isArray(display.executed_steps)
+    ? display.executed_steps
+        .map((item) => (item && typeof item === "object" ? String(item.command || "").trim() : ""))
+        .filter((item) => item.length > 0)
+    : [];
+  const skippedStepCommands = Array.isArray(display.skipped_steps)
+    ? display.skipped_steps
+        .map((item) => (item && typeof item === "object" ? String(item.command || "").trim() : ""))
+        .filter((item) => item.length > 0)
+    : [];
   const strategy = String(display.strategy || "").trim().toLowerCase() || selectedStrategy;
   const progressMadeRaw = display.progress_made;
   const progressMade =
@@ -85,6 +110,11 @@ export default function AutoControlPanel({ projectName, autoSummary }: Props) {
   const hasSummary =
     Boolean(String(display.run_id || "").trim()) ||
     commands.length > 0 ||
+    plannedSteps.length > 0 ||
+    executedStepCommands.length > 0 ||
+    skippedStepCommands.length > 0 ||
+    Boolean(planGoal) ||
+    Boolean(planReason) ||
     Boolean(stopReason) ||
     Boolean(stopExplanation) ||
     Boolean(currentSummary);
@@ -179,8 +209,27 @@ export default function AutoControlPanel({ projectName, autoSummary }: Props) {
         {hasSummary ? (
           <div className="mt-2 space-y-1 text-xs text-slate-200">
             <p>Strategy: {strategy}</p>
+            {planGoal ? <p>Plan Goal: {planGoal}</p> : null}
+            {planReason ? <p>Plan Reason: {planReason}</p> : null}
             <p>Executed: {executed}</p>
             <p>Commands: {commands.length ? commands.join(", ") : "(none)"}</p>
+            {plannedSteps.length ? (
+              <div>
+                <p>Planned Steps:</p>
+                <ol className="ml-4 list-decimal space-y-0.5">
+                  {plannedSteps.map((step, index) => (
+                    <li key={`${index}-${step}`}>{step}</li>
+                  ))}
+                </ol>
+              </div>
+            ) : null}
+            {executedStepCommands.length ? (
+              <p>Executed Steps: {executedStepCommands.join(", ")}</p>
+            ) : null}
+            {skippedStepCommands.length ? (
+              <p>Skipped Steps: {skippedStepCommands.join(", ")}</p>
+            ) : null}
+            {goalSatisfied ? <p>Goal satisfied: {goalSatisfied}</p> : null}
             {stopReason ? <p>Stopped: {stopReason}</p> : null}
             {stopExplanation ? <p>Why stop: {stopExplanation}</p> : null}
             {progressMade ? <p>Progress made: {progressMade}</p> : null}

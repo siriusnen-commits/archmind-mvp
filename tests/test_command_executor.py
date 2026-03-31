@@ -473,6 +473,7 @@ def test_auto_plan_relation_flow_orders_api_before_page_and_stops_when_goal_sati
     assert out["ok"] is True
     assert executed == ["/add_api GET /boards/{id}/cards"]
     assert out["auto_result"]["plan_goal"] == "complete_relation_flow"
+    assert out["auto_result"]["planned_steps"][0]["command"] == "/add_api GET /boards/{id}/cards"
     assert out["auto_result"]["goal_satisfied"] is True
     assert out["auto_result"]["stop_reason"] == "plan goal satisfied"
 
