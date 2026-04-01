@@ -1,12 +1,12 @@
+import Link from "next/link";
+
 import CurrentProjectIndicator from "@/components/CurrentProjectIndicator";
 import EvolutionCard from "@/components/EvolutionCard";
-import NewProjectWizard from "@/components/NewProjectWizard";
 import ProjectList, { ProjectListItem } from "@/components/ProjectList";
 import ProjectSummaryCard from "@/components/ProjectSummaryCard";
 import ProviderCard from "@/components/ProviderCard";
 import RefreshButton from "@/components/RefreshButton";
 import RuntimeCard from "@/components/RuntimeCard";
-import SettingsPanel from "@/components/SettingsPanel";
 import { resolveUiApiBaseUrl } from "@/app/_lib/uiApiBase";
 
 type SpecSummary = {
@@ -107,7 +107,12 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       <header className="mb-5 flex items-center justify-between gap-3">
         <h1 className="text-xl font-semibold text-slate-100">ArchMind Dashboard</h1>
         <div className="flex items-center gap-2">
-          <NewProjectWizard />
+          <Link
+            href="/projects/new"
+            className="rounded-md border border-cyan-600 px-3 py-1.5 text-sm font-medium text-cyan-200 hover:bg-cyan-900/30"
+          >
+            New Project
+          </Link>
           <RefreshButton
             className="rounded-md border border-slate-500 px-3 py-1.5 text-sm text-slate-100 hover:bg-slate-800"
           />
@@ -139,7 +144,6 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
           ) : null}
         </section>
       </div>
-      <SettingsPanel />
     </main>
   );
 }

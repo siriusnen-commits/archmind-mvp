@@ -1559,53 +1559,74 @@ def test_project_detail_source_renders_logs_viewer_panel() -> None:
 def test_dashboard_source_renders_current_project_indicator() -> None:
     source = Path("frontend/app/dashboard/page.tsx").read_text(encoding="utf-8")
     assert 'import CurrentProjectIndicator from "@/components/CurrentProjectIndicator"' in source
-    assert 'import NewProjectWizard from "@/components/NewProjectWizard"' in source
-    assert 'import SettingsPanel from "@/components/SettingsPanel"' in source
-    assert "<NewProjectWizard />" in source
-    assert "<SettingsPanel />" in source
+    assert 'href="/projects/new"' in source
     assert "<CurrentProjectIndicator" in source
     assert "projectName={currentProjectName}" in source
     assert "displayName={String(currentProject?.display_name || currentProjectName || \"\")}" in source
 
 
-def test_new_project_wizard_source_renders_fields_and_submit_contract() -> None:
-    source = Path("frontend/components/NewProjectWizard.tsx").read_text(encoding="utf-8")
-    assert '"use client";' in source
-    assert "New Project" in source
-    assert "Generate Project" in source
-    assert "Generation Mode" in source
-    assert "Project Language" in source
-    assert "LLM Mode" in source
-    assert "readArchmindSettings" in source
-    assert "setTemplate(defaults.defaultTemplate)" in source
-    assert "setMode(defaults.defaultMode)" in source
-    assert "setLanguage(defaults.defaultLanguage)" in source
-    assert "setLlmMode(defaults.defaultLLM)" in source
-    assert "/projects/idea_local" in source
-    assert "template," in source
-    assert "mode," in source
-    assert "language," in source
-    assert "llm_mode: llmMode" in source
-    assert 'router.push(`/projects/${encodeURIComponent(name)}`)' in source
-    assert "Generating..." in source
+def test_dashboard_source_no_longer_renders_inline_new_project_ui() -> None:
+    source = Path("frontend/app/dashboard/page.tsx").read_text(encoding="utf-8")
+    assert "NewProjectWizard" not in source
+    assert "<SettingsPanel />" not in source
 
 
-def test_settings_panel_source_renders_sections_and_persists_to_local_storage() -> None:
-    source = Path("frontend/components/SettingsPanel.tsx").read_text(encoding="utf-8")
+def test_new_project_page_source_uses_structured_create_flow_and_stateful_form() -> None:
+    source = Path("frontend/components/new-project/NewProjectPage.tsx").read_text(encoding="utf-8")
     assert '"use client";' in source
-    assert "Settings" in source
+    assert "validating" in source
+    assert "checking-runtime" in source
+    assert "resolving-template" in source
+    assert "generating" in source
+    assert "initializing" in source
+    assert "completed" in source
+    assert "failed" in source
+    assert "setError(result.error)" in source
+    assert "setStage(\"failed\")" in source
+    assert "setValues(INITIAL_VALUES)" not in source
+    assert "<NewProjectForm values={values}" in source
+    assert "if (creating)" in source
+
+
+def test_create_project_error_card_source_has_retryable_structured_error_actions() -> None:
+    source = Path("frontend/components/new-project/CreateProjectErrorCard.tsx").read_text(encoding="utf-8")
+    assert '"use client";' in source
+    assert "오류 코드" in source
+    assert "Retry" in source
+    assert "Edit inputs" in source
+    assert "Open settings" in source
+    assert "Open logs" in source
+    assert "Back to dashboard" in source
+    assert "error.retryable" in source
+
+
+def test_settings_launcher_source_uses_bottom_left_n_icon_and_opens_drawer() -> None:
+    source = Path("frontend/components/settings/SettingsLauncher.tsx").read_text(encoding="utf-8")
+    assert '"use client";' in source
+    assert "archmind:open-settings" in source
+    assert "fixed bottom-4 left-4" in source
+    assert "Open settings" in source
+    assert ">N<" in source or "N" in source
+    assert "SettingsDrawer" in source
+    assert "open={open}" in source
+
+
+def test_settings_form_source_preserves_generation_defaults_controls() -> None:
+    source = Path("frontend/components/settings/SettingsForm.tsx").read_text(encoding="utf-8")
     assert "UI Language" in source
-    assert "Layout Density" in source
-    assert "Preview Mode" in source
-    assert "Generation Defaults" in source
-    assert "Default Template" in source
     assert "Default Generation Mode" in source
     assert "Default Project Language" in source
     assert "Default LLM Mode" in source
-    assert "Advanced" in source
-    assert "Developer Mode" in source
-    assert "writeArchmindSettings(next)" in source
     assert "Settings saved" in source
+
+
+def test_old_standalone_settings_button_removed_from_dashboard_entrypoint() -> None:
+    dashboard_source = Path("frontend/app/dashboard/page.tsx").read_text(encoding="utf-8")
+    layout_source = Path("frontend/app/layout.tsx").read_text(encoding="utf-8")
+    assert "SettingsPanel" not in dashboard_source
+    assert "<SettingsPanel" not in dashboard_source
+    assert 'import SettingsLauncher from "@/components/settings/SettingsLauncher"' in layout_source
+    assert "<SettingsLauncher />" in layout_source
 
 
 def test_settings_store_source_uses_archmind_settings_key_with_safe_fallbacks() -> None:
