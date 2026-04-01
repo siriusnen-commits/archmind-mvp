@@ -102,7 +102,7 @@ export default function ProjectList({ projects, selectedName }: Props) {
       }
       setCommandFeedbackByProject((prev) => ({
         ...prev,
-        [target]: { status: "OK", message: detail || "Completed" },
+        [target]: { status: "OK", message: String(payload.detail || "").trim() || "Completed" },
       }));
       router.refresh();
     } catch (error) {
