@@ -383,6 +383,7 @@ def build_pipeline_command(
     auto_deploy: bool = False,
     deploy_target: str = "local",
     template_name: str | None = None,
+    starter_profile: str | None = None,
 ) -> list[str]:
     cmd = [
         "archmind",
@@ -398,6 +399,9 @@ def build_pipeline_command(
     normalized_template = str(template_name or "").strip().lower()
     if normalized_template:
         cmd += ["--template", normalized_template]
+    normalized_starter_profile = str(starter_profile or "").strip().lower()
+    if normalized_starter_profile:
+        cmd += ["--starter-profile", normalized_starter_profile]
     if auto_deploy:
         cmd.append("--auto-deploy")
         target = str(deploy_target or "local").strip().lower() or "local"

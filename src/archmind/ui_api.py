@@ -121,6 +121,13 @@ def _wizard_template_to_pipeline_template(template: str) -> str:
     return ""
 
 
+def _wizard_template_to_starter_profile(template: str) -> str:
+    normalized = _normalize_wizard_template(template)
+    if normalized in {"todo", "diary", "kanban", "bookmark"}:
+        return normalized
+    return ""
+
+
 def _max_iterations_for_mode(mode: str) -> int:
     normalized = _normalize_wizard_mode(mode)
     if normalized == "fast":
@@ -146,11 +153,13 @@ def _start_wizard_generation(
     base_dir = resolve_ui_projects_dir()
     project_dir = planned_project_dir(base_dir, idea_text)
     pipeline_template = _wizard_template_to_pipeline_template(template)
+    starter_profile = _wizard_template_to_starter_profile(template)
     cmd = build_pipeline_command(
         idea_text,
         base_dir,
         project_dir.name,
         template_name=pipeline_template or None,
+        starter_profile=starter_profile or None,
     )
     cmd += ["--max-iterations", str(_max_iterations_for_mode(mode))]
     # v1: llm_mode is accepted for forward compatibility; actual provider wiring remains backend defaults.

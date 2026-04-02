@@ -228,6 +228,91 @@ def test_pipeline_idea_fullstack_invalid_structure_stops_before_run(tmp_path: Pa
     assert result_payload.get("steps", {}).get("generate", {}).get("failure_class") == "generation-error"
 
 
+def test_pipeline_todo_starter_profile_fails_when_project_is_only_generic_scaffold(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project)
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "todo app",
+            "--template",
+            "fullstack-ddd",
+            "--starter-profile",
+            "todo",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "todo_generic_only",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code != 0
+
+    project_dir = tmp_path / "todo_generic_only"
+    result_payload = json.loads((project_dir / ".archmind" / "result.json").read_text(encoding="utf-8"))
+    assert result_payload.get("status") == "FAIL"
+    assert result_payload.get("steps", {}).get("generate", {}).get("failure_class") == "generation-error"
+    detail = str(result_payload.get("steps", {}).get("generate", {}).get("detail") or "")
+    assert (
+        "missing Task entity in spec" in detail
+        or "frontend root is still generic fallback scaffold" in detail
+        or "missing frontend tasks list page" in detail
+        or "missing frontend tasks create page" in detail
+    )
+
+
+def test_pipeline_todo_starter_profile_passes_when_task_baseline_is_materialized(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_seed_scaffold)
+    monkeypatch.setattr(
+        "archmind.pipeline.suggest_project_spec",
+        lambda *_args, **_kwargs: {
+            "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}, {"name": "status", "type": "string"}]}],
+            "api_endpoints": ["GET /tasks", "POST /tasks", "GET /tasks/{id}"],
+            "frontend_pages": ["tasks/list", "tasks/detail", "tasks/new"],
+        },
+    )
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "todo app",
+            "--template",
+            "fullstack-ddd",
+            "--starter-profile",
+            "todo",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "todo_materialized",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+
+    project_dir = tmp_path / "todo_materialized"
+    task_list = project_dir / "frontend" / "app" / "tasks" / "page.tsx"
+    task_create = project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx"
+    assert task_list.exists()
+    assert task_create.exists()
+    spec_payload = json.loads((project_dir / ".archmind" / "project_spec.json").read_text(encoding="utf-8"))
+    entity_names = {
+        str(item.get("name") or "").strip().lower()
+        for item in (spec_payload.get("entities") or [])
+        if isinstance(item, dict)
+    }
+    assert "task" in entity_names
+
+
 def test_pipeline_idea_generator_receives_effective_template_for_frontend_web(tmp_path: Path, monkeypatch) -> None:
     captured: dict[str, str] = {}
 

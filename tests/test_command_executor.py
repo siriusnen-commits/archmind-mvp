@@ -766,6 +766,37 @@ def test_auto_plan_ignores_unsupported_add_entity_and_executes_supported_candida
     assert "unsupported command" not in str(out["auto_result"]["stop_reason"]).lower()
 
 
+def test_auto_reports_no_supported_bootstrap_path_when_only_add_entity_is_available(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "demo-no-supported-bootstrap"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    analyses = [
+        {
+            "next_action": {"kind": "missing_entity", "message": "Add Task entity", "command": "/add_entity Task"},
+            "next_action_explanation": {"reason_summary": "No entities found yet"},
+            "suggestions": [{"kind": "missing_entity", "message": "Add Task entity", "command": "/add_entity Task"}],
+            "entities": [],
+            "fields_by_entity": {},
+            "apis": [],
+            "pages": [],
+            "placeholder_pages": [],
+            "entity_crud_status": {},
+        }
+    ]
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", lambda *_args, **_kwargs: analyses[0])
+    monkeypatch.setattr("archmind.telegram_bot._compute_auto_iteration_budget", lambda *_args, **_kwargs: (1, ["base=1"]))
+    monkeypatch.setattr("archmind.telegram_bot._auto_runtime_state_lines", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("archmind.telegram_bot._auto_analysis_brief", lambda *_args, **_kwargs: "entities=0, apis=0, pages=0")
+    monkeypatch.setattr("archmind.telegram_bot.sync_repo_after_auto_batch", lambda *_args, **_kwargs: {"status": "NOT_ATTEMPTED"})
+    monkeypatch.setattr("archmind.state.load_state", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("archmind.state.write_state", lambda *_args, **_kwargs: None)
+
+    out = _execute_auto_command(project_dir, project_name="demo", source="ui-next-run")
+    assert out["ok"] is True
+    assert out["auto_result"]["executed"] == 0
+    assert out["auto_result"]["commands"] == []
+    assert "project not materialized / no supported bootstrap path" in str(out["auto_result"]["stop_reason"])
+
+
 def test_auto_strategy_balanced_executes_medium_priority_plan_step(monkeypatch, tmp_path: Path) -> None:
     project_dir = tmp_path / "demo-balanced-medium"
     project_dir.mkdir(parents=True, exist_ok=True)
