@@ -2,45 +2,20 @@
 
 import type { FormEvent } from "react";
 
+import type { NewProjectLocaleTexts } from "@/components/new-project/locale";
 import type { CreateProjectFormValues } from "@/types/project-create";
-import type { GenerationMode, LlmMode, ProjectLanguage, TemplateOption, UiLanguage } from "@/types/settings";
+import type { GenerationMode, LlmMode, ProjectLanguage, TemplateOption } from "@/types/settings";
 
 type Props = {
   values: CreateProjectFormValues;
   onChange: (next: CreateProjectFormValues) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   disabled?: boolean;
-  uiLanguage?: UiLanguage;
+  locale: NewProjectLocaleTexts;
 };
 
-export default function NewProjectForm({ values, onChange, onSubmit, disabled = false, uiLanguage = "en" }: Props) {
-  const text =
-    uiLanguage === "ko"
-      ? {
-          idea: "아이디어",
-          template: "템플릿",
-          mode: "생성 모드",
-          language: "프로젝트 언어",
-          llm: "LLM 모드",
-          submit: disabled ? "생성 중..." : "프로젝트 생성",
-        }
-      : uiLanguage === "ja"
-        ? {
-            idea: "アイデア",
-            template: "テンプレート",
-            mode: "生成モード",
-            language: "プロジェクト言語",
-            llm: "LLMモード",
-            submit: disabled ? "生成中..." : "プロジェクト生成",
-          }
-        : {
-            idea: "Idea",
-            template: "Template",
-            mode: "Generation Mode",
-            language: "Project Language",
-            llm: "LLM Mode",
-            submit: disabled ? "Generating..." : "Generate Project",
-          };
+export default function NewProjectForm({ values, onChange, onSubmit, disabled = false, locale }: Props) {
+  const text = locale.form;
   return (
     <form onSubmit={onSubmit} className="space-y-3 rounded-lg border border-slate-700 bg-slate-900/70 p-4 sm:p-5">
       <label className="block space-y-1">
@@ -49,7 +24,7 @@ export default function NewProjectForm({ values, onChange, onSubmit, disabled = 
           required
           value={values.idea}
           onChange={(event) => onChange({ ...values, idea: event.target.value })}
-          placeholder={"personal diary app\ntodo app with deadlines\nbookmark manager with tags"}
+          placeholder={text.ideaPlaceholder}
           rows={4}
           disabled={disabled}
           className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 disabled:opacity-60"
@@ -64,11 +39,11 @@ export default function NewProjectForm({ values, onChange, onSubmit, disabled = 
           disabled={disabled}
           className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 disabled:opacity-60"
         >
-          <option value="auto">auto</option>
-          <option value="diary">diary</option>
-          <option value="todo">todo</option>
-          <option value="kanban">kanban</option>
-          <option value="bookmark">bookmark</option>
+          <option value="auto">{text.templateOptions.auto}</option>
+          <option value="diary">{text.templateOptions.diary}</option>
+          <option value="todo">{text.templateOptions.todo}</option>
+          <option value="kanban">{text.templateOptions.kanban}</option>
+          <option value="bookmark">{text.templateOptions.bookmark}</option>
         </select>
       </label>
 
@@ -80,9 +55,9 @@ export default function NewProjectForm({ values, onChange, onSubmit, disabled = 
           disabled={disabled}
           className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 disabled:opacity-60"
         >
-          <option value="fast">Fast</option>
-          <option value="balanced">Balanced</option>
-          <option value="high_quality">High Quality</option>
+          <option value="fast">{text.modeOptions.fast}</option>
+          <option value="balanced">{text.modeOptions.balanced}</option>
+          <option value="high_quality">{text.modeOptions.highQuality}</option>
         </select>
       </label>
 
@@ -94,9 +69,9 @@ export default function NewProjectForm({ values, onChange, onSubmit, disabled = 
           disabled={disabled}
           className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 disabled:opacity-60"
         >
-          <option value="english">English</option>
-          <option value="korean">Korean</option>
-          <option value="japanese">Japanese</option>
+          <option value="english">{text.languageOptions.english}</option>
+          <option value="korean">{text.languageOptions.korean}</option>
+          <option value="japanese">{text.languageOptions.japanese}</option>
         </select>
       </label>
 
@@ -108,9 +83,9 @@ export default function NewProjectForm({ values, onChange, onSubmit, disabled = 
           disabled={disabled}
           className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 disabled:opacity-60"
         >
-          <option value="local">Local</option>
-          <option value="cloud">Cloud</option>
-          <option value="hybrid">Hybrid</option>
+          <option value="local">{text.llmOptions.local}</option>
+          <option value="cloud">{text.llmOptions.cloud}</option>
+          <option value="hybrid">{text.llmOptions.hybrid}</option>
         </select>
       </label>
 
@@ -119,7 +94,7 @@ export default function NewProjectForm({ values, onChange, onSubmit, disabled = 
         disabled={disabled}
         className="w-full rounded-md border border-emerald-600 bg-emerald-500/10 px-3 py-2 text-sm font-semibold text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-60"
       >
-        {text.submit}
+        {disabled ? text.submitBusy : text.submitIdle}
       </button>
     </form>
   );

@@ -1587,19 +1587,39 @@ def test_new_project_page_source_uses_structured_create_flow_and_stateful_form()
     assert "<NewProjectForm values={values}" in source
     assert "if (creating)" in source
     assert 'href="/dashboard"' in source
-    assert "uiLanguage ===" in source
+    assert "getNewProjectLocale(uiLanguage)" in source
+    assert "locale.page.invalidIdea" in source
+    assert "uiLanguage ===" not in source
 
 
 def test_create_project_error_card_source_has_retryable_structured_error_actions() -> None:
     source = Path("frontend/components/new-project/CreateProjectErrorCard.tsx").read_text(encoding="utf-8")
     assert '"use client";' in source
-    assert "오류 코드" in source
-    assert "Retry" in source
-    assert "Edit inputs" in source
-    assert "Open settings" in source
-    assert "Open logs" in source
-    assert "Back to dashboard" in source
+    assert "const text = locale.error" in source
+    assert "uiLanguage ===" not in source
     assert "error.retryable" in source
+
+
+def test_new_project_locale_map_contains_english_and_korean_labels_without_mixing() -> None:
+    source = Path("frontend/components/new-project/locale.ts").read_text(encoding="utf-8")
+    assert "const EN: NewProjectLocaleTexts" in source
+    assert "const KO: NewProjectLocaleTexts" in source
+    assert "Generation Status" in source
+    assert "생성 진행 상태" in source
+    assert "Validating Input" in source
+    assert "입력 검증" in source
+    assert "NEW_PROJECT_LOCALES" in source
+    assert "getNewProjectLocale" in source
+
+
+def test_new_project_components_use_shared_locale_mapping_for_stage_and_form_labels() -> None:
+    status_source = Path("frontend/components/new-project/CreateProjectStatusCard.tsx").read_text(encoding="utf-8")
+    form_source = Path("frontend/components/new-project/NewProjectForm.tsx").read_text(encoding="utf-8")
+    assert "locale.status.stages[item]" in status_source
+    assert "LABEL_BY_STAGE" not in status_source
+    assert "uiLanguage ===" not in status_source
+    assert "const text = locale.form" in form_source
+    assert "uiLanguage ===" not in form_source
 
 
 def test_settings_launcher_source_uses_archmind_owned_launcher_and_opens_drawer() -> None:
