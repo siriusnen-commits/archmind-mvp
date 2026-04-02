@@ -590,7 +590,7 @@ def test_local_deploy_process_uses_archmind_log_files(monkeypatch, tmp_path: Pat
     assert any(path.endswith(".archmind/backend.log") for path in captured)
     assert any(path.endswith(".archmind/frontend.log") for path in captured)
     backend_cmd = next((cmd for cmd in captured_cmds if cmd and cmd[0] == "uvicorn"), [])
-    frontend_cmd = next((cmd for cmd in captured_cmds if cmd[:4] == ["npm", "exec", "--", "next"]), [])
+    frontend_cmd = next((cmd for cmd in captured_cmds if cmd[:3] == ["npm", "run", "dev"]), [])
     assert "--host" in backend_cmd
     assert "0.0.0.0" in backend_cmd
     assert "--hostname" in frontend_cmd
@@ -1521,6 +1521,16 @@ def test_is_pid_running_false_when_process_missing(monkeypatch) -> None:
     assert is_pid_running(12345) is False
 
 
+def test_is_pid_running_false_when_process_is_zombie(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.deploy.os.kill", lambda *_a, **_k: None)
+
+    class DummyRun:
+        stdout = "Z+"
+
+    monkeypatch.setattr("archmind.deploy.subprocess.run", lambda *a, **k: DummyRun())
+    assert is_pid_running(12345) is False
+
+
 def test_list_running_local_projects_includes_backend_only_running(monkeypatch, tmp_path: Path) -> None:
     root = tmp_path / "projects"
     project = root / "backend_only"
@@ -1626,6 +1636,33 @@ def test_get_local_runtime_status_uses_urls_and_pid_status(monkeypatch, tmp_path
     assert status["backend"]["url"] == "http://127.0.0.1:8044"
     assert status["frontend"]["status"] == "NOT RUNNING"
     assert status["frontend"]["url"] == "http://127.0.0.1:3044"
+
+
+def test_get_local_runtime_status_marks_frontend_fail_when_health_fail(monkeypatch, tmp_path: Path) -> None:
+    write_state(
+        tmp_path,
+        {
+            "deploy_target": "local",
+            "runtime": {
+                "frontend_pid": 55555,
+                "frontend_url": "http://127.0.0.1:3044",
+                "frontend_health": "FAIL",
+                "services": {
+                    "frontend": {
+                        "pid": 55555,
+                        "url": "http://127.0.0.1:3044",
+                        "status": "RUNNING",
+                        "health": "FAIL",
+                    }
+                },
+            },
+        },
+    )
+    monkeypatch.setattr("archmind.deploy.is_pid_running", lambda pid: int(pid or 0) == 55555)
+    monkeypatch.setattr("archmind.deploy._is_tcp_reachable", lambda _host, _port, timeout_s=0.35: False)
+    status = get_local_runtime_status(tmp_path)
+    assert status["frontend"]["status"] == "FAIL"
+    assert status["frontend"]["reachability"]["status"] == "UNREACHABLE"
 
 
 def test_get_local_runtime_status_marks_local_only_without_lan_urls(monkeypatch, tmp_path: Path) -> None:
@@ -1737,7 +1774,7 @@ def test_detect_frontend_runtime_entry_prefers_frontend_dir(tmp_path: Path) -> N
     assert detected["ok"] is True
     assert Path(str(detected["run_cwd"])).resolve() == frontend_dir.resolve()
     assert detected["frontend_port"] == 3013
-    assert detected["run_command"][:4] == ["npm", "exec", "--", "next"]
+    assert detected["run_command"][:3] == ["npm", "run", "dev"]
 
 
 def test_update_runtime_state_persists_runtime_services_structure(tmp_path: Path) -> None:

@@ -15,7 +15,8 @@ def test_detect_frontend_runtime_entry_next_command_has_single_port_flag(tmp_pat
     detected = detect_frontend_runtime_entry(tmp_path, port=3000)
     assert detected["ok"] is True
     cmd = [str(x) for x in detected.get("run_command") or []]
-    assert cmd[:4] == ["npm", "exec", "--", "next"]
+    assert cmd[:3] == ["npm", "run", "dev"]
+    assert "--hostname" in cmd
     assert cmd.count("--port") == 1
     assert "-p" not in cmd
 
