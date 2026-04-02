@@ -2143,6 +2143,7 @@ def _render_frontend_entity_create_page(
         normalized_fields = [{"name": "title", "type": "string"}]
     initial_map = ", ".join(f'{str(item["name"])}: ""' for item in normalized_fields)
     relation_lookup = {str(item.get("field_name") or ""): item for item in relation_specs}
+    has_relation_context = False
     relation_state_blocks = ""
     relation_effect_blocks = ""
     relation_ui_blocks = ""
@@ -2152,6 +2153,7 @@ def _render_frontend_entity_create_page(
         parent_label = str(item.get("parent_label") or parent_resource).strip()
         if not field_name or not parent_resource:
             continue
+        has_relation_context = True
         prefix = f"relation{idx}"
         relation_state_blocks += (
             f"  const [{prefix}Options, set{prefix.capitalize()}Options] = useState<RelationOption[]>([]);\n"
@@ -2244,10 +2246,13 @@ def _render_frontend_entity_create_page(
             payload_lines += f'      "{name}": values["{name}"] === "true" || values["{name}"] === "1",\n'
         else:
             payload_lines += f'      "{name}": values["{name}"],\n'
+    navigation_import = "useRouter, useSearchParams" if has_relation_context else "useRouter"
+    react_import = "FormEvent, useEffect, useState" if has_relation_context else "FormEvent, useState"
+    search_params_line = "  const searchParams = useSearchParams();\n" if has_relation_context else ""
     return (
         '"use client";\n\n'
-        'import { useRouter, useSearchParams } from "next/navigation";\n'
-        'import { FormEvent, useEffect, useState } from "react";\n'
+        f'import {{ {navigation_import} }} from "next/navigation";\n'
+        f'import {{ {react_import} }} from "react";\n'
         f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n\n'
         "type EntityItem = Record<string, unknown>;\n"
         "type RelationOption = { id: string; label: string };\n\n"
@@ -2259,7 +2264,7 @@ def _render_frontend_entity_create_page(
         "  return [];\n"
         "}\n\n"
         f"export default function {component_name}() {{\n"
-        "  const searchParams = useSearchParams();\n"
+        f"{search_params_line}"
         "  const router = useRouter();\n"
         "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n"
         f"  const [values, setValues] = useState<Record<string, string>>(() => ({{ {initial_map} }}));\n"

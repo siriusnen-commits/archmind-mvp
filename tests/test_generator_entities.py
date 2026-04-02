@@ -285,6 +285,30 @@ def test_apply_entity_fields_to_scaffold_reflects_description_in_frontend_create
     assert '"description": values["description"]' in create_text
 
 
+def test_task_create_page_avoids_use_search_params_without_relation_context(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_demo"
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\n\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps({"entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}, {"name": "status", "type": "string"}]}]}),
+        encoding="utf-8",
+    )
+    apply_entity_scaffold(project_dir, "Task")
+    apply_entity_fields_to_scaffold(
+        project_dir,
+        "Task",
+        [{"name": "title", "type": "string"}, {"name": "status", "type": "string"}],
+    )
+
+    create_text = (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").read_text(encoding="utf-8")
+    assert 'import { useRouter } from "next/navigation";' in create_text
+    assert "useSearchParams" not in create_text
+
+
 def test_apply_entity_fields_to_scaffold_is_idempotent_for_same_fields(tmp_path: Path) -> None:
     project_dir = tmp_path / "backend_demo"
     (project_dir / "app").mkdir(parents=True, exist_ok=True)
