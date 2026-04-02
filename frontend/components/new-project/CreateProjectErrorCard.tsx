@@ -1,7 +1,7 @@
 "use client";
 
 import type { CreateProjectError } from "@/types/project-create";
-import type { UiLanguage } from "@/types/settings";
+import type { NewProjectLocaleTexts } from "@/components/new-project/locale";
 
 type Props = {
   error: CreateProjectError;
@@ -11,7 +11,7 @@ type Props = {
   onOpenLogs: () => void;
   onBackToDashboard: () => void;
   busy?: boolean;
-  uiLanguage?: UiLanguage;
+  locale: NewProjectLocaleTexts;
 };
 
 export default function CreateProjectErrorCard({
@@ -22,41 +22,9 @@ export default function CreateProjectErrorCard({
   onOpenLogs,
   onBackToDashboard,
   busy = false,
-  uiLanguage = "en",
+  locale,
 }: Props) {
-  const text =
-    uiLanguage === "ko"
-      ? {
-          title: "생성 실패",
-          detail: "상세",
-          code: "오류 코드",
-          retry: "재시도",
-          edit: "입력 수정",
-          settings: "설정 열기",
-          logs: "로그 보기",
-          back: "대시보드로 돌아가기",
-        }
-      : uiLanguage === "ja"
-        ? {
-            title: "生成失敗",
-            detail: "詳細",
-            code: "エラーコード",
-            retry: "再試行",
-            edit: "入力を編集",
-            settings: "設定を開く",
-            logs: "ログを開く",
-            back: "ダッシュボードへ戻る",
-          }
-        : {
-            title: "Creation Failed",
-            detail: "Detail",
-            code: "Error Code",
-            retry: "Retry",
-            edit: "Edit inputs",
-            settings: "Open settings",
-            logs: "Open logs",
-            back: "Back to dashboard",
-          };
+  const text = locale.error;
   return (
     <section className="rounded-lg border border-rose-700 bg-rose-950/40 p-4">
       <h2 className="text-sm font-semibold text-rose-100">{text.title}</h2>

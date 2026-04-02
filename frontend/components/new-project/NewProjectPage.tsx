@@ -10,6 +10,7 @@ import CreateProjectStatusCard from "@/components/new-project/CreateProjectStatu
 import NewProjectForm from "@/components/new-project/NewProjectForm";
 import { createProject } from "@/lib/api/project-create";
 import { buildCreateDefaults, loadSettings } from "@/lib/api/settings";
+import { getNewProjectLocale } from "@/components/new-project/locale";
 import type { CreateProjectError, CreateProjectFormValues, CreateProjectStage } from "@/types/project-create";
 import type { UiLanguage } from "@/types/settings";
 
@@ -30,6 +31,7 @@ const INITIAL_VALUES: CreateProjectFormValues = {
 export default function NewProjectPage() {
   const router = useRouter();
   const [uiLanguage] = useState<UiLanguage>(() => loadSettings().uiLanguage);
+  const locale = getNewProjectLocale(uiLanguage);
   const [stage, setStage] = useState<CreateProjectStage>("idle");
   const [values, setValues] = useState<CreateProjectFormValues>(() => {
     const settings = loadSettings();
@@ -57,7 +59,7 @@ export default function NewProjectPage() {
       setStage("failed");
       setError({
         code: "INVALID_INPUT",
-        message: uiLanguage === "ko" ? "아이디어를 입력해 주세요." : uiLanguage === "ja" ? "アイデアを入力してください。" : "Please enter an idea.",
+        message: locale.page.invalidIdea,
         detail: "idea is required",
         retryable: false,
       });
@@ -127,25 +129,17 @@ export default function NewProjectPage() {
     <main className="mx-auto w-full max-w-3xl p-4 sm:p-6">
       <header className="mb-4 flex items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-slate-100">
-            {uiLanguage === "ko" ? "새 프로젝트" : uiLanguage === "ja" ? "新しいプロジェクト" : "New Project"}
-          </h1>
-          <p className="mt-1 text-sm text-slate-300">
-            {uiLanguage === "ko"
-              ? "아이디어 기반 프로젝트 생성을 시작합니다."
-              : uiLanguage === "ja"
-                ? "アイデアから新規プロジェクトを生成します。"
-                : "Create a project from your idea."}
-          </p>
+          <h1 className="text-xl font-semibold text-slate-100">{locale.page.title}</h1>
+          <p className="mt-1 text-sm text-slate-300">{locale.page.description}</p>
         </div>
         <Link href="/dashboard" className="rounded-md border border-slate-500 px-3 py-1.5 text-sm text-slate-100 hover:bg-slate-800">
-          {uiLanguage === "ko" ? "뒤로" : uiLanguage === "ja" ? "戻る" : "Back"}
+          {locale.page.back}
         </Link>
       </header>
 
       <div className="space-y-3">
-        <CreateProjectStatusCard stage={stage} uiLanguage={uiLanguage} />
-        <NewProjectForm values={values} onChange={setValues} onSubmit={onSubmit} disabled={creating} uiLanguage={uiLanguage} />
+        <CreateProjectStatusCard stage={stage} locale={locale} />
+        <NewProjectForm values={values} onChange={setValues} onSubmit={onSubmit} disabled={creating} locale={locale} />
         {error ? (
           <CreateProjectErrorCard
             error={error}
@@ -155,7 +149,7 @@ export default function NewProjectPage() {
             onOpenLogs={onOpenLogs}
             onBackToDashboard={onBackToDashboard}
             busy={creating}
-            uiLanguage={uiLanguage}
+            locale={locale}
           />
         ) : null}
       </div>
