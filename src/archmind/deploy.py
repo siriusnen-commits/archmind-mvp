@@ -1454,6 +1454,21 @@ def deploy_frontend_local(
     run_command = [str(x) for x in (entry.get("run_command") or []) if str(x).strip()]
     if not run_command:
         return _service_result("FAIL", None, "frontend run command not detected")
+    if str(entry.get("framework") or "").strip() == "nextjs":
+        next_bin = frontend_dir / "node_modules" / ".bin" / "next"
+        if not next_bin.exists():
+            install = subprocess.run(  # noqa: S603
+                ["npm", "install", "--no-audit", "--no-fund"],
+                cwd=frontend_dir,
+                capture_output=True,
+                text=True,
+                timeout=180,
+                shell=False,
+                check=False,
+            )
+            if install.returncode != 0:
+                detail = (install.stderr or install.stdout or "").strip() or "npm install failed"
+                return _service_result("FAIL", None, f"frontend dependency install failed: {detail}")
     _write_runtime_env_files(root, frontend_port=picked_port, backend_base_url=backend_base_url)
     try:
         log_path = root / ".archmind" / "frontend.log"

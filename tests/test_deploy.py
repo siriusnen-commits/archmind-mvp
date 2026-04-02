@@ -553,6 +553,55 @@ def test_local_frontend_deploy_returns_localhost_url(monkeypatch, tmp_path: Path
     assert result["pid"] == 13001
 
 
+def test_local_frontend_deploy_installs_next_dependencies_when_missing(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "frontend" / "package.json").write_text(
+        '{"name":"web","scripts":{"dev":"next dev"},"dependencies":{"next":"14.0.0"}}',
+        encoding="utf-8",
+    )
+    captured_runs: list[tuple[list[str], str]] = []
+
+    class DummyProc:
+        pid = 13011
+
+    class DummyCompleted:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        captured_runs.append(([str(x) for x in cmd], str(kwargs.get("cwd") or "")))
+        return DummyCompleted()
+
+    monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 3011)
+    monkeypatch.setattr("archmind.deploy.subprocess.run", fake_run)
+    monkeypatch.setattr("archmind.deploy._run_local_process_with_log", lambda *a, **k: DummyProc())
+    result = deploy_frontend_local(tmp_path)
+    assert result["status"] == "SUCCESS"
+    assert captured_runs
+    assert captured_runs[0][0][:2] == ["npm", "install"]
+    assert captured_runs[0][1].endswith("/frontend")
+
+
+def test_local_frontend_deploy_fails_when_next_dependency_install_fails(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "frontend" / "package.json").write_text(
+        '{"name":"web","scripts":{"dev":"next dev"},"dependencies":{"next":"14.0.0"}}',
+        encoding="utf-8",
+    )
+
+    class DummyCompleted:
+        returncode = 1
+        stdout = ""
+        stderr = "network error"
+
+    monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 3011)
+    monkeypatch.setattr("archmind.deploy.subprocess.run", lambda *a, **k: DummyCompleted())
+    result = deploy_frontend_local(tmp_path)
+    assert result["status"] == "FAIL"
+    assert "frontend dependency install failed" in str(result.get("detail") or "")
+
+
 def test_local_deploy_process_uses_archmind_log_files(monkeypatch, tmp_path: Path) -> None:
     _write_app_main(tmp_path)
     (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
