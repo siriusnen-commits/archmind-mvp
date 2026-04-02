@@ -7,6 +7,15 @@ import type {
   CreateProjectResult,
 } from "@/types/project-create";
 
+const PROJECT_READY_TIMEOUT_MS = 15000;
+const PROJECT_READY_INTERVAL_MS = 350;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 function classifyCreateErrorCode(rawError: string, rawDetail: string, status: string): CreateProjectErrorCode {
   const text = `${rawError} ${rawDetail} ${status}`.toLowerCase();
   if (text.includes("idea is required") || text.includes("invalid") || text.includes("required")) {
@@ -64,6 +73,52 @@ function toStructuredError(payload: CreateProjectApiResponse, fallbackDetail = "
   };
 }
 
+async function isProjectDetailReady(projectName: string): Promise<boolean> {
+  const target = String(projectName || "").trim();
+  if (!target) {
+    return false;
+  }
+  try {
+    const response = await fetch(`${UI_API_BASE}/projects/${encodeURIComponent(target)}`, {
+      method: "GET",
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      return false;
+    }
+    const payload = (await response.json().catch(() => ({}))) as { name?: unknown };
+    return String(payload?.name || "").trim() === target;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForProjectReady(projectName: string): Promise<boolean> {
+  const deadline = Date.now() + PROJECT_READY_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    if (await isProjectDetailReady(projectName)) {
+      return true;
+    }
+    await sleep(PROJECT_READY_INTERVAL_MS);
+  }
+  return false;
+}
+
+async function selectCurrentProject(projectName: string): Promise<void> {
+  const target = String(projectName || "").trim();
+  if (!target) {
+    return;
+  }
+  try {
+    await fetch(`${UI_API_BASE}/projects/${encodeURIComponent(target)}/select`, {
+      method: "POST",
+      cache: "no-store",
+    });
+  } catch {
+    // non-fatal: detail page also sets current project on mount
+  }
+}
+
 export async function createProject(values: CreateProjectFormValues): Promise<CreateProjectResult> {
   try {
     const response = await fetch(`${UI_API_BASE}/projects/idea_local`, {
@@ -95,6 +150,21 @@ export async function createProject(values: CreateProjectFormValues): Promise<Cr
         },
       };
     }
+
+    const ready = await waitForProjectReady(projectName);
+    if (!ready) {
+      return {
+        ok: false,
+        error: {
+          code: "PROJECT_INIT_FAILED",
+          message: "프로젝트 생성은 시작되었지만 상세 정보가 아직 준비되지 않았습니다. 잠시 후 다시 시도해 주세요.",
+          detail: "project registration did not complete in time",
+          retryable: true,
+          projectName,
+        },
+      };
+    }
+    await selectCurrentProject(projectName);
 
     return {
       ok: true,

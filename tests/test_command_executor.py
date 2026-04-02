@@ -708,6 +708,64 @@ def test_auto_plan_placeholder_goal_uses_implement_page(monkeypatch, tmp_path: P
     assert out["auto_result"]["plan_goal"] == "resolve_placeholder_or_incomplete_page"
 
 
+def test_auto_plan_ignores_unsupported_add_entity_and_executes_supported_candidate(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "demo-unsupported-next-action"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    analyses = [
+        {
+            "next_action": {"kind": "missing_entity", "message": "Add Task entity", "command": "/add_entity Task"},
+            "next_action_explanation": {"reason_summary": "No entities found yet"},
+            "suggestions": [
+                {"kind": "missing_field", "message": "Add title field", "command": "/add_field Task title:string"},
+                {"kind": "missing_entity", "message": "Add Task entity", "command": "/add_entity Task"},
+            ],
+            "entities": ["Task"],
+            "fields_by_entity": {"Task": []},
+            "apis": [],
+            "pages": [],
+            "placeholder_pages": [],
+            "entity_crud_status": {"Task": {"missing_api": ["GET list"], "missing_pages": ["tasks/list"]}},
+        },
+        {
+            "next_action": {"kind": "none", "message": "No immediate suggestions.", "command": ""},
+            "next_action_explanation": {},
+            "suggestions": [],
+            "entities": ["Task"],
+            "fields_by_entity": {"Task": [{"name": "title"}]},
+            "apis": [],
+            "pages": [],
+            "placeholder_pages": [],
+            "entity_crud_status": {"Task": {"missing_api": ["GET list"], "missing_pages": ["tasks/list"]}},
+        },
+    ]
+    call_idx = {"value": 0}
+
+    def _fake_build_analysis(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        idx = min(call_idx["value"], len(analyses) - 1)
+        call_idx["value"] += 1
+        return analyses[idx]
+
+    monkeypatch.setattr("archmind.telegram_bot._build_project_analysis", _fake_build_analysis)
+    monkeypatch.setattr("archmind.telegram_bot._compute_auto_iteration_budget", lambda *_args, **_kwargs: (2, ["base=2"]))
+    monkeypatch.setattr("archmind.telegram_bot._auto_runtime_state_lines", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("archmind.telegram_bot._auto_analysis_brief", lambda *_args, **_kwargs: "entities=1, apis=0, pages=0")
+    monkeypatch.setattr("archmind.telegram_bot.sync_repo_after_auto_batch", lambda *_args, **_kwargs: {"status": "SYNCED"})
+    monkeypatch.setattr("archmind.state.load_state", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("archmind.state.write_state", lambda *_args, **_kwargs: None)
+
+    executed: list[str] = []
+    monkeypatch.setattr(
+        "archmind.command_executor.execute_command",
+        lambda command, *_args, **_kwargs: (executed.append(command) or {"ok": True, "detail": "ok"}),
+    )
+
+    out = _execute_auto_command(project_dir, project_name="demo", source="ui-next-run")
+    assert out["ok"] is True
+    assert executed == ["/add_field Task title:string"]
+    assert "/add_entity Task" not in out["auto_result"]["commands"]
+    assert "unsupported command" not in str(out["auto_result"]["stop_reason"]).lower()
+
+
 def test_auto_strategy_balanced_executes_medium_priority_plan_step(monkeypatch, tmp_path: Path) -> None:
     project_dir = tmp_path / "demo-balanced-medium"
     project_dir.mkdir(parents=True, exist_ok=True)

@@ -96,14 +96,29 @@ def _build_wizard_idea_text(idea: str, template: str, language: str) -> str:
         return ""
     text = base
     normalized_template = _normalize_wizard_template(template)
-    if normalized_template != "auto" and normalized_template not in text.lower():
-        text = f"{text} {normalized_template} app"
+    template_hints = {
+        "todo": "todo task manager app with task list, create form, and task details",
+        "diary": "diary journal app with entry list, create form, and detail view",
+        "kanban": "kanban board app with board and card management",
+        "bookmark": "bookmark links app with list and create flow",
+    }
+    if normalized_template != "auto":
+        hint = str(template_hints.get(normalized_template) or f"{normalized_template} app").strip()
+        if hint and hint not in text.lower():
+            text = f"{text} {hint}"
     normalized_language = _normalize_wizard_language(language)
     if normalized_language == "korean":
         text = f"{text} (Korean language project)"
     elif normalized_language == "japanese":
         text = f"{text} (Japanese language project)"
     return text
+
+
+def _wizard_template_to_pipeline_template(template: str) -> str:
+    normalized = _normalize_wizard_template(template)
+    if normalized in {"todo", "diary", "kanban", "bookmark"}:
+        return "fullstack-ddd"
+    return ""
 
 
 def _max_iterations_for_mode(mode: str) -> int:
@@ -130,7 +145,13 @@ def _start_wizard_generation(
         return False, "", "Idea is required"
     base_dir = resolve_ui_projects_dir()
     project_dir = planned_project_dir(base_dir, idea_text)
-    cmd = build_pipeline_command(idea_text, base_dir, project_dir.name)
+    pipeline_template = _wizard_template_to_pipeline_template(template)
+    cmd = build_pipeline_command(
+        idea_text,
+        base_dir,
+        project_dir.name,
+        template_name=pipeline_template or None,
+    )
     cmd += ["--max-iterations", str(_max_iterations_for_mode(mode))]
     # v1: llm_mode is accepted for forward compatibility; actual provider wiring remains backend defaults.
     _ = _normalize_wizard_llm_mode(llm_mode)

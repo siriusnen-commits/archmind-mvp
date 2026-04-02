@@ -167,6 +167,18 @@ def test_build_pipeline_command_for_idea_local_enables_auto_deploy() -> None:
     assert cmd[cmd.index("--deploy-target") + 1] == "local"
 
 
+def test_build_pipeline_command_supports_optional_template_override() -> None:
+    base_dir = Path("/tmp/projects")
+    cmd = build_pipeline_command(
+        idea="todo app",
+        base_dir=base_dir,
+        project_name="20260402_todo_app",
+        template_name="fullstack-ddd",
+    )
+    assert "--template" in cmd
+    assert cmd[cmd.index("--template") + 1] == "fullstack-ddd"
+
+
 def test_resolve_template_for_idea_backend_routes_to_fastapi() -> None:
     assert resolve_template_for_idea("simple fastapi notes api") == "fastapi"
 

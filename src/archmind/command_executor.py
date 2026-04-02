@@ -179,6 +179,28 @@ def _execute_auto_command(
 
     idx = 1
     while idx <= iteration_budget:
+        def _first_supported_row(rows: list[dict[str, Any]]) -> dict[str, str]:
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                candidate = _normalize_recommended_command(str(row.get("command") or "").strip())
+                if not candidate:
+                    continue
+                candidate_cmd, _candidate_args = _parse_command_string(candidate)
+                if not candidate_cmd or candidate_cmd not in AUTO_ALLOWED_COMMANDS:
+                    continue
+                return {
+                    "kind": str(row.get("kind") or "").strip().lower(),
+                    "message": str(row.get("message") or "").strip(),
+                    "reason_summary": str(row.get("reason_summary") or "").strip(),
+                    "expected_effect": str(row.get("expected_effect") or "").strip(),
+                    "priority_reason": str(row.get("priority_reason") or "").strip(),
+                    "priority": str(row.get("priority") or "").strip().lower(),
+                    "command": candidate,
+                    "cmd": candidate_cmd,
+                }
+            return {}
+
         kind, message, raw_command = _extract_next_action(analysis)
         explanation = _extract_next_action_explanation(analysis)
         fallback_reason_summary = str(explanation.get("reason_summary") or "").strip() or message
@@ -234,6 +256,27 @@ def _execute_auto_command(
             cmd = str(step.get("cmd") or "").strip().lower()
             if not cmd and normalized_command:
                 cmd, _ = _parse_command_string(normalized_command)
+
+        if not normalized_command or cmd not in AUTO_ALLOWED_COMMANDS:
+            supported_row = _first_supported_row(plan_steps if isinstance(plan_steps, list) else [])
+            if not supported_row:
+                analysis_suggestions = analysis.get("suggestions") if isinstance(analysis.get("suggestions"), list) else []
+                supported_row = _first_supported_row(analysis_suggestions if isinstance(analysis_suggestions, list) else [])
+            if supported_row:
+                kind = str(supported_row.get("kind") or kind).strip().lower()
+                message = str(supported_row.get("message") or message).strip()
+                reason_summary = str(supported_row.get("reason_summary") or reason_summary).strip() or reason_summary
+                expected_effect = str(supported_row.get("expected_effect") or expected_effect).strip() or expected_effect
+                priority_reason = str(supported_row.get("priority_reason") or priority_reason).strip() or priority_reason
+                normalized_command = str(supported_row.get("command") or normalized_command).strip()
+                cmd = str(supported_row.get("cmd") or cmd).strip().lower()
+                supported_priority = str(supported_row.get("priority") or "").strip().lower()
+                if supported_priority:
+                    priority = supported_priority
+                else:
+                    priority = classify_auto_action_priority(
+                        {"kind": kind, "message": message, "command": normalized_command}
+                    )
 
         priority_allowed = _strategy_allows_priority(strategy, priority)
         actionable_supported = priority_allowed and bool(normalized_command) and cmd in AUTO_ALLOWED_COMMANDS
