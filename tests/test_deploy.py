@@ -1601,6 +1601,55 @@ def test_get_local_runtime_status_uses_urls_and_pid_status(monkeypatch, tmp_path
     assert status["frontend"]["url"] == "http://127.0.0.1:3044"
 
 
+def test_get_local_runtime_status_marks_local_only_without_lan_urls(monkeypatch, tmp_path: Path) -> None:
+    write_state(
+        tmp_path,
+        {
+            "deploy_target": "local",
+            "backend_pid": 44444,
+            "backend_deploy_url": "http://127.0.0.1:8044",
+        },
+    )
+    monkeypatch.setattr("archmind.deploy.is_pid_running", lambda pid: int(pid or 0) == 44444)
+    monkeypatch.setenv("ARCHMIND_LAN_HOST", "192.168.0.201")
+    monkeypatch.setenv("ARCHMIND_TAILSCALE_HOST", "100.64.0.8")
+    monkeypatch.setattr(
+        "archmind.deploy._is_tcp_reachable",
+        lambda host, _port, timeout_s=0.35: bool(host in {"127.0.0.1", "localhost"}),
+    )
+    status = get_local_runtime_status(tmp_path)
+    reachability = status["backend"]["reachability"]
+    assert reachability["status"] == "LOCAL_REACHABLE"
+    assert reachability["local_reachable"] is True
+    assert reachability["lan_reachable"] is False
+    assert reachability["external_reachable"] is False
+    assert reachability["lan_urls"] == []
+    assert reachability["external_urls"] == []
+
+
+def test_get_local_runtime_status_marks_lan_and_external_when_verified(monkeypatch, tmp_path: Path) -> None:
+    write_state(
+        tmp_path,
+        {
+            "deploy_target": "local",
+            "frontend_pid": 55555,
+            "frontend_deploy_url": "http://127.0.0.1:3044",
+        },
+    )
+    monkeypatch.setattr("archmind.deploy.is_pid_running", lambda pid: int(pid or 0) == 55555)
+    monkeypatch.setenv("ARCHMIND_LAN_HOST", "192.168.0.201")
+    monkeypatch.setenv("ARCHMIND_TAILSCALE_HOST", "100.64.0.8")
+    monkeypatch.setattr("archmind.deploy._is_tcp_reachable", lambda _host, _port, timeout_s=0.35: True)
+    status = get_local_runtime_status(tmp_path)
+    reachability = status["frontend"]["reachability"]
+    assert reachability["status"] == "EXTERNAL_REACHABLE"
+    assert reachability["local_reachable"] is True
+    assert reachability["lan_reachable"] is True
+    assert reachability["external_reachable"] is True
+    assert "http://192.168.0.201:3044" in reachability["lan_urls"]
+    assert "http://100.64.0.8:3044" in reachability["external_urls"]
+
+
 def test_detect_frontend_runtime_entry_prefers_frontend_dir(tmp_path: Path) -> None:
     frontend_dir = tmp_path / "frontend"
     frontend_dir.mkdir(parents=True, exist_ok=True)

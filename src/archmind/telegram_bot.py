@@ -2220,6 +2220,32 @@ def _normalize_runtime_state_label(value: str) -> str:
     return "STOPPED"
 
 
+def _has_materialization_failure(state_payload: dict[str, Any], result_payload: dict[str, Any]) -> bool:
+    auto_last = state_payload.get("auto_last_result") if isinstance(state_payload.get("auto_last_result"), dict) else {}
+    candidates = [
+        state_payload.get("last_failure_class"),
+        state_payload.get("last_detail"),
+        state_payload.get("last_status"),
+        result_payload.get("failure_class"),
+        result_payload.get("detail"),
+        result_payload.get("status"),
+        auto_last.get("stop_reason"),
+        auto_last.get("detail"),
+    ]
+    lowered = "\n".join(str(item or "").strip().lower() for item in candidates if str(item or "").strip())
+    if not lowered:
+        return False
+    if "project not materialized" in lowered:
+        return True
+    if "unsupported /add_entity" in lowered:
+        return True
+    if "no supported bootstrap path" in lowered:
+        return True
+    if "materialization" in lowered and any(token in lowered for token in ("fail", "missing", "not")):
+        return True
+    return False
+
+
 def _project_runtime_status(
     project_dir: Path,
     state_payload: dict[str, Any],
@@ -2252,7 +2278,11 @@ def _project_runtime_status(
     live_frontend_status = _normalize_runtime_state_label(str(frontend_live.get("status") or ""))
     live_signal_present = bool(str(backend_live.get("status") or "").strip() or str(frontend_live.get("status") or "").strip())
 
+    materialization_failed = _has_materialization_failure(state_payload, result_payload)
+
     if live_signal_present:
+        if materialization_failed:
+            return "FAIL"
         if live_backend_status == "RUNNING" or live_frontend_status == "RUNNING":
             return "RUNNING"
     elif "RUNNING" in normalized_backend or "RUNNING" in normalized_frontend:
@@ -2282,6 +2312,9 @@ def _project_runtime_status(
         return "STOPPED"
 
     if runtime_failure_class:
+        return "FAIL"
+
+    if materialization_failed:
         return "FAIL"
 
     if preflight_failed:
@@ -4155,17 +4188,50 @@ async def command_current(update: Any, context: Any) -> None:
     ]
     if backend_url:
         runtime_lines.append(f"Backend URL: {backend_url}")
-        external_backend_url = _external_url_for(backend_url, external_ip)
-        if runtime_backend == "RUNNING" and external_backend_url:
-            runtime_lines.append(f"External URL: {external_backend_url}")
+        backend_live = runtime_payload.get("backend") if isinstance(runtime_payload, dict) and isinstance(runtime_payload.get("backend"), dict) else {}
+        backend_reachability = backend_live.get("reachability") if isinstance(backend_live.get("reachability"), dict) else {}
+        backend_lan_urls = backend_reachability.get("lan_urls") if isinstance(backend_reachability.get("lan_urls"), list) else []
+        backend_external_urls = (
+            backend_reachability.get("external_urls") if isinstance(backend_reachability.get("external_urls"), list) else []
+        )
+        if runtime_backend == "RUNNING":
+            runtime_lines.append(f"Reachability: {str(backend_reachability.get('status') or 'UNREACHABLE').strip().upper() or 'UNREACHABLE'}")
+        for lan_url in backend_lan_urls:
+            text = str(lan_url or "").strip()
+            if text:
+                runtime_lines.append(f"LAN URL: {text}")
+        for external_url in backend_external_urls:
+            text = str(external_url or "").strip()
+            if text:
+                runtime_lines.append(f"External URL: {text}")
+        if runtime_backend == "RUNNING" and not backend_lan_urls and not backend_external_urls:
+            external_backend_url = _external_url_for(backend_url, external_ip)
+            if external_backend_url:
+                runtime_lines.append(f"External URL: {external_backend_url}")
     elif backend_last_known_url:
         runtime_lines.append(f"Last Backend URL: {backend_last_known_url}")
     runtime_lines.append(f"Frontend: {runtime_frontend}")
     if runtime_frontend == "RUNNING" and frontend_url:
         runtime_lines.append(f"Frontend URL: {frontend_url}")
-        external_frontend_url = _external_url_for(frontend_url, external_ip)
-        if external_frontend_url:
-            runtime_lines.append(f"External URL: {external_frontend_url}")
+        frontend_live = runtime_payload.get("frontend") if isinstance(runtime_payload, dict) and isinstance(runtime_payload.get("frontend"), dict) else {}
+        frontend_reachability = frontend_live.get("reachability") if isinstance(frontend_live.get("reachability"), dict) else {}
+        runtime_lines.append(f"Reachability: {str(frontend_reachability.get('status') or 'UNREACHABLE').strip().upper() or 'UNREACHABLE'}")
+        frontend_lan_urls = frontend_reachability.get("lan_urls") if isinstance(frontend_reachability.get("lan_urls"), list) else []
+        frontend_external_urls = (
+            frontend_reachability.get("external_urls") if isinstance(frontend_reachability.get("external_urls"), list) else []
+        )
+        for lan_url in frontend_lan_urls:
+            text = str(lan_url or "").strip()
+            if text:
+                runtime_lines.append(f"LAN URL: {text}")
+        for external_url in frontend_external_urls:
+            text = str(external_url or "").strip()
+            if text:
+                runtime_lines.append(f"External URL: {text}")
+        if not frontend_lan_urls and not frontend_external_urls:
+            external_frontend_url = _external_url_for(frontend_url, external_ip)
+            if external_frontend_url:
+                runtime_lines.append(f"External URL: {external_frontend_url}")
     elif frontend_last_known_url:
         runtime_lines.append(f"Last Frontend URL: {frontend_last_known_url}")
 
@@ -7841,18 +7907,54 @@ async def command_running(update: Any, context: Any) -> None:
         backend_url = str(backend.get("url") or "").strip()
         if backend_url:
             lines.append(f"   URL: {backend_url}")
-            external_backend_url = _external_url_for(backend_url, external_ip)
-            if backend_status.upper() == "RUNNING" and external_backend_url:
-                lines.append(f"   External URL: {external_backend_url}")
+            backend_reachability = backend.get("reachability") if isinstance(backend.get("reachability"), dict) else {}
+            if backend_status.upper() == "RUNNING":
+                lines.append(
+                    f"   Reachability: {str(backend_reachability.get('status') or 'UNREACHABLE').strip().upper() or 'UNREACHABLE'}"
+                )
+            lan_urls = backend_reachability.get("lan_urls") if isinstance(backend_reachability.get("lan_urls"), list) else []
+            external_urls = (
+                backend_reachability.get("external_urls") if isinstance(backend_reachability.get("external_urls"), list) else []
+            )
+            for lan_url in lan_urls:
+                text = str(lan_url or "").strip()
+                if text:
+                    lines.append(f"   LAN URL: {text}")
+            for external_url in external_urls:
+                text = str(external_url or "").strip()
+                if text:
+                    lines.append(f"   External URL: {text}")
+            if backend_status.upper() == "RUNNING" and not lan_urls and not external_urls:
+                external_backend_url = _external_url_for(backend_url, external_ip)
+                if external_backend_url:
+                    lines.append(f"   External URL: {external_backend_url}")
         frontend_status = str(frontend.get("status") or "NOT RUNNING")
         frontend_pid = frontend.get("pid")
         lines.append(f"   Frontend: {frontend_status}" + (f" (pid {frontend_pid})" if frontend_pid else ""))
         frontend_url = str(frontend.get("url") or "").strip()
         if frontend_url:
             lines.append(f"   URL: {frontend_url}")
-            external_frontend_url = _external_url_for(frontend_url, external_ip)
-            if frontend_status.upper() == "RUNNING" and external_frontend_url:
-                lines.append(f"   External URL: {external_frontend_url}")
+            frontend_reachability = frontend.get("reachability") if isinstance(frontend.get("reachability"), dict) else {}
+            if frontend_status.upper() == "RUNNING":
+                lines.append(
+                    f"   Reachability: {str(frontend_reachability.get('status') or 'UNREACHABLE').strip().upper() or 'UNREACHABLE'}"
+                )
+            lan_urls = frontend_reachability.get("lan_urls") if isinstance(frontend_reachability.get("lan_urls"), list) else []
+            external_urls = (
+                frontend_reachability.get("external_urls") if isinstance(frontend_reachability.get("external_urls"), list) else []
+            )
+            for lan_url in lan_urls:
+                text = str(lan_url or "").strip()
+                if text:
+                    lines.append(f"   LAN URL: {text}")
+            for external_url in external_urls:
+                text = str(external_url or "").strip()
+                if text:
+                    lines.append(f"   External URL: {text}")
+            if frontend_status.upper() == "RUNNING" and not lan_urls and not external_urls:
+                external_frontend_url = _external_url_for(frontend_url, external_ip)
+                if external_frontend_url:
+                    lines.append(f"   External URL: {external_frontend_url}")
         if idx != len(rows):
             lines.append("")
     await update.message.reply_text(_truncate_message("\n".join(lines), limit=3500))

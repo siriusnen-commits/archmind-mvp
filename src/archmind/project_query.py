@@ -108,6 +108,32 @@ def _expand_runtime_urls(primary_url: str) -> list[str]:
     return out
 
 
+def _expand_runtime_urls_with_reachability(primary_url: str, component_runtime: dict[str, Any] | None) -> list[str]:
+    base = str(primary_url or "").strip()
+    if not base:
+        return []
+    if not isinstance(component_runtime, dict):
+        return _expand_runtime_urls(base)
+    reachability = component_runtime.get("reachability") if isinstance(component_runtime.get("reachability"), dict) else {}
+    if not reachability:
+        return _expand_runtime_urls(base)
+    lan_urls = reachability.get("lan_urls") if isinstance(reachability, dict) else []
+    external_urls = reachability.get("external_urls") if isinstance(reachability, dict) else []
+    if not isinstance(lan_urls, list):
+        lan_urls = []
+    if not isinstance(external_urls, list):
+        external_urls = []
+    out: list[str] = [base]
+    seen: set[str] = {base}
+    for candidate in [*lan_urls, *external_urls]:
+        text = str(candidate or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        out.append(text)
+    return out
+
+
 def _runtime_hosts_config_path() -> Path:
     override = str(os.getenv("ARCHMIND_UI_RUNTIME_HOSTS_PATH", "") or "").strip()
     if override:
@@ -205,12 +231,19 @@ def _runtime_urls_for_display(
     snapshot = build_runtime_snapshot(runtime_payload if isinstance(runtime_payload, dict) else {}, state_payload)
     backend = snapshot.get("backend") if isinstance(snapshot.get("backend"), dict) else {}
     frontend = snapshot.get("frontend") if isinstance(snapshot.get("frontend"), dict) else {}
+    live_backend = runtime_payload.get("backend") if isinstance(runtime_payload.get("backend"), dict) else {}
+    live_frontend = runtime_payload.get("frontend") if isinstance(runtime_payload.get("frontend"), dict) else {}
     backend_url = str(backend.get("url") or "").strip()
     frontend_url = str(frontend.get("url") or "").strip()
     if status != "RUNNING":
         backend_url = ""
         frontend_url = ""
-    return backend_url, frontend_url, _expand_runtime_urls(backend_url), _expand_runtime_urls(frontend_url)
+    return (
+        backend_url,
+        frontend_url,
+        _expand_runtime_urls_with_reachability(backend_url, live_backend if live_backend else backend),
+        _expand_runtime_urls_with_reachability(frontend_url, live_frontend if live_frontend else frontend),
+    )
 
 
 def _resolve_current_project_dir() -> Path | None:
@@ -919,6 +952,10 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
         backend_url, frontend_url, backend_urls, frontend_urls = _runtime_urls_for_display(status, runtime_payload, state_payload)
         backend_runtime = snapshot.get("backend") if isinstance(snapshot.get("backend"), dict) else {}
         frontend_runtime = snapshot.get("frontend") if isinstance(snapshot.get("frontend"), dict) else {}
+        live_backend = runtime_payload.get("backend") if isinstance(runtime_payload.get("backend"), dict) else {}
+        live_frontend = runtime_payload.get("frontend") if isinstance(runtime_payload.get("frontend"), dict) else {}
+        backend_reachability = live_backend.get("reachability") if isinstance(live_backend.get("reachability"), dict) else {}
+        frontend_reachability = live_frontend.get("reachability") if isinstance(live_frontend.get("reachability"), dict) else {}
         analysis = analyze_project(
             project_dir,
             project_name=project_dir.name,
@@ -1067,6 +1104,14 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
                 frontend_urls=frontend_urls,
                 backend_last_known_url=str(backend_runtime.get("last_known_url") or "").strip(),
                 frontend_last_known_url=str(frontend_runtime.get("last_known_url") or "").strip(),
+                backend_reachability_status=str(backend_reachability.get("status") or "UNREACHABLE").strip().upper() or "UNREACHABLE",
+                frontend_reachability_status=str(frontend_reachability.get("status") or "UNREACHABLE").strip().upper() or "UNREACHABLE",
+                backend_local_reachable=bool(backend_reachability.get("local_reachable")),
+                frontend_local_reachable=bool(frontend_reachability.get("local_reachable")),
+                backend_lan_reachable=bool(backend_reachability.get("lan_reachable")),
+                frontend_lan_reachable=bool(frontend_reachability.get("lan_reachable")),
+                backend_external_reachable=bool(backend_reachability.get("external_reachable")),
+                frontend_external_reachable=bool(frontend_reachability.get("external_reachable")),
             ),
             recent_evolution=recent_evolution,
             recent_runs=recent_runs,
