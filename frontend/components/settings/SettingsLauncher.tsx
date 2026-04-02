@@ -42,10 +42,12 @@ export default function SettingsLauncher() {
       <button
         type="button"
         onClick={openDrawer}
+        data-testid="archmind-settings-launcher"
         aria-label="Open settings"
-        className="fixed bottom-4 left-4 z-40 inline-flex h-11 w-11 items-center justify-center rounded-full border border-slate-600 bg-slate-900/90 text-sm font-semibold text-slate-100 shadow-lg hover:bg-slate-800"
+        className="fixed bottom-4 right-4 z-40 inline-flex items-center gap-2 rounded-full border border-slate-600 bg-slate-900/90 px-3 py-2 text-sm font-semibold text-slate-100 shadow-lg hover:bg-slate-800"
       >
-        N
+        <span aria-hidden="true">[]</span>
+        <span>Settings</span>
       </button>
       <SettingsDrawer key={drawerVersion} open={open} onClose={() => setOpen(false)} />
     </>
