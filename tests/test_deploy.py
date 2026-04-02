@@ -1735,6 +1735,55 @@ def test_get_local_runtime_status_marks_frontend_fail_when_health_fail(monkeypat
     assert status["frontend"]["reachability"]["status"] == "UNREACHABLE"
 
 
+def test_get_local_runtime_status_recovers_stale_frontend_fail_when_reachable(monkeypatch, tmp_path: Path) -> None:
+    write_state(
+        tmp_path,
+        {
+            "last_status": "FAIL",
+            "last_failure_class": "generation-error",
+            "recent_failures": ["old generation drift"],
+            "next_action": "FIX",
+            "next_action_reason": "previous failure",
+            "runtime": {
+                "frontend_pid": 55555,
+                "frontend_url": "http://127.0.0.1:3044",
+                "frontend_status": "FAIL",
+                "frontend_health": "FAIL",
+                "services": {
+                    "frontend": {
+                        "pid": 55555,
+                        "url": "http://127.0.0.1:3044",
+                        "status": "FAIL",
+                        "health": "FAIL",
+                    }
+                },
+            },
+        },
+    )
+    monkeypatch.setattr("archmind.deploy.is_pid_running", lambda pid: int(pid or 0) == 55555)
+    monkeypatch.setenv("ARCHMIND_LAN_HOST", "192.168.0.201")
+    monkeypatch.setenv("ARCHMIND_TAILSCALE_HOST", "")
+    monkeypatch.setattr("archmind.deploy._detect_tailscale_host_for_runtime", lambda: "")
+    monkeypatch.setattr("archmind.deploy._is_tcp_reachable", lambda _host, _port, timeout_s=0.35: True)
+
+    status = get_local_runtime_status(tmp_path)
+    assert status["frontend"]["status"] == "RUNNING"
+    assert status["frontend"]["reachability"]["status"] in {"LOCAL_REACHABLE", "LAN_REACHABLE", "REMOTE_REACHABLE"}
+
+    state_after = load_state(tmp_path) or {}
+    runtime_after = state_after.get("runtime") if isinstance(state_after.get("runtime"), dict) else {}
+    services_after = runtime_after.get("services") if isinstance(runtime_after.get("services"), dict) else {}
+    frontend_after = services_after.get("frontend") if isinstance(services_after.get("frontend"), dict) else {}
+    assert str(runtime_after.get("frontend_health") or "").upper() == "SUCCESS"
+    assert str(runtime_after.get("frontend_status") or "").upper() == "RUNNING"
+    assert str(frontend_after.get("health") or "").upper() == "SUCCESS"
+    assert str(frontend_after.get("status") or "").upper() == "RUNNING"
+    assert str(state_after.get("last_status") or "").upper() == "SUCCESS"
+    assert str(state_after.get("last_failure_class") or "") == ""
+    assert state_after.get("recent_failures") == []
+    assert str(state_after.get("next_action") or "").upper() == "STOP"
+
+
 def test_get_local_runtime_status_marks_local_only_without_lan_urls(monkeypatch, tmp_path: Path) -> None:
     write_state(
         tmp_path,
@@ -1892,6 +1941,40 @@ def test_update_runtime_state_persists_runtime_services_structure(tmp_path: Path
     assert str(frontend.get("status") or "").upper() == "RUNNING"
     assert int(frontend.get("pid") or 0) == 44002
     assert int(state.get("frontend_pid") or 0) == 44002
+
+
+def test_update_runtime_state_clears_stale_failure_when_runtime_recovers(tmp_path: Path) -> None:
+    write_state(
+        tmp_path,
+        {
+            "last_status": "FAIL",
+            "last_failure_class": "generation-error",
+            "recent_failures": ["frontend create form drift"],
+            "next_action": "FIX",
+            "next_action_reason": "stale failure path",
+        },
+    )
+    update_runtime_state(
+        tmp_path,
+        {
+            "status": "SUCCESS",
+            "mode": "real",
+            "backend_status": "RUNNING",
+            "frontend_status": "RUNNING",
+            "frontend_smoke_status": "SUCCESS",
+            "services": {
+                "backend": {"status": "RUNNING", "url": "http://127.0.0.1:8044"},
+                "frontend": {"status": "RUNNING", "url": "http://127.0.0.1:3044", "health": "SUCCESS"},
+            },
+            "detail": "services started",
+        },
+        action="ui run-all",
+    )
+    state_after = load_state(tmp_path) or {}
+    assert str(state_after.get("last_status") or "").upper() == "SUCCESS"
+    assert str(state_after.get("last_failure_class") or "") == ""
+    assert state_after.get("recent_failures") == []
+    assert str(state_after.get("next_action") or "").upper() == "STOP"
 
 
 def test_read_last_lines_returns_none_when_missing(tmp_path: Path) -> None:
