@@ -556,7 +556,10 @@ def test_local_frontend_deploy_returns_localhost_url(monkeypatch, tmp_path: Path
 def test_local_deploy_process_uses_archmind_log_files(monkeypatch, tmp_path: Path) -> None:
     _write_app_main(tmp_path)
     (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "frontend" / "package.json").write_text('{"name":"web"}', encoding="utf-8")
+    (tmp_path / "frontend" / "package.json").write_text(
+        '{"name":"web","scripts":{"dev":"next dev"},"dependencies":{"next":"14.0.0"}}',
+        encoding="utf-8",
+    )
     captured: list[str] = []
     captured_cmds: list[list[str]] = []
 
@@ -587,10 +590,34 @@ def test_local_deploy_process_uses_archmind_log_files(monkeypatch, tmp_path: Pat
     assert any(path.endswith(".archmind/backend.log") for path in captured)
     assert any(path.endswith(".archmind/frontend.log") for path in captured)
     backend_cmd = next((cmd for cmd in captured_cmds if cmd and cmd[0] == "uvicorn"), [])
-    frontend_cmd = next((cmd for cmd in captured_cmds if cmd[:3] == ["npm", "run", "dev"]), [])
+    frontend_cmd = next((cmd for cmd in captured_cmds if cmd[:4] == ["npm", "exec", "--", "next"]), [])
     assert "--host" in backend_cmd
     assert "0.0.0.0" in backend_cmd
     assert "--hostname" in frontend_cmd
+    assert "0.0.0.0" in frontend_cmd
+
+
+def test_local_frontend_deploy_generic_runtime_uses_host_flag(monkeypatch, tmp_path: Path) -> None:
+    (tmp_path / "frontend").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "frontend" / "package.json").write_text(
+        '{"name":"web","scripts":{"dev":"vite"},"dependencies":{"vite":"5.0.0"}}',
+        encoding="utf-8",
+    )
+    captured_cmds: list[list[str]] = []
+
+    class DummyProc:
+        pid = 13001
+
+    def fake_run(cmd, **kwargs):  # type: ignore[no-untyped-def]
+        captured_cmds.append([str(x) for x in cmd])
+        return DummyProc()
+
+    monkeypatch.setattr("archmind.deploy.find_free_port", lambda: 3011)
+    monkeypatch.setattr("archmind.deploy._run_local_process_with_log", fake_run)
+    result = deploy_frontend_local(tmp_path)
+    assert result["status"] == "SUCCESS"
+    frontend_cmd = next((cmd for cmd in captured_cmds if cmd[:3] == ["npm", "run", "dev"]), [])
+    assert "--host" in frontend_cmd
     assert "0.0.0.0" in frontend_cmd
 
 
@@ -1642,11 +1669,60 @@ def test_get_local_runtime_status_marks_lan_and_external_when_verified(monkeypat
     monkeypatch.setattr("archmind.deploy._is_tcp_reachable", lambda _host, _port, timeout_s=0.35: True)
     status = get_local_runtime_status(tmp_path)
     reachability = status["frontend"]["reachability"]
-    assert reachability["status"] == "EXTERNAL_REACHABLE"
+    assert reachability["status"] == "REMOTE_REACHABLE"
     assert reachability["local_reachable"] is True
     assert reachability["lan_reachable"] is True
     assert reachability["external_reachable"] is True
     assert "http://192.168.0.201:3044" in reachability["lan_urls"]
+    assert "http://100.64.0.8:3044" in reachability["external_urls"]
+
+
+def test_get_local_runtime_status_includes_configured_remote_frontend_url_when_reachable(monkeypatch, tmp_path: Path) -> None:
+    write_state(
+        tmp_path,
+        {
+            "deploy_target": "local",
+            "frontend_pid": 55555,
+            "frontend_deploy_url": "http://127.0.0.1:3044",
+        },
+    )
+    monkeypatch.setattr("archmind.deploy.is_pid_running", lambda pid: int(pid or 0) == 55555)
+    monkeypatch.setenv("ARCHMIND_EXTERNAL_FRONTEND_URL", "http://198.51.100.7:3044")
+    monkeypatch.setenv("ARCHMIND_LAN_HOST", "")
+    monkeypatch.setenv("ARCHMIND_TAILSCALE_HOST", "")
+    monkeypatch.setattr("archmind.deploy._detect_lan_host_for_runtime", lambda: "")
+    monkeypatch.setattr("archmind.deploy._detect_tailscale_host_for_runtime", lambda: "")
+    monkeypatch.setattr("archmind.deploy._is_tcp_reachable", lambda _host, _port, timeout_s=0.35: True)
+    status = get_local_runtime_status(tmp_path)
+    reachability = status["frontend"]["reachability"]
+    assert reachability["status"] == "REMOTE_REACHABLE"
+    assert "http://198.51.100.7:3044" in reachability["external_urls"]
+
+
+def test_get_local_runtime_status_uses_persisted_hosts_for_frontend_reachability(monkeypatch, tmp_path: Path) -> None:
+    write_state(
+        tmp_path,
+        {
+            "deploy_target": "local",
+            "frontend_pid": 55555,
+            "frontend_deploy_url": "http://127.0.0.1:3044",
+        },
+    )
+    hosts_path = tmp_path / "ui_runtime_hosts.json"
+    hosts_path.write_text('{"lan_host":"192.168.0.250","tailscale_host":"100.64.0.8"}', encoding="utf-8")
+
+    monkeypatch.setenv("ARCHMIND_UI_RUNTIME_HOSTS_PATH", str(hosts_path))
+    monkeypatch.delenv("ARCHMIND_LAN_HOST", raising=False)
+    monkeypatch.delenv("ARCHMIND_TAILSCALE_HOST", raising=False)
+    monkeypatch.setattr("archmind.deploy._detect_lan_host_for_runtime", lambda: "")
+    monkeypatch.setattr("archmind.deploy._detect_tailscale_host_for_runtime", lambda: "")
+    monkeypatch.setattr("archmind.deploy.is_pid_running", lambda pid: int(pid or 0) == 55555)
+    monkeypatch.setattr("archmind.deploy._is_tcp_reachable", lambda _host, _port, timeout_s=0.35: True)
+
+    status = get_local_runtime_status(tmp_path)
+    reachability = status["frontend"]["reachability"]
+    assert reachability["status"] == "REMOTE_REACHABLE"
+    assert "http://192.168.0.250:3044" in reachability["lan_urls"]
     assert "http://100.64.0.8:3044" in reachability["external_urls"]
 
 

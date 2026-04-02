@@ -2885,6 +2885,57 @@ def test_ui_runtime_detail_includes_reachability_layers(monkeypatch, tmp_path: P
     assert runtime["frontend_lan_reachable"] is True
 
 
+def test_ui_runtime_frontend_three_url_exposure_is_symmetric_with_backend(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "runtime-three-url")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setattr(
+        "archmind.project_query.get_local_runtime_status",
+        lambda _project_dir: {
+            "backend": {
+                "status": "RUNNING",
+                "url": "http://127.0.0.1:8123",
+                "reachability": {
+                    "status": "REMOTE_REACHABLE",
+                    "local_reachable": True,
+                    "lan_reachable": True,
+                    "external_reachable": True,
+                    "lan_urls": ["http://192.168.0.197:8123"],
+                    "external_urls": ["http://100.117.128.20:8123"],
+                },
+            },
+            "frontend": {
+                "status": "RUNNING",
+                "url": "http://127.0.0.1:3123",
+                "reachability": {
+                    "status": "REMOTE_REACHABLE",
+                    "local_reachable": True,
+                    "lan_reachable": True,
+                    "external_reachable": True,
+                    "lan_urls": ["http://192.168.0.197:3123"],
+                    "external_urls": ["http://100.117.128.20:3123"],
+                },
+            },
+        },
+    )
+
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/runtime-three-url")
+    assert response.status_code == 200
+    runtime = response.json()["runtime"]
+    assert runtime["backend_urls"] == [
+        "http://127.0.0.1:8123",
+        "http://192.168.0.197:8123",
+        "http://100.117.128.20:8123",
+    ]
+    assert runtime["frontend_urls"] == [
+        "http://127.0.0.1:3123",
+        "http://192.168.0.197:3123",
+        "http://100.117.128.20:3123",
+    ]
+    assert runtime["frontend_reachability_status"] == "REMOTE_REACHABLE"
+
+
 def test_ui_runtime_url_expansion_auto_detects_lan_without_env(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     _make_project(projects_root, "runtime-auto-lan")

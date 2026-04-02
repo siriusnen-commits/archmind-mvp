@@ -313,6 +313,70 @@ def test_pipeline_todo_starter_profile_passes_when_task_baseline_is_materialized
     assert "task" in entity_names
 
 
+def test_pipeline_todo_real_path_materialization_avoids_generic_home_and_add_entity_bootstrap(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_seed_scaffold)
+    monkeypatch.setattr(
+        "archmind.pipeline.create_github_repo_with_status",
+        lambda _project_dir, enabled=True: {
+            "status": "FAILED",
+            "url": "",
+            "name": "todo_real_path",
+            "reason": "gh auth missing",
+            "attempted": True,
+        },
+    )
+    monkeypatch.setattr(
+        "archmind.pipeline.suggest_project_spec",
+        lambda *_args, **_kwargs: {
+            "shape": "fullstack",
+            "template": "fullstack-ddd",
+            "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}, {"name": "status", "type": "string"}]}],
+            "api_endpoints": ["GET /tasks", "POST /tasks", "GET /tasks/{id}", "PATCH /tasks/{id}", "DELETE /tasks/{id}"],
+            "frontend_pages": ["tasks/list", "tasks/new", "tasks/detail"],
+        },
+    )
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "todo app integrated real path",
+            "--template",
+            "fullstack-ddd",
+            "--starter-profile",
+            "todo",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "todo_real_path",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+
+    project_dir = tmp_path / "todo_real_path"
+    home_page_path = project_dir / "frontend" / "app" / "page.tsx"
+    if home_page_path.exists():
+        home_page = home_page_path.read_text(encoding="utf-8")
+        assert "ArchMind Fullstack Workspace" not in home_page
+    assert (project_dir / "frontend" / "app" / "tasks" / "page.tsx").exists()
+    assert (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").exists()
+
+    analysis = build_project_analysis(project_dir)
+    entities = [str(item) for item in (analysis.get("entities") or []) if str(item).strip()]
+    pages = [str(item) for item in (analysis.get("pages") or []) if str(item).strip()]
+    assert "Task" in entities
+    assert any(page.startswith("tasks/") for page in pages)
+
+    next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
+    next_command = str(next_action.get("command") or "").strip()
+    assert not next_command.startswith("/add_entity ")
+
+
 def test_pipeline_idea_generator_receives_effective_template_for_frontend_web(tmp_path: Path, monkeypatch) -> None:
     captured: dict[str, str] = {}
 
