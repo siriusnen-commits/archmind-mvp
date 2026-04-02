@@ -175,6 +175,27 @@ def _expand_runtime_urls_with_reachability(primary_url: str, component_runtime: 
     return out
 
 
+def _verified_nonlocal_urls(component_runtime: dict[str, Any] | None) -> list[str]:
+    if not isinstance(component_runtime, dict):
+        return []
+    reachability = component_runtime.get("reachability")
+    if not isinstance(reachability, dict):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for key in ("lan_urls", "external_urls"):
+        values = reachability.get(key)
+        if not isinstance(values, list):
+            continue
+        for candidate in values:
+            text = str(candidate or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            out.append(text)
+    return out
+
+
 def _runtime_hosts_config_path() -> Path:
     override = str(os.getenv("ARCHMIND_UI_RUNTIME_HOSTS_PATH", "") or "").strip()
     if override:
@@ -279,14 +300,20 @@ def _runtime_urls_for_display(
     if status != "RUNNING":
         backend_url = ""
         frontend_url = ""
-    backend_urls = _expand_runtime_urls_with_reachability(backend_url, live_backend if live_backend else backend)
-    frontend_urls = _expand_runtime_urls_with_reachability(frontend_url, live_frontend if live_frontend else frontend)
+    backend_runtime = live_backend if live_backend else backend
+    frontend_runtime = live_frontend if live_frontend else frontend
+    backend_urls = _expand_runtime_urls_with_reachability(backend_url, backend_runtime)
+    frontend_urls = _expand_runtime_urls_with_reachability(frontend_url, frontend_runtime)
+    verified_backend_nonlocal = _verified_nonlocal_urls(backend_runtime)
     if (
         frontend_url
         and len(frontend_urls) <= 1
-        and len(backend_urls) > 1
+        and bool(verified_backend_nonlocal)
     ):
-        expanded_from_backend = _expand_frontend_urls_from_backend_hosts(frontend_url, backend_urls)
+        expanded_from_backend = _expand_frontend_urls_from_backend_hosts(
+            frontend_url,
+            [backend_url, *verified_backend_nonlocal],
+        )
         if len(expanded_from_backend) > len(frontend_urls):
             frontend_urls = expanded_from_backend
     return (
