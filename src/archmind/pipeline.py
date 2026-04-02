@@ -380,6 +380,54 @@ def _detect_starter_profile_from_idea(idea: str) -> str:
     return ""
 
 
+def _ensure_todo_starter_seed(spec_seed: dict[str, Any] | None) -> dict[str, Any]:
+    seed = spec_seed if isinstance(spec_seed, dict) else {}
+    out = dict(seed)
+
+    entities_raw = out.get("entities") if isinstance(out.get("entities"), list) else []
+    entities: list[dict[str, Any]] = [row for row in entities_raw if isinstance(row, dict)]
+    task_row: dict[str, Any] | None = None
+    for row in entities:
+        if str(row.get("name") or "").strip().lower() == "task":
+            task_row = row
+            break
+    if task_row is None:
+        task_row = {"name": "Task", "fields": []}
+        entities.append(task_row)
+    fields_raw = task_row.get("fields") if isinstance(task_row.get("fields"), list) else []
+    fields: list[dict[str, str]] = [item for item in fields_raw if isinstance(item, dict)]
+    by_field = {
+        str(item.get("name") or "").strip().lower(): item
+        for item in fields
+        if str(item.get("name") or "").strip()
+    }
+    if "title" not in by_field:
+        fields.append({"name": "title", "type": "string"})
+    if "status" not in by_field:
+        fields.append({"name": "status", "type": "string"})
+    task_row["fields"] = fields
+    out["entities"] = entities
+
+    api_raw = out.get("api_endpoints") if isinstance(out.get("api_endpoints"), list) else []
+    api_values = [str(item or "").strip() for item in api_raw if str(item or "").strip()]
+    api_seen = {item.upper() for item in api_values}
+    for endpoint in ("GET /tasks", "POST /tasks", "GET /tasks/{id}"):
+        if endpoint.upper() not in api_seen:
+            api_values.append(endpoint)
+            api_seen.add(endpoint.upper())
+    out["api_endpoints"] = api_values
+
+    pages_raw = out.get("frontend_pages") if isinstance(out.get("frontend_pages"), list) else []
+    page_values = [str(item or "").strip().lower().strip("/") for item in pages_raw if str(item or "").strip()]
+    page_seen = set(page_values)
+    for page in ("tasks/list", "tasks/new", "tasks/detail"):
+        if page not in page_seen:
+            page_values.append(page)
+            page_seen.add(page)
+    out["frontend_pages"] = page_values
+    return out
+
+
 def _validate_todo_materialization(project_dir: Path, spec_seed: dict[str, Any] | None = None) -> tuple[bool, str]:
     spec_path = project_dir / ".archmind" / "project_spec.json"
     try:
@@ -974,6 +1022,8 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
             project_spec_seed = suggest_project_spec(normalized_idea, architecture_reasoning)
         except Exception as exc:
             print(f"[WARN] project spec suggestion failed: {exc}", file=sys.stderr)
+    if starter_profile == "todo":
+        project_spec_seed = _ensure_todo_starter_seed(project_spec_seed)
 
     try:
         project_dir = _resolve_project_dir(
