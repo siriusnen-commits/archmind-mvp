@@ -1729,6 +1729,20 @@ def update_runtime_state(
     payload["runtime"] = runtime
     payload["last_action"] = _sanitize_line(action, project_dir)
 
+    runtime_recovered = bool(
+        status == "SUCCESS"
+        and (
+            str(runtime.get("backend_status") or "").strip().upper() == "RUNNING"
+            or str(runtime.get("frontend_status") or "").strip().upper() == "RUNNING"
+        )
+    )
+    if runtime_recovered:
+        payload["last_status"] = "SUCCESS"
+        payload["last_failure_class"] = ""
+        payload["recent_failures"] = []
+        payload["next_action"] = "STOP"
+        payload["next_action_reason"] = "runtime healthy; no immediate recovery action required"
+
     _append_history(
         payload,
         {

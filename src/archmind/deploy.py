@@ -2132,6 +2132,62 @@ def get_local_runtime_status(project_dir: Path) -> dict[str, Any]:
 
     backend_reachability = _component_reachability(backend_url, process_running=backend_running)
     frontend_reachability = _component_reachability(frontend_url, process_running=frontend_running and frontend_health != "FAIL")
+    frontend_recovered = bool(
+        frontend_running
+        and (
+            frontend_reachability.get("local_reachable")
+            or frontend_reachability.get("lan_reachable")
+            or frontend_reachability.get("external_reachable")
+        )
+    )
+    if frontend_recovered:
+        frontend_health = "SUCCESS"
+        if frontend_status == "FAIL":
+            frontend_status = "RUNNING"
+
+        runtime_changed = False
+        runtime_block = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
+        if isinstance(runtime_block, dict):
+            if str(runtime_block.get("frontend_status") or "").strip().upper() != "RUNNING":
+                runtime_block["frontend_status"] = "RUNNING"
+                runtime_changed = True
+            if str(runtime_block.get("frontend_health") or "").strip().upper() != "SUCCESS":
+                runtime_block["frontend_health"] = "SUCCESS"
+                runtime_changed = True
+            services_block = runtime_block.get("services") if isinstance(runtime_block.get("services"), dict) else {}
+            frontend_block = services_block.get("frontend") if isinstance(services_block.get("frontend"), dict) else {}
+            if isinstance(frontend_block, dict):
+                if str(frontend_block.get("status") or "").strip().upper() != "RUNNING":
+                    frontend_block["status"] = "RUNNING"
+                    runtime_changed = True
+                if str(frontend_block.get("health") or "").strip().upper() != "SUCCESS":
+                    frontend_block["health"] = "SUCCESS"
+                    runtime_changed = True
+                services_block["frontend"] = frontend_block
+            runtime_block["services"] = services_block
+            state["runtime"] = runtime_block
+
+        summary_changed = False
+        if str(state.get("last_status") or "").strip().upper() in {"FAIL", "FAILED", "ERROR", "NOT_DONE", "BLOCKED", "STUCK"}:
+            state["last_status"] = "SUCCESS"
+            summary_changed = True
+        if str(state.get("last_failure_class") or "").strip():
+            state["last_failure_class"] = ""
+            summary_changed = True
+        failures_now = state.get("recent_failures")
+        if isinstance(failures_now, list) and failures_now:
+            state["recent_failures"] = []
+            summary_changed = True
+        if str(state.get("next_action") or "").strip().upper() in {"FIX", "RETRY", "CONTINUE"}:
+            state["next_action"] = "STOP"
+            state["next_action_reason"] = "runtime recovered after successful frontend health check"
+            summary_changed = True
+
+        if runtime_changed or summary_changed:
+            try:
+                write_state(root, state)
+            except Exception:
+                pass
 
     return {
         "project_dir": root,
