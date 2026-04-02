@@ -90,6 +90,47 @@ def _replace_url_host(url: str, host: str) -> str:
     return urlunparse(parsed._replace(netloc=netloc))
 
 
+def _is_runtime_url_reachable(url: str, timeout_s: float = 0.35) -> bool:
+    parsed = urlparse(str(url or "").strip())
+    host = str(parsed.hostname or "").strip()
+    if not host:
+        return False
+    port = parsed.port
+    if port is None:
+        if parsed.scheme == "https":
+            port = 443
+        elif parsed.scheme == "http":
+            port = 80
+    if not port:
+        return False
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout_s):
+            return True
+    except Exception:
+        return False
+
+
+def _expand_frontend_urls_from_backend_hosts(frontend_primary_url: str, backend_urls: list[str]) -> list[str]:
+    base = str(frontend_primary_url or "").strip()
+    if not base:
+        return []
+    out: list[str] = [base]
+    seen: set[str] = {base}
+    for backend_url in backend_urls:
+        parsed = urlparse(str(backend_url or "").strip())
+        host = str(parsed.hostname or "").strip()
+        if not host:
+            continue
+        candidate = _replace_url_host(base, host)
+        if not candidate or candidate in seen:
+            continue
+        if not _is_runtime_url_reachable(candidate):
+            continue
+        seen.add(candidate)
+        out.append(candidate)
+    return out
+
+
 def _expand_runtime_urls(primary_url: str) -> list[str]:
     base = str(primary_url or "").strip()
     if not base:
@@ -238,11 +279,21 @@ def _runtime_urls_for_display(
     if status != "RUNNING":
         backend_url = ""
         frontend_url = ""
+    backend_urls = _expand_runtime_urls_with_reachability(backend_url, live_backend if live_backend else backend)
+    frontend_urls = _expand_runtime_urls_with_reachability(frontend_url, live_frontend if live_frontend else frontend)
+    if (
+        frontend_url
+        and len(frontend_urls) <= 1
+        and len(backend_urls) > 1
+    ):
+        expanded_from_backend = _expand_frontend_urls_from_backend_hosts(frontend_url, backend_urls)
+        if len(expanded_from_backend) > len(frontend_urls):
+            frontend_urls = expanded_from_backend
     return (
         backend_url,
         frontend_url,
-        _expand_runtime_urls_with_reachability(backend_url, live_backend if live_backend else backend),
-        _expand_runtime_urls_with_reachability(frontend_url, live_frontend if live_frontend else frontend),
+        backend_urls,
+        frontend_urls,
     )
 
 
