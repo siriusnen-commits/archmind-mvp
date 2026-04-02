@@ -2246,7 +2246,7 @@ def _render_frontend_entity_create_page(
             payload_lines += f'      "{name}": values["{name}"],\n'
     return (
         '"use client";\n\n'
-        'import { useSearchParams } from "next/navigation";\n'
+        'import { useRouter, useSearchParams } from "next/navigation";\n'
         'import { FormEvent, useEffect, useState } from "react";\n'
         f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n\n'
         "type EntityItem = Record<string, unknown>;\n"
