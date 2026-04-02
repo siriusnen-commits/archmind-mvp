@@ -7,6 +7,7 @@ from urllib.parse import quote
 from fastapi.testclient import TestClient
 
 import archmind.current_project as current_project_state
+import archmind.ui_api as ui_api
 from archmind.execution_history import append_execution_event
 from archmind.state import write_state
 from archmind.telegram_bot import clear_current_project, get_validated_current_project, set_current_project
@@ -1592,6 +1593,16 @@ def test_new_project_page_source_uses_structured_create_flow_and_stateful_form()
     assert "uiLanguage ===" not in source
 
 
+def test_project_create_api_source_waits_for_project_registration_before_success() -> None:
+    source = Path("frontend/lib/api/project-create.ts").read_text(encoding="utf-8")
+    assert "waitForProjectReady(projectName)" in source
+    assert "isProjectDetailReady(projectName)" in source
+    assert "PROJECT_READY_TIMEOUT_MS" in source
+    assert "PROJECT_READY_INTERVAL_MS" in source
+    assert "selectCurrentProject(projectName)" in source
+    assert "project registration did not complete in time" in source
+
+
 def test_create_project_error_card_source_has_retryable_structured_error_actions() -> None:
     source = Path("frontend/components/new-project/CreateProjectErrorCard.tsx").read_text(encoding="utf-8")
     assert '"use client";' in source
@@ -2084,6 +2095,49 @@ def test_ui_idea_local_defaults_apply_when_optional_fields_missing(monkeypatch, 
     assert captured["mode"] == "balanced"
     assert captured["language"] == "english"
     assert captured["llm_mode"] == "local"
+
+
+def test_ui_idea_local_maps_domain_templates_to_fullstack_pipeline_template(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    projects_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr("archmind.telegram_bot.planned_project_dir", lambda base_dir, _idea: base_dir / "todo_seed_project")
+
+    def _fake_build_pipeline_command(
+        idea: str,
+        base_dir: Path,
+        project_name: str,
+        *,
+        auto_deploy: bool = False,
+        deploy_target: str = "local",
+        template_name: str | None = None,
+    ):  # type: ignore[no-untyped-def]
+        captured["idea"] = idea
+        captured["base_dir"] = base_dir
+        captured["project_name"] = project_name
+        captured["auto_deploy"] = auto_deploy
+        captured["deploy_target"] = deploy_target
+        captured["template_name"] = template_name
+        return ["archmind", "pipeline", "--idea", idea, "--name", project_name]
+
+    monkeypatch.setattr("archmind.telegram_bot.build_pipeline_command", _fake_build_pipeline_command)
+    monkeypatch.setattr("archmind.telegram_bot.start_pipeline_process", lambda *_args, **_kwargs: (True, Path("/tmp/mock.log")))
+
+    ok, project_name, error = ui_api._start_wizard_generation(
+        idea="task workspace",
+        template="todo",
+        mode="balanced",
+        language="english",
+        llm_mode="local",
+    )
+    assert ok is True
+    assert project_name == "todo_seed_project"
+    assert error == ""
+    assert captured["template_name"] == "fullstack-ddd"
+    assert "todo task manager app" in str(captured["idea"])
 
 
 def test_ui_idea_local_invalid_request_is_handled_safely(monkeypatch, tmp_path: Path) -> None:
