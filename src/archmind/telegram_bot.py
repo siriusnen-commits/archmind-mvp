@@ -5827,12 +5827,23 @@ def add_field_to_project(
         _rebuild_frontend_pages(spec)
         _append_evolution_event(spec, {"action": "add_field", "entity": entity_name, "field": field_name, "type": field_type})
 
-        apply_entity_scaffold(target, entity_name)
-        apply_entity_fields_to_scaffold(
-            target,
-            entity_name,
-            target_entity.get("fields") if isinstance(target_entity.get("fields"), list) else [],
+        generated_files: list[str] = []
+        generated_files.extend(apply_entity_scaffold(target, entity_name))
+        generated_files.extend(
+            apply_entity_fields_to_scaffold(
+                target,
+                entity_name,
+                target_entity.get("fields") if isinstance(target_entity.get("fields"), list) else [],
+            )
         )
+        dedup_generated_files: list[str] = []
+        seen_generated_files: set[str] = set()
+        for path in generated_files:
+            normalized = str(path).strip().replace("\\", "/")
+            if not normalized or normalized in seen_generated_files:
+                continue
+            seen_generated_files.add(normalized)
+            dedup_generated_files.append(normalized)
 
         spec_path.parent.mkdir(parents=True, exist_ok=True)
         spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -5850,10 +5861,14 @@ def add_field_to_project(
         restart_failed = False
         runtime_recovery: dict[str, Any] = {"attempted": False, "failed": False, "reason": "runtime recovery disabled"}
         if auto_restart_backend:
+            frontend_root_mode = (target / "frontend").exists()
+            frontend_changed = any(path.startswith("frontend/") for path in dedup_generated_files)
+            if not frontend_root_mode and (target / "package.json").exists():
+                frontend_changed = frontend_changed or any(path.startswith("app/") for path in dedup_generated_files)
             auto_restart_lines, restart_failed, runtime_recovery = _runtime_recovery_lines(
                 target,
                 backend_changed=True,
-                frontend_changed=False,
+                frontend_changed=frontend_changed,
             )
 
         next_lines = ["Next:", "- /inspect", "- /restart"]
@@ -5883,6 +5898,7 @@ def add_field_to_project(
                 ),
             },
             "recent_evolution": recent,
+            "generated_files": dedup_generated_files,
             "runtime_recovery": runtime_recovery,
             "message_text": (
                 "Field added\n\n"

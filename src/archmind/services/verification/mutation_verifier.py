@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,22 @@ from archmind.services.verification.navigation_verifier import verify_navigation
 from archmind.services.verification.runtime_verifier import verify_runtime_restart
 
 TARGET_COMMAND_PREFIXES = ("/add_field", "/add_api", "/add_page", "/auto")
+
+
+def _entity_to_resource(entity_name: str) -> str:
+    token = str(entity_name or "").strip()
+    if not token:
+        return ""
+    snake = re.sub(r"(?<!^)(?=[A-Z])", "_", token).strip("_").lower()
+    if not snake:
+        return ""
+    if snake.endswith("s"):
+        return snake
+    if snake.endswith("y") and len(snake) > 1 and snake[-2] not in "aeiou":
+        return snake[:-1] + "ies"
+    if snake.endswith(("ch", "sh", "x", "z")):
+        return snake + "es"
+    return snake + "s"
 
 
 @dataclass
@@ -111,7 +128,18 @@ def _runtime_reflection_check(project_dir: Path, command: str) -> tuple[bool, st
         parts = text.split()
         if len(parts) < 3:
             return False, "malformed add_field command"
+        entity_name = parts[1].strip()
         field_name = parts[2].split(":", 1)[0].strip()
+        entity_resource = _entity_to_resource(entity_name)
+        target_page = project_dir / "frontend" / "app" / entity_resource / "new" / "page.tsx"
+        if target_page.exists():
+            try:
+                body = target_page.read_text(encoding="utf-8")
+            except Exception:
+                body = ""
+            if field_name in body:
+                return True, f"frontend create form reflects field ({field_name})"
+            return False, f"frontend create form does not reflect field ({field_name})"
         create_pages = list((project_dir / "frontend" / "app").rglob("new/page.tsx")) if (project_dir / "frontend" / "app").exists() else []
         for page in create_pages:
             try:

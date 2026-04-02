@@ -3925,37 +3925,69 @@ def _write_if_changed(path: Path, content: str, changed: list[str], project_dir:
         changed.append(rel)
 
 
+def _sync_frontend_entity_create_form(
+    project_dir: Path,
+    entity_name: str,
+    fields: list[dict[str, Any]],
+    changed: list[str],
+) -> None:
+    app_root = _resolve_frontend_app_root(project_dir)
+    if app_root is None:
+        return
+    class_name, _, plural = _entity_identity(entity_name)
+    if not class_name or not plural:
+        return
+    target = app_root / plural / "new" / "page.tsx"
+    _ensure_frontend_api_base_helper(app_root, changed, project_dir)
+    _ensure_frontend_navigation_helper(app_root, changed, project_dir)
+    _ensure_frontend_navigation_shell_upgrade(app_root, changed, project_dir)
+    helper_import = _api_base_helper_import_for_page(app_root, target)
+    singular = _singularize_resource_name(plural).replace("-", " ").replace("_", " ").title()
+    content = _render_frontend_entity_create_page(
+        component_name=_safe_component_name([plural, "new"]),
+        title=f"New {singular}" if singular else f"New {class_name}",
+        entity_path=plural,
+        api_helper_import=helper_import,
+        field_specs=fields,
+        relation_specs=_relation_inputs_for_child_resource(project_dir, plural),
+    )
+    _write_if_changed(target, content, changed, project_dir)
+    _register_frontend_nav_link(app_root, f"/{plural}/new", changed, project_dir)
+    _sync_relation_detail_pages(project_dir, changed)
+
+
 def apply_entity_fields_to_scaffold(project_dir: Path, entity_name: str, fields: list[dict[str, Any]]) -> list[str]:
     """
     Update model/schema placeholders with field metadata for an existing entity scaffold.
-    Returns files that were changed. Frontend-only projects return [].
+    Also refresh frontend create forms so added fields appear in runtime UI.
+    Returns files that were changed.
     """
-    if not _has_backend_structure(project_dir):
-        return []
-    backend_app_root = _resolve_backend_app_root(project_dir)
-    if backend_app_root is None:
-        return []
     class_name, slug, _ = _entity_identity(entity_name)
     if not class_name:
         return []
 
     normalized_fields = _normalize_field_entries(fields)
-    need_datetime = any(ftype == "datetime" for _, ftype in normalized_fields)
-    field_lines = [f"    {name}: {_python_type(ftype)}" for name, ftype in normalized_fields]
-    body = "\n".join(field_lines) if field_lines else "    pass"
-    prefix = "from datetime import datetime\n\n" if need_datetime else ""
-
-    model_content = f"{prefix}class {class_name}:\n{body}\n"
-    schema_content = (
-        f"{prefix}class {class_name}Create:\n"
-        f"{body}\n\n"
-        f"class {class_name}Read:\n"
-        f"{body}\n"
-    )
-
     changed: list[str] = []
-    _write_if_changed(backend_app_root / "models" / f"{slug}.py", model_content, changed, project_dir)
-    _write_if_changed(backend_app_root / "schemas" / f"{slug}.py", schema_content, changed, project_dir)
+    if _has_backend_structure(project_dir):
+        backend_app_root = _resolve_backend_app_root(project_dir)
+        if backend_app_root is not None:
+            need_datetime = any(ftype == "datetime" for _, ftype in normalized_fields)
+            field_lines = [f"    {name}: {_python_type(ftype)}" for name, ftype in normalized_fields]
+            body = "\n".join(field_lines) if field_lines else "    pass"
+            prefix = "from datetime import datetime\n\n" if need_datetime else ""
+
+            model_content = f"{prefix}class {class_name}:\n{body}\n"
+            schema_content = (
+                f"{prefix}class {class_name}Create:\n"
+                f"{body}\n\n"
+                f"class {class_name}Read:\n"
+                f"{body}\n"
+            )
+            _write_if_changed(backend_app_root / "models" / f"{slug}.py", model_content, changed, project_dir)
+            _write_if_changed(backend_app_root / "schemas" / f"{slug}.py", schema_content, changed, project_dir)
+
+    frontend_fields = [{"name": name, "type": ftype} for name, ftype in normalized_fields]
+    _sync_frontend_entity_create_form(project_dir, entity_name, frontend_fields, changed)
     return changed
 
 
