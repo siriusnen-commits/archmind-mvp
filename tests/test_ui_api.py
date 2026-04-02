@@ -1602,17 +1602,21 @@ def test_create_project_error_card_source_has_retryable_structured_error_actions
     assert "error.retryable" in source
 
 
-def test_settings_launcher_source_uses_bottom_left_n_icon_and_opens_drawer() -> None:
+def test_settings_launcher_source_uses_archmind_owned_launcher_and_opens_drawer() -> None:
     source = Path("frontend/components/settings/SettingsLauncher.tsx").read_text(encoding="utf-8")
     assert '"use client";' in source
     assert "archmind:open-settings" in source
-    assert "fixed bottom-4 left-4" in source
+    assert "fixed bottom-4 right-4" in source
     assert "Open settings" in source
-    assert ">N<" in source or "N" in source
+    assert "data-testid=\"archmind-settings-launcher\"" in source
+    assert "Settings" in source
+    assert ">N<" not in source
     assert "SettingsDrawer" in source
     assert "open={open}" in source
     assert "setOpen(true)" in source
     assert "__archmind_settings_launcher_singleton__" in source
+    assert "next-dev" not in source.lower()
+    assert "turbopack" not in source.lower()
 
 
 def test_history_and_inspect_sources_include_verification_aware_components() -> None:
@@ -1653,6 +1657,7 @@ def test_old_standalone_settings_button_removed_from_dashboard_entrypoint() -> N
     assert "<SettingsPanel" not in dashboard_source
     assert 'import SettingsLauncher from "@/components/settings/SettingsLauncher"' in layout_source
     assert "<SettingsLauncher />" in layout_source
+    assert layout_source.count("<SettingsLauncher />") == 1
 
 
 def test_settings_store_source_uses_archmind_settings_key_with_safe_fallbacks() -> None:
