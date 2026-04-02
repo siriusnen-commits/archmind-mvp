@@ -1,5 +1,8 @@
 "use client";
 
+import VerificationBadge from "@/components/history/VerificationBadge";
+import VerificationIssues from "@/components/history/VerificationIssues";
+
 type EvolutionHistoryItem = {
   timestamp?: string;
   title?: string;
@@ -9,6 +12,10 @@ type EvolutionHistoryItem = {
   command?: string;
   source?: string;
   stop_reason?: string;
+  verification_status?: string;
+  verification_issues?: string[];
+  drift_summary?: string;
+  runtime_reflection?: string;
 };
 
 type Props = {
@@ -53,11 +60,22 @@ export default function EvolutionHistoryCard({ items }: Props) {
             const source = String(item.source || "").trim();
             const actionType = String(item.action_type || "").trim();
             const stopReason = String(item.stop_reason || "").trim();
+            const verificationStatus = String(item.verification_status || "").trim().toUpperCase();
+            const verificationIssues = Array.isArray(item.verification_issues)
+              ? item.verification_issues.map((row) => String(row || "").trim()).filter(Boolean)
+              : [];
+            const driftSummary = String(item.drift_summary || "").trim();
+            const runtimeReflection = String(item.runtime_reflection || "").trim();
             const timestamp = String(item.timestamp || "").trim();
             return (
               <article key={`${index}-${title.slice(0, 24)}`} className="rounded-md border border-slate-700 bg-slate-950/60 p-3">
                 <p className="break-words text-sm text-slate-100">
                   <span className={`mr-2 inline-block rounded border px-1.5 py-0.5 text-xs uppercase ${statusBadgeClass(status)}`}>{status}</span>
+                  {verificationStatus ? (
+                    <span className="mr-2 inline-block align-middle">
+                      <VerificationBadge status={verificationStatus} />
+                    </span>
+                  ) : null}
                   {title}
                 </p>
                 {summary ? <p className="mt-1 break-words text-xs text-slate-300">Summary: {summary}</p> : null}
@@ -65,6 +83,9 @@ export default function EvolutionHistoryCard({ items }: Props) {
                 {command && command !== title ? <p className="mt-1 break-words text-xs text-slate-300">Command: {command}</p> : null}
                 {source ? <p className="mt-1 text-xs text-slate-400">Source: {source}</p> : null}
                 {stopReason && stopReason !== summary ? <p className="mt-1 break-words text-xs text-amber-300">Stop: {stopReason}</p> : null}
+                {runtimeReflection ? <p className="mt-1 text-xs text-slate-400">Runtime reflection: {runtimeReflection}</p> : null}
+                {driftSummary ? <p className="mt-1 break-words text-xs text-slate-300">Drift: {driftSummary}</p> : null}
+                <VerificationIssues issues={verificationIssues} />
                 {timestamp ? (
                   <p className="mt-1 text-xs text-slate-400" suppressHydrationWarning>
                     {timestamp}

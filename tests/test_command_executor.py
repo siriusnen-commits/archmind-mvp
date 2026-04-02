@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from archmind.command_executor import _execute_auto_command, execute_command
@@ -24,6 +25,66 @@ def test_execute_command_add_field_valid(monkeypatch) -> None:
     assert out["project_name"] == "demo"
     assert out["message"] == "Field added"
     assert out["error"] is None
+
+
+def test_execute_command_add_field_verification_marks_partial_when_runtime_reflection_missing(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "demo"
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "app" / "tasks" / "new").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").write_text(
+        '"use client";\nexport default function Page(){return <div>title only</div>;}\n',
+        encoding="utf-8",
+    )
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp=FastAPI()\n", encoding="utf-8")
+    spec_path = project_dir / ".archmind" / "project_spec.json"
+    spec_path.write_text(
+        json.dumps({"entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: project_dir)
+
+    def fake_add_field(project_dir_arg: Path, entity: str, field: str, field_type: str, auto_restart_backend: bool = True):  # type: ignore[no-untyped-def]
+        payload = {"entities": [{"name": entity, "fields": [{"name": "title", "type": "string"}, {"name": field, "type": field_type}]}]}
+        spec_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return {
+            "ok": True,
+            "detail": "Field added",
+            "entity_name": entity,
+            "field_name": field,
+            "field_type": field_type,
+            "runtime_recovery": {"attempted": False, "failed": False, "reason": "disabled"},
+        }
+
+    monkeypatch.setattr("archmind.telegram_bot.add_field_to_project", fake_add_field)
+    out = execute_command("/add_field Task priority:string", "demo")
+    verification = out.get("verification") if isinstance(out.get("verification"), dict) else {}
+    assert str(verification.get("overall_status") or "") in {"PARTIAL", "FAILED"}
+    assert str(verification.get("overall_status") or "") != "VERIFIED"
+
+
+def test_execute_command_auto_keeps_partial_status_when_verification_is_not_verified(monkeypatch) -> None:
+    monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: Path("/tmp/demo"))
+
+    def fake_auto_executor(project_dir: Path, *, project_name: str, source: str, run_id=None, requested_steps=None, auto_strategy=None):  # type: ignore[no-untyped-def]
+        return {
+            "ok": True,
+            "project_name": project_name,
+            "detail": "Auto completed",
+            "message_text": "Auto evolution run",
+            "auto_result": {"run_id": "auto-verify-1", "executed": 1, "commands": ["/add_field Task priority:string"]},
+            "verification": {
+                "overall_status": "PARTIAL",
+                "issues": ["runtime reflection missing"],
+                "runtime_reflection": "missing_restart",
+                "drift_summary": "runtime reflection missing",
+            },
+        }
+
+    monkeypatch.setattr("archmind.command_executor._execute_auto_command", fake_auto_executor)
+    out = execute_command("/auto", "demo", source="ui-next-run")
+    assert out["ok"] is True
+    assert out["auto_result"]["verification"]["overall_status"] == "PARTIAL"
 
 
 def test_execute_command_add_api_valid(monkeypatch) -> None:

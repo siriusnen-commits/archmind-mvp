@@ -3,20 +3,48 @@
 import type { FormEvent } from "react";
 
 import type { CreateProjectFormValues } from "@/types/project-create";
-import type { GenerationMode, LlmMode, ProjectLanguage, TemplateOption } from "@/types/settings";
+import type { GenerationMode, LlmMode, ProjectLanguage, TemplateOption, UiLanguage } from "@/types/settings";
 
 type Props = {
   values: CreateProjectFormValues;
   onChange: (next: CreateProjectFormValues) => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   disabled?: boolean;
+  uiLanguage?: UiLanguage;
 };
 
-export default function NewProjectForm({ values, onChange, onSubmit, disabled = false }: Props) {
+export default function NewProjectForm({ values, onChange, onSubmit, disabled = false, uiLanguage = "en" }: Props) {
+  const text =
+    uiLanguage === "ko"
+      ? {
+          idea: "아이디어",
+          template: "템플릿",
+          mode: "생성 모드",
+          language: "프로젝트 언어",
+          llm: "LLM 모드",
+          submit: disabled ? "생성 중..." : "프로젝트 생성",
+        }
+      : uiLanguage === "ja"
+        ? {
+            idea: "アイデア",
+            template: "テンプレート",
+            mode: "生成モード",
+            language: "プロジェクト言語",
+            llm: "LLMモード",
+            submit: disabled ? "生成中..." : "プロジェクト生成",
+          }
+        : {
+            idea: "Idea",
+            template: "Template",
+            mode: "Generation Mode",
+            language: "Project Language",
+            llm: "LLM Mode",
+            submit: disabled ? "Generating..." : "Generate Project",
+          };
   return (
     <form onSubmit={onSubmit} className="space-y-3 rounded-lg border border-slate-700 bg-slate-900/70 p-4 sm:p-5">
       <label className="block space-y-1">
-        <span className="text-xs text-slate-300">Idea</span>
+        <span className="text-xs text-slate-300">{text.idea}</span>
         <textarea
           required
           value={values.idea}
@@ -29,7 +57,7 @@ export default function NewProjectForm({ values, onChange, onSubmit, disabled = 
       </label>
 
       <label className="block space-y-1">
-        <span className="text-xs text-slate-300">Template</span>
+        <span className="text-xs text-slate-300">{text.template}</span>
         <select
           value={values.template}
           onChange={(event) => onChange({ ...values, template: event.target.value as TemplateOption })}
@@ -45,7 +73,7 @@ export default function NewProjectForm({ values, onChange, onSubmit, disabled = 
       </label>
 
       <label className="block space-y-1">
-        <span className="text-xs text-slate-300">Generation Mode</span>
+        <span className="text-xs text-slate-300">{text.mode}</span>
         <select
           value={values.mode}
           onChange={(event) => onChange({ ...values, mode: event.target.value as GenerationMode })}
@@ -59,7 +87,7 @@ export default function NewProjectForm({ values, onChange, onSubmit, disabled = 
       </label>
 
       <label className="block space-y-1">
-        <span className="text-xs text-slate-300">Project Language</span>
+        <span className="text-xs text-slate-300">{text.language}</span>
         <select
           value={values.language}
           onChange={(event) => onChange({ ...values, language: event.target.value as ProjectLanguage })}
@@ -73,7 +101,7 @@ export default function NewProjectForm({ values, onChange, onSubmit, disabled = 
       </label>
 
       <label className="block space-y-1">
-        <span className="text-xs text-slate-300">LLM Mode</span>
+        <span className="text-xs text-slate-300">{text.llm}</span>
         <select
           value={values.llmMode}
           onChange={(event) => onChange({ ...values, llmMode: event.target.value as LlmMode })}
@@ -91,7 +119,7 @@ export default function NewProjectForm({ values, onChange, onSubmit, disabled = 
         disabled={disabled}
         className="w-full rounded-md border border-emerald-600 bg-emerald-500/10 px-3 py-2 text-sm font-semibold text-emerald-200 hover:bg-emerald-500/20 disabled:opacity-60"
       >
-        {disabled ? "Generating..." : "Generate Project"}
+        {text.submit}
       </button>
     </form>
   );

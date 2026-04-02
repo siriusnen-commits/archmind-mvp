@@ -89,6 +89,7 @@ class ProjectDetailResponse(BaseModel):
     architecture: dict[str, Any] = Field(default_factory=dict)
     logs: dict[str, Any] = Field(default_factory=dict)
     auto_summary: dict[str, Any] = Field(default_factory=dict)
+    verification: dict[str, Any] = Field(default_factory=dict)
     repository: RepositorySummary = Field(default_factory=RepositorySummary)
     analysis: dict[str, Any] = Field(default_factory=dict)
     warning: str = ""

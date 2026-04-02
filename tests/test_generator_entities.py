@@ -370,6 +370,24 @@ def test_apply_frontend_page_scaffold_note_entity_is_usable_crud_mvp(tmp_path: P
     assert "method: \"DELETE\"" in detail_text
 
 
+def test_generated_create_page_confirms_success_after_api_and_redirects_to_list(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_create_truth"
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        '{"entities":[{"name":"Task","fields":[{"name":"title","type":"string"}]}]}',
+        encoding="utf-8",
+    )
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    apply_page_scaffold(project_dir, "tasks/new")
+    text = (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").read_text(encoding="utf-8")
+    assert "if (!response.ok) throw new Error" in text
+    assert "await response.json();" in text
+    assert 'router.push("/tasks");' in text
+    assert "router.refresh();" in text
+
+
 def test_apply_frontend_page_scaffold_diary_entry_has_search_empty_state_and_recent_first_ui(tmp_path: Path) -> None:
     project_dir = tmp_path / "fullstack_diary"
     (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
@@ -787,7 +805,8 @@ def test_apply_page_scaffold_backfills_legacy_memo_shell_and_surfaces_new_pages(
     root_text = (app_dir / "page.tsx").read_text(encoding="utf-8")
     assert 'href: "/notes"' in nav_text
     assert 'href: "/reminders"' in nav_text
-    assert "APP_NAV_LINKS.map" in layout_text
+    assert "AppNav" in layout_text
+    assert 'from "./_lib/AppNav"' in layout_text
     assert 'from "./_lib/navigation"' in root_text
     assert "Primary section" in root_text
     assert "Open {primaryCollection.label}" in root_text
@@ -839,7 +858,7 @@ def test_apply_page_scaffold_upgrades_fullstack_template_shell_to_navigation_hom
     assert "This scaffold is domain-neutral." not in root_text
     assert 'from "./_lib/navigation"' in root_text
     assert "Primary section" in root_text
-    assert "APP_NAV_LINKS.map" in layout_text
+    assert "AppNav" in layout_text
     assert 'href: "/entries"' in nav_text
 
 
@@ -864,6 +883,23 @@ def test_apply_page_scaffold_landing_surfaces_create_cta_when_new_page_exists(tm
     assert 'href: "/entries/new"' in nav_text
     assert "createAction" in root_text
     assert "{createAction.label}" in root_text
+
+
+def test_navigation_baseline_contains_home_list_create_and_active_nav_component(tmp_path: Path) -> None:
+    project_dir = tmp_path / "nav_baseline"
+    app_dir = project_dir / "frontend" / "app"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    apply_page_scaffold(project_dir, "tasks/list")
+
+    nav_text = (app_dir / "_lib" / "navigation.ts").read_text(encoding="utf-8")
+    app_nav_text = (app_dir / "_lib" / "AppNav.tsx").read_text(encoding="utf-8")
+    assert 'href: "/"' in nav_text
+    assert 'href: "/tasks"' in nav_text
+    assert 'href: "/tasks/new"' in nav_text
+    assert "usePathname" in app_nav_text
+    assert "aria-current" in app_nav_text
 
 
 def test_apply_frontend_page_scaffold_is_idempotent_and_skips_backend_only(tmp_path: Path) -> None:

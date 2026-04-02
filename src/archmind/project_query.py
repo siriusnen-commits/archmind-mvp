@@ -316,6 +316,8 @@ def _runtime_state_from_status(status: str) -> str:
 
 def _normalize_evolution_status(value: Any) -> str:
     text = str(value or "").strip().lower()
+    if text in {"verified", "partial", "failed"}:
+        return text.upper()
     if text == "ok":
         return "OK"
     if text == "fail":
@@ -437,6 +439,10 @@ def _build_evolution_history(
                 "command": command,
                 "source": source,
                 "stop_reason": stop_reason,
+                "verification_status": str(item.get("verification_status") or "").strip().upper(),
+                "verification_issues": [str(x) for x in (item.get("verification_issues") or []) if str(x).strip()],
+                "drift_summary": str(item.get("drift_summary") or "").strip(),
+                "runtime_reflection": str(item.get("runtime_reflection") or "").strip(),
             }
         )
 
@@ -471,6 +477,52 @@ def _normalize_ui_timestamp(value: Any) -> str:
     if parsed.tzinfo is not None:
         parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
     return parsed.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _normalize_verification_payload(value: Any) -> dict[str, Any]:
+    row = value if isinstance(value, dict) else {}
+    status = str(row.get("overall_status") or "").strip().upper()
+    if status not in {"VERIFIED", "PARTIAL", "FAILED"}:
+        status = ""
+    issues = [str(item) for item in (row.get("issues") or []) if str(item).strip()]
+    drift_summary = str(row.get("drift_summary") or "").strip()
+    runtime_reflection = str(row.get("runtime_reflection") or "").strip()
+    return {
+        "overall_status": status,
+        "issues": issues,
+        "drift_summary": drift_summary,
+        "runtime_reflection": runtime_reflection,
+    }
+
+
+def _build_verification_overview(recent_runs: list[dict[str, Any]]) -> dict[str, Any]:
+    verified = 0
+    partial = 0
+    failed = 0
+    latest_status = ""
+    latest_issues: list[str] = []
+    latest_runtime_reflection = ""
+    latest_drift_summary = ""
+    for row in recent_runs:
+        status = str(row.get("verification_status") or "").strip().upper()
+        if status == "VERIFIED":
+            verified += 1
+        elif status == "PARTIAL":
+            partial += 1
+        elif status == "FAILED":
+            failed += 1
+        if not latest_status and status:
+            latest_status = status
+            latest_issues = [str(item) for item in (row.get("verification_issues") or []) if str(item).strip()]
+            latest_runtime_reflection = str(row.get("runtime_reflection") or "").strip()
+            latest_drift_summary = str(row.get("drift_summary") or "").strip()
+    return {
+        "status_counts": {"verified": verified, "partial": partial, "failed": failed},
+        "latest_status": latest_status or ("FAILED" if failed else ("PARTIAL" if partial else ("VERIFIED" if verified else "UNKNOWN"))),
+        "latest_issues": latest_issues[:6],
+        "runtime_reflection": latest_runtime_reflection,
+        "drift_summary": latest_drift_summary,
+    }
 
 
 def _is_within_project(path: Path, project_dir: Path) -> bool:
@@ -685,6 +737,7 @@ def _empty_project_detail(project_dir: Path, warning: str = "") -> ProjectDetail
         },
         logs={"default_source": "latest", "max_lines": _UI_LOG_MAX_LINES, "sources": []},
         auto_summary={},
+        verification={},
         repository=RepositorySummary(),
         analysis=analyze_project(project_dir, project_name=project_dir.name, spec_payload={}, runtime_payload={}),
         warning=str(warning or "").strip(),
@@ -955,6 +1008,7 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
         for item in reversed(recent_runs_raw):
             if not isinstance(item, dict):
                 continue
+            verification = _normalize_verification_payload(item.get("verification"))
             recent_runs.append(
                 {
                     "timestamp": _normalize_ui_timestamp(item.get("timestamp")),
@@ -963,12 +1017,17 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
                     "status": str(item.get("status") or "").strip().lower(),
                     "message": str(item.get("message") or "").strip(),
                     "stop_reason": str(item.get("stop_reason") or "").strip(),
+                    "verification_status": str(verification.get("overall_status") or "").strip().upper(),
+                    "verification_issues": verification.get("issues") if isinstance(verification.get("issues"), list) else [],
+                    "drift_summary": str(verification.get("drift_summary") or "").strip(),
+                    "runtime_reflection": str(verification.get("runtime_reflection") or "").strip(),
                 }
             )
         auto_summary_raw = state_payload.get("auto_last_result") if isinstance(state_payload.get("auto_last_result"), dict) else {}
         auto_summary = _normalize_auto_summary(auto_summary_raw)
         recent_evolution = summarize_recent_evolution(spec, limit=5)
         evolution_history = _build_evolution_history(recent_runs, recent_evolution, auto_summary=auto_summary)
+        verification_overview = _build_verification_overview(recent_runs)
         architecture = {
             "app_shape": str(state_payload.get("architecture_app_shape") or spec.get("shape") or "unknown").strip() or "unknown",
             "recommended_template": (
@@ -1015,6 +1074,7 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
             architecture=architecture,
             logs=logs,
             auto_summary=auto_summary,
+            verification=verification_overview,
             repository=repository,
             analysis=analysis,
             warning=consistency_notice,

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import SettingsDrawer from "@/components/settings/SettingsDrawer";
 
 export default function SettingsLauncher() {
+  const [enabled, setEnabled] = useState(true);
   const [open, setOpen] = useState(false);
   const [drawerVersion, setDrawerVersion] = useState(0);
 
@@ -14,6 +15,13 @@ export default function SettingsLauncher() {
   }
 
   useEffect(() => {
+    const markerKey = "__archmind_settings_launcher_singleton__";
+    const globalWindow = window as Window & { [key: string]: unknown };
+    if (globalWindow[markerKey]) {
+      setEnabled(false);
+      return;
+    }
+    globalWindow[markerKey] = true;
     function onOpenSettings() {
       setDrawerVersion((prev) => prev + 1);
       setOpen(true);
@@ -21,8 +29,13 @@ export default function SettingsLauncher() {
     window.addEventListener("archmind:open-settings", onOpenSettings);
     return () => {
       window.removeEventListener("archmind:open-settings", onOpenSettings);
+      delete globalWindow[markerKey];
     };
   }, []);
+
+  if (!enabled) {
+    return null;
+  }
 
   return (
     <>

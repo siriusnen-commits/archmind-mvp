@@ -22,6 +22,7 @@ def append_execution_event(
     step_no: int | None = None,
     stop_reason: str | None = None,
     timestamp: str | None = None,
+    verification: dict[str, Any] | None = None,
 ) -> bool:
     event: dict[str, Any] = {
         "timestamp": str(timestamp or datetime.now(timezone.utc).isoformat()),
@@ -37,6 +38,8 @@ def append_execution_event(
         event["step_no"] = int(step_no)
     if stop_reason:
         event["stop_reason"] = str(stop_reason)
+    if isinstance(verification, dict) and verification:
+        event["verification"] = verification
 
     try:
         history_file = execution_history_path(project_dir)

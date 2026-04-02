@@ -1258,12 +1258,9 @@ def _render_frontend_navigation_file(hrefs: list[str]) -> str:
     unique: list[str] = []
     seen_canonical: set[str] = set()
     seen_labels: set[str] = set()
-    has_non_root = any(_canonicalize_nav_href(item) not in {"", "/"} for item in hrefs)
     for href in hrefs:
         cleaned = _canonicalize_nav_href(href)
         if not cleaned:
-            continue
-        if has_non_root and cleaned == "/":
             continue
         parts = [part for part in cleaned.strip("/").split("/") if part]
         if _route_kind_from_segments(parts) == "detail":
@@ -1276,8 +1273,20 @@ def _render_frontend_navigation_file(hrefs: list[str]) -> str:
         seen_canonical.add(cleaned)
         seen_labels.add(label_key)
         unique.append(cleaned)
-    if not unique:
-        unique = ["/"]
+    if "/" not in unique:
+        unique.insert(0, "/")
+    list_candidate = next(
+        (
+            href
+            for href in unique
+            if href != "/" and _route_kind_from_segments([part for part in href.strip("/").split("/") if part]) == "list"
+        ),
+        "",
+    )
+    if list_candidate:
+        create_candidate = f"{list_candidate}/new"
+        if create_candidate not in unique:
+            unique.append(create_candidate)
     lines = []
     for index, href in enumerate(unique):
         label = _nav_label_from_href(href)
@@ -1296,6 +1305,43 @@ def _render_frontend_navigation_file(hrefs: list[str]) -> str:
     )
 
 
+def _render_frontend_app_nav_component() -> str:
+    return (
+        '"use client";\n\n'
+        'import Link from "next/link";\n'
+        'import { usePathname } from "next/navigation";\n'
+        'import { APP_NAV_LINKS } from "./navigation";\n\n'
+        "function normalizePath(pathname: string): string {\n"
+        "  const value = String(pathname || \"\").trim();\n"
+        "  if (!value || value === \"/\") return \"/\";\n"
+        "  return value.endsWith(\"/\") ? value.slice(0, -1) : value;\n"
+        "}\n\n"
+        "export default function AppNav() {\n"
+        "  const pathname = normalizePath(usePathname() || \"/\");\n"
+        "  return (\n"
+        '    <nav className=\"flex flex-wrap items-center gap-2 text-xs\">\n'
+        "      {APP_NAV_LINKS.map((link) => {\n"
+        "        const href = normalizePath(link.href);\n"
+        "        const active = pathname === href || (href !== \"/\" && pathname.startsWith(`${href}/`));\n"
+        "        return (\n"
+        "          <Link\n"
+        "            key={link.href}\n"
+        "            href={link.href}\n"
+        "            aria-current={active ? \"page\" : undefined}\n"
+        "            className={active\n"
+        '              ? \"rounded-md border border-cyan-500/70 bg-cyan-500/10 px-2 py-1 font-semibold text-cyan-100\"\n'
+        '              : \"rounded-md border border-slate-700 px-2 py-1 text-slate-200 hover:bg-slate-800\"}\n'
+        "          >\n"
+        "            {link.label}\n"
+        "          </Link>\n"
+        "        );\n"
+        "      })}\n"
+        "    </nav>\n"
+        "  );\n"
+        "}\n"
+    )
+
+
 def _parse_nav_hrefs(navigation_text: str) -> list[str]:
     hrefs: list[str] = []
     for match in re.finditer(r'href:\s*"([^"]+)"', navigation_text):
@@ -1307,20 +1353,27 @@ def _parse_nav_hrefs(navigation_text: str) -> list[str]:
 
 def _ensure_frontend_navigation_helper(app_root: Path, generated: list[str], project_dir: Path) -> None:
     nav_path = _frontend_nav_path(app_root)
-    if nav_path.exists():
-        return
+    app_nav_path = app_root / "_lib" / "AppNav.tsx"
     discovered = _discover_frontend_routes(app_root)
     if not discovered:
         discovered = ["/"]
-    _write_if_missing(nav_path, _render_frontend_navigation_file(discovered), generated, project_dir)
+    if nav_path.exists():
+        existing = _parse_nav_hrefs(nav_path.read_text(encoding="utf-8"))
+        for href in discovered:
+            cleaned = _canonicalize_nav_href(href)
+            if cleaned and cleaned not in existing:
+                existing.append(cleaned)
+        _write_if_changed(nav_path, _render_frontend_navigation_file(existing), generated, project_dir)
+    else:
+        _write_if_missing(nav_path, _render_frontend_navigation_file(discovered), generated, project_dir)
+    _write_if_missing(app_nav_path, _render_frontend_app_nav_component(), generated, project_dir)
 
 
 def _render_frontend_layout_with_navigation(title: str) -> str:
     safe_title = str(title or "").strip() or "ArchMind App"
     return (
-        'import Link from "next/link";\n'
         'import "./globals.css";\n'
-        'import { APP_NAV_LINKS } from "./_lib/navigation";\n\n'
+        'import AppNav from "./_lib/AppNav";\n\n'
         "export const metadata = {\n"
         f'  title: "{safe_title}",\n'
         "};\n\n"
@@ -1336,13 +1389,7 @@ def _render_frontend_layout_with_navigation(title: str) -> str:
         f'                  <div className="text-lg font-semibold tracking-wide">{safe_title}</div>\n'
         '                  <div className="text-xs text-slate-300">FastAPI + Next.js workspace</div>\n'
         "                </div>\n"
-        '                <nav className="flex flex-wrap items-center gap-2 text-xs">\n'
-        "                  {APP_NAV_LINKS.map((link) => (\n"
-        '                    <Link key={link.href} href={link.href} className="rounded-md border border-slate-700 px-2 py-1 text-slate-200 hover:bg-slate-800">\n'
-        "                      {link.label}\n"
-        "                    </Link>\n"
-        "                  ))}\n"
-        "                </nav>\n"
+        "                <AppNav />\n"
         "              </div>\n"
         "            </div>\n"
         "          </header>\n"
@@ -1441,6 +1488,11 @@ def _ensure_frontend_navigation_shell_upgrade(app_root: Path, generated: list[st
     layout_path = app_root / "layout.tsx"
     if layout_path.exists():
         layout_text = layout_path.read_text(encoding="utf-8")
+        if "APP_NAV_LINKS.map" in layout_text and "AppNav" not in layout_text:
+            title_match = re.search(r'title:\s*["\']([^"\']+)["\']', layout_text)
+            title = title_match.group(1) if title_match else project_dir.name
+            _write_if_changed(layout_path, _render_frontend_layout_with_navigation(title), generated, project_dir)
+            layout_text = layout_path.read_text(encoding="utf-8")
         if "APP_NAV_LINKS" not in layout_text:
             legacy_markers = (
                 "FastAPI + Next.js workspace" in layout_text
@@ -1994,7 +2046,7 @@ def _render_frontend_relation_page(
     return (
         '"use client";\n\n'
         'import Link from "next/link";\n'
-        'import { useSearchParams } from "next/navigation";\n'
+        'import { useRouter, useSearchParams } from "next/navigation";\n'
         'import { useEffect, useState } from "react";\n'
         f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n\n'
         "type EntityItem = Record<string, unknown> & { id?: number | string };\n\n"
@@ -2208,6 +2260,7 @@ def _render_frontend_entity_create_page(
         "}\n\n"
         f"export default function {component_name}() {{\n"
         "  const searchParams = useSearchParams();\n"
+        "  const router = useRouter();\n"
         "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n"
         f"  const [values, setValues] = useState<Record<string, string>>(() => ({{ {initial_map} }}));\n"
         "  const [saving, setSaving] = useState(false);\n"
@@ -2234,7 +2287,10 @@ def _render_frontend_entity_create_page(
         "        body: JSON.stringify(payload),\n"
         "      });\n"
         "      if (!response.ok) throw new Error(`HTTP ${response.status}`);\n"
+        "      await response.json();\n"
         "      setMessage(\"Created.\");\n"
+        "      router.push(\"/" + str(entity_path).strip("/") + "\");\n"
+        "      router.refresh();\n"
         "    } catch (e) {\n"
         "      const detail = e instanceof Error ? e.message : String(e || \"unknown error\");\n"
         "      setError(detail);\n"
