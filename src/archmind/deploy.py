@@ -1948,10 +1948,28 @@ def _component_reachability(url: str, *, process_running: bool) -> dict[str, Any
         else:
             lan_urls.append(replaced)
 
+    # Allow explicitly configured remote URL to participate in verified remote exposure.
+    configured_remote_candidates = [
+        str(os.getenv("ARCHMIND_EXTERNAL_FRONTEND_URL", "") or "").strip(),
+        str(os.getenv("ARCHMIND_EXTERNAL_BACKEND_URL", "") or "").strip(),
+    ]
+    for candidate in configured_remote_candidates:
+        endpoint = _parse_endpoint(candidate)
+        if endpoint is None:
+            continue
+        host, candidate_port = endpoint
+        if candidate_port != port:
+            continue
+        if not _is_tcp_reachable(host, candidate_port):
+            continue
+        replaced = _replace_url_host(url, host)
+        if replaced and replaced not in external_urls:
+            external_urls.append(replaced)
+
     lan_reachable = bool(lan_urls)
     external_reachable = bool(external_urls)
     if external_reachable:
-        status = "EXTERNAL_REACHABLE"
+        status = "REMOTE_REACHABLE"
     elif lan_reachable:
         status = "LAN_REACHABLE"
     elif local_reachable:

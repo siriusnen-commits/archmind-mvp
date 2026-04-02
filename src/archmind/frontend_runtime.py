@@ -105,12 +105,13 @@ def detect_frontend_runtime_entry(
         frontend_run_mode = "next-dev"
         framework = "nextjs"
     else:
+        # Generic dev servers (e.g. Vite) typically use `--host` for non-local binding.
         run_command = [
             "npm",
             "run",
             "dev",
             "--",
-            "--hostname",
+            "--host",
             "0.0.0.0",
             "--port",
             str(selected_port),
