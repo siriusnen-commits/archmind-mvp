@@ -1672,6 +1672,33 @@ def test_get_local_runtime_status_includes_configured_remote_frontend_url_when_r
     assert "http://198.51.100.7:3044" in reachability["external_urls"]
 
 
+def test_get_local_runtime_status_uses_persisted_hosts_for_frontend_reachability(monkeypatch, tmp_path: Path) -> None:
+    write_state(
+        tmp_path,
+        {
+            "deploy_target": "local",
+            "frontend_pid": 55555,
+            "frontend_deploy_url": "http://127.0.0.1:3044",
+        },
+    )
+    hosts_path = tmp_path / "ui_runtime_hosts.json"
+    hosts_path.write_text('{"lan_host":"192.168.0.250","tailscale_host":"100.64.0.8"}', encoding="utf-8")
+
+    monkeypatch.setenv("ARCHMIND_UI_RUNTIME_HOSTS_PATH", str(hosts_path))
+    monkeypatch.delenv("ARCHMIND_LAN_HOST", raising=False)
+    monkeypatch.delenv("ARCHMIND_TAILSCALE_HOST", raising=False)
+    monkeypatch.setattr("archmind.deploy._detect_lan_host_for_runtime", lambda: "")
+    monkeypatch.setattr("archmind.deploy._detect_tailscale_host_for_runtime", lambda: "")
+    monkeypatch.setattr("archmind.deploy.is_pid_running", lambda pid: int(pid or 0) == 55555)
+    monkeypatch.setattr("archmind.deploy._is_tcp_reachable", lambda _host, _port, timeout_s=0.35: True)
+
+    status = get_local_runtime_status(tmp_path)
+    reachability = status["frontend"]["reachability"]
+    assert reachability["status"] == "REMOTE_REACHABLE"
+    assert "http://192.168.0.250:3044" in reachability["lan_urls"]
+    assert "http://100.64.0.8:3044" in reachability["external_urls"]
+
+
 def test_detect_frontend_runtime_entry_prefers_frontend_dir(tmp_path: Path) -> None:
     frontend_dir = tmp_path / "frontend"
     frontend_dir.mkdir(parents=True, exist_ok=True)

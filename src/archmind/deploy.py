@@ -1878,6 +1878,31 @@ def _detect_lan_host_for_runtime() -> str:
         sock.close()
 
 
+def _runtime_hosts_config_path() -> Path:
+    override = str(os.getenv("ARCHMIND_UI_RUNTIME_HOSTS_PATH", "") or "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    return (Path.home() / ".archmind" / "ui_runtime_hosts.json").expanduser().resolve()
+
+
+def _load_persisted_runtime_hosts() -> dict[str, str]:
+    path = _runtime_hosts_config_path()
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key in ("lan_host", "tailscale_host"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            out[key] = value
+    return out
+
+
 def _detect_tailscale_host_for_runtime() -> str:
     try:
         result = subprocess.run(
@@ -1927,8 +1952,15 @@ def _component_reachability(url: str, *, process_running: bool) -> dict[str, Any
     _host, port = endpoint
     local_reachable = _is_tcp_reachable("127.0.0.1", port) or _is_tcp_reachable("localhost", port)
 
-    lan_host = str(os.getenv("ARCHMIND_LAN_HOST", "") or "").strip() or _detect_lan_host_for_runtime()
-    tailscale_host = str(os.getenv("ARCHMIND_TAILSCALE_HOST", "") or "").strip() or _detect_tailscale_host_for_runtime()
+    persisted_hosts = _load_persisted_runtime_hosts()
+    lan_host = str(os.getenv("ARCHMIND_LAN_HOST", "") or "").strip() or str(persisted_hosts.get("lan_host") or "").strip()
+    tailscale_host = (
+        str(os.getenv("ARCHMIND_TAILSCALE_HOST", "") or "").strip() or str(persisted_hosts.get("tailscale_host") or "").strip()
+    )
+    if not lan_host:
+        lan_host = _detect_lan_host_for_runtime()
+    if not tailscale_host:
+        tailscale_host = _detect_tailscale_host_for_runtime()
 
     lan_urls: list[str] = []
     external_urls: list[str] = []
