@@ -489,7 +489,7 @@ def _is_frontend_build_signature(signature: str) -> bool:
 
 def _is_frontend_build_class(failure_class: str) -> bool:
     text = str(failure_class or "").strip().lower()
-    return text in {"frontend-build", "frontend-clean"}
+    return text in {"frontend-build", "frontend-clean", "frontend-other"}
 
 
 def _is_stale_frontend_build_failure_line(line: str) -> bool:
