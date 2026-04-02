@@ -382,10 +382,30 @@ def test_generated_create_page_confirms_success_after_api_and_redirects_to_list(
 
     apply_page_scaffold(project_dir, "tasks/new")
     text = (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").read_text(encoding="utf-8")
+    assert 'import { useRouter, useSearchParams } from "next/navigation";' in text
+    assert "const router = useRouter();" in text
     assert "if (!response.ok) throw new Error" in text
     assert "await response.json();" in text
     assert 'router.push("/tasks");' in text
     assert "router.refresh();" in text
+
+
+def test_generated_create_page_never_uses_userouter_without_next_navigation_import(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_router_import_guard"
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        '{"entities":[{"name":"Task","fields":[{"name":"title","type":"string"}]}]}',
+        encoding="utf-8",
+    )
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    apply_page_scaffold(project_dir, "tasks/new")
+    text = (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").read_text(encoding="utf-8")
+
+    assert "useRouter()" in text
+    assert 'from "next/navigation"' in text
+    assert "ReferenceError: Can't find variable: useRouter" not in text
 
 
 def test_apply_frontend_page_scaffold_diary_entry_has_search_empty_state_and_recent_first_ui(tmp_path: Path) -> None:
