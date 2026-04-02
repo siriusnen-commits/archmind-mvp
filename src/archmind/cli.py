@@ -218,6 +218,12 @@ def build_parser() -> argparse.ArgumentParser:
     ppipe.add_argument("--out", default="generated_test", help="Output directory base")
     ppipe.add_argument("--name", default=None, help="Project name (folder name)")
     ppipe.add_argument("--template", default="fastapi", choices=_templates_choices(), help="Template name")
+    ppipe.add_argument(
+        "--starter-profile",
+        default="",
+        choices=["", "todo", "diary", "kanban", "bookmark"],
+        help="Force starter materialization profile validation (wizard/internal use)",
+    )
     ppipe.add_argument("--prompt", default=None, help="Override system prompt (advanced)")
     ppipe.add_argument("--gen-model", default="llama3:latest", help="Ollama model name for generate")
     ppipe.add_argument("--gen-ollama-base-url", default="http://127.0.0.1:11434", help="Ollama base URL")
@@ -433,6 +439,7 @@ def run_pipeline_cmd(args: argparse.Namespace) -> int:
         out=args.out,
         name=args.name,
         template=args.template,
+        starter_profile=str(args.starter_profile or "").strip().lower(),
         template_explicit="--template" in list(getattr(args, "_argv", [])),
         prompt=args.prompt,
         gen_model=args.gen_model,

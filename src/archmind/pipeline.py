@@ -47,6 +47,7 @@ class PipelineOptions:
     out: str
     name: Optional[str]
     template: str
+    starter_profile: str
     template_explicit: bool
     prompt: Optional[str]
     gen_model: str
@@ -68,6 +69,9 @@ class PipelineOptions:
     json_summary: bool
     auto_deploy: bool
     auto_deploy_target: str
+
+
+SUPPORTED_STARTER_PROFILES = {"todo", "diary", "kanban", "bookmark"}
 
 
 def _repository_default_payload(
@@ -319,6 +323,8 @@ def _build_command(opts: PipelineOptions) -> str:
         parts += ["--name", opts.name]
     if opts.template:
         parts += ["--template", opts.template]
+    if opts.starter_profile:
+        parts += ["--starter-profile", opts.starter_profile]
     if opts.prompt:
         parts += ["--prompt", opts.prompt]
     if opts.gen_model:
@@ -354,6 +360,83 @@ def _build_command(opts: PipelineOptions) -> str:
     if opts.auto_deploy_target:
         parts += ["--deploy-target", opts.auto_deploy_target]
     return " ".join(parts)
+
+
+def _normalize_starter_profile(value: str | None) -> str:
+    text = str(value or "").strip().lower()
+    return text if text in SUPPORTED_STARTER_PROFILES else ""
+
+
+def _detect_starter_profile_from_idea(idea: str) -> str:
+    text = str(idea or "").strip().lower()
+    if any(token in text for token in ("todo", "task manager", "task app")):
+        return "todo"
+    if any(token in text for token in ("diary", "journal", "entry app")):
+        return "diary"
+    if any(token in text for token in ("kanban", "board", "cards")):
+        return "kanban"
+    if any(token in text for token in ("bookmark", "saved link", "reading list")):
+        return "bookmark"
+    return ""
+
+
+def _validate_todo_materialization(project_dir: Path, spec_seed: dict[str, Any] | None = None) -> tuple[bool, str]:
+    spec_path = project_dir / ".archmind" / "project_spec.json"
+    try:
+        spec_payload = json.loads(spec_path.read_text(encoding="utf-8")) if spec_path.exists() else {}
+    except Exception:
+        spec_payload = {}
+    spec = spec_payload if isinstance(spec_payload, dict) else {}
+    if not spec and isinstance(spec_seed, dict):
+        spec = spec_seed
+
+    entities = spec.get("entities") if isinstance(spec.get("entities"), list) else []
+    entity_names = {
+        str(item.get("name") or "").strip().lower()
+        for item in entities
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    }
+    apis = {
+        str(item or "").strip().upper()
+        for item in (spec.get("api_endpoints") or [])
+        if str(item or "").strip()
+    }
+    pages = {
+        str(item or "").strip().lower().strip("/")
+        for item in (spec.get("frontend_pages") or [])
+        if str(item or "").strip()
+    }
+
+    missing: list[str] = []
+    if "task" not in entity_names:
+        missing.append("missing Task entity in spec")
+    for endpoint in ("GET /TASKS", "POST /TASKS", "GET /TASKS/{ID}"):
+        if endpoint not in apis:
+            missing.append(f"missing baseline API endpoint: {endpoint}")
+    if "tasks/list" not in pages:
+        missing.append("missing tasks/list in spec frontend_pages")
+    if "tasks/detail" not in pages and "tasks/new" not in pages:
+        missing.append("missing tasks/detail or tasks/new in spec frontend_pages")
+
+    app_root = project_dir / "frontend" / "app"
+    tasks_list_page = app_root / "tasks" / "page.tsx"
+    tasks_create_page = app_root / "tasks" / "new" / "page.tsx"
+    if not tasks_list_page.exists():
+        missing.append("missing frontend tasks list page")
+    if not tasks_create_page.exists():
+        missing.append("missing frontend tasks create page")
+    root_page = app_root / "page.tsx"
+    if root_page.exists():
+        try:
+            root_text = root_page.read_text(encoding="utf-8")
+        except Exception:
+            root_text = ""
+        if "ArchMind Fullstack Workspace" in root_text:
+            missing.append("frontend root is still generic fallback scaffold")
+
+    if missing:
+        return False, "; ".join(missing)
+    return True, ""
 
 
 def compute_status(
@@ -847,10 +930,13 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
     selected_template = ""
     effective_template = opts.template
     template_fallback_reason = ""
+    starter_profile = _normalize_starter_profile(opts.starter_profile)
     if initial_idea:
         normalized_payload = normalize_idea(initial_idea)
         normalized_idea = str(normalized_payload.get("normalized") or initial_idea)
         idea_language = str(normalized_payload.get("language") or "en")
+        if not starter_profile:
+            starter_profile = _detect_starter_profile_from_idea(normalized_idea)
 
         memory_path = _failure_memory_path(opts)
         for hint in get_failure_hints(normalized_idea, memory_path):
@@ -953,6 +1039,60 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
             payload["backend_run_mode"] = "asgi-direct"
             payload["backend_run_cwd"] = str((project_dir / "backend") if app_shape == "fullstack" or effective_template == "fullstack-ddd" else project_dir)
             payload["backend_run_command"] = "uvicorn app.main:app --host 0.0.0.0 --port <assigned_port>"
+            payload["recent_failures"] = [reason]
+            write_state(project_dir, payload)
+        except Exception:
+            pass
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        failure_payload = {
+            "status": "FAIL",
+            "project_type": normalize_project_type(_project_type_from_app_shape(app_shape)),
+            "github_repo_url": "",
+            "repository": repository_payload,
+            "selected_template": selected_template,
+            "effective_template": effective_template,
+            "template_fallback_reason": template_fallback_reason or None,
+            "project_dir": str(project_dir),
+            "timestamp": timestamp,
+            "command": _build_command(opts),
+            "steps": {
+                "generate": {
+                    "skipped": False,
+                    "ok": False,
+                    "detail": reason,
+                    "failure_class": "generation-error",
+                },
+                "run_before_fix": {"ok": False, "status": "FAIL", "reason": "skipped due to generation-error"},
+                "fix": {"attempted": False, "applied": bool(opts.apply), "iterations": 0, "model": opts.model, "scope": _effective_fix_scope(opts), "prompt": None},
+                "run_after_fix": {"ok": False, "log": None, "summary": None, "detail": None},
+            },
+            "artifacts": {},
+            "failure_summary": [reason],
+            "architecture_reasoning": architecture_reasoning or None,
+        }
+        result_json, _ = write_result(project_dir, failure_payload)
+        print(f"[FAIL] generation-error. result: {result_json}", file=sys.stderr)
+        return 1
+
+    materialization_ok = True
+    materialization_reason = ""
+    if starter_profile == "todo":
+        materialization_ok, materialization_reason = _validate_todo_materialization(project_dir, project_spec_seed)
+    if not materialization_ok:
+        reason = str(materialization_reason or "starter profile materialization failed")
+        print(f"[ERROR] generation-error: {reason}", file=sys.stderr)
+        repository_payload = _repository_default_payload(
+            status="SKIPPED",
+            reason="generation failed before scaffold completed",
+            attempted=False,
+        )
+        try:
+            payload = ensure_state(project_dir)
+            payload["last_status"] = "FAIL"
+            payload["last_failure_class"] = "generation-error"
+            payload["runtime_failure_class"] = "generation-error"
+            payload["repository"] = repository_payload
+            payload["github_repo_url"] = ""
             payload["recent_failures"] = [reason]
             write_state(project_dir, payload)
         except Exception:

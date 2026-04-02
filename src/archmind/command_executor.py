@@ -349,9 +349,9 @@ def _execute_auto_command(
                 break
             summary_lines.append(f"- Next: {normalized_command}")
             if cmd not in AUTO_ALLOWED_COMMANDS:
-                stop_reason = f"unsupported command: {cmd or normalized_command}"
+                stop_reason = "project not materialized / no supported bootstrap path"
                 stop_explanation = _auto_stop_explanation(stop_reason, analysis)
-                summary_lines.append("- Result: STOP (unsupported command)")
+                summary_lines.append("- Result: STOP (no supported bootstrap path)")
                 summary_lines.append(f"- Why stop: {stop_explanation}")
                 append_execution_event(
                     project_dir,
@@ -359,7 +359,7 @@ def _execute_auto_command(
                     source=source,
                     command=normalized_command,
                     status="stop",
-                    message="Unsupported command for auto run.",
+                    message="No supported bootstrap command for current project state.",
                     run_id=run_key,
                     step_no=idx,
                     stop_reason=stop_reason,

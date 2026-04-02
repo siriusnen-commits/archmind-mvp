@@ -179,6 +179,18 @@ def test_build_pipeline_command_supports_optional_template_override() -> None:
     assert cmd[cmd.index("--template") + 1] == "fullstack-ddd"
 
 
+def test_build_pipeline_command_supports_optional_starter_profile_override() -> None:
+    base_dir = Path("/tmp/projects")
+    cmd = build_pipeline_command(
+        idea="todo app",
+        base_dir=base_dir,
+        project_name="20260402_todo_app",
+        starter_profile="todo",
+    )
+    assert "--starter-profile" in cmd
+    assert cmd[cmd.index("--starter-profile") + 1] == "todo"
+
+
 def test_resolve_template_for_idea_backend_routes_to_fastapi() -> None:
     assert resolve_template_for_idea("simple fastapi notes api") == "fastapi"
 

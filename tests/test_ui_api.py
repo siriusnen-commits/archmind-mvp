@@ -2114,6 +2114,7 @@ def test_ui_idea_local_maps_domain_templates_to_fullstack_pipeline_template(monk
         auto_deploy: bool = False,
         deploy_target: str = "local",
         template_name: str | None = None,
+        starter_profile: str | None = None,
     ):  # type: ignore[no-untyped-def]
         captured["idea"] = idea
         captured["base_dir"] = base_dir
@@ -2121,6 +2122,7 @@ def test_ui_idea_local_maps_domain_templates_to_fullstack_pipeline_template(monk
         captured["auto_deploy"] = auto_deploy
         captured["deploy_target"] = deploy_target
         captured["template_name"] = template_name
+        captured["starter_profile"] = starter_profile
         return ["archmind", "pipeline", "--idea", idea, "--name", project_name]
 
     monkeypatch.setattr("archmind.telegram_bot.build_pipeline_command", _fake_build_pipeline_command)
@@ -2137,6 +2139,7 @@ def test_ui_idea_local_maps_domain_templates_to_fullstack_pipeline_template(monk
     assert project_name == "todo_seed_project"
     assert error == ""
     assert captured["template_name"] == "fullstack-ddd"
+    assert captured["starter_profile"] == "todo"
     assert "todo task manager app" in str(captured["idea"])
 
 
