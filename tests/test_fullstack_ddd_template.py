@@ -119,7 +119,7 @@ def test_fullstack_scaffolds_entities_and_pages_from_project_spec(tmp_path: Path
     assert "ArchMind Fullstack Workspace" not in frontend_root.read_text(encoding="utf-8")
     assert "This scaffold is domain-neutral." not in frontend_root.read_text(encoding="utf-8")
     assert 'from "./_lib/navigation"' in frontend_root.read_text(encoding="utf-8")
-    assert "APP_NAV_LINKS.map" in frontend_layout.read_text(encoding="utf-8")
+    assert "AppNav" in frontend_layout.read_text(encoding="utf-8")
     assert frontend_eslint.read_text(encoding="utf-8").strip() == '{\n  "extends": ["next/core-web-vitals"]\n}'
 
 

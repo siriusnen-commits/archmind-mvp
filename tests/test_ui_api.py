@@ -1586,6 +1586,8 @@ def test_new_project_page_source_uses_structured_create_flow_and_stateful_form()
     assert "setValues(INITIAL_VALUES)" not in source
     assert "<NewProjectForm values={values}" in source
     assert "if (creating)" in source
+    assert 'href="/dashboard"' in source
+    assert "uiLanguage ===" in source
 
 
 def test_create_project_error_card_source_has_retryable_structured_error_actions() -> None:
@@ -1609,6 +1611,17 @@ def test_settings_launcher_source_uses_bottom_left_n_icon_and_opens_drawer() -> 
     assert ">N<" in source or "N" in source
     assert "SettingsDrawer" in source
     assert "open={open}" in source
+    assert "__archmind_settings_launcher_singleton__" in source
+
+
+def test_history_and_inspect_sources_include_verification_aware_components() -> None:
+    history_source = Path("frontend/components/EvolutionHistoryCard.tsx").read_text(encoding="utf-8")
+    detail_source = Path("frontend/app/projects/[project]/page.tsx").read_text(encoding="utf-8")
+    assert "VerificationBadge" in history_source
+    assert "VerificationIssues" in history_source
+    assert "verification_status" in history_source
+    assert "RuntimeConsistencyCard" in detail_source
+    assert "DriftSummaryCard" in detail_source
 
 
 def test_settings_form_source_preserves_generation_defaults_controls() -> None:

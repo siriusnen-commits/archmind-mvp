@@ -1,6 +1,7 @@
 "use client";
 
 import type { CreateProjectStage } from "@/types/project-create";
+import type { UiLanguage } from "@/types/settings";
 
 const STAGES: CreateProjectStage[] = [
   "idle",
@@ -26,14 +27,16 @@ const LABEL_BY_STAGE: Record<CreateProjectStage, string> = {
 
 type Props = {
   stage: CreateProjectStage;
+  uiLanguage?: UiLanguage;
 };
 
-export default function CreateProjectStatusCard({ stage }: Props) {
+export default function CreateProjectStatusCard({ stage, uiLanguage = "en" }: Props) {
   const activeIndex = STAGES.indexOf(stage);
+  const title = uiLanguage === "ko" ? "생성 진행 상태" : uiLanguage === "ja" ? "生成ステータス" : "Generation Status";
 
   return (
     <section className="rounded-lg border border-slate-700 bg-slate-900/70 p-4">
-      <h2 className="mb-3 text-sm font-semibold text-slate-100">생성 진행 상태</h2>
+      <h2 className="mb-3 text-sm font-semibold text-slate-100">{title}</h2>
       <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {STAGES.map((item, index) => {
           const done = activeIndex > -1 && index < activeIndex;

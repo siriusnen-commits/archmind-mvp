@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from archmind.execution_history import append_execution_event
+from archmind.services.verification import should_verify_command, snapshot_mutation_state, verify_mutation
 
 ADD_FIELD_RE = re.compile(r"^/add_field\s+(\S+)\s+([^:\s]+)\s*:\s*(\S+)\s*$")
 ADD_API_RE = re.compile(r"^/add_api\s+(GET|POST|PUT|PATCH|DELETE)\s+(\S+)\s*$", re.IGNORECASE)
@@ -86,6 +87,7 @@ def _write_execution_event(
     run_id: str | None = None,
     step_no: int | None = None,
     stop_reason: str | None = None,
+    verification: dict[str, Any] | None = None,
 ) -> None:
     if project_dir is None:
         return
@@ -99,6 +101,7 @@ def _write_execution_event(
         run_id=run_id,
         step_no=step_no,
         stop_reason=stop_reason,
+        verification=verification,
     )
 
 
@@ -163,6 +166,7 @@ def _execute_auto_command(
     goal_satisfied = False
     executed_steps: list[dict[str, str]] = []
     skipped_steps: list[dict[str, str]] = []
+    step_verification_rows: list[dict[str, Any]] = []
 
     summary_lines.extend(
         [
@@ -423,6 +427,9 @@ def _execute_auto_command(
             summary_lines.append("- Result: OK")
             executed += 1
             executed_commands.append(normalized_command)
+            verification_payload = step_result.get("verification") if isinstance(step_result.get("verification"), dict) else {}
+            if verification_payload:
+                step_verification_rows.append(verification_payload)
             executed_steps.append(
                 {
                     "command": normalized_command,
@@ -642,6 +649,38 @@ def _execute_auto_command(
             "frontend_url": runtime_frontend_url,
         },
     }
+    if step_verification_rows:
+        failed = any(str(row.get("overall_status") or "").strip().upper() == "FAILED" for row in step_verification_rows)
+        all_verified = all(str(row.get("overall_status") or "").strip().upper() == "VERIFIED" for row in step_verification_rows)
+        if failed:
+            overall_verification = "FAILED"
+        elif all_verified and step_verification_rows:
+            overall_verification = "VERIFIED"
+        else:
+            overall_verification = "PARTIAL"
+        aggregated_issues: list[str] = []
+        for row in step_verification_rows:
+            for issue in (row.get("issues") or []):
+                text = str(issue or "").strip()
+                if text and text not in aggregated_issues:
+                    aggregated_issues.append(text)
+        auto_result["verification"] = {
+            "overall_status": overall_verification,
+            "steps": [],
+            "issues": aggregated_issues[:10],
+            "runtime_reflection": "auto",
+            "drift_summary": "runtime and generated code are aligned"
+            if overall_verification == "VERIFIED"
+            else ("; ".join(aggregated_issues[:3]) if aggregated_issues else "auto run has partial verification"),
+        }
+    else:
+        auto_result["verification"] = {
+            "overall_status": "PARTIAL",
+            "steps": [],
+            "issues": ["auto run has no verified mutation step"],
+            "runtime_reflection": "auto",
+            "drift_summary": "auto run has no verified mutation step",
+        }
 
     try:
         state = load_state(project_dir) or {}
@@ -657,6 +696,7 @@ def _execute_auto_command(
         "detail": f"Auto completed: executed={executed}, stopped={stop_reason}",
         "repository_sync": repo_sync,
         "auto_result": auto_result,
+        "verification": auto_result.get("verification"),
     }
 
 
@@ -706,6 +746,8 @@ def execute_command(
     implement_page_match = ADD_IMPLEMENT_PAGE_RE.match(normalized_command)
     entity_match = ADD_ENTITY_RE.match(normalized_command)
     auto_match = AUTO_RE.match(normalized_command)
+    verify_command = should_verify_command(normalized_command)
+    before_snapshot = snapshot_mutation_state(project_dir) if verify_command else {}
 
     try:
         from archmind.telegram_bot import (
@@ -861,6 +903,30 @@ def execute_command(
             "error": error,
         }
     )
+    verification_payload = payload.get("verification") if isinstance(payload.get("verification"), dict) else {}
+    if verify_command:
+        if auto_match and not verification_payload:
+            auto_verification = (
+                payload.get("auto_result", {}).get("verification")
+                if isinstance(payload.get("auto_result"), dict)
+                else {}
+            )
+            verification_payload = auto_verification if isinstance(auto_verification, dict) else {}
+        if not verification_payload:
+            try:
+                verification_payload = verify_mutation(normalized_command, project_dir, before_snapshot, payload)
+            except Exception as exc:
+                verification_payload = {
+                    "overall_status": "PARTIAL",
+                    "steps": [],
+                    "issues": [f"verification failed: {exc}"],
+                    "runtime_reflection": "unknown",
+                    "drift_summary": "verification failed",
+                }
+        payload["verification"] = verification_payload
+        payload["verification_status"] = str(verification_payload.get("overall_status") or "PARTIAL").strip().upper() or "PARTIAL"
+        if auto_match and isinstance(payload.get("auto_result"), dict):
+            payload["auto_result"]["verification"] = verification_payload
     if bool(payload.get("ok")) and enable_git_sync and not auto_match:
         sync = sync_repo_after_evolution_command(project_dir, normalized_command)
         payload["repository_sync"] = sync
@@ -888,5 +954,6 @@ def execute_command(
         message=str(payload.get("message") or payload.get("error") or ""),
         run_id=run_id,
         step_no=step_no,
+        verification=verification_payload if isinstance(verification_payload, dict) else None,
     )
     return payload

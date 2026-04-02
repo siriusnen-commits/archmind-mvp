@@ -5,6 +5,8 @@ import EvolutionCard from "@/components/EvolutionCard";
 import EvolutionHistoryCard from "@/components/EvolutionHistoryCard";
 import InspectOverviewCard from "@/components/InspectOverviewCard";
 import LogsViewerCard from "@/components/LogsViewerCard";
+import DriftSummaryCard from "@/components/inspect/DriftSummaryCard";
+import RuntimeConsistencyCard from "@/components/inspect/RuntimeConsistencyCard";
 import AddEntityCard from "@/components/AddEntityCard";
 import AddFieldCard from "@/components/AddFieldCard";
 import AddApiCard from "@/components/AddApiCard";
@@ -129,6 +131,10 @@ type ProjectDetail = {
     status?: string;
     message?: string;
     stop_reason?: string;
+    verification_status?: string;
+    verification_issues?: string[];
+    drift_summary?: string;
+    runtime_reflection?: string;
   }>;
   evolution_history?: Array<{
     timestamp?: string;
@@ -139,7 +145,22 @@ type ProjectDetail = {
     command?: string;
     source?: string;
     stop_reason?: string;
+    verification_status?: string;
+    verification_issues?: string[];
+    drift_summary?: string;
+    runtime_reflection?: string;
   }>;
+  verification?: {
+    latest_status?: string;
+    latest_issues?: string[];
+    runtime_reflection?: string;
+    drift_summary?: string;
+    status_counts?: {
+      verified?: number;
+      partial?: number;
+      failed?: number;
+    };
+  };
   architecture?: {
     app_shape?: string;
     recommended_template?: string;
@@ -244,6 +265,8 @@ export default async function ProjectDetailPage({ params }: PageProps) {
         <section className="space-y-3">
           <ProjectSummaryCard project={detail} />
           <InspectOverviewCard project={detail} />
+          <RuntimeConsistencyCard verification={detail.verification} />
+          <DriftSummaryCard verification={detail.verification} />
           <NextActionCard projectName={detail.name} nextAction={analysis?.next_action} />
           <NextCandidatesCard projectName={detail.name} candidates={analysis?.next_candidates} />
           <AutoControlPanel projectName={detail.name} autoSummary={detail.auto_summary} />
