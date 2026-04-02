@@ -1835,6 +1835,142 @@ def _to_port(value: Any) -> int | None:
     return port if port > 0 else None
 
 
+def _parse_endpoint(url: str) -> tuple[str, int] | None:
+    text = str(url or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = parse.urlparse(text)
+    except Exception:
+        return None
+    host = str(parsed.hostname or "").strip()
+    if not host:
+        return None
+    port = parsed.port
+    if port is None:
+        if parsed.scheme == "https":
+            port = 443
+        elif parsed.scheme == "http":
+            port = 80
+    if not port:
+        return None
+    return host, int(port)
+
+
+def _is_tcp_reachable(host: str, port: int, *, timeout_s: float = 0.35) -> bool:
+    if not host or int(port) <= 0:
+        return False
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout_s):
+            return True
+    except Exception:
+        return False
+
+
+def _detect_lan_host_for_runtime() -> str:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.connect(("8.8.8.8", 80))
+        return str(sock.getsockname()[0] or "").strip()
+    except Exception:
+        return ""
+    finally:
+        sock.close()
+
+
+def _detect_tailscale_host_for_runtime() -> str:
+    try:
+        result = subprocess.run(
+            ["tailscale", "ip", "-4"],
+            capture_output=True,
+            text=True,
+            timeout=1,
+            shell=False,
+            check=False,
+        )
+        lines = [str(line).strip() for line in str(result.stdout or "").splitlines() if str(line).strip()]
+        return lines[0] if lines else ""
+    except Exception:
+        return ""
+
+
+def _replace_url_host(url: str, host: str) -> str:
+    text = str(url or "").strip()
+    if not text:
+        return ""
+    target = str(host or "").strip()
+    if not target or ":" in target:
+        return ""
+    try:
+        parsed = parse.urlparse(text)
+    except Exception:
+        return ""
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    port = parsed.port
+    netloc = target if port is None else f"{target}:{int(port)}"
+    return parse.urlunparse(parsed._replace(netloc=netloc))
+
+
+def _component_reachability(url: str, *, process_running: bool) -> dict[str, Any]:
+    endpoint = _parse_endpoint(url)
+    if endpoint is None:
+        return {
+            "status": "PROCESS_RUNNING" if process_running else "UNREACHABLE",
+            "process_running": bool(process_running),
+            "local_reachable": False,
+            "lan_reachable": False,
+            "external_reachable": False,
+            "lan_urls": [],
+            "external_urls": [],
+        }
+    _host, port = endpoint
+    local_reachable = _is_tcp_reachable("127.0.0.1", port) or _is_tcp_reachable("localhost", port)
+
+    lan_host = str(os.getenv("ARCHMIND_LAN_HOST", "") or "").strip() or _detect_lan_host_for_runtime()
+    tailscale_host = str(os.getenv("ARCHMIND_TAILSCALE_HOST", "") or "").strip() or _detect_tailscale_host_for_runtime()
+
+    lan_urls: list[str] = []
+    external_urls: list[str] = []
+    seen_hosts: set[str] = set()
+    for candidate, bucket in ((lan_host, "lan"), (tailscale_host, "external")):
+        host = str(candidate or "").strip()
+        if not host or host in seen_hosts or host in _LOOPBACK_HOSTS:
+            continue
+        seen_hosts.add(host)
+        if not _is_tcp_reachable(host, port):
+            continue
+        replaced = _replace_url_host(url, host)
+        if not replaced:
+            continue
+        if bucket == "external":
+            external_urls.append(replaced)
+        else:
+            lan_urls.append(replaced)
+
+    lan_reachable = bool(lan_urls)
+    external_reachable = bool(external_urls)
+    if external_reachable:
+        status = "EXTERNAL_REACHABLE"
+    elif lan_reachable:
+        status = "LAN_REACHABLE"
+    elif local_reachable:
+        status = "LOCAL_REACHABLE"
+    elif process_running:
+        status = "PROCESS_RUNNING"
+    else:
+        status = "UNREACHABLE"
+    return {
+        "status": status,
+        "process_running": bool(process_running),
+        "local_reachable": bool(local_reachable),
+        "lan_reachable": bool(lan_reachable),
+        "external_reachable": bool(external_reachable),
+        "lan_urls": lan_urls,
+        "external_urls": external_urls,
+    }
+
+
 def is_pid_running(pid: int | None) -> bool:
     if pid is None:
         return False
@@ -1910,6 +2046,9 @@ def get_local_runtime_status(project_dir: Path) -> dict[str, Any]:
     else:
         frontend_status = "NOT RUNNING"
 
+    backend_reachability = _component_reachability(backend_url, process_running=backend_running)
+    frontend_reachability = _component_reachability(frontend_url, process_running=frontend_running)
+
     return {
         "project_dir": root,
         "project_name": root.name,
@@ -1918,11 +2057,13 @@ def get_local_runtime_status(project_dir: Path) -> dict[str, Any]:
             "status": backend_status,
             "pid": backend_pid,
             "url": backend_url,
+            "reachability": backend_reachability,
         },
         "frontend": {
             "status": frontend_status,
             "pid": frontend_pid,
             "url": frontend_url,
+            "reachability": frontend_reachability,
         },
         "services": {
             "backend": {
@@ -1934,6 +2075,7 @@ def get_local_runtime_status(project_dir: Path) -> dict[str, Any]:
                 "health": str((backend_service.get("health") if isinstance(backend_service, dict) else "") or runtime.get("healthcheck_status") or "").strip().upper(),
                 "framework": str((backend_service.get("framework") if isinstance(backend_service, dict) else "") or "fastapi").strip(),
                 "last_checked_at": str((backend_service.get("last_checked_at") if isinstance(backend_service, dict) else "") or "").strip(),
+                "reachability": backend_reachability,
             },
             "frontend": {
                 "status": frontend_status,
@@ -1944,6 +2086,7 @@ def get_local_runtime_status(project_dir: Path) -> dict[str, Any]:
                 "health": str((frontend_service.get("health") if isinstance(frontend_service, dict) else "") or runtime.get("frontend_health") or "").strip().upper(),
                 "framework": str((frontend_service.get("framework") if isinstance(frontend_service, dict) else "") or runtime.get("frontend_framework") or "").strip(),
                 "last_checked_at": str((frontend_service.get("last_checked_at") if isinstance(frontend_service, dict) else "") or "").strip(),
+                "reachability": frontend_reachability,
             },
         },
         "running": backend_running or frontend_running,

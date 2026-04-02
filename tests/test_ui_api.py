@@ -2796,6 +2796,95 @@ def test_ui_runtime_url_expansion_with_lan_and_tailscale(monkeypatch, tmp_path: 
     ]
 
 
+def test_ui_runtime_url_expansion_hides_lan_when_reachability_is_local_only(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "runtime-local-only")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setenv("ARCHMIND_UI_RUNTIME_HOSTS_PATH", str(tmp_path / "ui_runtime_hosts.json"))
+    monkeypatch.setenv("ARCHMIND_LAN_HOST", "192.168.0.197")
+    monkeypatch.setenv("ARCHMIND_TAILSCALE_HOST", "100.117.128.20")
+    monkeypatch.setattr(
+        "archmind.project_query.get_local_runtime_status",
+        lambda _project_dir: {
+            "backend": {
+                "status": "RUNNING",
+                "url": "http://127.0.0.1:8123",
+                "reachability": {
+                    "status": "LOCAL_REACHABLE",
+                    "local_reachable": True,
+                    "lan_reachable": False,
+                    "external_reachable": False,
+                    "lan_urls": [],
+                    "external_urls": [],
+                },
+            },
+            "frontend": {
+                "status": "RUNNING",
+                "url": "http://127.0.0.1:3123",
+                "reachability": {
+                    "status": "LOCAL_REACHABLE",
+                    "local_reachable": True,
+                    "lan_reachable": False,
+                    "external_reachable": False,
+                    "lan_urls": [],
+                    "external_urls": [],
+                },
+            },
+        },
+    )
+
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/runtime-local-only")
+    assert response.status_code == 200
+    runtime = response.json()["runtime"]
+    assert runtime["backend_urls"] == ["http://127.0.0.1:8123"]
+    assert runtime["frontend_urls"] == ["http://127.0.0.1:3123"]
+
+
+def test_ui_runtime_detail_includes_reachability_layers(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "runtime-reachability")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setattr(
+        "archmind.project_query.get_local_runtime_status",
+        lambda _project_dir: {
+            "backend": {
+                "status": "RUNNING",
+                "url": "http://127.0.0.1:8123",
+                "reachability": {
+                    "status": "PROCESS_RUNNING",
+                    "local_reachable": False,
+                    "lan_reachable": False,
+                    "external_reachable": False,
+                    "lan_urls": [],
+                    "external_urls": [],
+                },
+            },
+            "frontend": {
+                "status": "RUNNING",
+                "url": "http://127.0.0.1:3123",
+                "reachability": {
+                    "status": "LAN_REACHABLE",
+                    "local_reachable": True,
+                    "lan_reachable": True,
+                    "external_reachable": False,
+                    "lan_urls": ["http://192.168.0.197:3123"],
+                    "external_urls": [],
+                },
+            },
+        },
+    )
+
+    client = TestClient(create_ui_app())
+    response = client.get("/ui/projects/runtime-reachability")
+    assert response.status_code == 200
+    runtime = response.json()["runtime"]
+    assert runtime["backend_reachability_status"] == "PROCESS_RUNNING"
+    assert runtime["backend_local_reachable"] is False
+    assert runtime["frontend_reachability_status"] == "LAN_REACHABLE"
+    assert runtime["frontend_lan_reachable"] is True
+
+
 def test_ui_runtime_url_expansion_auto_detects_lan_without_env(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     _make_project(projects_root, "runtime-auto-lan")

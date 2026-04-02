@@ -25,6 +25,14 @@ class RuntimeSummary(BaseModel):
     frontend_last_known_url: str = ""
     backend_urls: list[str] = Field(default_factory=list)
     frontend_urls: list[str] = Field(default_factory=list)
+    backend_reachability_status: str = "UNREACHABLE"
+    frontend_reachability_status: str = "UNREACHABLE"
+    backend_local_reachable: bool = False
+    frontend_local_reachable: bool = False
+    backend_lan_reachable: bool = False
+    frontend_lan_reachable: bool = False
+    backend_external_reachable: bool = False
+    frontend_external_reachable: bool = False
 
 
 class SpecSummary(BaseModel):

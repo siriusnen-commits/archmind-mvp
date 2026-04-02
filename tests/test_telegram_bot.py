@@ -104,6 +104,29 @@ def test_extract_idea_parsing() -> None:
     assert extract_idea([]) == ""
 
 
+def test_project_runtime_status_surfaces_materialization_failure_even_when_process_running(tmp_path: Path) -> None:
+    project_dir = tmp_path / "demo"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    state_payload = {
+        "runtime": {
+            "services": {
+                "frontend": {"status": "RUNNING", "url": "http://127.0.0.1:3000"},
+                "backend": {"status": "RUNNING", "url": "http://127.0.0.1:8000"},
+            }
+        },
+        "auto_last_result": {
+            "stop_reason": "project not materialized / no supported bootstrap path",
+        },
+    }
+    result_payload: dict[str, object] = {}
+    runtime_payload = {
+        "frontend": {"status": "RUNNING", "url": "http://127.0.0.1:3000"},
+        "backend": {"status": "RUNNING", "url": "http://127.0.0.1:8000"},
+    }
+    out = telegram_bot._project_runtime_status(project_dir, state_payload, result_payload, runtime_payload)
+    assert out == "FAIL"
+
+
 def _mark_archmind_project(path: Path) -> None:
     (path / ".archmind").mkdir(parents=True, exist_ok=True)
 
