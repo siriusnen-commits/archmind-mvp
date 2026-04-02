@@ -1611,6 +1611,7 @@ def test_settings_launcher_source_uses_bottom_left_n_icon_and_opens_drawer() -> 
     assert ">N<" in source or "N" in source
     assert "SettingsDrawer" in source
     assert "open={open}" in source
+    assert "setOpen(true)" in source
     assert "__archmind_settings_launcher_singleton__" in source
 
 
@@ -1631,6 +1632,18 @@ def test_settings_form_source_preserves_generation_defaults_controls() -> None:
     assert "Default Project Language" in source
     assert "Default LLM Mode" in source
     assert "Settings saved" in source
+
+
+def test_settings_drawer_source_renders_settings_content_and_keeps_it_visible() -> None:
+    source = Path("frontend/components/settings/SettingsDrawer.tsx").read_text(encoding="utf-8")
+    assert '"use client";' in source
+    assert "if (!open)" in source
+    assert "setSettings(loadSettings())" in source
+    assert "role=\"dialog\"" in source
+    assert "aria-modal=\"true\"" in source
+    assert "overflow-y-auto" in source
+    assert "data-testid=\"settings-content\"" in source
+    assert "<SettingsForm settings={settings} onChange={updateSettings} savedAt={savedAt} />" in source
 
 
 def test_old_standalone_settings_button_removed_from_dashboard_entrypoint() -> None:

@@ -3,7 +3,7 @@
 import SettingsForm from "@/components/settings/SettingsForm";
 import { loadSettings, saveSettings } from "@/lib/api/settings";
 import type { ArchmindSettings } from "@/types/settings";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type Props = {
   open: boolean;
@@ -13,6 +13,14 @@ type Props = {
 export default function SettingsDrawer({ open, onClose }: Props) {
   const [settings, setSettings] = useState<ArchmindSettings>(() => loadSettings());
   const [savedAt, setSavedAt] = useState(0);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    // Re-sync from persisted storage whenever the drawer opens so new settings fields are visible/useable.
+    setSettings(loadSettings());
+  }, [open]);
 
   if (!open) {
     return null;
@@ -25,9 +33,9 @@ export default function SettingsDrawer({ open, onClose }: Props) {
   }
 
   return (
-    <div className="fixed inset-0 z-50">
+    <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Settings">
       <button type="button" onClick={onClose} className="absolute inset-0 bg-slate-950/70" aria-label="Close settings" />
-      <aside className="absolute bottom-0 left-0 top-0 w-full max-w-md border-r border-slate-700 bg-slate-900 p-4 sm:p-5">
+      <aside className="absolute bottom-0 left-0 top-0 w-full max-w-md overflow-y-auto border-r border-slate-700 bg-slate-900 p-4 sm:p-5">
         <div className="mb-4 flex items-center justify-between gap-3">
           <h2 className="text-base font-semibold text-slate-100">Settings</h2>
           <button
@@ -38,7 +46,9 @@ export default function SettingsDrawer({ open, onClose }: Props) {
             Close
           </button>
         </div>
-        <SettingsForm settings={settings} onChange={updateSettings} savedAt={savedAt} />
+        <div data-testid="settings-content">
+          <SettingsForm settings={settings} onChange={updateSettings} savedAt={savedAt} />
+        </div>
       </aside>
     </div>
   );
