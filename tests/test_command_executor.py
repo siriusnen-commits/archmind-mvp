@@ -63,6 +63,51 @@ def test_execute_command_add_field_verification_marks_partial_when_runtime_refle
     assert str(verification.get("overall_status") or "") != "VERIFIED"
 
 
+def test_execute_command_add_field_verification_is_verified_only_when_frontend_reflects_field(tmp_path: Path, monkeypatch) -> None:
+    project_dir = tmp_path / "demo"
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "app" / "tasks" / "new").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "app" / "_lib").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").write_text(
+        '"use client";\nexport default function Page(){return <div><label>priority</label><input name="priority" /></div>;}\n',
+        encoding="utf-8",
+    )
+    (project_dir / "frontend" / "app" / "_lib" / "navigation.ts").write_text(
+        'export const navigationItems = [{ href: "/", label: "Home" }, { href: "/tasks", label: "List" }, { href: "/tasks/new", label: "Create" }];\n',
+        encoding="utf-8",
+    )
+    (project_dir / "frontend" / "app" / "_lib" / "AppNav.tsx").write_text(
+        'export default function AppNav(){return null;}\n',
+        encoding="utf-8",
+    )
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\napp=FastAPI()\n", encoding="utf-8")
+    spec_path = project_dir / ".archmind" / "project_spec.json"
+    spec_path.write_text(
+        json.dumps({"entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: project_dir)
+
+    def fake_add_field(project_dir_arg: Path, entity: str, field: str, field_type: str, auto_restart_backend: bool = True):  # type: ignore[no-untyped-def]
+        payload = {"entities": [{"name": entity, "fields": [{"name": "title", "type": "string"}, {"name": field, "type": field_type}]}]}
+        spec_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        return {
+            "ok": True,
+            "detail": "Field added",
+            "entity_name": entity,
+            "field_name": field,
+            "field_type": field_type,
+            "generated_files": ["frontend/app/tasks/new/page.tsx"],
+            "runtime_recovery": {"attempted": True, "failed": False, "reason": ""},
+        }
+
+    monkeypatch.setattr("archmind.telegram_bot.add_field_to_project", fake_add_field)
+    out = execute_command("/add_field Task priority:string", "demo")
+    verification = out.get("verification") if isinstance(out.get("verification"), dict) else {}
+    assert str(verification.get("overall_status") or "") == "VERIFIED"
+
+
 def test_execute_command_auto_keeps_partial_status_when_verification_is_not_verified(monkeypatch) -> None:
     monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: Path("/tmp/demo"))
 

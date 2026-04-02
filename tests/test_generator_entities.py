@@ -203,6 +203,13 @@ def test_apply_entity_fields_to_scaffold_updates_models_and_schemas(tmp_path: Pa
     (project_dir / "app").mkdir(parents=True, exist_ok=True)
     (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
     (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\n\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps({"entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}, {"name": "due_date", "type": "datetime"}]}]}),
+        encoding="utf-8",
+    )
     apply_entity_scaffold(project_dir, "Task")
 
     changed = apply_entity_fields_to_scaffold(
@@ -213,13 +220,69 @@ def test_apply_entity_fields_to_scaffold_updates_models_and_schemas(tmp_path: Pa
 
     assert "app/models/task.py" in changed
     assert "app/schemas/task.py" in changed
+    assert "frontend/app/tasks/new/page.tsx" in changed
     model_text = (project_dir / "app" / "models" / "task.py").read_text(encoding="utf-8")
     schema_text = (project_dir / "app" / "schemas" / "task.py").read_text(encoding="utf-8")
+    create_text = (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").read_text(encoding="utf-8")
     assert "from datetime import datetime" in model_text
     assert "title: str" in model_text
     assert "due_date: datetime" in model_text
     assert "class TaskCreate" in schema_text
     assert "class TaskRead" in schema_text
+    assert 'label className="text-xs text-slate-300">Title<' in create_text
+    assert 'label className="text-xs text-slate-300">Due Date<' in create_text
+
+
+def test_apply_entity_fields_to_scaffold_reflects_priority_in_frontend_create_form(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_demo"
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\n\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps({"entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}, {"name": "priority", "type": "string"}]}]}),
+        encoding="utf-8",
+    )
+    apply_entity_scaffold(project_dir, "Task")
+
+    changed = apply_entity_fields_to_scaffold(
+        project_dir,
+        "Task",
+        [{"name": "title", "type": "string"}, {"name": "priority", "type": "string"}],
+    )
+
+    assert "frontend/app/tasks/new/page.tsx" in changed
+    create_text = (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").read_text(encoding="utf-8")
+    assert 'label className="text-xs text-slate-300">Priority<' in create_text
+    assert '"priority": values["priority"]' in create_text
+
+
+def test_apply_entity_fields_to_scaffold_reflects_description_in_frontend_create_form(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_demo"
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\n\napp = FastAPI()\n", encoding="utf-8")
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps({"entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}, {"name": "description", "type": "string"}]}]}),
+        encoding="utf-8",
+    )
+    apply_entity_scaffold(project_dir, "Task")
+
+    changed = apply_entity_fields_to_scaffold(
+        project_dir,
+        "Task",
+        [{"name": "title", "type": "string"}, {"name": "description", "type": "string"}],
+    )
+
+    assert "frontend/app/tasks/new/page.tsx" in changed
+    create_text = (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").read_text(encoding="utf-8")
+    assert 'label className="text-xs text-slate-300">Description<' in create_text
+    assert '"description": values["description"]' in create_text
 
 
 def test_apply_entity_fields_to_scaffold_is_idempotent_for_same_fields(tmp_path: Path) -> None:
