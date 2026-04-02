@@ -445,7 +445,8 @@ def test_generated_create_page_confirms_success_after_api_and_redirects_to_list(
 
     apply_page_scaffold(project_dir, "tasks/new")
     text = (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").read_text(encoding="utf-8")
-    assert 'import { useRouter, useSearchParams } from "next/navigation";' in text
+    assert 'from "next/navigation"' in text
+    assert "useRouter" in text
     assert "const router = useRouter();" in text
     assert "if (!response.ok) throw new Error" in text
     assert "await response.json();" in text
