@@ -88,6 +88,45 @@ def _fake_generate_project_with_seed_scaffold(idea: str, opt) -> Path:
     return project_dir
 
 
+def _fake_generate_project_with_generic_root_and_seed_scaffold(idea: str, opt) -> Path:
+    del idea
+    project_dir = _fake_generate_project("demo", opt)
+    frontend_app = project_dir / "frontend" / "app"
+    frontend_app.mkdir(parents=True, exist_ok=True)
+    (frontend_app / "layout.tsx").write_text(
+        'import "./globals.css";\n'
+        "\n"
+        "export const metadata = {\n"
+        '  title: "demo",\n'
+        "};\n"
+        "\n"
+        "export default function RootLayout({ children }: { children: React.ReactNode }) {\n"
+        "  return (\n"
+        '    <html lang="en">\n'
+        "      <body>\n"
+        '        <main className="mx-auto min-h-screen max-w-4xl p-6">{children}</main>\n'
+        "      </body>\n"
+        "    </html>\n"
+        "  );\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    (frontend_app / "page.tsx").write_text(
+        "export default function HomePage() {\n"
+        "  return (\n"
+        '    <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-6">\n'
+        '      <h1 className="text-2xl font-semibold">ArchMind Fullstack Workspace</h1>\n'
+        '      <p className="text-sm text-slate-300">\n'
+        "        This scaffold is domain-neutral. Entities, APIs, and pages are generated from project spec.\n"
+        "      </p>\n"
+        "    </section>\n"
+        "  );\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    return _fake_generate_project_with_seed_scaffold("demo", opt)
+
+
 def test_pipeline_help() -> None:
     with pytest.raises(SystemExit) as exc:
         main(["pipeline", "--help"])
@@ -375,6 +414,53 @@ def test_pipeline_todo_real_path_materialization_avoids_generic_home_and_add_ent
     next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
     next_command = str(next_action.get("command") or "").strip()
     assert not next_command.startswith("/add_entity ")
+
+
+def test_pipeline_todo_starter_profile_enforces_seed_baseline_when_suggestion_is_empty(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_generic_root_and_seed_scaffold)
+    monkeypatch.setattr("archmind.pipeline.suggest_project_spec", lambda *_args, **_kwargs: {})
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "simple app",
+            "--template",
+            "fullstack-ddd",
+            "--starter-profile",
+            "todo",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "todo_seed_enforced",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+
+    project_dir = tmp_path / "todo_seed_enforced"
+    root_text = (project_dir / "frontend" / "app" / "page.tsx").read_text(encoding="utf-8")
+    assert "ArchMind Fullstack Workspace" not in root_text
+    assert (project_dir / "frontend" / "app" / "tasks" / "page.tsx").exists()
+    assert (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").exists()
+
+    spec_payload = json.loads((project_dir / ".archmind" / "project_spec.json").read_text(encoding="utf-8"))
+    entity_names = {
+        str(item.get("name") or "").strip().lower()
+        for item in (spec_payload.get("entities") or [])
+        if isinstance(item, dict)
+    }
+    pages = {
+        str(item or "").strip().lower().strip("/")
+        for item in (spec_payload.get("frontend_pages") or [])
+        if str(item or "").strip()
+    }
+    assert "task" in entity_names
+    assert {"tasks/list", "tasks/new"}.issubset(pages)
 
 
 def test_pipeline_idea_generator_receives_effective_template_for_frontend_web(tmp_path: Path, monkeypatch) -> None:
