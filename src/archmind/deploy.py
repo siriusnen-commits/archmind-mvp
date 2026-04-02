@@ -2026,13 +2026,29 @@ def is_pid_running(pid: int | None) -> bool:
         return False
     try:
         os.kill(pid, 0)
-        return True
     except ProcessLookupError:
         return False
     except PermissionError:
-        return True
+        # PermissionError still means the pid exists; continue with zombie check.
+        pass
     except Exception:
         return False
+    try:
+        probe = subprocess.run(  # noqa: S603
+            ["ps", "-o", "stat=", "-p", str(int(pid))],
+            capture_output=True,
+            text=True,
+            timeout=0.3,
+            shell=False,
+            check=False,
+        )
+        stat_text = str(probe.stdout or "").strip().upper()
+        if "Z" in stat_text:
+            return False
+    except Exception:
+        # Keep compatibility when ps is unavailable in test/sandbox environments.
+        pass
+    return True
 
 
 def get_local_runtime_status(project_dir: Path) -> dict[str, Any]:
@@ -2083,13 +2099,16 @@ def get_local_runtime_status(project_dir: Path) -> dict[str, Any]:
         or (runtime.get("frontend_status") if isinstance(runtime, dict) else "")
         or ""
     ).strip().upper()
+    frontend_health = str((frontend_service.get("health") if isinstance(frontend_service, dict) else "") or runtime.get("frontend_health") or "").strip().upper()
     if backend_running:
         backend_status = "RUNNING"
     elif backend_state_status in {"FAIL", "WARNING", "STOPPED"}:
         backend_status = backend_state_status
     else:
         backend_status = "NOT RUNNING"
-    if frontend_running:
+    if frontend_running and frontend_health == "FAIL":
+        frontend_status = "FAIL"
+    elif frontend_running:
         frontend_status = "RUNNING"
     elif frontend_state_status in {"FAIL", "WARNING", "STOPPED"}:
         frontend_status = frontend_state_status
@@ -2097,7 +2116,7 @@ def get_local_runtime_status(project_dir: Path) -> dict[str, Any]:
         frontend_status = "NOT RUNNING"
 
     backend_reachability = _component_reachability(backend_url, process_running=backend_running)
-    frontend_reachability = _component_reachability(frontend_url, process_running=frontend_running)
+    frontend_reachability = _component_reachability(frontend_url, process_running=frontend_running and frontend_health != "FAIL")
 
     return {
         "project_dir": root,
@@ -2133,7 +2152,7 @@ def get_local_runtime_status(project_dir: Path) -> dict[str, Any]:
                 "port": _to_port((frontend_service.get("port") if isinstance(frontend_service, dict) else None) or runtime.get("frontend_port")),
                 "url": frontend_url,
                 "log_path": str((frontend_service.get("log_path") if isinstance(frontend_service, dict) else "") or runtime.get("frontend_log_path") or "").strip(),
-                "health": str((frontend_service.get("health") if isinstance(frontend_service, dict) else "") or runtime.get("frontend_health") or "").strip().upper(),
+                "health": frontend_health,
                 "framework": str((frontend_service.get("framework") if isinstance(frontend_service, dict) else "") or runtime.get("frontend_framework") or "").strip(),
                 "last_checked_at": str((frontend_service.get("last_checked_at") if isinstance(frontend_service, dict) else "") or "").strip(),
                 "reachability": frontend_reachability,

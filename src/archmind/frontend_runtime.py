@@ -90,13 +90,13 @@ def detect_frontend_runtime_entry(
     selected_port = int(port) if port else (script_port or 3000)
     uses_next = "next" in dev_script.lower() or has_next_dependency
     if uses_next:
-        # Avoid duplicate -p/--port from package.json scripts by invoking Next directly.
+        # Use package-script execution from the detected frontend directory.
+        # This keeps Next.js package resolution pinned to the project-local dependency.
         run_command = [
             "npm",
-            "exec",
-            "--",
-            "next",
+            "run",
             "dev",
+            "--",
             "--hostname",
             "0.0.0.0",
             "--port",
