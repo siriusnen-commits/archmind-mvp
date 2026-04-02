@@ -482,6 +482,90 @@ def _sync_template_fields_from_result(project_dir: Path, payload: dict[str, Any]
         payload["template_fallback_reason"] = fallback_reason
 
 
+def _is_frontend_build_signature(signature: str) -> bool:
+    text = str(signature or "").strip().lower()
+    return bool(text) and "frontend-build" in text
+
+
+def _is_frontend_build_class(failure_class: str) -> bool:
+    text = str(failure_class or "").strip().lower()
+    return text in {"frontend-build", "frontend-clean"}
+
+
+def _is_stale_frontend_build_failure_line(line: str) -> bool:
+    text = str(line or "").strip().lower()
+    if not text:
+        return False
+    return any(
+        token in text
+        for token in (
+            "export encountered errors on following paths",
+            "/tasks/new/page",
+            "pagenotfounderror",
+            "enoent",
+        )
+    )
+
+
+def _frontend_runtime_healthy(payload: dict[str, Any]) -> bool:
+    runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
+    services = runtime.get("services") if isinstance(runtime.get("services"), dict) else {}
+    frontend_service = services.get("frontend") if isinstance(services.get("frontend"), dict) else {}
+    status = str(frontend_service.get("status") or runtime.get("frontend_status") or "").strip().upper()
+    health = str(frontend_service.get("health") or runtime.get("frontend_health") or "").strip().upper()
+    return status == "RUNNING" and health == "SUCCESS"
+
+
+def _reconcile_stale_frontend_build_failure(payload: dict[str, Any]) -> None:
+    if not _frontend_runtime_healthy(payload):
+        return
+
+    runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
+    if isinstance(runtime, dict):
+        runtime["frontend_status"] = "RUNNING"
+        runtime["frontend_health"] = "SUCCESS"
+        services = runtime.get("services") if isinstance(runtime.get("services"), dict) else {}
+        frontend_service = services.get("frontend") if isinstance(services.get("frontend"), dict) else {}
+        if isinstance(frontend_service, dict):
+            frontend_service["status"] = "RUNNING"
+            frontend_service["health"] = "SUCCESS"
+            services["frontend"] = frontend_service
+            runtime["services"] = services
+        if _is_frontend_build_class(str(runtime.get("failure_class") or "")):
+            runtime["failure_class"] = ""
+        payload["runtime"] = runtime
+    payload["runtime_failure_class"] = str(runtime.get("failure_class") or "").strip()[:80]
+
+    has_frontend_build_signature = _is_frontend_build_signature(str(payload.get("last_failure_signature") or ""))
+    has_frontend_build_class = _is_frontend_build_class(str(payload.get("last_failure_class") or ""))
+    failures_now = payload.get("recent_failures")
+    filtered_failures: list[str] = []
+    had_stale_failure_lines = False
+    if isinstance(failures_now, list):
+        for item in failures_now:
+            line = str(item or "").strip()
+            if not line:
+                continue
+            if _is_stale_frontend_build_failure_line(line):
+                had_stale_failure_lines = True
+                continue
+            filtered_failures.append(line)
+        payload["recent_failures"] = filtered_failures[:10]
+
+    if has_frontend_build_signature:
+        payload["last_failure_signature"] = ""
+    if has_frontend_build_class:
+        payload["last_failure_class"] = ""
+    if (
+        str(payload.get("last_status") or "").strip().upper() in {"FAIL", "FAILED", "ERROR", "NOT_DONE", "BLOCKED", "STUCK"}
+        and (has_frontend_build_signature or has_frontend_build_class or had_stale_failure_lines)
+    ):
+        payload["last_status"] = "SUCCESS"
+    if has_frontend_build_signature or has_frontend_build_class or had_stale_failure_lines:
+        payload["next_action"] = "STOP"
+        payload["next_action_reason"] = "frontend runtime recovered; stale frontend build failure cleared"
+
+
 def _normalize_loaded_state(project_dir: Path, payload: dict[str, Any]) -> dict[str, Any]:
     base = _default_state(project_dir)
     normalized = dict(base)
@@ -642,6 +726,7 @@ def _normalize_loaded_state(project_dir: Path, payload: dict[str, Any]) -> dict[
     _sync_summary_fields_from_history(normalized)
     _sync_summary_fields_from_latest_fix_summary(project_dir, normalized)
     _sync_template_fields_from_result(project_dir, normalized)
+    _reconcile_stale_frontend_build_failure(normalized)
     return normalized
 
 
@@ -1038,6 +1123,7 @@ def write_state(project_dir: Path, payload: dict[str, Any]) -> Path:
     payload["backend_log_path"] = runtime["backend_log_path"]
     payload["backend_status"] = runtime["backend_status"]
     payload["runtime_failure_class"] = runtime["failure_class"]
+    _reconcile_stale_frontend_build_failure(payload)
     history = payload.get("history")
     if not isinstance(history, list):
         payload["history"] = []
