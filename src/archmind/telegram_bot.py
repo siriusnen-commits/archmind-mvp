@@ -70,6 +70,8 @@ DEFAULT_PROJECTS_DIR = Path.home() / "archmind-telegram-projects"
 DEFAULT_TEMPLATE = "fullstack-ddd"
 SUPPORTED_FIELD_TYPES = ("string", "int", "float", "bool", "datetime")
 SUPPORTED_API_METHODS = ("GET", "POST", "PATCH", "DELETE")
+FRONTEND_RECOVERY_WINDOW_SECONDS = 4.0
+FRONTEND_RECOVERY_POLL_INTERVAL_SECONDS = 0.5
 HELP_TEXT = """ArchMind commands
 
 PROJECT CREATION
@@ -1318,6 +1320,38 @@ def _runtime_recovery_lines(
     backend_changed: bool,
     frontend_changed: bool,
 ) -> tuple[list[str], bool, dict[str, Any]]:
+    def _service_status(runtime_payload: dict[str, Any], key: str) -> str:
+        if not isinstance(runtime_payload, dict):
+            return ""
+        service = runtime_payload.get(key)
+        if not isinstance(service, dict):
+            return ""
+        return str(service.get("status") or "").strip().upper()
+
+    def _poll_runtime_after_frontend_restart(
+        runtime_payload: dict[str, Any],
+        *,
+        backend_running_now: bool,
+        frontend_running_now: bool,
+    ) -> tuple[dict[str, Any], bool, bool]:
+        if frontend_running_now:
+            return runtime_payload, backend_running_now, frontend_running_now
+        deadline = time.monotonic() + FRONTEND_RECOVERY_WINDOW_SECONDS
+        latest = runtime_payload
+        while time.monotonic() < deadline:
+            time.sleep(FRONTEND_RECOVERY_POLL_INTERVAL_SECONDS)
+            try:
+                current = get_local_runtime_status(project_path)
+            except Exception:
+                break
+            if isinstance(current, dict):
+                latest = current
+            backend_running_now = backend_running_now or _service_status(latest, "backend") == "RUNNING"
+            frontend_running_now = _service_status(latest, "frontend") == "RUNNING"
+            if frontend_running_now:
+                break
+        return latest, backend_running_now, frontend_running_now
+
     meta: dict[str, Any] = {
         "attempted": False,
         "failed": False,
@@ -1361,12 +1395,25 @@ def _runtime_recovery_lines(
         return lines, True, meta
     backend_after = runtime_after.get("backend") if isinstance(runtime_after.get("backend"), dict) else {}
     frontend_after = runtime_after.get("frontend") if isinstance(runtime_after.get("frontend"), dict) else {}
+    backend_status_after = str(backend_after.get("status") or "").strip().upper()
+    frontend_status_after = str(frontend_after.get("status") or "").strip().upper()
+    backend_running = backend_status_after == "RUNNING"
+    frontend_running = frontend_status_after == "RUNNING"
+    if need_frontend and not frontend_running:
+        runtime_after, backend_running, frontend_running = _poll_runtime_after_frontend_restart(
+            runtime_after,
+            backend_running_now=backend_running,
+            frontend_running_now=frontend_running,
+        )
+        backend_after = runtime_after.get("backend") if isinstance(runtime_after.get("backend"), dict) else {}
+        frontend_after = runtime_after.get("frontend") if isinstance(runtime_after.get("frontend"), dict) else {}
+        backend_status_after = str(backend_after.get("status") or "").strip().upper()
+        frontend_status_after = str(frontend_after.get("status") or "").strip().upper()
+
     lines: list[str] = ["Auto-restart:", "Attempted: yes"]
     failed = False
 
     if need_backend:
-        backend_status_after = str(backend_after.get("status") or "").strip().upper()
-        backend_running = backend_status_after == "RUNNING"
         restart_backend = (
             result.get("backend")
             if isinstance(result, dict) and isinstance(result.get("backend"), dict)
@@ -1389,8 +1436,6 @@ def _runtime_recovery_lines(
                 lines.append(f"Backend detail: {backend_detail}")
 
     if need_frontend:
-        frontend_status_after = str(frontend_after.get("status") or "").strip().upper()
-        frontend_running = frontend_status_after == "RUNNING"
         restart_frontend = (
             result.get("frontend")
             if isinstance(result, dict) and isinstance(result.get("frontend"), dict)
