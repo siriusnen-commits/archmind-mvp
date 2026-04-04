@@ -167,6 +167,99 @@ def test_generate_project_fullstack_ddd_normalizes_and_applies_multi_entity_seed
     assert 'href: "/tags"' in navigation
 
 
+def test_generate_project_starter_crud_create_and_list_persist_across_todo_diary_bookmark(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    cases = [
+        (
+            "todo",
+            "Task",
+            [{"name": "title", "type": "string"}, {"name": "status", "type": "string"}],
+            "/tasks",
+            {
+                "api_endpoints": [
+                    "GET /tasks",
+                    "POST /tasks",
+                    "GET /tasks/{id}",
+                    "PATCH /tasks/{id}",
+                    "DELETE /tasks/{id}",
+                ],
+                "frontend_pages": ["tasks/list", "tasks/new", "tasks/detail"],
+            },
+            {"title": "todo-create-sync", "status": "todo"},
+        ),
+        (
+            "diary",
+            "Entry",
+            [{"name": "title", "type": "string"}, {"name": "content", "type": "string"}],
+            "/entries",
+            {
+                "api_endpoints": [
+                    "GET /entries",
+                    "POST /entries",
+                    "GET /entries/{id}",
+                    "PATCH /entries/{id}",
+                    "DELETE /entries/{id}",
+                ],
+                "frontend_pages": ["entries/list", "entries/new", "entries/detail"],
+            },
+            {"title": "diary-create-sync", "content": "hello diary"},
+        ),
+        (
+            "bookmark",
+            "Bookmark",
+            [{"name": "title", "type": "string"}, {"name": "url", "type": "string"}, {"name": "note", "type": "string"}],
+            "/bookmarks",
+            {
+                "api_endpoints": [
+                    "GET /bookmarks",
+                    "POST /bookmarks",
+                    "GET /bookmarks/{id}",
+                    "PATCH /bookmarks/{id}",
+                    "DELETE /bookmarks/{id}",
+                ],
+                "frontend_pages": ["bookmarks/list", "bookmarks/new", "bookmarks/detail"],
+            },
+            {"title": "bookmark-create-sync", "url": "https://example.com", "note": "saved"},
+        ),
+    ]
+
+    for profile, entity_name, fields, endpoint, spec_extras, create_payload in cases:
+        opt = GenerateOptions(out=tmp_path, force=False, name=f"{profile}_crud_sync", template="fullstack-ddd")
+        setattr(
+            opt,
+            "project_spec",
+            {
+                "entities": [{"name": entity_name, "fields": fields}],
+                **spec_extras,
+            },
+        )
+        project_dir = Path(generate_project(f"{profile} app", opt))
+        backend_dir = project_dir / "backend"
+        db_url = f"sqlite:///{project_dir / 'data' / f'{profile}.db'}"
+        app = _import_generated_backend_app(backend_dir, db_url)
+        client = TestClient(app)
+
+        create = client.post(endpoint, json=create_payload)
+        assert create.status_code == 200
+        created = create.json()
+        assert isinstance(created, dict)
+        assert "endpoint" not in created
+        assert str(created.get("title") or "") == str(create_payload.get("title") or "")
+        assert int(created.get("id") or 0) > 0
+
+        listing = client.get(endpoint)
+        assert listing.status_code == 200
+        rows = listing.json()
+        assert isinstance(rows, list)
+        assert any(
+            isinstance(item, dict)
+            and str(item.get("title") or "") == str(create_payload.get("title") or "")
+            and int(item.get("id") or 0) == int(created.get("id") or 0)
+            for item in rows
+        )
+
+
 def test_apply_entity_scaffold_is_idempotent_and_does_not_overwrite_existing_files(tmp_path: Path) -> None:
     project_dir = tmp_path / "backend_demo"
     (project_dir / "app" / "models").mkdir(parents=True, exist_ok=True)
