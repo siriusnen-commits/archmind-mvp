@@ -2064,6 +2064,68 @@ def test_update_runtime_state_clears_stale_frontend_build_failure_after_frontend
     assert str(state_after.get("next_action") or "").upper() == "STOP"
 
 
+def test_update_runtime_state_clears_stale_frontend_other_after_frontend_recovery(tmp_path: Path) -> None:
+    write_state(
+        tmp_path,
+        {
+            "last_status": "FAIL",
+            "last_failure_signature": "",
+            "last_failure_class": "frontend-other",
+            "runtime_failure_class": "frontend-other",
+            "recent_failures": [
+                "PageNotFoundError: app/tasks/new/page.tsx",
+                "ENOENT: no such file or directory",
+            ],
+            "next_action": "FIX",
+            "next_action_reason": "stale frontend runtime failure",
+            "runtime": {
+                "frontend_status": "FAIL",
+                "frontend_health": "FAIL",
+                "failure_class": "frontend-other",
+                "services": {
+                    "frontend": {
+                        "status": "FAIL",
+                        "health": "FAIL",
+                        "url": "http://127.0.0.1:3044",
+                    }
+                },
+            },
+        },
+    )
+
+    update_runtime_state(
+        tmp_path,
+        {
+            "status": "FAIL",
+            "mode": "real",
+            "backend_status": "RUNNING",
+            "frontend_status": "RUNNING",
+            "frontend_smoke_status": "SUCCESS",
+            "services": {
+                "backend": {"status": "RUNNING", "url": "http://127.0.0.1:8044"},
+                "frontend": {"status": "RUNNING", "url": "http://127.0.0.1:3044", "health": "SUCCESS"},
+            },
+            "frontend": {"status": "RUNNING", "url": "http://127.0.0.1:3044", "health": "SUCCESS"},
+            "detail": "frontend recovered and reachable",
+        },
+        action="ui runtime refresh",
+    )
+
+    state_after = load_state(tmp_path) or {}
+    runtime_after = state_after.get("runtime") if isinstance(state_after.get("runtime"), dict) else {}
+    services_after = runtime_after.get("services") if isinstance(runtime_after.get("services"), dict) else {}
+    frontend_after = services_after.get("frontend") if isinstance(services_after.get("frontend"), dict) else {}
+    assert str(runtime_after.get("frontend_health") or "").upper() == "SUCCESS"
+    assert str(runtime_after.get("frontend_status") or "").upper() == "RUNNING"
+    assert str(frontend_after.get("health") or "").upper() == "SUCCESS"
+    assert str(frontend_after.get("status") or "").upper() == "RUNNING"
+    assert str(state_after.get("runtime_failure_class") or "") == ""
+    assert str(state_after.get("last_failure_class") or "") == ""
+    assert state_after.get("recent_failures") == []
+    assert str(state_after.get("last_status") or "").upper() == "SUCCESS"
+    assert str(state_after.get("next_action") or "").upper() == "STOP"
+
+
 def test_read_last_lines_returns_none_when_missing(tmp_path: Path) -> None:
     assert read_last_lines(tmp_path / "missing.log", lines=20) is None
 
