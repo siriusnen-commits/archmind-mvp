@@ -2635,6 +2635,91 @@ def test_ui_runtime_action_endpoints(monkeypatch, tmp_path: Path) -> None:
         assert payload["error"] == ""
 
 
+def test_ui_runtime_action_run_all_polls_and_replaces_stale_frontend_fail(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "runtime-poll-project")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    calls = {"status": 0}
+    sleeps: list[float] = []
+    runtime_sequence = [
+        {
+            "backend": {"status": "RUNNING", "url": "http://127.0.0.1:8000"},
+            "frontend": {"status": "FAIL", "url": "http://127.0.0.1:3000"},
+        },
+        {
+            "backend": {"status": "RUNNING", "url": "http://127.0.0.1:8000"},
+            "frontend": {"status": "RUNNING", "url": "http://127.0.0.1:3000"},
+        },
+    ]
+
+    def fake_runtime(_project_dir):  # type: ignore[no-untyped-def]
+        index = min(calls["status"], len(runtime_sequence) - 1)
+        calls["status"] += 1
+        return runtime_sequence[index]
+
+    monkeypatch.setattr("archmind.ui_api.get_local_runtime_status", fake_runtime)
+    monkeypatch.setattr("archmind.ui_api.time.sleep", lambda sec: sleeps.append(float(sec)))
+    monkeypatch.setattr(
+        "archmind.ui_api.run_project_all",
+        lambda _project_dir: {"ok": True, "status": "SUCCESS", "detail": "all started"},
+    )
+
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/runtime-poll-project/run-all")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["backend_status"] == "RUNNING"
+    assert payload["frontend_status"] == "RUNNING"
+    assert calls["status"] == 2
+    assert sleeps == [1.0]
+
+
+def test_ui_runtime_action_restart_polling_stops_when_runtime_converges(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "runtime-restart-poll-project")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    calls = {"status": 0}
+    sleeps: list[float] = []
+    runtime_sequence = [
+        {
+            "backend": {"status": "RUNNING", "url": "http://127.0.0.1:8000"},
+            "frontend": {"status": "FAIL", "url": "http://127.0.0.1:3000"},
+        },
+        {
+            "backend": {"status": "RUNNING", "url": "http://127.0.0.1:8000"},
+            "frontend": {"status": "FAIL", "url": "http://127.0.0.1:3000"},
+        },
+        {
+            "backend": {"status": "RUNNING", "url": "http://127.0.0.1:8000"},
+            "frontend": {"status": "RUNNING", "url": "http://127.0.0.1:3000"},
+        },
+    ]
+
+    def fake_runtime(_project_dir):  # type: ignore[no-untyped-def]
+        index = min(calls["status"], len(runtime_sequence) - 1)
+        calls["status"] += 1
+        return runtime_sequence[index]
+
+    monkeypatch.setattr("archmind.ui_api.get_local_runtime_status", fake_runtime)
+    monkeypatch.setattr("archmind.ui_api.time.sleep", lambda sec: sleeps.append(float(sec)))
+    monkeypatch.setattr(
+        "archmind.ui_api.restart_project_runtime",
+        lambda _project_dir: {"ok": True, "status": "SUCCESS", "detail": "restarted"},
+    )
+
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/runtime-restart-poll-project/restart")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["frontend_status"] == "RUNNING"
+    assert calls["status"] == 3
+    assert sleeps == [1.0, 1.0]
+
+
 def test_ui_delete_local_action_does_not_call_repo_delete(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     _make_project(projects_root, "delete-local-only")
