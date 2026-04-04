@@ -260,6 +260,114 @@ def test_generate_project_starter_crud_create_and_list_persist_across_todo_diary
         )
 
 
+def test_generate_project_starter_add_field_persists_and_reflects_across_todo_diary_bookmark(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    from archmind.telegram_bot import add_field_to_project
+
+    cases = [
+        (
+            "todo",
+            "Task",
+            [{"name": "title", "type": "string"}, {"name": "status", "type": "string"}],
+            "/tasks",
+            {
+                "api_endpoints": [
+                    "GET /tasks",
+                    "POST /tasks",
+                    "GET /tasks/{id}",
+                    "PATCH /tasks/{id}",
+                    "DELETE /tasks/{id}",
+                ],
+                "frontend_pages": ["tasks/list", "tasks/new", "tasks/detail"],
+            },
+            {"title": "todo-with-priority", "status": "todo", "priority": "high"},
+        ),
+        (
+            "diary",
+            "Entry",
+            [{"name": "title", "type": "string"}, {"name": "content", "type": "string"}],
+            "/entries",
+            {
+                "api_endpoints": [
+                    "GET /entries",
+                    "POST /entries",
+                    "GET /entries/{id}",
+                    "PATCH /entries/{id}",
+                    "DELETE /entries/{id}",
+                ],
+                "frontend_pages": ["entries/list", "entries/new", "entries/detail"],
+            },
+            {"title": "diary-with-priority", "content": "memo", "priority": "high"},
+        ),
+        (
+            "bookmark",
+            "Bookmark",
+            [{"name": "title", "type": "string"}, {"name": "url", "type": "string"}, {"name": "note", "type": "string"}],
+            "/bookmarks",
+            {
+                "api_endpoints": [
+                    "GET /bookmarks",
+                    "POST /bookmarks",
+                    "GET /bookmarks/{id}",
+                    "PATCH /bookmarks/{id}",
+                    "DELETE /bookmarks/{id}",
+                ],
+                "frontend_pages": ["bookmarks/list", "bookmarks/new", "bookmarks/detail"],
+            },
+            {"title": "bookmark-with-priority", "url": "https://example.com", "note": "saved", "priority": "high"},
+        ),
+    ]
+
+    for profile, entity_name, fields, endpoint, spec_extras, create_payload in cases:
+        opt = GenerateOptions(out=tmp_path, force=False, name=f"{profile}_add_field_sync", template="fullstack-ddd")
+        setattr(
+            opt,
+            "project_spec",
+            {
+                "entities": [{"name": entity_name, "fields": fields}],
+                **spec_extras,
+            },
+        )
+        project_dir = Path(generate_project(f"{profile} app", opt))
+        archmind_spec = project_dir / "archmind_spec.json"
+        if archmind_spec.exists():
+            archmind_dir = project_dir / ".archmind"
+            archmind_dir.mkdir(parents=True, exist_ok=True)
+            (archmind_dir / "project_spec.json").write_text(archmind_spec.read_text(encoding="utf-8"), encoding="utf-8")
+        add_field_result = add_field_to_project(
+            project_dir,
+            entity_name,
+            "priority",
+            "string",
+            auto_restart_backend=False,
+        )
+        assert bool(add_field_result.get("ok")) is True
+        assert str(add_field_result.get("status") or "").strip().lower() == "added"
+
+        backend_dir = project_dir / "backend"
+        db_url = f"sqlite:///{project_dir / 'data' / f'{profile}_add_field.db'}"
+        app = _import_generated_backend_app(backend_dir, db_url)
+        client = TestClient(app)
+
+        create = client.post(endpoint, json=create_payload)
+        assert create.status_code == 200
+        created = create.json()
+        assert isinstance(created, dict)
+        assert str(created.get("priority") or "") == "high"
+
+        listing = client.get(endpoint)
+        assert listing.status_code == 200
+        rows = listing.json()
+        assert isinstance(rows, list)
+        assert any(
+            isinstance(item, dict)
+            and str(item.get("title") or "") == str(create_payload.get("title") or "")
+            and str(item.get("priority") or "") == "high"
+            for item in rows
+        )
+
+
 def test_apply_entity_scaffold_is_idempotent_and_does_not_overwrite_existing_files(tmp_path: Path) -> None:
     project_dir = tmp_path / "backend_demo"
     (project_dir / "app" / "models").mkdir(parents=True, exist_ok=True)

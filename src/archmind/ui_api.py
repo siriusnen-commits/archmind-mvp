@@ -697,6 +697,10 @@ def _runtime_converged_for_action(action: str, snapshot: dict[str, Any]) -> bool
         return True
     if "FAIL" in {backend_status, frontend_status}:
         return False
+    frontend = snapshot.get("frontend") if isinstance(snapshot.get("frontend"), dict) else {}
+    frontend_expected = bool(str(frontend.get("last_known_url") or frontend.get("url") or "").strip())
+    if frontend_expected:
+        return frontend_status == "RUNNING"
     if frontend_status == "RUNNING":
         return True
     return backend_status == "RUNNING"
