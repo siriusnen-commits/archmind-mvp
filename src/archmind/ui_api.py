@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from fastapi import APIRouter, FastAPI, HTTPException
@@ -58,6 +59,8 @@ from archmind.ui_models import (
 
 router = APIRouter(prefix="/ui", tags=["ui"])
 logger = logging.getLogger(__name__)
+RUNTIME_ACTION_POLL_MAX_ATTEMPTS = 5
+RUNTIME_ACTION_POLL_INTERVAL_SECONDS = 1.0
 
 
 def _normalize_wizard_mode(value: str) -> str:
@@ -680,12 +683,49 @@ def post_ui_projects_idea_local(body: NewProjectWizardRequest) -> NewProjectWiza
         )
 
 
-def _runtime_action_response(project_dir, action: str, result: dict) -> RuntimeActionResponse:
-    runtime = get_local_runtime_status(project_dir)
-    snapshot = build_runtime_snapshot(runtime if isinstance(runtime, dict) else {}, {})
+def _runtime_status_pair_from_snapshot(snapshot: dict[str, Any]) -> tuple[str, str]:
     backend = snapshot.get("backend") if isinstance(snapshot.get("backend"), dict) else {}
     frontend = snapshot.get("frontend") if isinstance(snapshot.get("frontend"), dict) else {}
+    backend_status = str(backend.get("status") or "NOT RUNNING").strip().upper() or "NOT RUNNING"
+    frontend_status = str(frontend.get("status") or "NOT RUNNING").strip().upper() or "NOT RUNNING"
+    return backend_status, frontend_status
+
+
+def _runtime_converged_for_action(action: str, snapshot: dict[str, Any]) -> bool:
+    backend_status, frontend_status = _runtime_status_pair_from_snapshot(snapshot)
+    if action not in {"run-all", "restart"}:
+        return True
+    if "FAIL" in {backend_status, frontend_status}:
+        return False
+    if frontend_status == "RUNNING":
+        return True
+    return backend_status == "RUNNING"
+
+
+def _load_runtime_snapshot_with_post_action_poll(project_dir, action: str, *, should_poll: bool) -> dict[str, Any]:
+    latest_runtime = get_local_runtime_status(project_dir)
+    latest_snapshot = build_runtime_snapshot(latest_runtime if isinstance(latest_runtime, dict) else {}, {})
+    if not should_poll:
+        return latest_snapshot
+    for _ in range(max(0, RUNTIME_ACTION_POLL_MAX_ATTEMPTS - 1)):
+        if _runtime_converged_for_action(action, latest_snapshot):
+            break
+        time.sleep(RUNTIME_ACTION_POLL_INTERVAL_SECONDS)
+        latest_runtime = get_local_runtime_status(project_dir)
+        latest_snapshot = build_runtime_snapshot(latest_runtime if isinstance(latest_runtime, dict) else {}, {})
+    return latest_snapshot
+
+
+def _runtime_action_response(project_dir, action: str, result: dict) -> RuntimeActionResponse:
     ok = bool(result.get("ok"))
+    snapshot = _load_runtime_snapshot_with_post_action_poll(
+        project_dir,
+        action,
+        should_poll=ok and action in {"run-all", "restart"},
+    )
+    backend = snapshot.get("backend") if isinstance(snapshot.get("backend"), dict) else {}
+    frontend = snapshot.get("frontend") if isinstance(snapshot.get("frontend"), dict) else {}
+    backend_status, frontend_status = _runtime_status_pair_from_snapshot(snapshot)
     detail = str(result.get("detail") or "").strip()
     error = "" if ok else _extract_runtime_action_error(result)
     if not detail and not ok and error:
@@ -696,8 +736,8 @@ def _runtime_action_response(project_dir, action: str, result: dict) -> RuntimeA
         status=str(result.get("status") or ("SUCCESS" if ok else "FAIL")),
         detail=detail,
         error=error,
-        backend_status=str(backend.get("status") or "NOT RUNNING").strip().upper() or "NOT RUNNING",
-        frontend_status=str(frontend.get("status") or "NOT RUNNING").strip().upper() or "NOT RUNNING",
+        backend_status=backend_status,
+        frontend_status=frontend_status,
         backend_url=str(backend.get("url") or ""),
         frontend_url=str(frontend.get("url") or ""),
     )
