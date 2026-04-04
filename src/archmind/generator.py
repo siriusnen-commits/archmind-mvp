@@ -1741,6 +1741,30 @@ def apply_entity_scaffold(project_dir: Path, entity_name: str) -> list[str]:
     return generated
 
 
+def _is_core_entity_crud_route(backend_app_root: Path, method: str, route_path: str) -> bool:
+    method_up = str(method or "").strip().upper()
+    path = _canonicalize_api_path(str(route_path or "").strip())
+    if method_up not in {"GET", "POST", "PATCH", "DELETE"} or not path:
+        return False
+    routers_dir = backend_app_root / "routers"
+    if not routers_dir.exists():
+        return False
+    for router_file in routers_dir.glob("*.py"):
+        stem = router_file.stem.strip().lower()
+        if not stem or stem in {"custom", "__init__"}:
+            continue
+        resource = _pluralize_resource_name(stem)
+        if not resource:
+            continue
+        base = f"/{resource}"
+        detail = f"/{resource}/{{id}}"
+        if path == base and method_up in {"GET", "POST"}:
+            return True
+        if path == detail and method_up in {"GET", "PATCH", "DELETE"}:
+            return True
+    return False
+
+
 def apply_api_scaffold(project_dir: Path, method: str, path: str) -> list[str]:
     """
     Create or update a shared custom router with explicit API endpoints.
@@ -1755,6 +1779,8 @@ def apply_api_scaffold(project_dir: Path, method: str, path: str) -> list[str]:
     method_up = str(method or "").strip().upper()
     route_path = _canonicalize_api_path(str(path or "").strip())
     if not method_up or not route_path:
+        return []
+    if _is_core_entity_crud_route(backend_app_root, method_up, route_path):
         return []
 
     router_file = backend_app_root / "routers" / "custom.py"
