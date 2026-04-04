@@ -1733,7 +1733,7 @@ def test_get_local_runtime_status_marks_frontend_fail_when_health_fail(monkeypat
     monkeypatch.setattr("archmind.deploy._is_tcp_reachable", lambda _host, _port, timeout_s=0.35: False)
     status = get_local_runtime_status(tmp_path)
     assert status["frontend"]["status"] == "FAIL"
-    assert status["frontend"]["reachability"]["status"] == "UNREACHABLE"
+    assert status["frontend"]["reachability"]["status"] == "PROCESS_RUNNING"
 
 
 def test_get_local_runtime_status_recovers_stale_frontend_fail_when_reachable(monkeypatch, tmp_path: Path) -> None:
@@ -1781,8 +1781,56 @@ def test_get_local_runtime_status_recovers_stale_frontend_fail_when_reachable(mo
     assert str(frontend_after.get("status") or "").upper() == "RUNNING"
     assert str(state_after.get("last_status") or "").upper() == "SUCCESS"
     assert str(state_after.get("last_failure_class") or "") == ""
+    assert str(state_after.get("runtime_failure_class") or "") == ""
     assert state_after.get("recent_failures") == []
     assert str(state_after.get("next_action") or "").upper() == "STOP"
+
+
+def test_get_local_runtime_status_overrides_stale_fail_when_frontend_http_200(monkeypatch, tmp_path: Path) -> None:
+    write_state(
+        tmp_path,
+        {
+            "runtime_failure_class": "frontend-other",
+            "runtime": {
+                "frontend_pid": 55555,
+                "frontend_url": "http://127.0.0.1:3044",
+                "frontend_status": "FAIL",
+                "frontend_health": "FAIL",
+                "failure_class": "frontend-other",
+                "services": {
+                    "frontend": {
+                        "pid": 55555,
+                        "url": "http://127.0.0.1:3044",
+                        "status": "FAIL",
+                        "health": "FAIL",
+                    }
+                },
+            },
+        },
+    )
+    monkeypatch.setattr("archmind.deploy.is_pid_running", lambda pid: int(pid or 0) == 55555)
+    monkeypatch.setattr(
+        "archmind.deploy._component_reachability",
+        lambda _url, process_running=False: {
+            "status": "UNREACHABLE",
+            "process_running": bool(process_running),
+            "local_reachable": False,
+            "lan_reachable": False,
+            "external_reachable": False,
+            "lan_urls": [],
+            "external_urls": [],
+        },
+    )
+    monkeypatch.setattr("archmind.deploy._frontend_http_200_reachable", lambda _url, timeout_s=1.5: True)
+
+    status = get_local_runtime_status(tmp_path)
+    assert status["frontend"]["status"] == "RUNNING"
+    assert status["services"]["frontend"]["health"] == "SUCCESS"
+
+    state_after = load_state(tmp_path) or {}
+    runtime_after = state_after.get("runtime") if isinstance(state_after.get("runtime"), dict) else {}
+    assert str(runtime_after.get("failure_class") or "") == ""
+    assert str(state_after.get("runtime_failure_class") or "") == ""
 
 
 def test_get_local_runtime_status_marks_local_only_without_lan_urls(monkeypatch, tmp_path: Path) -> None:
@@ -2332,3 +2380,25 @@ def test_verify_frontend_smoke_fail_on_request_exception(monkeypatch) -> None:
     result = verify_frontend_smoke("https://web-demo.up.railway.app")
     assert result["status"] == "FAIL"
     assert "request failed" in result["detail"]
+
+
+def test_frontend_smoke_with_retry_uses_startup_grace_and_eventual_success(monkeypatch) -> None:
+    import archmind.deploy as deploy
+
+    calls = {"count": 0}
+    sleeps: list[float] = []
+
+    def fake_verify(_url):  # type: ignore[no-untyped-def]
+        calls["count"] += 1
+        if calls["count"] < 3:
+            return {"url": "http://127.0.0.1:3011", "status": "FAIL", "detail": "warming up"}
+        return {"url": "http://127.0.0.1:3011", "status": "SUCCESS", "detail": "frontend URL returned HTTP 200"}
+
+    monkeypatch.setattr("archmind.deploy.verify_frontend_smoke", fake_verify)
+    monkeypatch.setattr("archmind.deploy.time.sleep", lambda sec: sleeps.append(float(sec)))
+
+    result = deploy._frontend_smoke_with_retry("http://127.0.0.1:3011")
+    assert result["status"] == "SUCCESS"
+    assert calls["count"] == 3
+    assert sleeps[0] == 2.0
+    assert sleeps[1:] == [1.0, 1.0]

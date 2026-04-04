@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import signal
@@ -24,6 +25,11 @@ from archmind.state import ensure_state, load_state, update_after_deploy, update
 MOCK_RAILWAY_URL = "https://example.up.railway.app"
 _RAILWAY_DOMAIN_RE = re.compile(r"https://[a-z0-9-]+\.up\.railway\.app")
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+FRONTEND_HEALTH_RETRY_ATTEMPTS = 5
+FRONTEND_HEALTH_RETRY_DELAY_SECONDS = 1.0
+FRONTEND_HEALTH_STARTUP_GRACE_SECONDS = 2.0
+
+logger = logging.getLogger(__name__)
 
 
 def detect_deploy_target(project_dir: Path) -> str:
@@ -272,6 +278,22 @@ def verify_frontend_smoke(
         "status": "FAIL",
         "detail": f"frontend URL returned HTTP {status_code}",
     }
+
+
+def _frontend_http_200_reachable(url: str, timeout_s: float = 1.5) -> bool:
+    base = str(url or "").strip()
+    if not base:
+        return False
+    parsed = parse.urlparse(base)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return False
+    req = request.Request(base, method="GET")
+    try:
+        with request.urlopen(req, timeout=timeout_s) as response:  # noqa: S310
+            status_code = int(response.getcode() or 0)
+            return status_code == 200
+    except Exception:
+        return False
 
 
 def _service_result(status: str, url: str | None, detail: str) -> dict[str, Any]:
@@ -767,7 +789,10 @@ def _backend_smoke_with_retry(base_url: str, attempts: int = 12, interval_s: flo
     return latest
 
 
-def _frontend_smoke_with_retry(base_url: str, attempts: int = 5, interval_s: float = 0.4) -> dict[str, Any]:
+def _frontend_smoke_with_retry(base_url: str, attempts: int = FRONTEND_HEALTH_RETRY_ATTEMPTS, interval_s: float = FRONTEND_HEALTH_RETRY_DELAY_SECONDS) -> dict[str, Any]:
+    grace_s = FRONTEND_HEALTH_STARTUP_GRACE_SECONDS
+    if grace_s > 0:
+        time.sleep(grace_s)
     latest = verify_frontend_smoke(base_url)
     if str(latest.get("status") or "").upper() == "SUCCESS":
         return latest
@@ -2131,18 +2156,22 @@ def get_local_runtime_status(project_dir: Path) -> dict[str, Any]:
         frontend_status = "NOT RUNNING"
 
     backend_reachability = _component_reachability(backend_url, process_running=backend_running)
-    frontend_reachability = _component_reachability(frontend_url, process_running=frontend_running and frontend_health != "FAIL")
+    frontend_reachability = _component_reachability(frontend_url, process_running=frontend_running)
+    frontend_http_ok = bool(frontend_running and _frontend_http_200_reachable(frontend_url))
     frontend_recovered = bool(
-        frontend_running
-        and (
+        frontend_http_ok
+        or (
+            frontend_running
+            and (
             frontend_reachability.get("local_reachable")
             or frontend_reachability.get("lan_reachable")
             or frontend_reachability.get("external_reachable")
         )
+        )
     )
     if frontend_recovered:
         frontend_health = "SUCCESS"
-        if frontend_status == "FAIL":
+        if frontend_status == "FAIL" or frontend_http_ok:
             frontend_status = "RUNNING"
 
         runtime_changed = False
@@ -2153,6 +2182,9 @@ def get_local_runtime_status(project_dir: Path) -> dict[str, Any]:
                 runtime_changed = True
             if str(runtime_block.get("frontend_health") or "").strip().upper() != "SUCCESS":
                 runtime_block["frontend_health"] = "SUCCESS"
+                runtime_changed = True
+            if str(runtime_block.get("failure_class") or "").strip():
+                runtime_block["failure_class"] = ""
                 runtime_changed = True
             services_block = runtime_block.get("services") if isinstance(runtime_block.get("services"), dict) else {}
             frontend_block = services_block.get("frontend") if isinstance(services_block.get("frontend"), dict) else {}
@@ -2174,6 +2206,9 @@ def get_local_runtime_status(project_dir: Path) -> dict[str, Any]:
         if str(state.get("last_failure_class") or "").strip():
             state["last_failure_class"] = ""
             summary_changed = True
+        if str(state.get("runtime_failure_class") or "").strip():
+            state["runtime_failure_class"] = ""
+            summary_changed = True
         failures_now = state.get("recent_failures")
         if isinstance(failures_now, list) and failures_now:
             state["recent_failures"] = []
@@ -2184,6 +2219,7 @@ def get_local_runtime_status(project_dir: Path) -> dict[str, Any]:
             summary_changed = True
 
         if runtime_changed or summary_changed:
+            logger.debug("frontend health recovered from stale FAIL")
             try:
                 write_state(root, state)
             except Exception:
