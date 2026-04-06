@@ -186,6 +186,8 @@ type ProjectDetail = {
       title?: string;
       why?: string;
       command?: string;
+      expected_effect?: string;
+      priority?: string;
     }>;
   };
   logs?: {
