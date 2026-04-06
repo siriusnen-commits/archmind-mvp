@@ -42,6 +42,15 @@ type FlowExecution = {
   status?: "pending" | "running" | "completed" | "failed" | string;
   current_step?: string;
   steps?: FlowStepExecution[];
+  recovery?: {
+    triggered?: boolean;
+    reason?: string;
+    status?: "running" | "completed" | "failed" | string;
+    steps?: Array<{
+      command?: string;
+      status?: "pending" | "running" | "done" | "failed" | string;
+    }>;
+  };
   updated_at?: string;
 };
 
@@ -366,6 +375,11 @@ export default function PlanOverviewCard({ projectName, plan, flowExecution }: P
                   const normalizedFlowName = String(flow.name || "").trim();
                   const isActiveFlow = executionFlowName === normalizedFlowName;
                   const isRunningThisFlow = isActiveFlow && executionStatus === "running";
+                  const recovery = isActiveFlow && execution.recovery && typeof execution.recovery === "object" ? execution.recovery : null;
+                  const recoveryTriggered = Boolean(recovery?.triggered);
+                  const recoveryReason = String(recovery?.reason || "").trim();
+                  const recoveryStatus = String(recovery?.status || "").trim().toLowerCase() || "failed";
+                  const recoverySteps = Array.isArray(recovery?.steps) ? recovery.steps : [];
                   const flowMessage = String(flowMessageByName[normalizedFlowName] || "").trim();
                   const flowHint = String(flowHintByName[normalizedFlowName] || "").trim();
                   const canResume = isActiveFlow && (executionStatus === "failed" || executionStatus === "running");
@@ -421,6 +435,30 @@ export default function PlanOverviewCard({ projectName, plan, flowExecution }: P
                       ) : null}
                       {isActiveFlow && executionStatus === "completed" ? (
                         <p className="mt-1 text-[11px] text-emerald-300">Flow complete ({completedCount}/{totalCount}).</p>
+                      ) : null}
+                      {recoveryTriggered ? (
+                        <div className="mt-2 rounded border border-amber-700/60 bg-amber-950/20 p-2">
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-200">Recovery</p>
+                          <p className="mt-1 text-[11px] text-amber-100">
+                            Reason: {recoveryReason || "default"} · Status: {recoveryStatus}
+                          </p>
+                          {recoverySteps.length > 0 ? (
+                            <div className="mt-1 space-y-1">
+                              {recoverySteps.map((item, recoveryIdx) => {
+                                const recoveryCommand = normalizeCommand(String(item?.command || ""));
+                                const recoveryStepStatus = normalizeStepStatus(String(item?.status || "pending"));
+                                return (
+                                  <div key={`${recoveryCommand}-${recoveryIdx}`} className="flex items-center justify-between gap-2 rounded border border-amber-800/50 bg-amber-950/20 px-2 py-1">
+                                    <p className="truncate text-[11px] text-amber-100">{recoveryCommand || "(empty command)"}</p>
+                                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${statusBadgeClass(recoveryStepStatus)}`}>
+                                      {recoveryStepStatus}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : null}
+                        </div>
                       ) : null}
                       {flowMessage ? <p className="mt-1 text-[11px] text-slate-300">{flowMessage}</p> : null}
                       {flowHint ? <p className="mt-1 text-[11px] text-cyan-300">{flowHint}</p> : null}
