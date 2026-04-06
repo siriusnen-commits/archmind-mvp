@@ -644,6 +644,43 @@ _PLAN_BUCKET_SCORE = {
     "saved_plan_gap": 120,
 }
 _PLAN_PRIORITY_SCORE = {"high": 40, "medium": 20, "low": 10, "none": 0}
+_PLAN_FLOW_MAX = 2
+
+
+def _infer_step_type_from_command(command: str) -> str:
+    text = str(command or "").strip().lower()
+    if text.startswith("/add_api "):
+        return "api"
+    if text.startswith("/add_field "):
+        return "field"
+    if text.startswith("/add_page ") or text.startswith("/implement_page "):
+        return "page"
+    return "api"
+
+
+def _infer_flow_type(bucket: str, command: str, title: str) -> str:
+    normalized_bucket = str(bucket or "").strip().lower()
+    text = " ".join([str(command or "").strip().lower(), str(title or "").strip().lower()])
+    if "search" in text:
+        return "search"
+    if normalized_bucket == "relation_gap":
+        return "relation"
+    if normalized_bucket in {"crud_gap", "runtime_drift_gap"}:
+        return "crud"
+    if normalized_bucket in {"usability_gap", "saved_plan_gap"}:
+        return "usability"
+    return "crud"
+
+
+def _flow_name(flow_type: str) -> str:
+    normalized = str(flow_type or "").strip().lower()
+    if normalized == "search":
+        return "Search Flow"
+    if normalized == "relation":
+        return "Relation Flow"
+    if normalized == "usability":
+        return "Usability Flow"
+    return "CRUD Flow"
 
 
 def _normalize_plan_priority(value: Any) -> str:
@@ -845,11 +882,16 @@ def _plan_candidate_step(
     priority: str,
     goal: str,
 ) -> dict[str, str]:
+    normalized_command = _canonicalize_plan_command(command)
+    step_type = _infer_step_type_from_command(normalized_command)
+    flow_type = _infer_flow_type(bucket, normalized_command, title)
     return {
         "bucket": str(bucket or "").strip(),
         "goal": str(goal or "").strip(),
+        "flow_type": flow_type,
+        "step_type": step_type,
         "title": str(title or "Next step").strip() or "Next step",
-        "command": _canonicalize_plan_command(command),
+        "command": normalized_command,
         "why": str(why or "").strip(),
         "expected_effect": str(expected_effect or "").strip(),
         "priority": _normalize_plan_priority(priority),
@@ -998,6 +1040,77 @@ def _build_saved_plan_candidates(plan_row: dict[str, Any]) -> list[dict[str, str
     return out
 
 
+def _flow_step_sort_key(step: dict[str, str]) -> tuple[int, int, str]:
+    flow_type = str(step.get("flow_type") or "").strip().lower()
+    step_type = str(step.get("step_type") or "").strip().lower()
+    if flow_type == "search":
+        order = {"api": 0, "field": 1, "page": 2}
+    elif flow_type == "crud":
+        order = {"api": 0, "page": 1, "field": 2}
+    elif flow_type == "usability":
+        order = {"field": 0, "api": 1, "page": 2}
+    elif flow_type == "relation":
+        order = {"api": 0, "page": 1, "field": 2}
+    else:
+        order = {"api": 0, "field": 1, "page": 2}
+    return (
+        int(order.get(step_type, 99)),
+        -_plan_score(step),
+        str(step.get("command") or ""),
+    )
+
+
+def _build_flow_payload(steps: list[dict[str, str]], *, flow_type: str, flow_no: int) -> dict[str, Any]:
+    ordered = sorted(steps, key=_flow_step_sort_key)
+    payload_steps: list[dict[str, Any]] = []
+    previous_id = ""
+    for idx, step in enumerate(ordered, start=1):
+        step_id = f"{flow_type}_{flow_no}_{idx}"
+        depends_on = [previous_id] if previous_id else []
+        payload_steps.append(
+            {
+                "id": step_id,
+                "title": str(step.get("title") or "Plan step").strip() or "Plan step",
+                "command": str(step.get("command") or "").strip(),
+                "depends_on": depends_on,
+                "why": str(step.get("why") or "").strip(),
+                "expected_effect": str(step.get("expected_effect") or "").strip(),
+                "priority": _normalize_plan_priority(step.get("priority")),
+                "type": str(step.get("step_type") or "").strip().lower() or "api",
+            }
+        )
+        previous_id = step_id
+    return {
+        "name": _flow_name(flow_type),
+        "flow_type": flow_type,
+        "steps": payload_steps,
+    }
+
+
+def _build_plan_flows(steps: list[dict[str, str]]) -> list[dict[str, Any]]:
+    if not steps:
+        return []
+    grouped: dict[str, list[dict[str, str]]] = {}
+    for step in steps:
+        flow_type = str(step.get("flow_type") or "").strip().lower() or "crud"
+        grouped.setdefault(flow_type, []).append(step)
+
+    ranked_flows = sorted(
+        grouped.items(),
+        key=lambda item: (
+            -max((_plan_score(step) for step in item[1]), default=0),
+            str(item[0]),
+        ),
+    )[:_PLAN_FLOW_MAX]
+
+    flows: list[dict[str, Any]] = []
+    for idx, (flow_type, flow_steps) in enumerate(ranked_flows, start=1):
+        flow_payload = _build_flow_payload(flow_steps, flow_type=flow_type, flow_no=idx)
+        if flow_payload.get("steps"):
+            flows.append(flow_payload)
+    return flows
+
+
 def _build_plan_overview(
     project_dir: Path,
     *,
@@ -1132,14 +1245,16 @@ def _build_plan_overview(
         ),
     )
     steps = ranked[:3]
+    flows = _build_plan_flows(steps)
 
-    if not steps:
+    if not steps or not flows:
         return {
             "goal": "none",
             "priority": "none",
             "why": "No immediate suggestions.",
             "expected_effect": "No immediate action is needed.",
             "steps": [],
+            "flows": [],
         }
 
     top = steps[0]
@@ -1147,21 +1262,23 @@ def _build_plan_overview(
     priority = _normalize_plan_priority(top.get("priority"))
     why = str(top.get("why") or "").strip() or str(explanation.get("reason_summary") or "").strip()
     expected_effect = str(top.get("expected_effect") or "").strip() or str(explanation.get("expected_effect") or "").strip()
+    flattened_steps = [
+        {
+            "title": str(row.get("title") or "Plan step").strip() or "Plan step",
+            "command": str(row.get("command") or "").strip(),
+            "why": str(row.get("why") or "").strip(),
+            "expected_effect": str(row.get("expected_effect") or "").strip(),
+            "priority": _normalize_plan_priority(row.get("priority")),
+        }
+        for row in steps
+    ]
     return {
         "goal": goal,
         "priority": priority,
         "why": why,
         "expected_effect": expected_effect,
-        "steps": [
-            {
-                "title": str(row.get("title") or "Plan step").strip() or "Plan step",
-                "command": str(row.get("command") or "").strip(),
-                "why": str(row.get("why") or "").strip(),
-                "expected_effect": str(row.get("expected_effect") or "").strip(),
-                "priority": _normalize_plan_priority(row.get("priority")),
-            }
-            for row in steps
-        ],
+        "steps": flattened_steps,
+        "flows": flows,
     }
 
 

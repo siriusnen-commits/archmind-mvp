@@ -418,6 +418,7 @@ def test_ui_plan_generation_todo_suggests_meaningful_next_fields_or_search(monke
         command in {"/add_field Task priority:string", "/add_field Task description:string", "/add_api GET /tasks/search"}
         for command in commands
     )
+    assert isinstance(payload.get("plan", {}).get("flows", []), list)
 
 
 def test_ui_plan_generation_bookmark_suggests_organization_or_search_improvements(monkeypatch, tmp_path: Path) -> None:
@@ -527,6 +528,14 @@ def test_ui_plan_generation_avoids_duplicates_and_satisfied_steps(monkeypatch, t
     commands = [str(item.get("command") or "") for item in (payload.get("plan", {}).get("steps") or []) if isinstance(item, dict)]
     assert len(commands) == len(set(commands))
     assert "/add_page tasks/list" not in commands
+    flow_commands = [
+        str(step.get("command") or "")
+        for flow in (payload.get("plan", {}).get("flows") or [])
+        if isinstance(flow, dict)
+        for step in (flow.get("steps") or [])
+        if isinstance(step, dict)
+    ]
+    assert len(flow_commands) == len(set(flow_commands))
 
 
 def test_ui_plan_generation_suppresses_low_value_metadata_when_higher_value_exists(monkeypatch, tmp_path: Path) -> None:
@@ -612,6 +621,64 @@ def test_ui_plan_generation_allows_no_immediate_action_for_truly_complete_projec
     assert payload["plan"]["goal"] == "none"
     assert payload["plan"]["priority"] == "none"
     assert payload["plan"]["steps"] == []
+    assert payload["plan"]["flows"] == []
+
+
+def test_ui_plan_generation_builds_flow_groups_with_ordered_steps_and_dependencies(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "plan-flow-order")
+    archmind_dir = project_dir / ".archmind"
+    (archmind_dir / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "project_name": "plan-flow-order",
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "domains": ["tasks"],
+                "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": ["GET /tasks", "POST /tasks"],
+                "frontend_pages": ["tasks/list"],
+                "evolution": {"version": 1, "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    payload = client.get("/ui/projects/plan-flow-order").json()
+    flows = payload.get("plan", {}).get("flows")
+    assert isinstance(flows, list)
+    assert 1 <= len(flows) <= 2
+    assert flows[0]["name"]
+    first_flow_steps = flows[0]["steps"]
+    assert isinstance(first_flow_steps, list)
+    assert len(first_flow_steps) >= 1
+    for idx, step in enumerate(first_flow_steps):
+        assert step["id"]
+        assert step["title"]
+        assert step["command"]
+        assert isinstance(step.get("depends_on", []), list)
+        if idx == 0:
+            assert step.get("depends_on", []) == []
+        else:
+            assert step.get("depends_on", []) == [first_flow_steps[idx - 1]["id"]]
+
+    crud_flows = [flow for flow in flows if str(flow.get("flow_type") or "").strip().lower() == "crud"]
+    if crud_flows:
+        commands = [str(step.get("command") or "") for step in (crud_flows[0].get("steps") or []) if isinstance(step, dict)]
+        api_positions = [idx for idx, command in enumerate(commands) if command.startswith("/add_api ")]
+        page_positions = [idx for idx, command in enumerate(commands) if command.startswith("/add_page ") or command.startswith("/implement_page ")]
+        if api_positions and page_positions:
+            assert min(api_positions) < max(page_positions)
+
+
+def test_plan_overview_component_renders_flows_with_order_and_dependencies() -> None:
+    source = Path("frontend/components/PlanOverviewCard.tsx").read_text(encoding="utf-8")
+    assert "Flows" in source
+    assert "Step {idx + 1}" in source
+    assert "Depends on:" in source
+    assert "flow.steps.slice(0, 10)" in source
 
 
 def test_ui_project_detail_summary_counts_match_analysis_lists(monkeypatch, tmp_path: Path) -> None:

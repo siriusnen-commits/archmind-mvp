@@ -182,6 +182,20 @@ type ProjectDetail = {
     priority?: string;
     why?: string;
     expected_effect?: string;
+    flows?: Array<{
+      name?: string;
+      flow_type?: string;
+      steps?: Array<{
+        id?: string;
+        title?: string;
+        command?: string;
+        depends_on?: string[];
+        why?: string;
+        expected_effect?: string;
+        priority?: string;
+        type?: string;
+      }>;
+    }>;
     steps?: Array<{
       title?: string;
       why?: string;
