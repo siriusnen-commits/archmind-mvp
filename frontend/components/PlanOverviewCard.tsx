@@ -6,11 +6,20 @@ import { classifyActionFailure, classifyNetworkFailure } from "@/components/acti
 import { UI_API_BASE } from "@/components/uiApi";
 
 type PlanStep = {
+  id?: string;
   title?: string;
   why?: string;
   command?: string;
+  depends_on?: string[];
   expected_effect?: string;
   priority?: string;
+  type?: string;
+};
+
+type PlanFlow = {
+  name?: string;
+  flow_type?: string;
+  steps?: PlanStep[];
 };
 
 type PlanOverview = {
@@ -18,6 +27,7 @@ type PlanOverview = {
   priority?: string;
   why?: string;
   expected_effect?: string;
+  flows?: PlanFlow[];
   steps?: PlanStep[];
 };
 
@@ -44,17 +54,47 @@ export default function PlanOverviewCard({ projectName, plan }: Props) {
   const priority = String(row.priority || "").trim();
   const why = String(row.why || "").trim();
   const expectedEffect = String(row.expected_effect || "").trim();
-  const steps = (Array.isArray(row.steps) ? row.steps : [])
+  const flows = (Array.isArray(row.flows) ? row.flows : [])
+    .filter((flow): flow is PlanFlow => Boolean(flow && typeof flow === "object"))
+    .map((flow) => ({
+      name: String(flow.name || "").trim() || "Plan Flow",
+      flowType: String(flow.flow_type || "").trim().toLowerCase() || "crud",
+      steps: (Array.isArray(flow.steps) ? flow.steps : [])
+        .filter((item): item is PlanStep => Boolean(item && typeof item === "object"))
+        .map((item) => ({
+          id: String(item.id || "").trim(),
+          title: String(item.title || "").trim() || "Plan step",
+          command: normalizeCommand(String(item.command || "")),
+          dependsOn: Array.isArray(item.depends_on)
+            ? item.depends_on.map((dep) => String(dep || "").trim()).filter((dep) => Boolean(dep))
+            : [],
+          why: String(item.why || "").trim(),
+          expectedEffect: String(item.expected_effect || "").trim(),
+          priority: String(item.priority || "").trim().toLowerCase(),
+          stepType: String(item.type || "").trim().toLowerCase(),
+        }))
+        .filter((item) => Boolean(item.command)),
+    }))
+    .filter((flow) => flow.steps.length > 0);
+
+  const fallbackSteps = (Array.isArray(row.steps) ? row.steps : [])
     .filter((item): item is PlanStep => Boolean(item && typeof item === "object"))
-    .map((item) => ({
+    .map((item, idx) => ({
+      id: String(item.id || "").trim() || `step_${idx + 1}`,
       title: String(item.title || "").trim() || "Plan step",
-      why: String(item.why || "").trim(),
       command: normalizeCommand(String(item.command || "")),
+      dependsOn: Array.isArray(item.depends_on)
+        ? item.depends_on.map((dep) => String(dep || "").trim()).filter((dep) => Boolean(dep))
+        : [],
+      why: String(item.why || "").trim(),
       expectedEffect: String(item.expected_effect || "").trim(),
       priority: String(item.priority || "").trim().toLowerCase(),
-    }));
+      stepType: String(item.type || "").trim().toLowerCase(),
+    }))
+    .filter((item) => Boolean(item.command));
 
-  const hasAny = Boolean(goal || priority || why || expectedEffect || steps.length);
+  const groupedFlows = flows.length > 0 ? flows : fallbackSteps.length > 0 ? [{ name: "Recommended Steps", flowType: "generic", steps: fallbackSteps }] : [];
+  const hasAny = Boolean(goal || priority || why || expectedEffect || groupedFlows.length);
 
   async function copyCommand(command: string) {
     const value = normalizeCommand(command);
@@ -149,47 +189,65 @@ export default function PlanOverviewCard({ projectName, plan }: Props) {
           </div>
 
           <div className="rounded border border-slate-700 bg-slate-950/40 p-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-300">Steps</p>
-            {steps.length === 0 ? <p className="mt-1 text-sm text-slate-300">No plan steps available.</p> : null}
-            {steps.length > 0 ? (
-              <div className="mt-2 space-y-2">
-                {steps.slice(0, 20).map((step, idx) => {
-                  const command = normalizeCommand(step.command || "");
-                  const runState = runStateByCommand[command] || "idle";
-                  const disabled = !command || !String(projectName || "").trim() || Boolean(runningCommand);
-                  const message = String(messageByCommand[command] || "").trim();
-                  const hint = String(hintByCommand[command] || "").trim();
-                  return (
-                    <article key={`${step.title}-${command}-${idx}`} className="rounded border border-slate-700 bg-slate-950/70 p-3">
-                      <p className="text-sm font-semibold text-slate-100">{step.title || "Plan step"}</p>
-                      <p className="mt-1 text-xs text-slate-300">{step.why || why || "No step rationale."}</p>
-                      <p className="mt-1 text-[11px] text-slate-400">
-                        Priority: {step.priority || "unknown"} · Effect: {step.expectedEffect || "Improves project completeness."}
-                      </p>
-                      {command ? <p className="mt-2 break-all text-xs text-cyan-200">{command}</p> : <p className="mt-2 text-xs text-slate-400">No command</p>}
-                      <div className="mt-2 flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => copyCommand(command)}
-                          disabled={!command}
-                          className="rounded-md border border-slate-500 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-60"
-                        >
-                          Copy
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => runCommand(command)}
-                          disabled={disabled}
-                          className="rounded-md border border-cyan-600 px-3 py-1.5 text-xs text-cyan-200 hover:bg-cyan-900/30 disabled:opacity-60"
-                        >
-                          {runState === "running" ? "Running..." : runState === "success" ? "Completed" : "Run"}
-                        </button>
-                      </div>
-                      {message ? <p className={runState === "error" ? "mt-2 text-xs text-rose-300" : "mt-2 text-xs text-emerald-300"}>{message}</p> : null}
-                      {hint ? <p className="mt-1 text-xs text-cyan-300">{hint}</p> : null}
-                    </article>
-                  );
-                })}
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-300">Flows</p>
+            {groupedFlows.length === 0 ? <p className="mt-1 text-sm text-slate-300">No plan steps available.</p> : null}
+            {groupedFlows.length > 0 ? (
+              <div className="mt-2 space-y-3">
+                {groupedFlows.slice(0, 2).map((flow, flowIdx) => (
+                  <section key={`${flow.name}-${flow.flowType}-${flowIdx}`} className="rounded border border-slate-700 bg-slate-900/30 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-200">
+                      {flow.name}
+                    </p>
+                    <div className="mt-2 space-y-2">
+                      {flow.steps.slice(0, 10).map((step, idx) => {
+                        const command = normalizeCommand(step.command || "");
+                        const runState = runStateByCommand[command] || "idle";
+                        const disabled = !command || !String(projectName || "").trim() || Boolean(runningCommand);
+                        const message = String(messageByCommand[command] || "").trim();
+                        const hint = String(hintByCommand[command] || "").trim();
+                        return (
+                          <article key={`${step.id || step.title}-${command}-${idx}`} className="rounded border border-slate-700 bg-slate-950/70 p-3">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                              Step {idx + 1}
+                            </p>
+                            <p className="text-sm font-semibold text-slate-100">{step.title || "Plan step"}</p>
+                            <p className="mt-1 text-xs text-slate-300">{step.why || why || "No step rationale."}</p>
+                            <p className="mt-1 text-[11px] text-slate-400">
+                              Priority: {step.priority || "unknown"} · Type: {step.stepType || "unknown"} · Effect:{" "}
+                              {step.expectedEffect || "Improves project completeness."}
+                            </p>
+                            {step.dependsOn.length > 0 ? (
+                              <p className="mt-1 text-[11px] text-amber-300">Depends on: {step.dependsOn.join(", ")}</p>
+                            ) : (
+                              <p className="mt-1 text-[11px] text-slate-500">Depends on: (none)</p>
+                            )}
+                            {command ? <p className="mt-2 break-all text-xs text-cyan-200">{command}</p> : <p className="mt-2 text-xs text-slate-400">No command</p>}
+                            <div className="mt-2 flex gap-2">
+                              <button
+                                type="button"
+                                onClick={() => copyCommand(command)}
+                                disabled={!command}
+                                className="rounded-md border border-slate-500 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-60"
+                              >
+                                Copy
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => runCommand(command)}
+                                disabled={disabled}
+                                className="rounded-md border border-cyan-600 px-3 py-1.5 text-xs text-cyan-200 hover:bg-cyan-900/30 disabled:opacity-60"
+                              >
+                                {runState === "running" ? "Running..." : runState === "success" ? "Completed" : "Run"}
+                              </button>
+                            </div>
+                            {message ? <p className={runState === "error" ? "mt-2 text-xs text-rose-300" : "mt-2 text-xs text-emerald-300"}>{message}</p> : null}
+                            {hint ? <p className="mt-1 text-xs text-cyan-300">{hint}</p> : null}
+                          </article>
+                        );
+                      })}
+                    </div>
+                  </section>
+                ))}
               </div>
             ) : null}
           </div>
