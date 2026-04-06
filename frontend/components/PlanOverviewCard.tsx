@@ -9,6 +9,8 @@ type PlanStep = {
   title?: string;
   why?: string;
   command?: string;
+  expected_effect?: string;
+  priority?: string;
 };
 
 type PlanOverview = {
@@ -48,6 +50,8 @@ export default function PlanOverviewCard({ projectName, plan }: Props) {
       title: String(item.title || "").trim() || "Plan step",
       why: String(item.why || "").trim(),
       command: normalizeCommand(String(item.command || "")),
+      expectedEffect: String(item.expected_effect || "").trim(),
+      priority: String(item.priority || "").trim().toLowerCase(),
     }));
 
   const hasAny = Boolean(goal || priority || why || expectedEffect || steps.length);
@@ -159,6 +163,9 @@ export default function PlanOverviewCard({ projectName, plan }: Props) {
                     <article key={`${step.title}-${command}-${idx}`} className="rounded border border-slate-700 bg-slate-950/70 p-3">
                       <p className="text-sm font-semibold text-slate-100">{step.title || "Plan step"}</p>
                       <p className="mt-1 text-xs text-slate-300">{step.why || why || "No step rationale."}</p>
+                      <p className="mt-1 text-[11px] text-slate-400">
+                        Priority: {step.priority || "unknown"} · Effect: {step.expectedEffect || "Improves project completeness."}
+                      </p>
                       {command ? <p className="mt-2 break-all text-xs text-cyan-200">{command}</p> : <p className="mt-2 text-xs text-slate-400">No command</p>}
                       <div className="mt-2 flex gap-2">
                         <button

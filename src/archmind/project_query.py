@@ -635,11 +635,376 @@ def _load_saved_plan_payload(project_dir: Path) -> dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
+_PLAN_LOW_VALUE_FIELDS = {"created_at", "updated_at", "timestamp", "deleted_at"}
+_PLAN_BUCKET_SCORE = {
+    "runtime_drift_gap": 400,
+    "crud_gap": 320,
+    "relation_gap": 280,
+    "usability_gap": 220,
+    "saved_plan_gap": 120,
+}
+_PLAN_PRIORITY_SCORE = {"high": 40, "medium": 20, "low": 10, "none": 0}
+
+
+def _normalize_plan_priority(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in {"high", "medium", "low", "none"}:
+        return text
+    return "medium"
+
+
+def _normalize_plan_page(value: Any) -> str:
+    return str(value or "").strip().replace("\\", "/").strip("/").lower()
+
+
+def _normalize_plan_api_endpoint(method: Any, path: Any) -> str:
+    method_text = str(method or "").strip().upper()
+    path_text = str(path or "").strip()
+    if not method_text or not path_text:
+        return ""
+    if not path_text.startswith("/"):
+        path_text = f"/{path_text}"
+    return f"{method_text} {path_text}"
+
+
+def _canonicalize_plan_command(command: Any) -> str:
+    text = str(command or "").strip()
+    if not text.startswith("/"):
+        return ""
+    parts = [part for part in text.split() if part]
+    if not parts:
+        return ""
+    cmd = parts[0].strip().lower()
+    if cmd in {"/fix", "/inspect", "/next", "/auto"} and len(parts) == 1:
+        return cmd
+    if cmd == "/add_entity" and len(parts) >= 2:
+        entity = str(parts[1] or "").strip()
+        return f"/add_entity {entity}" if entity else ""
+    if cmd == "/add_field" and len(parts) >= 3:
+        entity = str(parts[1] or "").strip()
+        expr = str(parts[2] or "").strip()
+        if ":" in expr:
+            field_name, field_type = expr.split(":", 1)
+        else:
+            field_name, field_type = expr, "string"
+        field_name = str(field_name or "").strip().lower()
+        field_type = str(field_type or "").strip().lower() or "string"
+        if not entity or not field_name:
+            return ""
+        return f"/add_field {entity} {field_name}:{field_type}"
+    if cmd == "/add_api" and len(parts) >= 3:
+        endpoint = _normalize_plan_api_endpoint(parts[1], parts[2])
+        return f"/add_api {endpoint}" if endpoint else ""
+    if cmd in {"/add_page", "/implement_page"} and len(parts) >= 2:
+        page = _normalize_plan_page(parts[1])
+        return f"{cmd} {page}" if page else ""
+    return ""
+
+
+def _plan_field_name_from_command(command: str) -> str:
+    text = str(command or "").strip()
+    if not text.startswith("/add_field "):
+        return ""
+    parts = [part for part in text.split() if part]
+    if len(parts) < 3:
+        return ""
+    expr = str(parts[2] or "").strip().lower()
+    return expr.split(":", 1)[0].strip()
+
+
+def _detect_plan_profile(
+    analysis_payload: dict[str, Any],
+    spec_payload: dict[str, Any],
+    project_name: str,
+) -> str:
+    entities = {str(item or "").strip().lower() for item in (analysis_payload.get("entities") or []) if str(item).strip()}
+    modules = {
+        str(item or "").strip().lower()
+        for item in (
+            analysis_payload.get("modules")
+            if isinstance(analysis_payload.get("modules"), list)
+            else spec_payload.get("modules") if isinstance(spec_payload.get("modules"), list) else []
+        )
+        if str(item).strip()
+    }
+    domains = {
+        str(item or "").strip().lower()
+        for item in (
+            analysis_payload.get("domains")
+            if isinstance(analysis_payload.get("domains"), list)
+            else spec_payload.get("domains") if isinstance(spec_payload.get("domains"), list) else []
+        )
+        if str(item).strip()
+    }
+    name_text = str(project_name or "").strip().lower()
+    tokens = {*(entities), *(modules), *(domains), name_text}
+    if any("bookmark" in token for token in tokens):
+        return "bookmark"
+    if any(token in {"task", "tasks", "todo", "todos"} or "todo" in token for token in tokens):
+        return "todo"
+    if any(token in {"entry", "entries", "diary", "journal"} or "diary" in token or "journal" in token for token in tokens):
+        return "diary"
+    return "generic"
+
+
+def _build_plan_state(
+    *,
+    analysis_payload: dict[str, Any],
+    spec_payload: dict[str, Any],
+) -> dict[str, Any]:
+    entities = {str(item or "").strip().lower() for item in (analysis_payload.get("entities") or []) if str(item).strip()}
+    fields_by_entity_raw = analysis_payload.get("fields_by_entity") if isinstance(analysis_payload.get("fields_by_entity"), dict) else {}
+    fields_by_entity: dict[str, set[str]] = {}
+    for entity, fields in fields_by_entity_raw.items():
+        key = str(entity or "").strip().lower()
+        if not key:
+            continue
+        row_set: set[str] = set()
+        if isinstance(fields, list):
+            for item in fields:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or "").strip().lower()
+                if name:
+                    row_set.add(name)
+        fields_by_entity[key] = row_set
+
+    api_set: set[str] = set()
+    for item in (analysis_payload.get("apis") or []):
+        if not isinstance(item, dict):
+            continue
+        endpoint = _normalize_plan_api_endpoint(item.get("method"), item.get("path"))
+        if endpoint:
+            api_set.add(endpoint)
+    for endpoint in _extract_spec_api_endpoints(spec_payload):
+        parts = str(endpoint or "").split(maxsplit=1)
+        if len(parts) != 2:
+            continue
+        normalized = _normalize_plan_api_endpoint(parts[0], parts[1])
+        if normalized:
+            api_set.add(normalized)
+
+    page_set = {_normalize_plan_page(item) for item in (analysis_payload.get("pages") or []) if _normalize_plan_page(item)}
+    page_set.update({_normalize_plan_page(item) for item in _extract_spec_pages(spec_payload) if _normalize_plan_page(item)})
+    placeholder_pages = {
+        _normalize_plan_page(item)
+        for item in (analysis_payload.get("placeholder_pages") or [])
+        if _normalize_plan_page(item)
+    }
+    return {
+        "entities": entities,
+        "fields_by_entity": fields_by_entity,
+        "apis": api_set,
+        "pages": page_set,
+        "placeholder_pages": placeholder_pages,
+    }
+
+
+def _is_plan_command_already_satisfied(command: str, state: dict[str, Any]) -> bool:
+    text = _canonicalize_plan_command(command)
+    if not text:
+        return True
+    entities = state.get("entities") if isinstance(state.get("entities"), set) else set()
+    fields_by_entity = state.get("fields_by_entity") if isinstance(state.get("fields_by_entity"), dict) else {}
+    api_set = state.get("apis") if isinstance(state.get("apis"), set) else set()
+    page_set = state.get("pages") if isinstance(state.get("pages"), set) else set()
+    placeholder_pages = state.get("placeholder_pages") if isinstance(state.get("placeholder_pages"), set) else set()
+
+    if text.startswith("/add_entity "):
+        entity = str(text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else "").strip().lower()
+        return bool(entity and entity in entities)
+    if text.startswith("/add_field "):
+        parts = [part for part in text.split() if part]
+        if len(parts) < 3:
+            return True
+        entity = str(parts[1] or "").strip().lower()
+        field = str(parts[2] or "").strip().split(":", 1)[0].strip().lower()
+        existing_fields = fields_by_entity.get(entity) if isinstance(fields_by_entity.get(entity), set) else set()
+        return bool(field and field in existing_fields)
+    if text.startswith("/add_api "):
+        endpoint = str(text.replace("/add_api ", "", 1) or "").strip()
+        return bool(endpoint and endpoint in api_set)
+    if text.startswith("/add_page "):
+        page = _normalize_plan_page(text.replace("/add_page ", "", 1))
+        return bool(page and page in page_set)
+    if text.startswith("/implement_page "):
+        page = _normalize_plan_page(text.replace("/implement_page ", "", 1))
+        if not page:
+            return True
+        return page not in placeholder_pages
+    return False
+
+
+def _plan_candidate_step(
+    *,
+    bucket: str,
+    title: str,
+    command: str,
+    why: str,
+    expected_effect: str,
+    priority: str,
+    goal: str,
+) -> dict[str, str]:
+    return {
+        "bucket": str(bucket or "").strip(),
+        "goal": str(goal or "").strip(),
+        "title": str(title or "Next step").strip() or "Next step",
+        "command": _canonicalize_plan_command(command),
+        "why": str(why or "").strip(),
+        "expected_effect": str(expected_effect or "").strip(),
+        "priority": _normalize_plan_priority(priority),
+    }
+
+
+def _plan_score(step: dict[str, str]) -> int:
+    bucket = str(step.get("bucket") or "").strip()
+    priority = _normalize_plan_priority(step.get("priority"))
+    score = int(_PLAN_BUCKET_SCORE.get(bucket, 100))
+    score += int(_PLAN_PRIORITY_SCORE.get(priority, 0))
+    if str(step.get("command") or "").strip():
+        score += 5
+    if _plan_field_name_from_command(str(step.get("command") or "")) in _PLAN_LOW_VALUE_FIELDS:
+        score -= 80
+    return score
+
+
+def _build_usability_candidates(
+    *,
+    profile: str,
+    analysis_payload: dict[str, Any],
+) -> list[dict[str, str]]:
+    candidates: list[dict[str, str]] = []
+    entity_crud = analysis_payload.get("entity_crud_status") if isinstance(analysis_payload.get("entity_crud_status"), dict) else {}
+    preferred_field_map: dict[str, list[str]] = {
+        "todo": ["priority", "description", "status", "due_date"],
+        "bookmark": ["category", "tags", "description", "pinned"],
+        "diary": ["mood", "summary", "tags"],
+        "generic": ["description", "status", "priority"],
+    }
+    preferred_fields = preferred_field_map.get(profile, preferred_field_map["generic"])
+    for entity, info in entity_crud.items():
+        if not isinstance(info, dict):
+            continue
+        entity_name = str(entity or "").strip()
+        if not entity_name:
+            continue
+        missing_useful = [str(item).strip().lower() for item in (info.get("missing_useful_fields") or []) if str(item).strip()]
+        if not missing_useful:
+            continue
+        for field in preferred_fields:
+            if field in missing_useful and field not in _PLAN_LOW_VALUE_FIELDS:
+                candidates.append(
+                    _plan_candidate_step(
+                        bucket="usability_gap",
+                        goal="improve_user_flow",
+                        title=f"Add useful {field} for {entity_name}",
+                        command=f"/add_field {entity_name} {field}:string",
+                        why=f"{entity_name} needs a user-facing field ({field}) to improve practical workflow.",
+                        expected_effect=f"Improves usability and filtering quality for {entity_name}.",
+                        priority="medium",
+                    )
+                )
+                break
+
+    if profile == "bookmark":
+        candidates.append(
+            _plan_candidate_step(
+                bucket="usability_gap",
+                goal="improve_discovery_flow",
+                title="Add bookmark search endpoint",
+                command="/add_api GET /bookmarks/search",
+                why="Bookmark projects benefit from quick retrieval by keyword or category.",
+                expected_effect="Enables organization/search-oriented bookmark discovery flow.",
+                priority="medium",
+            )
+        )
+    if profile == "todo":
+        candidates.append(
+            _plan_candidate_step(
+                bucket="usability_gap",
+                goal="improve_task_management_flow",
+                title="Add task filtering endpoint",
+                command="/add_api GET /tasks/search",
+                why="Task projects need filter/search support for practical daily use.",
+                expected_effect="Improves task finding and prioritization workflows.",
+                priority="medium",
+            )
+        )
+    if profile == "diary":
+        candidates.append(
+            _plan_candidate_step(
+                bucket="usability_gap",
+                goal="improve_entry_reflection_flow",
+                title="Add diary search endpoint",
+                command="/add_api GET /entries/search",
+                why="Diary projects need quick lookup across past entries.",
+                expected_effect="Improves recall and navigation through entry history.",
+                priority="medium",
+            )
+        )
+    return candidates
+
+
+def _build_runtime_drift_candidate(
+    *,
+    analysis_payload: dict[str, Any],
+    verification_payload: dict[str, Any],
+) -> dict[str, str] | None:
+    latest_status = str(verification_payload.get("latest_status") or "").strip().upper()
+    latest_issues = verification_payload.get("latest_issues") if isinstance(verification_payload.get("latest_issues"), list) else []
+    runtime_reflection = str(verification_payload.get("runtime_reflection") or "").strip()
+    drift_summary = str(verification_payload.get("drift_summary") or "").strip()
+    has_drift_signal = latest_status in {"PARTIAL", "FAILED"} or bool(latest_issues) or bool(runtime_reflection) or bool(drift_summary)
+    if not has_drift_signal:
+        return None
+    next_action = analysis_payload.get("next_action") if isinstance(analysis_payload.get("next_action"), dict) else {}
+    suggested = _canonicalize_plan_command(next_action.get("command"))
+    command = suggested or "/fix"
+    reason_fragments = [str(item).strip() for item in latest_issues if str(item).strip()]
+    reason = reason_fragments[0] if reason_fragments else drift_summary or runtime_reflection or "Verification reported runtime/spec drift."
+    return _plan_candidate_step(
+        bucket="runtime_drift_gap",
+        goal="resolve_runtime_drift",
+        title="Resolve runtime and verification drift",
+        command=command,
+        why=reason,
+        expected_effect="Aligns runtime behavior with expected spec and improves verification stability.",
+        priority="high",
+    )
+
+
+def _build_saved_plan_candidates(plan_row: dict[str, Any]) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    phases = plan_row.get("phases") if isinstance(plan_row.get("phases"), list) else []
+    for phase in phases:
+        if not isinstance(phase, dict):
+            continue
+        title = str(phase.get("title") or "Saved plan step").strip() or "Saved plan step"
+        for step in (phase.get("steps") or []):
+            command = _canonicalize_plan_command(step)
+            if not command:
+                continue
+            out.append(
+                _plan_candidate_step(
+                    bucket="saved_plan_gap",
+                    goal="continue_saved_plan",
+                    title=title,
+                    command=command,
+                    why="Previously generated plan step that still appears actionable.",
+                    expected_effect="Continues execution of a previously planned improvement.",
+                    priority="low",
+                )
+            )
+    return out
+
+
 def _build_plan_overview(
     project_dir: Path,
     *,
     analysis_payload: dict[str, Any],
     auto_summary: dict[str, Any],
+    spec_payload: dict[str, Any],
+    verification_payload: dict[str, Any],
 ) -> dict[str, Any]:
     plan_row = _load_saved_plan_payload(project_dir)
     explanation = (
@@ -647,62 +1012,156 @@ def _build_plan_overview(
         if isinstance(analysis_payload.get("next_action_explanation"), dict)
         else {}
     )
-    goal = str(explanation.get("gap_type") or auto_summary.get("plan_goal") or "").strip()
-    priority = str(explanation.get("priority") or "").strip().lower()
-    why = str(explanation.get("reason_summary") or auto_summary.get("plan_reason") or "").strip()
-    expected_effect = str(explanation.get("expected_effect") or "").strip()
+    profile = _detect_plan_profile(analysis_payload, spec_payload, project_dir.name)
+    plan_state = _build_plan_state(analysis_payload=analysis_payload, spec_payload=spec_payload)
 
-    steps: list[dict[str, str]] = []
-    phases = plan_row.get("phases") if isinstance(plan_row.get("phases"), list) else []
-    for phase in phases:
-        if not isinstance(phase, dict):
+    raw_candidates: list[dict[str, str]] = []
+    for item in (analysis_payload.get("suggestions") or []):
+        if not isinstance(item, dict):
             continue
-        title = str(phase.get("title") or "Plan step").strip() or "Plan step"
-        phase_steps = phase.get("steps") if isinstance(phase.get("steps"), list) else []
-        for phase_step in phase_steps:
-            command = str(phase_step or "").strip()
-            if not command:
-                continue
-            steps.append(
-                {
-                    "title": title,
-                    "why": why,
-                    "command": command,
-                }
+        kind = str(item.get("kind") or "").strip().lower()
+        message = str(item.get("message") or "").strip()
+        command = _canonicalize_plan_command(item.get("command"))
+        if not command or kind in {"none", ""}:
+            continue
+        if kind in {"relation_page_behavior", "relation_scoped_api", "relation_placeholder_page"}:
+            bucket = "relation_gap"
+            goal = "close_relation_gap"
+            title = "Complete relation flow"
+        elif kind in {"missing_entity", "missing_crud_api", "missing_page", "placeholder_page"}:
+            bucket = "crud_gap"
+            goal = "complete_crud_flow"
+            title = "Close CRUD/page gap"
+        else:
+            bucket = "usability_gap"
+            goal = "improve_user_flow"
+            title = "Improve usability"
+        priority = "high" if bucket in {"crud_gap", "relation_gap"} else "medium"
+        raw_candidates.append(
+            _plan_candidate_step(
+                bucket=bucket,
+                goal=goal,
+                title=title,
+                command=command,
+                why=message or str(explanation.get("reason_summary") or "").strip(),
+                expected_effect=str(explanation.get("expected_effect") or "").strip() or "Improves project completeness in the next iteration.",
+                priority=priority,
             )
+        )
+
+    visualization_gaps = analysis_payload.get("visualization_gaps") if isinstance(analysis_payload.get("visualization_gaps"), list) else []
+    for row in visualization_gaps:
+        if not isinstance(row, dict):
+            continue
+        gap_type = str(row.get("gap_type") or "").strip().lower()
+        if not gap_type.startswith("missing_relation") and gap_type != "relation_page_placeholder":
+            continue
+        command = _canonicalize_plan_command(row.get("command"))
+        if not command:
+            continue
+        raw_candidates.append(
+            _plan_candidate_step(
+                bucket="relation_gap",
+                goal="close_relation_gap",
+                title="Close relation gap",
+                command=command,
+                why=str(row.get("actionable") or row.get("gap_type") or "Relation flow is incomplete.").strip(),
+                expected_effect="Improves relation-aware API/page behavior for connected entities.",
+                priority=str(row.get("priority") or "high"),
+            )
+        )
+
+    raw_candidates.extend(_build_usability_candidates(profile=profile, analysis_payload=analysis_payload))
+
+    runtime_candidate = _build_runtime_drift_candidate(
+        analysis_payload=analysis_payload,
+        verification_payload=verification_payload,
+    )
+    if runtime_candidate is not None:
+        raw_candidates.append(runtime_candidate)
+
+    raw_candidates.extend(_build_saved_plan_candidates(plan_row))
+
+    planned_steps = auto_summary.get("planned_steps") if isinstance(auto_summary.get("planned_steps"), list) else []
+    for item in planned_steps:
+        if not isinstance(item, dict):
+            continue
+        command = _canonicalize_plan_command(item.get("command"))
+        if not command:
+            continue
+        raw_candidates.append(
+            _plan_candidate_step(
+                bucket="saved_plan_gap",
+                goal=str(auto_summary.get("plan_goal") or "continue_auto_plan").strip().lower() or "continue_auto_plan",
+                title="Continue auto plan",
+                command=command,
+                why=str(auto_summary.get("plan_reason") or "").strip() or "Auto plan identified this step as useful.",
+                expected_effect="Continues the last auto-planned improvement path.",
+                priority="low",
+            )
+        )
+
+    deduped: list[dict[str, str]] = []
+    seen_keys: set[str] = set()
+    for row in raw_candidates:
+        command = _canonicalize_plan_command(row.get("command"))
+        if not command:
+            continue
+        if _is_plan_command_already_satisfied(command, plan_state):
+            continue
+        key = command
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        normalized = dict(row)
+        normalized["command"] = command
+        deduped.append(normalized)
+
+    deduped = [
+        item
+        for item in deduped
+        if _plan_field_name_from_command(str(item.get("command") or "")) not in _PLAN_LOW_VALUE_FIELDS
+    ]
+
+    ranked = sorted(
+        deduped,
+        key=lambda row: (
+            -_plan_score(row),
+            str(row.get("bucket") or ""),
+            str(row.get("command") or ""),
+        ),
+    )
+    steps = ranked[:3]
 
     if not steps:
-        planned_steps = auto_summary.get("planned_steps") if isinstance(auto_summary.get("planned_steps"), list) else []
-        for item in planned_steps:
-            if not isinstance(item, dict):
-                continue
-            command = str(item.get("command") or "").strip()
-            if not command:
-                continue
-            kind = str(item.get("kind") or "").strip()
-            title = kind.replace("_", " ").strip().title() if kind else "Planned step"
-            steps.append(
-                {
-                    "title": title,
-                    "why": why,
-                    "command": command,
-                }
-            )
+        return {
+            "goal": "none",
+            "priority": "none",
+            "why": "No immediate suggestions.",
+            "expected_effect": "No immediate action is needed.",
+            "steps": [],
+        }
 
-    if not steps:
-        next_action = analysis_payload.get("next_action") if isinstance(analysis_payload.get("next_action"), dict) else {}
-        command = str(next_action.get("command") or "").strip()
-        if command:
-            steps.append({"title": "Next action", "why": why, "command": command})
-
-    if not goal and not priority and not why and not expected_effect and not steps:
-        return {}
+    top = steps[0]
+    goal = str(top.get("goal") or "general_improvement").strip() or "general_improvement"
+    priority = _normalize_plan_priority(top.get("priority"))
+    why = str(top.get("why") or "").strip() or str(explanation.get("reason_summary") or "").strip()
+    expected_effect = str(top.get("expected_effect") or "").strip() or str(explanation.get("expected_effect") or "").strip()
     return {
         "goal": goal,
         "priority": priority,
         "why": why,
         "expected_effect": expected_effect,
-        "steps": steps,
+        "steps": [
+            {
+                "title": str(row.get("title") or "Plan step").strip() or "Plan step",
+                "command": str(row.get("command") or "").strip(),
+                "why": str(row.get("why") or "").strip(),
+                "expected_effect": str(row.get("expected_effect") or "").strip(),
+                "priority": _normalize_plan_priority(row.get("priority")),
+            }
+            for row in steps
+        ],
     }
 
 
@@ -1349,14 +1808,16 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
             spec_payload=spec if isinstance(spec, dict) else {},
             analysis_payload=analysis if isinstance(analysis, dict) else {},
         )
+        recent_evolution = summarize_recent_evolution(spec, limit=5)
+        evolution_history = _build_evolution_history(recent_runs, recent_evolution, auto_summary=auto_summary)
+        verification_overview = _build_verification_overview(recent_runs)
         plan_overview = _build_plan_overview(
             project_dir,
             analysis_payload=analysis if isinstance(analysis, dict) else {},
             auto_summary=auto_summary,
+            spec_payload=spec if isinstance(spec, dict) else {},
+            verification_payload=verification_overview if isinstance(verification_overview, dict) else {},
         )
-        recent_evolution = summarize_recent_evolution(spec, limit=5)
-        evolution_history = _build_evolution_history(recent_runs, recent_evolution, auto_summary=auto_summary)
-        verification_overview = _build_verification_overview(recent_runs)
         architecture = {
             "app_shape": str(state_payload.get("architecture_app_shape") or spec.get("shape") or "unknown").strip() or "unknown",
             "recommended_template": (

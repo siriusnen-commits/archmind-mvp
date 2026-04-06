@@ -377,11 +377,241 @@ def test_ui_project_detail_includes_design_and_plan_when_available(monkeypatch, 
     assert payload["design"]["apis"] == ["GET /tasks", "POST /tasks"]
     assert payload["design"]["pages"] == ["tasks/list", "tasks/new"]
     assert "iterative generation" in payload["design"]["notes"]
-    assert payload["plan"]["goal"] == "missing_crud_api"
-    assert payload["plan"]["priority"] == "high"
-    assert "Task detail mutation flow is incomplete" in payload["plan"]["why"]
+    assert payload["plan"]["goal"] != "none"
+    assert payload["plan"]["priority"] in {"high", "medium", "low"}
     assert payload["plan"]["steps"][0]["title"] == "Core APIs"
     assert payload["plan"]["steps"][0]["command"] == "/add_api GET /tasks/{id}"
+
+
+def test_ui_plan_generation_todo_suggests_meaningful_next_fields_or_search(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "todo-plan-quality")
+    archmind_dir = project_dir / ".archmind"
+    (archmind_dir / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "project_name": "todo-plan-quality",
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "domains": ["tasks"],
+                "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": [
+                    "GET /tasks",
+                    "POST /tasks",
+                    "GET /tasks/{id}",
+                    "PATCH /tasks/{id}",
+                    "DELETE /tasks/{id}",
+                ],
+                "frontend_pages": ["tasks/list", "tasks/new", "tasks/detail"],
+                "evolution": {"version": 1, "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    payload = client.get("/ui/projects/todo-plan-quality").json()
+    commands = [str(item.get("command") or "") for item in (payload.get("plan", {}).get("steps") or []) if isinstance(item, dict)]
+    assert payload["plan"]["goal"] != "none"
+    assert any(
+        command in {"/add_field Task priority:string", "/add_field Task description:string", "/add_api GET /tasks/search"}
+        for command in commands
+    )
+
+
+def test_ui_plan_generation_bookmark_suggests_organization_or_search_improvements(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "bookmark-plan-quality")
+    archmind_dir = project_dir / ".archmind"
+    (archmind_dir / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "project_name": "bookmark-plan-quality",
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "domains": ["bookmarks"],
+                "entities": [{"name": "Bookmark", "fields": [{"name": "title", "type": "string"}, {"name": "url", "type": "string"}]}],
+                "api_endpoints": [
+                    "GET /bookmarks",
+                    "POST /bookmarks",
+                    "GET /bookmarks/{id}",
+                    "PATCH /bookmarks/{id}",
+                    "DELETE /bookmarks/{id}",
+                ],
+                "frontend_pages": ["bookmarks/list", "bookmarks/new", "bookmarks/detail"],
+                "evolution": {"version": 1, "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    payload = client.get("/ui/projects/bookmark-plan-quality").json()
+    commands = [str(item.get("command") or "") for item in (payload.get("plan", {}).get("steps") or []) if isinstance(item, dict)]
+    assert payload["plan"]["goal"] != "none"
+    assert any(
+        command in {"/add_api GET /bookmarks/search", "/add_field Bookmark description:string"}
+        for command in commands
+    )
+
+
+def test_ui_plan_generation_diary_suggests_meaningful_next_improvements(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "diary-plan-quality")
+    archmind_dir = project_dir / ".archmind"
+    (archmind_dir / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "project_name": "diary-plan-quality",
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "domains": ["diary"],
+                "entities": [{"name": "Entry", "fields": [{"name": "title", "type": "string"}, {"name": "content", "type": "string"}]}],
+                "api_endpoints": [
+                    "GET /entries",
+                    "POST /entries",
+                    "GET /entries/{id}",
+                    "PATCH /entries/{id}",
+                    "DELETE /entries/{id}",
+                ],
+                "frontend_pages": ["entries/list", "entries/new", "entries/detail"],
+                "evolution": {"version": 1, "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    payload = client.get("/ui/projects/diary-plan-quality").json()
+    commands = [str(item.get("command") or "") for item in (payload.get("plan", {}).get("steps") or []) if isinstance(item, dict)]
+    assert payload["plan"]["goal"] != "none"
+    assert any(command in {"/add_api GET /entries/search", "/add_field Entry mood:string"} for command in commands)
+
+
+def test_ui_plan_generation_avoids_duplicates_and_satisfied_steps(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "plan-dedupe")
+    archmind_dir = project_dir / ".archmind"
+    (archmind_dir / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "project_name": "plan-dedupe",
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "domains": ["tasks"],
+                "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": [
+                    "GET /tasks",
+                    "POST /tasks",
+                    "GET /tasks/{id}",
+                    "PATCH /tasks/{id}",
+                    "DELETE /tasks/{id}",
+                ],
+                "frontend_pages": ["tasks/list", "tasks/new", "tasks/detail"],
+                "evolution": {"version": 1, "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind_dir / "plan_execution.json").write_text(
+        json.dumps({"phases": [{"title": "Old Plan", "steps": ["/add_field Task priority:string", "/add_field Task priority:string", "/add_page tasks/list"]}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    payload = client.get("/ui/projects/plan-dedupe").json()
+    commands = [str(item.get("command") or "") for item in (payload.get("plan", {}).get("steps") or []) if isinstance(item, dict)]
+    assert len(commands) == len(set(commands))
+    assert "/add_page tasks/list" not in commands
+
+
+def test_ui_plan_generation_suppresses_low_value_metadata_when_higher_value_exists(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "plan-low-value-filter")
+    archmind_dir = project_dir / ".archmind"
+    (archmind_dir / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "project_name": "plan-low-value-filter",
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "domains": ["tasks"],
+                "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": [
+                    "GET /tasks",
+                    "POST /tasks",
+                    "GET /tasks/{id}",
+                    "PATCH /tasks/{id}",
+                    "DELETE /tasks/{id}",
+                ],
+                "frontend_pages": ["tasks/list", "tasks/new", "tasks/detail"],
+                "evolution": {"version": 1, "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind_dir / "plan_execution.json").write_text(
+        json.dumps({"phases": [{"title": "Legacy Metadata", "steps": ["/add_field Task created_at:datetime"]}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    payload = client.get("/ui/projects/plan-low-value-filter").json()
+    commands = [str(item.get("command") or "") for item in (payload.get("plan", {}).get("steps") or []) if isinstance(item, dict)]
+    assert "/add_field Task created_at:datetime" not in commands
+    assert any(command in {"/add_field Task priority:string", "/add_field Task description:string"} for command in commands)
+
+
+def test_ui_plan_generation_allows_no_immediate_action_for_truly_complete_project(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "plan-complete")
+    archmind_dir = project_dir / ".archmind"
+    (archmind_dir / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "project_name": "plan-complete",
+                "shape": "fullstack",
+                "template": "fullstack-ddd",
+                "domains": ["tasks"],
+                "entities": [
+                    {
+                        "name": "Task",
+                        "fields": [
+                            {"name": "title", "type": "string"},
+                            {"name": "content", "type": "string"},
+                            {"name": "description", "type": "string"},
+                            {"name": "priority", "type": "string"},
+                            {"name": "status", "type": "string"},
+                            {"name": "due_date", "type": "datetime"},
+                        ],
+                    }
+                ],
+                "api_endpoints": [
+                    "GET /tasks",
+                    "POST /tasks",
+                    "GET /tasks/{id}",
+                    "PATCH /tasks/{id}",
+                    "DELETE /tasks/{id}",
+                    "GET /tasks/search",
+                ],
+                "frontend_pages": ["tasks/list", "tasks/new", "tasks/detail"],
+                "evolution": {"version": 1, "history": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    payload = client.get("/ui/projects/plan-complete").json()
+    assert payload["plan"]["goal"] == "none"
+    assert payload["plan"]["priority"] == "none"
+    assert payload["plan"]["steps"] == []
 
 
 def test_ui_project_detail_summary_counts_match_analysis_lists(monkeypatch, tmp_path: Path) -> None:
