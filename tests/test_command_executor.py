@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from archmind.command_executor import _execute_auto_command, execute_command
 from archmind.execution_history import load_recent_execution_events
@@ -111,7 +112,7 @@ def test_execute_command_add_field_verification_is_verified_only_when_frontend_r
 def test_execute_command_auto_keeps_partial_status_when_verification_is_not_verified(monkeypatch) -> None:
     monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: Path("/tmp/demo"))
 
-    def fake_auto_executor(project_dir: Path, *, project_name: str, source: str, run_id=None, requested_steps=None, auto_strategy=None):  # type: ignore[no-untyped-def]
+    def fake_auto_executor(project_dir: Path, *, project_name: str, source: str, run_id=None, auto_strategy=None):  # type: ignore[no-untyped-def]
         return {
             "ok": True,
             "project_name": project_name,
@@ -126,7 +127,7 @@ def test_execute_command_auto_keeps_partial_status_when_verification_is_not_veri
             },
         }
 
-    monkeypatch.setattr("archmind.command_executor._execute_auto_command", fake_auto_executor)
+    monkeypatch.setattr("archmind.command_executor._execute_auto_via_plan_flow", fake_auto_executor)
     out = execute_command("/auto", "demo", source="ui-next-run")
     assert out["ok"] is True
     assert out["auto_result"]["verification"]["overall_status"] == "PARTIAL"
@@ -338,15 +339,14 @@ def test_execute_command_push_failure_does_not_fail_evolution(monkeypatch) -> No
     assert "Hint: configure git credentials or token for GitHub push from this environment" in str(out["message_text"])
 
 
-def test_execute_command_auto_uses_auto_executor_and_skips_single_command_sync(monkeypatch) -> None:
+def test_execute_command_auto_uses_flow_executor_and_skips_single_command_sync(monkeypatch) -> None:
     monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: Path("/tmp/demo"))
     sync_calls: list[str] = []
 
-    def fake_auto_executor(project_dir: Path, *, project_name: str, source: str, run_id=None, requested_steps=None, auto_strategy=None):  # type: ignore[no-untyped-def]
+    def fake_auto_executor(project_dir: Path, *, project_name: str, source: str, run_id=None, auto_strategy=None):  # type: ignore[no-untyped-def]
         assert project_dir == Path("/tmp/demo")
         assert project_name == "demo"
         assert source == "ui-next-run"
-        assert requested_steps is None
         assert auto_strategy == "balanced"
         return {
             "ok": True,
@@ -357,7 +357,7 @@ def test_execute_command_auto_uses_auto_executor_and_skips_single_command_sync(m
             "auto_result": {"run_id": "auto-1", "strategy": "balanced", "executed": 1, "commands": ["/add_api GET /boards/{id}/cards"]},
         }
 
-    monkeypatch.setattr("archmind.command_executor._execute_auto_command", fake_auto_executor)
+    monkeypatch.setattr("archmind.command_executor._execute_auto_via_plan_flow", fake_auto_executor)
     monkeypatch.setattr("archmind.telegram_bot.sync_repo_after_evolution_command", lambda *_args, **_kwargs: sync_calls.append("called") or {"status": "SYNCED"})
 
     out = execute_command("/auto", "demo", source="ui-next-run")
@@ -373,7 +373,7 @@ def test_execute_command_auto_forwards_explicit_strategy(monkeypatch) -> None:
 
     captured: dict[str, str] = {}
 
-    def fake_auto_executor(project_dir: Path, *, project_name: str, source: str, run_id=None, requested_steps=None, auto_strategy=None):  # type: ignore[no-untyped-def]
+    def fake_auto_executor(project_dir: Path, *, project_name: str, source: str, run_id=None, auto_strategy=None):  # type: ignore[no-untyped-def]
         assert project_dir == Path("/tmp/demo")
         captured["strategy"] = str(auto_strategy or "")
         return {
@@ -385,11 +385,164 @@ def test_execute_command_auto_forwards_explicit_strategy(monkeypatch) -> None:
             "auto_result": {"run_id": "auto-2", "strategy": str(auto_strategy or "balanced"), "executed": 0, "commands": []},
         }
 
-    monkeypatch.setattr("archmind.command_executor._execute_auto_command", fake_auto_executor)
+    monkeypatch.setattr("archmind.command_executor._execute_auto_via_plan_flow", fake_auto_executor)
     out = execute_command("/auto", "demo", source="ui-next-run", auto_strategy="safe")
     assert out["ok"] is True
     assert captured["strategy"] == "safe"
     assert out["auto_result"]["strategy"] == "safe"
+
+
+def test_auto_triggers_plan_flow_execution_via_run_project_flow(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "demo"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: project_dir)
+
+    class _Detail:
+        plan = {
+            "flows": [
+                {
+                    "name": "Flow A",
+                    "steps": [{"id": "s1", "command": "/add_api GET /tasks"}],
+                }
+            ]
+        }
+
+    called: dict[str, Any] = {}
+
+    monkeypatch.setattr("archmind.project_query.build_project_detail", lambda _project_dir: _Detail())
+
+    def _fake_run_project_flow(project_dir_arg: Path, flow_name: str, *, sync: bool | None = None):  # type: ignore[no-untyped-def]
+        called["project_dir"] = project_dir_arg
+        called["flow_name"] = flow_name
+        called["sync"] = sync
+        return {
+            "ok": True,
+            "started": True,
+            "detail": "Flow execution completed",
+            "flow_execution": {
+                "flow_name": flow_name,
+                "status": "completed",
+                "steps": [{"id": "s1", "status": "done", "command": "/add_api GET /tasks"}],
+            },
+        }
+
+    monkeypatch.setattr("archmind.project_query.run_project_flow", _fake_run_project_flow)
+    monkeypatch.setattr("archmind.state.load_state", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("archmind.state.write_state", lambda *_args, **_kwargs: None)
+
+    out = execute_command("/auto", "demo", source="ui-next-run")
+    assert out["ok"] is True
+    assert called["project_dir"] == project_dir
+    assert called["flow_name"] == "Flow A"
+    assert called["sync"] is True
+
+
+def test_auto_selects_first_flow_when_multiple_flows_exist(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "demo"
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    class _Detail:
+        plan = {
+            "flows": [
+                {"name": "First Flow", "steps": [{"id": "s1", "command": "/add_api GET /a"}]},
+                {"name": "Second Flow", "steps": [{"id": "s2", "command": "/add_api GET /b"}]},
+            ]
+        }
+
+    selected: dict[str, str] = {}
+    monkeypatch.setattr("archmind.project_query.build_project_detail", lambda _project_dir: _Detail())
+    monkeypatch.setattr("archmind.state.load_state", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("archmind.state.write_state", lambda *_args, **_kwargs: None)
+
+    def _fake_run_project_flow(_project_dir: Path, flow_name: str, *, sync: bool | None = None):  # type: ignore[no-untyped-def]
+        selected["flow_name"] = flow_name
+        return {"ok": True, "started": True, "detail": "done", "flow_execution": {"flow_name": flow_name, "status": "completed", "steps": []}}
+
+    monkeypatch.setattr("archmind.project_query.run_project_flow", _fake_run_project_flow)
+    monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: project_dir)
+    out_exec = execute_command("/auto", "demo", source="ui-next-run")
+    assert out_exec["ok"] is True
+    assert selected["flow_name"] == "First Flow"
+
+
+def test_auto_generates_plan_context_via_project_detail_when_missing(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "demo"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: project_dir)
+    monkeypatch.setattr("archmind.state.load_state", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("archmind.state.write_state", lambda *_args, **_kwargs: None)
+
+    calls = {"detail": 0}
+
+    class _Detail:
+        plan = {"flows": [{"name": "Generated Flow", "steps": [{"id": "s1", "command": "/add_api GET /tasks"}]}]}
+
+    def _fake_build_project_detail(_project_dir: Path):  # type: ignore[no-untyped-def]
+        calls["detail"] += 1
+        return _Detail()
+
+    monkeypatch.setattr("archmind.project_query.build_project_detail", _fake_build_project_detail)
+    monkeypatch.setattr(
+        "archmind.project_query.run_project_flow",
+        lambda _project_dir, flow_name, *, sync=None: {  # type: ignore[no-untyped-def]
+            "ok": True,
+            "started": True,
+            "detail": "done",
+            "flow_execution": {"flow_name": flow_name, "status": "completed", "steps": [{"id": "s1", "status": "done"}]},
+        },
+    )
+
+    out = execute_command("/auto", "demo", source="ui-next-run")
+    assert out["ok"] is True
+    assert calls["detail"] >= 1
+    assert out["auto_result"]["selected_flow"] == "Generated Flow"
+
+
+def test_auto_reuses_flow_execution_state_and_stops_on_failure(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "demo"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: project_dir)
+    monkeypatch.setattr("archmind.state.load_state", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("archmind.state.write_state", lambda *_args, **_kwargs: None)
+
+    class _Detail:
+        plan = {
+            "flows": [
+                {
+                    "name": "Failing Flow",
+                    "steps": [
+                        {"id": "s1", "command": "/add_api GET /tasks"},
+                        {"id": "s2", "command": "/add_page tasks/list"},
+                    ],
+                }
+            ]
+        }
+
+    monkeypatch.setattr("archmind.project_query.build_project_detail", lambda _project_dir: _Detail())
+    monkeypatch.setattr(
+        "archmind.project_query.run_project_flow",
+        lambda _project_dir, flow_name, *, sync=None: {  # type: ignore[no-untyped-def]
+            "ok": True,
+            "started": True,
+            "detail": "Flow execution completed",
+            "flow_execution": {
+                "flow_name": flow_name,
+                "status": "failed",
+                "current_step": "s2",
+                "steps": [
+                    {"id": "s1", "status": "done", "command": "/add_api GET /tasks"},
+                    {"id": "s2", "status": "failed", "command": "/add_page tasks/list"},
+                ],
+            },
+        },
+    )
+
+    out = execute_command("/auto", "demo", source="ui-next-run")
+    assert out["ok"] is True
+    assert out["auto_result"]["selected_flow"] == "Failing Flow"
+    assert out["auto_result"]["stop_reason"] == "flow failed"
+    assert out["auto_result"]["verification"]["overall_status"] == "FAILED"
+    assert "s2" in str(out["auto_result"]["stop_explanation"])
 
 
 def test_auto_strategy_safe_stops_before_medium_priority_action(monkeypatch, tmp_path: Path) -> None:

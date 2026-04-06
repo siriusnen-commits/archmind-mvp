@@ -105,6 +105,205 @@ def _write_execution_event(
     )
 
 
+def _select_first_flow_from_plan(plan_payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+    flows = plan_payload.get("flows") if isinstance(plan_payload.get("flows"), list) else []
+    for flow in flows:
+        if not isinstance(flow, dict):
+            continue
+        name = str(flow.get("name") or "").strip()
+        steps = flow.get("steps") if isinstance(flow.get("steps"), list) else []
+        normalized_steps = [item for item in steps if isinstance(item, dict)]
+        if name and normalized_steps:
+            return name, normalized_steps
+    return "", []
+
+
+def _execute_auto_via_plan_flow(
+    project_dir: Path,
+    *,
+    project_name: str,
+    source: str,
+    run_id: str | None = None,
+    auto_strategy: str | None = None,
+) -> dict[str, Any]:
+    from archmind.project_query import build_project_detail, run_project_flow
+    from archmind.state import load_state, write_state
+
+    strategy = _normalize_auto_strategy(auto_strategy)
+    summary_lines: list[str] = [
+        "Auto flow execution",
+        f"Target Project: {project_dir.name}",
+        f"Strategy: {strategy}",
+        "",
+    ]
+
+    detail = build_project_detail(project_dir)
+    plan_payload = detail.plan if isinstance(getattr(detail, "plan", {}), dict) else {}
+    selected_flow_name, selected_flow_steps = _select_first_flow_from_plan(plan_payload if isinstance(plan_payload, dict) else {})
+
+    if not selected_flow_name:
+        stop_reason = "no flow available"
+        stop_explanation = "Plan has no executable flow. Run /plan after adding more project context."
+        auto_result = {
+            "run_id": run_id or f"auto-{project_dir.name}",
+            "strategy": strategy,
+            "executed": 0,
+            "commands": [],
+            "stop_reason": stop_reason,
+            "stop_explanation": stop_explanation,
+            "selected_flow": "",
+            "planned_steps": [],
+            "executed_steps": [],
+            "goal_satisfied": False,
+            "progress_made": False,
+            "progress_score": 0,
+            "verification": {
+                "overall_status": "PARTIAL",
+                "steps": [],
+                "issues": ["no executable flow"],
+                "runtime_reflection": "auto-flow",
+                "drift_summary": "no executable flow",
+            },
+        }
+        try:
+            state = load_state(project_dir) or {}
+            state["auto_last_result"] = auto_result
+            write_state(project_dir, state)
+        except Exception:
+            pass
+        summary_lines.extend(
+            [
+                "Summary",
+                "- Selected flow: (none)",
+                "- Progress: 0/0",
+                f"- Stopped: {stop_reason}",
+                f"- Stop explanation: {stop_explanation}",
+            ]
+        )
+        return {
+            "ok": True,
+            "project_name": project_name,
+            "detail": "Auto completed: no executable flow",
+            "message_text": "\n".join(summary_lines),
+            "repository_sync": {"status": "NOT_ATTEMPTED", "reason": "no executed changes"},
+            "auto_result": auto_result,
+            "verification": auto_result.get("verification"),
+        }
+
+    summary_lines.append(f"Selected flow: {selected_flow_name}")
+    run_result = run_project_flow(project_dir, selected_flow_name, sync=True)
+    execution = run_result.get("flow_execution") if isinstance(run_result.get("flow_execution"), dict) else {}
+    execution_steps = execution.get("steps") if isinstance(execution.get("steps"), list) else []
+    done_steps = [row for row in execution_steps if isinstance(row, dict) and str(row.get("status") or "").strip().lower() == "done"]
+    failed_step = next(
+        (
+            row
+            for row in execution_steps
+            if isinstance(row, dict) and str(row.get("status") or "").strip().lower() == "failed"
+        ),
+        None,
+    )
+    total_count = len([row for row in execution_steps if isinstance(row, dict)])
+    done_count = len(done_steps)
+    execution_status = str(execution.get("status") or "").strip().lower()
+    if execution_status == "failed":
+        stop_reason = "flow failed"
+        stop_explanation = (
+            f"Flow stopped on step '{str((failed_step or {}).get('id') or execution.get('current_step') or '').strip() or 'unknown'}'."
+        )
+    elif execution_status == "completed":
+        stop_reason = "flow completed"
+        stop_explanation = "Selected flow completed successfully."
+    else:
+        stop_reason = str(run_result.get("detail") or "flow execution stopped").strip() or "flow execution stopped"
+        stop_explanation = str(run_result.get("error") or "").strip() or stop_reason
+
+    summary_lines.append(f"Progress: {done_count}/{total_count}")
+    for idx, row in enumerate(execution_steps, start=1):
+        if not isinstance(row, dict):
+            continue
+        step_id = str(row.get("id") or f"step_{idx}").strip() or f"step_{idx}"
+        step_status = str(row.get("status") or "pending").strip().lower() or "pending"
+        summary_lines.append(f"- Step {idx}: {step_id} [{step_status}]")
+
+    summary_lines.extend(
+        [
+            "",
+            "Summary",
+            f"- Selected flow: {selected_flow_name}",
+            f"- Progress: {done_count}/{total_count}",
+            f"- Stopped: {stop_reason}",
+            f"- Stop explanation: {stop_explanation}",
+        ]
+    )
+
+    planned_steps = [
+        {
+            "command": str(row.get("command") or "").strip(),
+            "priority": str(row.get("priority") or "").strip().lower() or "unknown",
+            "kind": str(row.get("type") or "").strip().lower(),
+        }
+        for row in selected_flow_steps
+        if isinstance(row, dict) and str(row.get("command") or "").strip()
+    ]
+    done_step_ids = {str(item.get("id") or "").strip() for item in done_steps if isinstance(item, dict)}
+    done_commands = {str(item.get("command") or "").strip() for item in done_steps if isinstance(item, dict)}
+    executed_steps = [
+        {
+            "command": str(row.get("command") or "").strip(),
+            "flow_step_id": str(row.get("id") or "").strip(),
+        }
+        for row in selected_flow_steps
+        if isinstance(row, dict)
+        and str(row.get("command") or "").strip()
+        and (
+            str(row.get("id") or "").strip() in done_step_ids
+            or str(row.get("command") or "").strip() in done_commands
+        )
+    ]
+
+    verification_status = "FAILED" if execution_status == "failed" else ("VERIFIED" if execution_status == "completed" else "PARTIAL")
+    auto_result = {
+        "run_id": run_id or f"auto-{project_dir.name}",
+        "strategy": strategy,
+        "executed": done_count,
+        "commands": [str(row.get("command") or "").strip() for row in done_steps if isinstance(row, dict) and str(row.get("command") or "").strip()],
+        "stop_reason": stop_reason,
+        "stop_explanation": stop_explanation,
+        "selected_flow": selected_flow_name,
+        "planned_steps": planned_steps,
+        "executed_steps": executed_steps,
+        "goal_satisfied": execution_status == "completed",
+        "progress_made": done_count > 0,
+        "progress_score": done_count,
+        "verification": {
+            "overall_status": verification_status,
+            "steps": [],
+            "issues": [stop_explanation] if execution_status == "failed" else [],
+            "runtime_reflection": "auto-flow",
+            "drift_summary": stop_explanation,
+        },
+        "flow_execution": execution,
+    }
+
+    try:
+        state = load_state(project_dir) or {}
+        state["auto_last_result"] = auto_result
+        write_state(project_dir, state)
+    except Exception:
+        pass
+
+    return {
+        "ok": bool(run_result.get("ok")),
+        "project_name": project_name,
+        "detail": str(run_result.get("detail") or f"Auto completed: {stop_reason}"),
+        "message_text": "\n".join(summary_lines),
+        "repository_sync": {"status": "NOT_ATTEMPTED", "reason": "auto uses flow execution path"},
+        "auto_result": auto_result,
+        "verification": auto_result.get("verification"),
+    }
+
+
 def _execute_auto_command(
     project_dir: Path,
     *,
@@ -804,19 +1003,11 @@ def execute_command(
 
         result: dict[str, Any]
         if auto_match:
-            raw_steps = str(auto_match.group(1) or "").strip()
-            requested_steps = None
-            if raw_steps:
-                try:
-                    requested_steps = int(raw_steps)
-                except Exception:
-                    requested_steps = None
-            result = _execute_auto_command(
+            result = _execute_auto_via_plan_flow(
                 project_dir,
                 project_name=key,
                 source=source,
                 run_id=run_id,
-                requested_steps=requested_steps,
                 auto_strategy=normalized_auto_strategy,
             )
         elif entity_match:

@@ -183,6 +183,7 @@ def start_flow_execution(
     project_id: str,
     flow_name: str,
     steps: list[dict[str, Any]],
+    sync: bool | None = None,
 ) -> dict[str, Any]:
     lock = _flow_lock(project_dir)
     with lock:
@@ -199,7 +200,8 @@ def start_flow_execution(
         initial = _build_initial_execution(project_id=project_id, flow_name=flow_name, steps=steps)
         _persist_flow_execution(project_dir, initial)
 
-    if str(os.getenv("ARCHMIND_FLOW_EXEC_SYNC", "") or "").strip() == "1":
+    force_sync = bool(sync) if isinstance(sync, bool) else (str(os.getenv("ARCHMIND_FLOW_EXEC_SYNC", "") or "").strip() == "1")
+    if force_sync:
         _run_flow_execution(project_dir, project_id)
         latest = load_flow_execution(project_dir)
         return {
