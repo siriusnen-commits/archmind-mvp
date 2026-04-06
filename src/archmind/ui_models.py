@@ -95,6 +95,8 @@ class ProjectDetailResponse(BaseModel):
     recent_runs: list[dict[str, Any]] = Field(default_factory=list)
     evolution_history: list[dict[str, Any]] = Field(default_factory=list)
     architecture: dict[str, Any] = Field(default_factory=dict)
+    design: dict[str, Any] = Field(default_factory=dict)
+    plan: dict[str, Any] = Field(default_factory=dict)
     logs: dict[str, Any] = Field(default_factory=dict)
     auto_summary: dict[str, Any] = Field(default_factory=dict)
     verification: dict[str, Any] = Field(default_factory=dict)
