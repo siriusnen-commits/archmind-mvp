@@ -1875,6 +1875,175 @@ def test_ui_project_detail_includes_flow_execution_and_reload_returns_same_state
     assert execution_a == execution_b
 
 
+def test_ui_resume_flow_skips_done_steps_and_starts_from_failed_step(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "flow-resume-failed")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setenv("ARCHMIND_FLOW_EXEC_SYNC", "1")
+
+    (project_dir / ".archmind" / "flow_execution.json").write_text(
+        json.dumps(
+            {
+                "project_id": "flow-resume-failed",
+                "flow_name": "Core Flow",
+                "status": "failed",
+                "current_step": "s2",
+                "steps": [
+                    {"id": "s1", "title": "Step1", "command": "/add_api GET /notes", "status": "done"},
+                    {"id": "s2", "title": "Step2", "command": "/add_page notes/list", "status": "failed"},
+                    {"id": "s3", "title": "Step3", "command": "/add_page notes/detail", "status": "pending"},
+                ],
+                "updated_at": "2026-04-06T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    executed: list[str] = []
+
+    def _fake_execute(command: str, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        executed.append(command)
+        return {"ok": True, "detail": "ok"}
+
+    monkeypatch.setattr("archmind.flow_execution.execute_command", _fake_execute)
+
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/flow-resume-failed/resume_flow")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["flow_execution"]["status"] == "completed"
+    assert executed == ["/add_page notes/list", "/add_page notes/detail"]
+    statuses = {step["id"]: step["status"] for step in payload["flow_execution"]["steps"]}
+    assert statuses["s1"] == "done"
+    assert statuses["s2"] == "done"
+    assert statuses["s3"] == "done"
+
+
+def test_ui_resume_flow_resets_running_step_and_resumes_from_it(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "flow-resume-running")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setenv("ARCHMIND_FLOW_EXEC_SYNC", "1")
+
+    (project_dir / ".archmind" / "flow_execution.json").write_text(
+        json.dumps(
+            {
+                "project_id": "flow-resume-running",
+                "flow_name": "Core Flow",
+                "status": "running",
+                "current_step": "s2",
+                "steps": [
+                    {"id": "s1", "title": "Step1", "command": "/add_api GET /notes", "status": "done"},
+                    {"id": "s2", "title": "Step2", "command": "/add_page notes/list", "status": "running"},
+                    {"id": "s3", "title": "Step3", "command": "/add_page notes/detail", "status": "pending"},
+                ],
+                "updated_at": "2026-04-06T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    executed: list[str] = []
+
+    def _fake_execute(command: str, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        executed.append(command)
+        return {"ok": True, "detail": "ok"}
+
+    monkeypatch.setattr("archmind.flow_execution.execute_command", _fake_execute)
+
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/flow-resume-running/resume_flow")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["flow_execution"]["status"] == "completed"
+    assert executed == ["/add_page notes/list", "/add_page notes/detail"]
+
+
+def test_ui_resume_flow_stops_on_failure_and_keeps_later_steps_pending(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "flow-resume-stop")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setenv("ARCHMIND_FLOW_EXEC_SYNC", "1")
+
+    (project_dir / ".archmind" / "flow_execution.json").write_text(
+        json.dumps(
+            {
+                "project_id": "flow-resume-stop",
+                "flow_name": "Core Flow",
+                "status": "failed",
+                "current_step": "s2",
+                "steps": [
+                    {"id": "s1", "title": "Step1", "command": "/add_api GET /notes", "status": "done"},
+                    {"id": "s2", "title": "Step2", "command": "/add_page notes/list", "status": "failed"},
+                    {"id": "s3", "title": "Step3", "command": "/add_page notes/detail", "status": "pending"},
+                ],
+                "updated_at": "2026-04-06T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    calls = {"count": 0}
+
+    def _fake_execute(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        calls["count"] += 1
+        return {"ok": False, "error": "failed"}
+
+    monkeypatch.setattr("archmind.flow_execution.execute_command", _fake_execute)
+
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/flow-resume-stop/resume_flow")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["flow_execution"]["status"] == "failed"
+    statuses = {step["id"]: step["status"] for step in payload["flow_execution"]["steps"]}
+    assert statuses["s1"] == "done"
+    assert statuses["s2"] == "failed"
+    assert statuses["s3"] == "pending"
+    assert calls["count"] == 1
+
+
+def test_ui_resume_flow_completes_remaining_steps(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "flow-resume-complete")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setenv("ARCHMIND_FLOW_EXEC_SYNC", "1")
+
+    (project_dir / ".archmind" / "flow_execution.json").write_text(
+        json.dumps(
+            {
+                "project_id": "flow-resume-complete",
+                "flow_name": "Core Flow",
+                "status": "failed",
+                "current_step": "s2",
+                "steps": [
+                    {"id": "s1", "title": "Step1", "command": "/add_api GET /notes", "status": "done"},
+                    {"id": "s2", "title": "Step2", "command": "/add_page notes/list", "status": "failed"},
+                    {"id": "s3", "title": "Step3", "command": "/add_page notes/detail", "status": "pending"},
+                ],
+                "updated_at": "2026-04-06T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("archmind.flow_execution.execute_command", lambda *_args, **_kwargs: {"ok": True, "detail": "ok"})
+
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/flow-resume-complete/resume_flow")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["flow_execution"]["status"] == "completed"
+    statuses = {step["id"]: step["status"] for step in payload["flow_execution"]["steps"]}
+    assert statuses["s1"] == "done"
+    assert statuses["s2"] == "done"
+    assert statuses["s3"] == "done"
+
+
 def test_ui_add_entity_rejects_empty_name_safely(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     _make_project(projects_root, "entity-empty")
@@ -2386,6 +2555,8 @@ def test_plan_overview_component_renders_run_flow_and_flow_progress_ui() -> None
     source = Path("frontend/components/PlanOverviewCard.tsx").read_text(encoding="utf-8")
     assert "Run Flow" in source
     assert "Running Flow..." in source
+    assert "Resume" in source
+    assert "Resuming..." in source
     assert "Progress:" in source
     assert "Running:" in source
     assert "Step {idx + 1}" in source
@@ -2398,6 +2569,7 @@ def test_plan_overview_flow_execution_uses_backend_run_flow_and_status_payload()
     assert "flowExecution?: FlowExecution | null;" in source
     assert "executionStepStatusById" in source
     assert "/run_flow" in source
+    assert "/resume_flow" in source
     assert "JSON.stringify({ flow_name: normalizedFlowName })" in source
     assert "const hasActiveExecution = executionStatus === \"running\";" in source
     assert "setInterval(() => {" in source
@@ -2436,6 +2608,13 @@ def test_plan_run_flow_proxy_route_exists() -> None:
     source = Path("frontend/app/api/ui/projects/[project]/run_flow/route.ts").read_text(encoding="utf-8")
     assert "getBackendUiBase" in source
     assert "/run_flow" in source
+    assert "method: \"POST\"" in source
+
+
+def test_plan_resume_flow_proxy_route_exists() -> None:
+    source = Path("frontend/app/api/ui/projects/[project]/resume_flow/route.ts").read_text(encoding="utf-8")
+    assert "getBackendUiBase" in source
+    assert "/resume_flow" in source
     assert "method: \"POST\"" in source
 
 

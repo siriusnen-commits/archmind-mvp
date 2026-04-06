@@ -545,6 +545,72 @@ def test_auto_reuses_flow_execution_state_and_stops_on_failure(monkeypatch, tmp_
     assert "s2" in str(out["auto_result"]["stop_explanation"])
 
 
+def test_auto_uses_resume_flow_when_existing_execution_is_failed(monkeypatch, tmp_path: Path) -> None:
+    project_dir = tmp_path / "demo"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("archmind.command_executor._resolve_project_dir", lambda _name: project_dir)
+    monkeypatch.setattr("archmind.state.load_state", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("archmind.state.write_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "archmind.flow_execution.load_flow_execution",
+        lambda _project_dir: {
+            "project_id": "demo",
+            "flow_name": "Resume Flow",
+            "status": "failed",
+            "current_step": "s2",
+            "steps": [
+                {"id": "s1", "status": "done", "command": "/add_api GET /tasks"},
+                {"id": "s2", "status": "failed", "command": "/add_page tasks/list"},
+            ],
+        },
+    )
+
+    class _Detail:
+        plan = {
+            "flows": [
+                {
+                    "name": "Resume Flow",
+                    "steps": [
+                        {"id": "s1", "command": "/add_api GET /tasks"},
+                        {"id": "s2", "command": "/add_page tasks/list"},
+                    ],
+                }
+            ]
+        }
+
+    called = {"resume": 0, "run": 0}
+    monkeypatch.setattr("archmind.project_query.build_project_detail", lambda _project_dir: _Detail())
+
+    def _fake_resume(_project_dir: Path, *, sync: bool | None = None):  # type: ignore[no-untyped-def]
+        called["resume"] += 1
+        return {
+            "ok": True,
+            "started": True,
+            "detail": "Flow resume completed",
+            "flow_execution": {
+                "flow_name": "Resume Flow",
+                "status": "completed",
+                "steps": [
+                    {"id": "s1", "status": "done", "command": "/add_api GET /tasks"},
+                    {"id": "s2", "status": "done", "command": "/add_page tasks/list"},
+                ],
+            },
+        }
+
+    def _fake_run(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        called["run"] += 1
+        return {"ok": True, "started": True, "detail": "Flow execution completed", "flow_execution": {"status": "completed", "steps": []}}
+
+    monkeypatch.setattr("archmind.project_query.run_project_resume_flow", _fake_resume)
+    monkeypatch.setattr("archmind.project_query.run_project_flow", _fake_run)
+
+    out = execute_command("/auto", "demo", source="ui-next-run")
+    assert out["ok"] is True
+    assert called["resume"] == 1
+    assert called["run"] == 0
+    assert out["auto_result"]["selected_flow"] == "Resume Flow"
+
+
 def test_auto_strategy_safe_stops_before_medium_priority_action(monkeypatch, tmp_path: Path) -> None:
     project_dir = tmp_path / "demo"
     project_dir.mkdir(parents=True, exist_ok=True)

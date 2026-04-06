@@ -131,6 +131,53 @@ def _set_step_status(execution: dict[str, Any], step_id: str, status: str) -> No
         return
 
 
+def _is_flow_worker_alive(project_dir: Path) -> bool:
+    key = _flow_key(project_dir)
+    with _GUARD:
+        worker = _FLOW_THREADS.get(key)
+        if worker is None:
+            return False
+        return worker.is_alive()
+
+
+def _prepare_execution_for_resume(execution: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    steps = execution.get("steps") if isinstance(execution.get("steps"), list) else []
+    first_resume_step_id = ""
+    first_resume_index = -1
+    for idx, step in enumerate(steps):
+        if not isinstance(step, dict):
+            continue
+        step_id = str(step.get("id") or "").strip()
+        status = _normalize_step_status(step.get("status") or "pending")
+        if status == "running":
+            step["status"] = "pending"
+            status = "pending"
+        if first_resume_index >= 0:
+            continue
+        if status in {"failed", "pending"}:
+            first_resume_index = idx
+            first_resume_step_id = step_id
+            if status == "failed":
+                step["status"] = "pending"
+
+    if first_resume_index < 0:
+        execution["status"] = "completed"
+        execution["current_step"] = ""
+        return execution, ""
+
+    for idx, step in enumerate(steps):
+        if idx <= first_resume_index:
+            continue
+        if not isinstance(step, dict):
+            continue
+        if _normalize_step_status(step.get("status") or "pending") == "running":
+            step["status"] = "pending"
+
+    execution["status"] = "running"
+    execution["current_step"] = first_resume_step_id
+    return execution, first_resume_step_id
+
+
 def _run_flow_execution(project_dir: Path, project_id: str) -> None:
     lock = _flow_lock(project_dir)
     with lock:
@@ -228,4 +275,74 @@ def start_flow_execution(
         "detail": "Flow execution started",
         "error": "",
         "flow_execution": initial,
+    }
+
+
+def resume_flow_execution(
+    project_dir: Path,
+    *,
+    project_id: str,
+    sync: bool | None = None,
+) -> dict[str, Any]:
+    lock = _flow_lock(project_dir)
+    with lock:
+        current = load_flow_execution(project_dir)
+        if not current:
+            return {
+                "ok": False,
+                "started": False,
+                "detail": "No existing flow execution to resume",
+                "error": "flow execution not found",
+                "flow_execution": {},
+            }
+        status = str(current.get("status") or "").strip().lower()
+        if status == "running" and _is_flow_worker_alive(project_dir):
+            return {
+                "ok": True,
+                "started": False,
+                "detail": "Flow execution already running",
+                "error": "",
+                "flow_execution": current,
+            }
+        prepared, resume_step_id = _prepare_execution_for_resume(current)
+        _persist_flow_execution(project_dir, prepared)
+
+    if not resume_step_id:
+        latest = load_flow_execution(project_dir)
+        return {
+            "ok": True,
+            "started": False,
+            "detail": "No remaining step to resume",
+            "error": "",
+            "flow_execution": latest if latest else prepared,
+        }
+
+    force_sync = bool(sync) if isinstance(sync, bool) else (str(os.getenv("ARCHMIND_FLOW_EXEC_SYNC", "") or "").strip() == "1")
+    if force_sync:
+        _run_flow_execution(project_dir, project_id)
+        latest = load_flow_execution(project_dir)
+        return {
+            "ok": True,
+            "started": True,
+            "detail": "Flow resume completed",
+            "error": "",
+            "flow_execution": latest if latest else prepared,
+        }
+
+    key = _flow_key(project_dir)
+    worker = threading.Thread(
+        target=_run_flow_execution,
+        args=(project_dir, project_id),
+        daemon=True,
+        name=f"archmind-flow-resume:{project_id}",
+    )
+    with _GUARD:
+        _FLOW_THREADS[key] = worker
+    worker.start()
+    return {
+        "ok": True,
+        "started": True,
+        "detail": "Flow resume started",
+        "error": "",
+        "flow_execution": prepared,
     }

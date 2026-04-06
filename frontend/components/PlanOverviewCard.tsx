@@ -79,6 +79,7 @@ export default function PlanOverviewCard({ projectName, plan, flowExecution }: P
   const [messageByCommand, setMessageByCommand] = useState<Record<string, string>>({});
   const [hintByCommand, setHintByCommand] = useState<Record<string, string>>({});
   const [runningFlowName, setRunningFlowName] = useState("");
+  const [resumingFlowName, setResumingFlowName] = useState("");
   const [flowMessageByName, setFlowMessageByName] = useState<Record<string, string>>({});
   const [flowHintByName, setFlowHintByName] = useState<Record<string, string>>({});
 
@@ -280,6 +281,54 @@ export default function PlanOverviewCard({ projectName, plan, flowExecution }: P
     }
   }
 
+  async function resumeFlow(flowName: string) {
+    const targetProject = String(projectName || "").trim();
+    const normalizedFlowName = String(flowName || "").trim();
+    if (!targetProject || !normalizedFlowName || Boolean(runningFlowName) || Boolean(resumingFlowName)) {
+      return;
+    }
+
+    setResumingFlowName(normalizedFlowName);
+    setFlowMessageByName((prev) => ({ ...prev, [normalizedFlowName]: "" }));
+    setFlowHintByName((prev) => ({ ...prev, [normalizedFlowName]: "" }));
+
+    try {
+      const response = await fetch(`${UI_API_BASE}/projects/${encodeURIComponent(targetProject)}/resume_flow`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        detail?: string;
+        error?: string;
+      };
+      if (!response.ok || !Boolean(payload.ok)) {
+        const classified = classifyActionFailure(response, payload, {
+          actionLabel: "Resume Flow",
+          includeLogsHint: true,
+        });
+        setFlowMessageByName((prev) => ({ ...prev, [normalizedFlowName]: classified.message }));
+        setFlowHintByName((prev) => ({ ...prev, [normalizedFlowName]: classified.hint }));
+        return;
+      }
+      const detail = String(payload.detail || "").trim();
+      if (detail) {
+        setFlowMessageByName((prev) => ({ ...prev, [normalizedFlowName]: detail }));
+      }
+      router.refresh();
+    } catch (error) {
+      const classified = classifyNetworkFailure(error, {
+        actionLabel: "Resume Flow",
+        includeLogsHint: true,
+      });
+      setFlowMessageByName((prev) => ({ ...prev, [normalizedFlowName]: classified.message }));
+      setFlowHintByName((prev) => ({ ...prev, [normalizedFlowName]: classified.hint }));
+    } finally {
+      setResumingFlowName("");
+    }
+  }
+
   return (
     <section className="rounded-md border border-slate-700 bg-slate-900 p-4">
       <h3 className="text-sm font-semibold text-slate-100">Plan Overview</h3>
@@ -319,6 +368,7 @@ export default function PlanOverviewCard({ projectName, plan, flowExecution }: P
                   const isRunningThisFlow = isActiveFlow && executionStatus === "running";
                   const flowMessage = String(flowMessageByName[normalizedFlowName] || "").trim();
                   const flowHint = String(flowHintByName[normalizedFlowName] || "").trim();
+                  const canResume = isActiveFlow && (executionStatus === "failed" || executionStatus === "running");
                   const completedCount = flow.steps.filter((step) => {
                     if (!isActiveFlow) {
                       return false;
@@ -332,19 +382,36 @@ export default function PlanOverviewCard({ projectName, plan, flowExecution }: P
                     <section key={`${flow.name}-${flow.flowType}-${flowIdx}`} className="rounded border border-slate-700 bg-slate-900/30 p-3">
                       <div className="mb-2 flex items-center justify-between gap-2">
                         <p className="text-xs font-semibold uppercase tracking-wide text-slate-200">{flow.name}</p>
-                        <button
-                          type="button"
-                          onClick={() => void runFlow(normalizedFlowName)}
-                          disabled={
-                            !String(projectName || "").trim() ||
-                            totalCount === 0 ||
-                            hasActiveExecution ||
-                            Boolean(runningFlowName)
-                          }
-                          className="rounded-md border border-cyan-600 px-3 py-1 text-xs text-cyan-200 hover:bg-cyan-900/30 disabled:opacity-60"
-                        >
-                          {runningFlowName === normalizedFlowName || isRunningThisFlow ? "Running Flow..." : "Run Flow"}
-                        </button>
+                        <div className="flex items-center gap-2">
+                          {canResume ? (
+                            <button
+                              type="button"
+                              onClick={() => void resumeFlow(normalizedFlowName)}
+                              disabled={
+                                !String(projectName || "").trim() ||
+                                Boolean(runningFlowName) ||
+                                Boolean(resumingFlowName)
+                              }
+                              className="rounded-md border border-amber-600 px-3 py-1 text-xs text-amber-200 hover:bg-amber-900/30 disabled:opacity-60"
+                            >
+                              {resumingFlowName === normalizedFlowName ? "Resuming..." : "Resume"}
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => void runFlow(normalizedFlowName)}
+                            disabled={
+                              !String(projectName || "").trim() ||
+                              totalCount === 0 ||
+                              hasActiveExecution ||
+                              Boolean(runningFlowName) ||
+                              Boolean(resumingFlowName)
+                            }
+                            className="rounded-md border border-cyan-600 px-3 py-1 text-xs text-cyan-200 hover:bg-cyan-900/30 disabled:opacity-60"
+                          >
+                            {runningFlowName === normalizedFlowName || isRunningThisFlow ? "Running Flow..." : "Run Flow"}
+                          </button>
+                        </div>
                       </div>
 
                       <p className="text-[11px] text-slate-400">Progress: {progress}</p>
