@@ -2188,6 +2188,49 @@ def test_plan_overview_component_uses_existing_command_path_and_refetches_after_
     assert "return null" not in source
 
 
+def test_plan_overview_component_renders_run_flow_and_flow_progress_ui() -> None:
+    source = Path("frontend/components/PlanOverviewCard.tsx").read_text(encoding="utf-8")
+    assert "Run Flow" in source
+    assert "Running Flow..." in source
+    assert "Progress:" in source
+    assert "Running:" in source
+    assert "Step {idx + 1}" in source
+    assert "Depends on:" in source
+
+
+def test_plan_overview_flow_execution_runs_in_order_and_updates_step_status() -> None:
+    source = Path("frontend/components/PlanOverviewCard.tsx").read_text(encoding="utf-8")
+    assert 'type StepRunStatus = "pending" | "running" | "done" | "failed"' in source
+    assert "async function runFlow(" in source
+    assert "for (const [idx, step] of flow.steps.entries())" in source
+    assert 'acc[item] = "pending"' in source
+    assert '[currentStepKey]: "running"' in source
+    assert '[currentStepKey]: "done"' in source
+    assert '[currentStepKey]: "failed"' in source
+
+
+def test_plan_overview_flow_execution_stops_on_failure_and_keeps_later_steps_pending() -> None:
+    source = Path("frontend/components/PlanOverviewCard.tsx").read_text(encoding="utf-8")
+    assert "failed = true" in source
+    assert "break;" in source
+    assert "Stopped on failure." in source
+    assert "const pendingStatus = stepKeys.reduce" in source
+
+
+def test_plan_overview_flow_execution_triggers_refresh_after_flow_run() -> None:
+    source = Path("frontend/components/PlanOverviewCard.tsx").read_text(encoding="utf-8")
+    assert "setRunningFlowKey(\"\");" in source
+    assert "router.refresh();" in source
+
+
+def test_plan_overview_component_keeps_individual_run_and_copy_actions() -> None:
+    source = Path("frontend/components/PlanOverviewCard.tsx").read_text(encoding="utf-8")
+    assert "navigator.clipboard" in source
+    assert "onClick={() => copyCommand(command)}" in source
+    assert "onClick={() => runCommand(command)}" in source
+    assert "JSON.stringify({ command: normalizedCommand })" in source
+
+
 def test_auto_control_panel_renders_states_and_uses_auto_command_path() -> None:
     source = Path("frontend/components/AutoControlPanel.tsx").read_text(encoding="utf-8")
     assert '"use client";' in source
