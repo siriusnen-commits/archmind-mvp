@@ -204,6 +204,17 @@ type ProjectDetail = {
       priority?: string;
     }>;
   };
+  flow_execution?: {
+    project_id?: string;
+    flow_name?: string;
+    status?: "pending" | "running" | "completed" | "failed" | string;
+    current_step?: string;
+    steps?: Array<{
+      id?: string;
+      status?: "pending" | "running" | "done" | "failed" | string;
+    }>;
+    updated_at?: string;
+  };
   logs?: {
     default_source?: string;
     max_lines?: number;
@@ -302,7 +313,7 @@ export default async function ProjectDetailPage({ params }: PageProps) {
           <ProjectSummaryCard project={detail} />
           <InspectOverviewCard project={detail} />
           <DesignOverviewCard design={detail.design} />
-          <PlanOverviewCard projectName={detail.name} plan={detail.plan} />
+          <PlanOverviewCard projectName={detail.name} plan={detail.plan} flowExecution={detail.flow_execution} />
           <RuntimeConsistencyCard verification={detail.verification} />
           <DriftSummaryCard verification={detail.verification} />
           <NextActionCard projectName={detail.name} nextAction={analysis?.next_action} />

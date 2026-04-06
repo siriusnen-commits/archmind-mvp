@@ -300,6 +300,7 @@ def test_ui_project_detail_response_shape(monkeypatch, tmp_path: Path) -> None:
     assert isinstance(payload.get("auto_summary", {}), dict)
     assert isinstance(payload.get("design", {}), dict)
     assert isinstance(payload.get("plan", {}), dict)
+    assert isinstance(payload.get("flow_execution", {}), dict)
     assert "repository" in payload
     assert payload["repository"]["status"] == "CREATED"
     assert payload["repository"]["url"] == "https://github.com/example/beta"
@@ -1682,6 +1683,198 @@ def test_ui_run_command_rejects_invalid_consistently(monkeypatch, tmp_path: Path
     assert "Unsupported command" in str(payload["error"])
 
 
+def test_ui_run_flow_creates_execution_state_and_persists_file(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "flow-create")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setenv("ARCHMIND_FLOW_EXEC_SYNC", "1")
+
+    def _fixed_plan(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return {
+            "goal": "improve_flow",
+            "priority": "high",
+            "why": "Need execution flow",
+            "expected_effect": "Deterministic flow",
+            "steps": [],
+            "flows": [
+                {
+                    "name": "Core Flow",
+                    "flow_type": "crud",
+                    "steps": [
+                        {"id": "s1", "title": "Add API", "command": "/add_api GET /notes/{id}", "depends_on": []},
+                        {"id": "s2", "title": "Add Page", "command": "/add_page notes/detail", "depends_on": ["s1"]},
+                    ],
+                }
+            ],
+        }
+
+    monkeypatch.setattr("archmind.project_query._build_plan_overview", _fixed_plan)
+    monkeypatch.setattr(
+        "archmind.flow_execution.execute_command",
+        lambda *_args, **_kwargs: {"ok": True, "detail": "ok"},
+    )
+
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/flow-create/run_flow", json={"flow_name": "Core Flow"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["started"] is True
+    assert payload["flow_execution"]["flow_name"] == "Core Flow"
+    assert payload["flow_execution"]["status"] == "completed"
+    assert [step["status"] for step in payload["flow_execution"]["steps"]] == ["done", "done"]
+
+    execution_path = project_dir / ".archmind" / "flow_execution.json"
+    assert execution_path.exists()
+    persisted = json.loads(execution_path.read_text(encoding="utf-8"))
+    assert persisted["project_id"] == "flow-create"
+    assert persisted["flow_name"] == "Core Flow"
+    assert persisted["status"] == "completed"
+    assert [step["status"] for step in persisted["steps"]] == ["done", "done"]
+
+
+def test_ui_run_flow_step_status_transitions_are_persisted_in_order(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "flow-transition")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setenv("ARCHMIND_FLOW_EXEC_SYNC", "1")
+
+    def _fixed_plan(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return {
+            "goal": "improve_flow",
+            "priority": "high",
+            "why": "Need execution flow",
+            "expected_effect": "Deterministic flow",
+            "steps": [],
+            "flows": [
+                {
+                    "name": "Core Flow",
+                    "flow_type": "crud",
+                    "steps": [
+                        {"id": "s1", "title": "Add API", "command": "/add_api GET /notes/{id}", "depends_on": []},
+                        {"id": "s2", "title": "Add Page", "command": "/add_page notes/detail", "depends_on": ["s1"]},
+                    ],
+                }
+            ],
+        }
+
+    call_snapshots: list[dict[str, str]] = []
+
+    def _fake_execute(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        current = json.loads((project_dir / ".archmind" / "flow_execution.json").read_text(encoding="utf-8"))
+        call_snapshots.append({str(item.get("id")): str(item.get("status")) for item in (current.get("steps") or [])})
+        return {"ok": True, "detail": "ok"}
+
+    monkeypatch.setattr("archmind.project_query._build_plan_overview", _fixed_plan)
+    monkeypatch.setattr("archmind.flow_execution.execute_command", _fake_execute)
+
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/flow-transition/run_flow", json={"flow_name": "Core Flow"})
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert len(call_snapshots) == 2
+    assert call_snapshots[0]["s1"] == "running"
+    assert call_snapshots[0]["s2"] == "pending"
+    assert call_snapshots[1]["s1"] == "done"
+    assert call_snapshots[1]["s2"] == "running"
+
+
+def test_ui_run_flow_stops_on_failure_and_keeps_later_steps_pending(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "flow-fail")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setenv("ARCHMIND_FLOW_EXEC_SYNC", "1")
+
+    def _fixed_plan(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return {
+            "goal": "improve_flow",
+            "priority": "high",
+            "why": "Need execution flow",
+            "expected_effect": "Deterministic flow",
+            "steps": [],
+            "flows": [
+                {
+                    "name": "Core Flow",
+                    "flow_type": "crud",
+                    "steps": [
+                        {"id": "s1", "title": "Step1", "command": "/add_api GET /notes/{id}", "depends_on": []},
+                        {"id": "s2", "title": "Step2", "command": "/add_page notes/detail", "depends_on": ["s1"]},
+                        {"id": "s3", "title": "Step3", "command": "/add_page notes/new", "depends_on": ["s2"]},
+                    ],
+                }
+            ],
+        }
+
+    calls = {"count": 0}
+
+    def _fake_execute(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return {"ok": True, "detail": "ok"}
+        return {"ok": False, "error": "failed"}
+
+    monkeypatch.setattr("archmind.project_query._build_plan_overview", _fixed_plan)
+    monkeypatch.setattr("archmind.flow_execution.execute_command", _fake_execute)
+
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/flow-fail/run_flow", json={"flow_name": "Core Flow"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["flow_execution"]["status"] == "failed"
+    statuses = {step["id"]: step["status"] for step in payload["flow_execution"]["steps"]}
+    assert statuses["s1"] == "done"
+    assert statuses["s2"] == "failed"
+    assert statuses["s3"] == "pending"
+    assert calls["count"] == 2
+
+    persisted = json.loads((project_dir / ".archmind" / "flow_execution.json").read_text(encoding="utf-8"))
+    assert persisted["status"] == "failed"
+    persisted_statuses = {step["id"]: step["status"] for step in persisted["steps"]}
+    assert persisted_statuses["s1"] == "done"
+    assert persisted_statuses["s2"] == "failed"
+    assert persisted_statuses["s3"] == "pending"
+
+
+def test_ui_project_detail_includes_flow_execution_and_reload_returns_same_state(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "flow-detail")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+
+    (project_dir / ".archmind" / "flow_execution.json").write_text(
+        json.dumps(
+            {
+                "project_id": "flow-detail",
+                "flow_name": "Core Flow",
+                "status": "running",
+                "current_step": "s2",
+                "steps": [
+                    {"id": "s1", "status": "done"},
+                    {"id": "s2", "status": "running"},
+                    {"id": "s3", "status": "pending"},
+                ],
+                "updated_at": "2026-04-06T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    client = TestClient(create_ui_app())
+    response_a = client.get("/ui/projects/flow-detail")
+    response_b = client.get("/ui/projects/flow-detail")
+    assert response_a.status_code == 200
+    assert response_b.status_code == 200
+
+    execution_a = response_a.json().get("flow_execution")
+    execution_b = response_b.json().get("flow_execution")
+    assert isinstance(execution_a, dict)
+    assert isinstance(execution_b, dict)
+    assert execution_a["flow_name"] == "Core Flow"
+    assert execution_a["status"] == "running"
+    assert execution_a["current_step"] == "s2"
+    assert execution_a == execution_b
+
+
 def test_ui_add_entity_rejects_empty_name_safely(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     _make_project(projects_root, "entity-empty")
@@ -1922,6 +2115,7 @@ def test_project_detail_source_renders_design_and_plan_overview_panels() -> None
     assert "<PlanOverviewCard" in project_detail_source
     assert "design={detail.design}" in project_detail_source
     assert "plan={detail.plan}" in project_detail_source
+    assert "flowExecution={detail.flow_execution}" in project_detail_source
     assert "projectName={detail.name}" in project_detail_source
     assert "&& <DesignOverviewCard" not in project_detail_source
     assert "&& <PlanOverviewCard" not in project_detail_source
@@ -2198,28 +2392,35 @@ def test_plan_overview_component_renders_run_flow_and_flow_progress_ui() -> None
     assert "Depends on:" in source
 
 
-def test_plan_overview_flow_execution_runs_in_order_and_updates_step_status() -> None:
+def test_plan_overview_flow_execution_uses_backend_run_flow_and_status_payload() -> None:
     source = Path("frontend/components/PlanOverviewCard.tsx").read_text(encoding="utf-8")
     assert 'type StepRunStatus = "pending" | "running" | "done" | "failed"' in source
-    assert "async function runFlow(" in source
-    assert "for (const [idx, step] of flow.steps.entries())" in source
-    assert 'acc[item] = "pending"' in source
-    assert '[currentStepKey]: "running"' in source
-    assert '[currentStepKey]: "done"' in source
-    assert '[currentStepKey]: "failed"' in source
+    assert "flowExecution?: FlowExecution | null;" in source
+    assert "executionStepStatusById" in source
+    assert "/run_flow" in source
+    assert "JSON.stringify({ flow_name: normalizedFlowName })" in source
+    assert "const hasActiveExecution = executionStatus === \"running\";" in source
+    assert "setInterval(() => {" in source
+    assert "router.refresh();" in source
 
 
-def test_plan_overview_flow_execution_stops_on_failure_and_keeps_later_steps_pending() -> None:
+def test_plan_overview_flow_execution_stops_on_failure_and_shows_failed_status() -> None:
     source = Path("frontend/components/PlanOverviewCard.tsx").read_text(encoding="utf-8")
-    assert "failed = true" in source
-    assert "break;" in source
-    assert "Stopped on failure." in source
-    assert "const pendingStatus = stepKeys.reduce" in source
+    assert "executionStatus === \"failed\"" in source
+    assert "Stopped on failure. Check step status below." in source
+    assert "const backendStatus = isActiveFlow ? executionStepStatusById[stepId] || \"pending\" : \"pending\";" in source
+
+
+def test_plan_overview_flow_execution_keeps_step_order_rendering_from_plan() -> None:
+    source = Path("frontend/components/PlanOverviewCard.tsx").read_text(encoding="utf-8")
+    assert "async function runFlow(" in source
+    assert "flow.steps.slice(0, 10).map((step, idx) => {" in source
+    assert "Step {idx + 1}" in source
 
 
 def test_plan_overview_flow_execution_triggers_refresh_after_flow_run() -> None:
     source = Path("frontend/components/PlanOverviewCard.tsx").read_text(encoding="utf-8")
-    assert "setRunningFlowKey(\"\");" in source
+    assert "setRunningFlowName(\"\");" in source
     assert "router.refresh();" in source
 
 
@@ -2229,6 +2430,13 @@ def test_plan_overview_component_keeps_individual_run_and_copy_actions() -> None
     assert "onClick={() => copyCommand(command)}" in source
     assert "onClick={() => runCommand(command)}" in source
     assert "JSON.stringify({ command: normalizedCommand })" in source
+
+
+def test_plan_run_flow_proxy_route_exists() -> None:
+    source = Path("frontend/app/api/ui/projects/[project]/run_flow/route.ts").read_text(encoding="utf-8")
+    assert "getBackendUiBase" in source
+    assert "/run_flow" in source
+    assert "method: \"POST\"" in source
 
 
 def test_auto_control_panel_renders_states_and_uses_auto_command_path() -> None:

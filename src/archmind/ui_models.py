@@ -97,6 +97,7 @@ class ProjectDetailResponse(BaseModel):
     architecture: dict[str, Any] = Field(default_factory=dict)
     design: dict[str, Any] = Field(default_factory=dict)
     plan: dict[str, Any] = Field(default_factory=dict)
+    flow_execution: dict[str, Any] = Field(default_factory=dict)
     logs: dict[str, Any] = Field(default_factory=dict)
     auto_summary: dict[str, Any] = Field(default_factory=dict)
     verification: dict[str, Any] = Field(default_factory=dict)
@@ -251,6 +252,20 @@ class RunCommandResponse(BaseModel):
     auto_result: dict[str, Any] = Field(default_factory=dict)
     spec_summary: SpecSummary = Field(default_factory=SpecSummary)
     recent_evolution: list[str] = Field(default_factory=list)
+
+
+class RunFlowRequest(BaseModel):
+    flow_name: str = ""
+
+
+class RunFlowResponse(BaseModel):
+    ok: bool = False
+    started: bool = False
+    project_name: str = ""
+    flow_name: str = ""
+    detail: str = ""
+    error: str = ""
+    flow_execution: dict[str, Any] = Field(default_factory=dict)
 
 
 class NewProjectWizardRequest(BaseModel):

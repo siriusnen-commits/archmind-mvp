@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { classifyActionFailure, classifyNetworkFailure } from "@/components/actionError";
 import { UI_API_BASE } from "@/components/uiApi";
@@ -31,9 +31,24 @@ type PlanOverview = {
   steps?: PlanStep[];
 };
 
+type FlowStepExecution = {
+  id?: string;
+  status?: "pending" | "running" | "done" | "failed" | string;
+};
+
+type FlowExecution = {
+  project_id?: string;
+  flow_name?: string;
+  status?: "pending" | "running" | "completed" | "failed" | string;
+  current_step?: string;
+  steps?: FlowStepExecution[];
+  updated_at?: string;
+};
+
 type Props = {
   projectName?: string;
   plan?: PlanOverview | null;
+  flowExecution?: FlowExecution | null;
 };
 
 type RunState = "idle" | "running" | "success" | "error";
@@ -43,24 +58,49 @@ function normalizeCommand(value: string): string {
   return String(value || "").trim();
 }
 
-export default function PlanOverviewCard({ projectName, plan }: Props) {
+function normalizeStepStatus(value: string): StepRunStatus {
+  const text = String(value || "").trim().toLowerCase();
+  if (text === "running") {
+    return "running";
+  }
+  if (text === "done") {
+    return "done";
+  }
+  if (text === "failed") {
+    return "failed";
+  }
+  return "pending";
+}
+
+export default function PlanOverviewCard({ projectName, plan, flowExecution }: Props) {
   const router = useRouter();
   const [runningCommand, setRunningCommand] = useState("");
   const [runStateByCommand, setRunStateByCommand] = useState<Record<string, RunState>>({});
   const [messageByCommand, setMessageByCommand] = useState<Record<string, string>>({});
   const [hintByCommand, setHintByCommand] = useState<Record<string, string>>({});
-  const [runningFlowKey, setRunningFlowKey] = useState("");
-  const [flowStepStatusByKey, setFlowStepStatusByKey] = useState<Record<string, StepRunStatus>>({});
-  const [flowMessageByStepKey, setFlowMessageByStepKey] = useState<Record<string, string>>({});
-  const [flowHintByStepKey, setFlowHintByStepKey] = useState<Record<string, string>>({});
-  const [flowSummaryByKey, setFlowSummaryByKey] = useState<Record<string, string>>({});
-  const [flowRunningStepByKey, setFlowRunningStepByKey] = useState<Record<string, string>>({});
+  const [runningFlowName, setRunningFlowName] = useState("");
+  const [flowMessageByName, setFlowMessageByName] = useState<Record<string, string>>({});
+  const [flowHintByName, setFlowHintByName] = useState<Record<string, string>>({});
 
   const row = plan && typeof plan === "object" ? plan : {};
   const goal = String(row.goal || "").trim();
   const priority = String(row.priority || "").trim();
   const why = String(row.why || "").trim();
   const expectedEffect = String(row.expected_effect || "").trim();
+
+  const execution = flowExecution && typeof flowExecution === "object" ? flowExecution : {};
+  const executionFlowName = String(execution.flow_name || "").trim();
+  const executionStatus = String(execution.status || "").trim().toLowerCase();
+  const executionCurrentStep = String(execution.current_step || "").trim();
+  const executionStepStatusById = (Array.isArray(execution.steps) ? execution.steps : []).reduce<Record<string, StepRunStatus>>((acc, item) => {
+    const stepId = String(item?.id || "").trim();
+    if (!stepId) {
+      return acc;
+    }
+    acc[stepId] = normalizeStepStatus(String(item?.status || "pending"));
+    return acc;
+  }, {});
+
   const flows = (Array.isArray(row.flows) ? row.flows : [])
     .filter((flow): flow is PlanFlow => Boolean(flow && typeof flow === "object"))
     .map((flow) => ({
@@ -68,8 +108,8 @@ export default function PlanOverviewCard({ projectName, plan }: Props) {
       flowType: String(flow.flow_type || "").trim().toLowerCase() || "crud",
       steps: (Array.isArray(flow.steps) ? flow.steps : [])
         .filter((item): item is PlanStep => Boolean(item && typeof item === "object"))
-        .map((item) => ({
-          id: String(item.id || "").trim(),
+        .map((item, idx) => ({
+          id: String(item.id || "").trim() || `step_${idx + 1}`,
           title: String(item.title || "").trim() || "Plan step",
           command: normalizeCommand(String(item.command || "")),
           dependsOn: Array.isArray(item.depends_on)
@@ -100,17 +140,20 @@ export default function PlanOverviewCard({ projectName, plan }: Props) {
     }))
     .filter((item) => Boolean(item.command));
 
-  const groupedFlows = flows.length > 0 ? flows : fallbackSteps.length > 0 ? [{ name: "Recommended Steps", flowType: "generic", steps: fallbackSteps }] : [];
+  const groupedFlows =
+    flows.length > 0 ? flows : fallbackSteps.length > 0 ? [{ name: "Recommended Steps", flowType: "generic", steps: fallbackSteps }] : [];
   const hasAny = Boolean(goal || priority || why || expectedEffect || groupedFlows.length);
-  const hasRunningFlow = Boolean(runningFlowKey);
+  const hasActiveExecution = executionStatus === "running";
 
-  function stepKey(flowIdx: number, stepIdx: number, step: { id?: string; command?: string }): string {
-    return String(step.id || `${flowIdx}:${stepIdx}:${String(step.command || "").trim()}`);
-  }
-
-  function flowKey(flowIdx: number, flow: { name?: string; flowType?: string }): string {
-    return `${flowIdx}:${String(flow.name || "").trim()}:${String(flow.flowType || "").trim()}`;
-  }
+  useEffect(() => {
+    if (!hasActiveExecution || !String(projectName || "").trim()) {
+      return;
+    }
+    const timer = setInterval(() => {
+      router.refresh();
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [hasActiveExecution, projectName, router]);
 
   function statusBadgeClass(status: StepRunStatus): string {
     if (status === "done") {
@@ -189,99 +232,52 @@ export default function PlanOverviewCard({ projectName, plan }: Props) {
     }
   }
 
-  async function runFlow(
-    flow: {
-      name: string;
-      flowType: string;
-      steps: Array<{
-        id?: string;
-        title?: string;
-        command?: string;
-        dependsOn?: string[];
-      }>;
-    },
-    flowIdx: number,
-  ) {
+  async function runFlow(flowName: string) {
     const targetProject = String(projectName || "").trim();
-    const key = flowKey(flowIdx, flow);
-    if (!targetProject || !flow.steps.length || hasRunningFlow) {
+    const normalizedFlowName = String(flowName || "").trim();
+    if (!targetProject || !normalizedFlowName || hasActiveExecution || Boolean(runningFlowName)) {
       return;
     }
 
-    const stepKeys = flow.steps.map((step, idx) => stepKey(flowIdx, idx, step));
-    const pendingStatus = stepKeys.reduce<Record<string, StepRunStatus>>((acc, item) => {
-      acc[item] = "pending";
-      return acc;
-    }, {});
-    setFlowStepStatusByKey((prev) => ({ ...prev, ...pendingStatus }));
-    setFlowSummaryByKey((prev) => ({ ...prev, [key]: "" }));
-    setFlowRunningStepByKey((prev) => ({ ...prev, [key]: "" }));
-    setRunningFlowKey(key);
+    setRunningFlowName(normalizedFlowName);
+    setFlowMessageByName((prev) => ({ ...prev, [normalizedFlowName]: "" }));
+    setFlowHintByName((prev) => ({ ...prev, [normalizedFlowName]: "" }));
 
-    let completed = 0;
-    let failed = false;
-    for (const [idx, step] of flow.steps.entries()) {
-      const command = normalizeCommand(step.command || "");
-      const currentStepKey = stepKey(flowIdx, idx, step);
-      const stepTitle = String(step.title || command || `Step ${idx + 1}`).trim();
-      if (!command) {
-        failed = true;
-        setFlowStepStatusByKey((prev) => ({ ...prev, [currentStepKey]: "failed" }));
-        setFlowMessageByStepKey((prev) => ({ ...prev, [currentStepKey]: "Command is missing." }));
-        break;
-      }
-      setFlowRunningStepByKey((prev) => ({ ...prev, [key]: stepTitle }));
-      setFlowStepStatusByKey((prev) => ({ ...prev, [currentStepKey]: "running" }));
-      setFlowMessageByStepKey((prev) => ({ ...prev, [currentStepKey]: "" }));
-      setFlowHintByStepKey((prev) => ({ ...prev, [currentStepKey]: "" }));
-      try {
-        const response = await fetch(`${UI_API_BASE}/projects/${encodeURIComponent(targetProject)}/commands`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ command }),
-        });
-        const payload = (await response.json().catch(() => ({}))) as {
-          ok?: boolean;
-          detail?: string;
-          error?: string;
-        };
-        if (!response.ok || !Boolean(payload.ok)) {
-          const classified = classifyActionFailure(response, payload, {
-            actionLabel: "Flow step run",
-            includeLogsHint: true,
-          });
-          failed = true;
-          setFlowStepStatusByKey((prev) => ({ ...prev, [currentStepKey]: "failed" }));
-          setFlowMessageByStepKey((prev) => ({ ...prev, [currentStepKey]: classified.message }));
-          setFlowHintByStepKey((prev) => ({ ...prev, [currentStepKey]: classified.hint }));
-          break;
-        }
-        const detail = String(payload.error || payload.detail || "").trim();
-        completed += 1;
-        setFlowStepStatusByKey((prev) => ({ ...prev, [currentStepKey]: "done" }));
-        setFlowMessageByStepKey((prev) => ({ ...prev, [currentStepKey]: detail || "Completed" }));
-      } catch (error) {
-        const classified = classifyNetworkFailure(error, {
-          actionLabel: "Flow step run",
+    try {
+      const response = await fetch(`${UI_API_BASE}/projects/${encodeURIComponent(targetProject)}/run_flow`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ flow_name: normalizedFlowName }),
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        ok?: boolean;
+        detail?: string;
+        error?: string;
+      };
+      if (!response.ok || !Boolean(payload.ok)) {
+        const classified = classifyActionFailure(response, payload, {
+          actionLabel: "Run Flow",
           includeLogsHint: true,
         });
-        failed = true;
-        setFlowStepStatusByKey((prev) => ({ ...prev, [currentStepKey]: "failed" }));
-        setFlowMessageByStepKey((prev) => ({ ...prev, [currentStepKey]: classified.message }));
-        setFlowHintByStepKey((prev) => ({ ...prev, [currentStepKey]: classified.hint }));
-        break;
+        setFlowMessageByName((prev) => ({ ...prev, [normalizedFlowName]: classified.message }));
+        setFlowHintByName((prev) => ({ ...prev, [normalizedFlowName]: classified.hint }));
+        return;
       }
+      const detail = String(payload.detail || "").trim();
+      if (detail) {
+        setFlowMessageByName((prev) => ({ ...prev, [normalizedFlowName]: detail }));
+      }
+      router.refresh();
+    } catch (error) {
+      const classified = classifyNetworkFailure(error, {
+        actionLabel: "Run Flow",
+        includeLogsHint: true,
+      });
+      setFlowMessageByName((prev) => ({ ...prev, [normalizedFlowName]: classified.message }));
+      setFlowHintByName((prev) => ({ ...prev, [normalizedFlowName]: classified.hint }));
+    } finally {
+      setRunningFlowName("");
     }
-
-    setFlowRunningStepByKey((prev) => ({ ...prev, [key]: "" }));
-    setFlowSummaryByKey((prev) => ({
-      ...prev,
-      [key]: failed
-        ? `Stopped on failure. Completed ${completed}/${flow.steps.length}.`
-        : `Flow complete (${completed}/${flow.steps.length}).`,
-    }));
-    setRunningFlowKey("");
-    router.refresh();
   }
 
   return (
@@ -317,99 +313,114 @@ export default function PlanOverviewCard({ projectName, plan }: Props) {
             {groupedFlows.length === 0 ? <p className="mt-1 text-sm text-slate-300">No plan steps available.</p> : null}
             {groupedFlows.length > 0 ? (
               <div className="mt-2 space-y-3">
-                {groupedFlows.slice(0, 2).map((flow, flowIdx) => (
-                  <section key={`${flow.name}-${flow.flowType}-${flowIdx}`} className="rounded border border-slate-700 bg-slate-900/30 p-3">
-                    {(() => {
-                      const flowRunKey = flowKey(flowIdx, flow);
-                      const completedCount = flow.steps.filter((step, idx) => flowStepStatusByKey[stepKey(flowIdx, idx, step)] === "done").length;
-                      const totalCount = flow.steps.length;
-                      const runningStep = String(flowRunningStepByKey[flowRunKey] || "").trim();
-                      const flowSummary = String(flowSummaryByKey[flowRunKey] || "").trim();
-                      const isThisFlowRunning = runningFlowKey === flowRunKey;
-                      return (
-                        <>
-                          <div className="mb-2 flex items-center justify-between gap-2">
-                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-200">
-                              {flow.name}
-                            </p>
-                            <button
-                              type="button"
-                              onClick={() => void runFlow(flow, flowIdx)}
-                              disabled={hasRunningFlow || !String(projectName || "").trim() || totalCount === 0}
-                              className="rounded-md border border-cyan-600 px-3 py-1 text-xs text-cyan-200 hover:bg-cyan-900/30 disabled:opacity-60"
-                            >
-                              {isThisFlowRunning ? "Running Flow..." : "Run Flow"}
-                            </button>
-                          </div>
-                          <p className="text-[11px] text-slate-400">
-                            Progress: {completedCount}/{totalCount}
-                          </p>
-                          {runningStep ? <p className="mt-1 text-[11px] text-cyan-300">Running: {runningStep}</p> : null}
-                          {flowSummary ? <p className="mt-1 text-[11px] text-slate-300">{flowSummary}</p> : null}
-                        </>
-                      );
-                    })()}
-                    <div className="mt-2 space-y-2">
-                      {flow.steps.slice(0, 10).map((step, idx) => {
-                        const command = normalizeCommand(step.command || "");
-                        const currentStepKey = stepKey(flowIdx, idx, step);
-                        const runState = runStateByCommand[command] || "idle";
-                        const disabled = !command || !String(projectName || "").trim() || Boolean(runningCommand);
-                        const message = String(messageByCommand[command] || "").trim();
-                        const hint = String(hintByCommand[command] || "").trim();
-                        const flowStatus = flowStepStatusByKey[currentStepKey] || "pending";
-                        const flowMessage = String(flowMessageByStepKey[currentStepKey] || "").trim();
-                        const flowHint = String(flowHintByStepKey[currentStepKey] || "").trim();
-                        return (
-                          <article key={`${step.id || step.title}-${command}-${idx}`} className="rounded border border-slate-700 bg-slate-950/70 p-3">
-                            <div className="flex items-center justify-between gap-2">
-                              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-                                Step {idx + 1}
+                {groupedFlows.slice(0, 2).map((flow, flowIdx) => {
+                  const normalizedFlowName = String(flow.name || "").trim();
+                  const isActiveFlow = executionFlowName === normalizedFlowName;
+                  const isRunningThisFlow = isActiveFlow && executionStatus === "running";
+                  const flowMessage = String(flowMessageByName[normalizedFlowName] || "").trim();
+                  const flowHint = String(flowHintByName[normalizedFlowName] || "").trim();
+                  const completedCount = flow.steps.filter((step) => {
+                    if (!isActiveFlow) {
+                      return false;
+                    }
+                    return executionStepStatusById[String(step.id || "").trim()] === "done";
+                  }).length;
+                  const totalCount = flow.steps.length;
+                  const progress = isActiveFlow ? `${completedCount}/${totalCount}` : `0/${totalCount}`;
+
+                  return (
+                    <section key={`${flow.name}-${flow.flowType}-${flowIdx}`} className="rounded border border-slate-700 bg-slate-900/30 p-3">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-200">{flow.name}</p>
+                        <button
+                          type="button"
+                          onClick={() => void runFlow(normalizedFlowName)}
+                          disabled={
+                            !String(projectName || "").trim() ||
+                            totalCount === 0 ||
+                            hasActiveExecution ||
+                            Boolean(runningFlowName)
+                          }
+                          className="rounded-md border border-cyan-600 px-3 py-1 text-xs text-cyan-200 hover:bg-cyan-900/30 disabled:opacity-60"
+                        >
+                          {runningFlowName === normalizedFlowName || isRunningThisFlow ? "Running Flow..." : "Run Flow"}
+                        </button>
+                      </div>
+
+                      <p className="text-[11px] text-slate-400">Progress: {progress}</p>
+                      {isRunningThisFlow && executionCurrentStep ? <p className="mt-1 text-[11px] text-cyan-300">Running: {executionCurrentStep}</p> : null}
+                      {isActiveFlow && executionStatus === "failed" ? (
+                        <p className="mt-1 text-[11px] text-rose-300">Stopped on failure. Check step status below.</p>
+                      ) : null}
+                      {isActiveFlow && executionStatus === "completed" ? (
+                        <p className="mt-1 text-[11px] text-emerald-300">Flow complete ({completedCount}/{totalCount}).</p>
+                      ) : null}
+                      {flowMessage ? <p className="mt-1 text-[11px] text-slate-300">{flowMessage}</p> : null}
+                      {flowHint ? <p className="mt-1 text-[11px] text-cyan-300">{flowHint}</p> : null}
+
+                      <div className="mt-2 space-y-2">
+                        {flow.steps.slice(0, 10).map((step, idx) => {
+                          const command = normalizeCommand(step.command || "");
+                          const runState = runStateByCommand[command] || "idle";
+                          const disabled = !command || !String(projectName || "").trim() || Boolean(runningCommand);
+                          const message = String(messageByCommand[command] || "").trim();
+                          const hint = String(hintByCommand[command] || "").trim();
+                          const stepId = String(step.id || "").trim();
+                          const backendStatus = isActiveFlow ? executionStepStatusById[stepId] || "pending" : "pending";
+                          const isCurrentlyRunning = isRunningThisFlow && executionCurrentStep === stepId;
+                          const flowStatus: StepRunStatus = isCurrentlyRunning ? "running" : backendStatus;
+
+                          return (
+                            <article key={`${step.id || step.title}-${command}-${idx}`} className="rounded border border-slate-700 bg-slate-950/70 p-3">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Step {idx + 1}</p>
+                                <span
+                                  className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${statusBadgeClass(
+                                    flowStatus,
+                                  )}`}
+                                >
+                                  {flowStatus}
+                                </span>
+                              </div>
+                              <p className="text-sm font-semibold text-slate-100">{step.title || "Plan step"}</p>
+                              <p className="mt-1 text-xs text-slate-300">{step.why || why || "No step rationale."}</p>
+                              <p className="mt-1 text-[11px] text-slate-400">
+                                Priority: {step.priority || "unknown"} · Type: {step.stepType || "unknown"} · Effect: {" "}
+                                {step.expectedEffect || "Improves project completeness."}
                               </p>
-                              <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${statusBadgeClass(flowStatus)}`}>
-                                {flowStatus}
-                              </span>
-                            </div>
-                            <p className="text-sm font-semibold text-slate-100">{step.title || "Plan step"}</p>
-                            <p className="mt-1 text-xs text-slate-300">{step.why || why || "No step rationale."}</p>
-                            <p className="mt-1 text-[11px] text-slate-400">
-                              Priority: {step.priority || "unknown"} · Type: {step.stepType || "unknown"} · Effect:{" "}
-                              {step.expectedEffect || "Improves project completeness."}
-                            </p>
-                            {step.dependsOn.length > 0 ? (
-                              <p className="mt-1 text-[11px] text-amber-300">Depends on: {step.dependsOn.join(", ")}</p>
-                            ) : (
-                              <p className="mt-1 text-[11px] text-slate-500">Depends on: (none)</p>
-                            )}
-                            {command ? <p className="mt-2 break-all text-xs text-cyan-200">{command}</p> : <p className="mt-2 text-xs text-slate-400">No command</p>}
-                            <div className="mt-2 flex gap-2">
-                              <button
-                                type="button"
-                                onClick={() => copyCommand(command)}
-                                disabled={!command}
-                                className="rounded-md border border-slate-500 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-60"
-                              >
-                                Copy
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => runCommand(command)}
-                                disabled={disabled}
-                                className="rounded-md border border-cyan-600 px-3 py-1.5 text-xs text-cyan-200 hover:bg-cyan-900/30 disabled:opacity-60"
-                              >
-                                {runState === "running" ? "Running..." : runState === "success" ? "Completed" : "Run"}
-                              </button>
-                            </div>
-                            {flowMessage ? <p className={flowStatus === "failed" ? "mt-2 text-xs text-rose-300" : "mt-2 text-xs text-emerald-300"}>{flowMessage}</p> : null}
-                            {flowHint ? <p className="mt-1 text-xs text-cyan-300">{flowHint}</p> : null}
-                            {message ? <p className={runState === "error" ? "mt-2 text-xs text-rose-300" : "mt-2 text-xs text-emerald-300"}>{message}</p> : null}
-                            {hint ? <p className="mt-1 text-xs text-cyan-300">{hint}</p> : null}
-                          </article>
-                        );
-                      })}
-                    </div>
-                  </section>
-                ))}
+                              {step.dependsOn.length > 0 ? (
+                                <p className="mt-1 text-[11px] text-amber-300">Depends on: {step.dependsOn.join(", ")}</p>
+                              ) : (
+                                <p className="mt-1 text-[11px] text-slate-500">Depends on: (none)</p>
+                              )}
+                              {command ? <p className="mt-2 break-all text-xs text-cyan-200">{command}</p> : <p className="mt-2 text-xs text-slate-400">No command</p>}
+                              <div className="mt-2 flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => copyCommand(command)}
+                                  disabled={!command}
+                                  className="rounded-md border border-slate-500 px-3 py-1.5 text-xs text-slate-200 hover:bg-slate-800 disabled:opacity-60"
+                                >
+                                  Copy
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => runCommand(command)}
+                                  disabled={disabled}
+                                  className="rounded-md border border-cyan-600 px-3 py-1.5 text-xs text-cyan-200 hover:bg-cyan-900/30 disabled:opacity-60"
+                                >
+                                  {runState === "running" ? "Running..." : runState === "success" ? "Completed" : "Run"}
+                                </button>
+                              </div>
+                              {message ? <p className={runState === "error" ? "mt-2 text-xs text-rose-300" : "mt-2 text-xs text-emerald-300"}>{message}</p> : null}
+                              {hint ? <p className="mt-1 text-xs text-cyan-300">{hint}</p> : null}
+                            </article>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  );
+                })}
               </div>
             ) : null}
           </div>
