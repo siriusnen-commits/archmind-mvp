@@ -42,6 +42,15 @@ type FlowExecution = {
   status?: "pending" | "running" | "completed" | "failed" | string;
   current_step?: string;
   steps?: FlowStepExecution[];
+  timeline?: Array<{
+    id?: string;
+    type?: string;
+    status?: string;
+    step_id?: string;
+    command?: string;
+    detail?: string;
+    at?: string;
+  }>;
   recovery?: {
     triggered?: boolean;
     reason?: string;
@@ -79,6 +88,39 @@ function normalizeStepStatus(value: string): StepRunStatus {
     return "failed";
   }
   return "pending";
+}
+
+function timelineEventText(event: {
+  type?: string;
+  status?: string;
+  step_id?: string;
+  command?: string;
+  detail?: string;
+}): string {
+  const type = String(event.type || "").trim().toLowerCase();
+  const status = String(event.status || "").trim().toLowerCase();
+  const stepId = String(event.step_id || "").trim();
+  const command = normalizeCommand(String(event.command || ""));
+  const detail = String(event.detail || "").trim();
+  if (type === "flow_start") {
+    return "Flow started";
+  }
+  if (type === "step") {
+    return `Step ${stepId || "(unknown)"} ${status || "updated"}${command ? ` · ${command}` : ""}`;
+  }
+  if (type === "recovery_start") {
+    return `Recovery started${detail ? ` · ${detail}` : ""}`;
+  }
+  if (type === "recovery_step") {
+    return `Recovery step ${status || "updated"}${command ? ` · ${command}` : ""}`;
+  }
+  if (type === "resume") {
+    return `Resume ${status || "updated"}${stepId ? ` · from ${stepId}` : ""}`;
+  }
+  if (type === "flow_complete") {
+    return "Flow completed";
+  }
+  return detail || "Execution event";
 }
 
 export default function PlanOverviewCard({ projectName, plan, flowExecution }: Props) {
@@ -380,6 +422,7 @@ export default function PlanOverviewCard({ projectName, plan, flowExecution }: P
                   const recoveryReason = String(recovery?.reason || "").trim();
                   const recoveryStatus = String(recovery?.status || "").trim().toLowerCase() || "failed";
                   const recoverySteps = Array.isArray(recovery?.steps) ? recovery.steps : [];
+                  const timeline = isActiveFlow && Array.isArray(execution.timeline) ? execution.timeline : [];
                   const flowMessage = String(flowMessageByName[normalizedFlowName] || "").trim();
                   const flowHint = String(flowHintByName[normalizedFlowName] || "").trim();
                   const canResume = isActiveFlow && (executionStatus === "failed" || executionStatus === "running");
@@ -462,6 +505,29 @@ export default function PlanOverviewCard({ projectName, plan, flowExecution }: P
                       ) : null}
                       {flowMessage ? <p className="mt-1 text-[11px] text-slate-300">{flowMessage}</p> : null}
                       {flowHint ? <p className="mt-1 text-[11px] text-cyan-300">{flowHint}</p> : null}
+                      {timeline.length > 0 ? (
+                        <div className="mt-2 rounded border border-slate-700 bg-slate-950/40 p-2">
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-300">Execution Timeline</p>
+                          <div className="mt-1 space-y-1">
+                            {timeline.slice(-20).map((event, eventIdx) => {
+                              const eventStatus = normalizeStepStatus(String(event?.status || "pending"));
+                              const eventText = timelineEventText(event || {});
+                              const eventAt = String(event?.at || "").trim();
+                              return (
+                                <div key={`${String(event?.id || eventIdx)}-${eventIdx}`} className="flex items-start justify-between gap-2 rounded border border-slate-700 bg-slate-900/40 px-2 py-1">
+                                  <p className="text-[11px] text-slate-200">{eventText}</p>
+                                  <div className="flex items-center gap-2">
+                                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${statusBadgeClass(eventStatus)}`}>
+                                      {eventStatus}
+                                    </span>
+                                    {eventAt ? <span className="text-[10px] text-slate-400">{eventAt}</span> : null}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : null}
 
                       <div className="mt-2 space-y-2">
                         {flow.steps.slice(0, 10).map((step, idx) => {

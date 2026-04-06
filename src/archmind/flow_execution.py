@@ -75,6 +75,22 @@ def _normalize_step(step: dict[str, Any], idx: int) -> dict[str, Any]:
     }
 
 
+def _normalize_timeline_event(event: dict[str, Any], idx: int) -> dict[str, Any]:
+    row = event if isinstance(event, dict) else {}
+    event_type = str(row.get("type") or "").strip().lower() or "event"
+    status_raw = str(row.get("status") or "").strip().lower()
+    status = _normalize_step_status(status_raw) if status_raw else ""
+    return {
+        "id": str(row.get("id") or f"event_{idx + 1}").strip() or f"event_{idx + 1}",
+        "type": event_type,
+        "status": status,
+        "step_id": str(row.get("step_id") or "").strip(),
+        "command": str(row.get("command") or "").strip(),
+        "detail": str(row.get("detail") or "").strip(),
+        "at": str(row.get("at") or _utc_now_iso()).strip() or _utc_now_iso(),
+    }
+
+
 def _normalize_recovery(payload: dict[str, Any] | None) -> dict[str, Any]:
     row = payload if isinstance(payload, dict) else {}
     steps_raw = row.get("steps") if isinstance(row.get("steps"), list) else []
@@ -104,7 +120,9 @@ def _normalize_recovery(payload: dict[str, Any] | None) -> dict[str, Any]:
 def _normalize_flow_execution(payload: dict[str, Any] | None) -> dict[str, Any]:
     row = payload if isinstance(payload, dict) else {}
     steps_raw = row.get("steps") if isinstance(row.get("steps"), list) else []
+    timeline_raw = row.get("timeline") if isinstance(row.get("timeline"), list) else []
     steps = [_normalize_step(step, idx) for idx, step in enumerate(steps_raw) if isinstance(step, dict)]
+    timeline = [_normalize_timeline_event(item, idx) for idx, item in enumerate(timeline_raw) if isinstance(item, dict)]
     return {
         "project_id": str(row.get("project_id") or "").strip(),
         "flow_name": str(row.get("flow_name") or "").strip(),
@@ -112,6 +130,7 @@ def _normalize_flow_execution(payload: dict[str, Any] | None) -> dict[str, Any]:
         "current_step": str(row.get("current_step") or "").strip(),
         "steps": steps,
         "recovery": _normalize_recovery(row.get("recovery") if isinstance(row.get("recovery"), dict) else None),
+        "timeline": timeline,
         "updated_at": str(row.get("updated_at") or _utc_now_iso()).strip() or _utc_now_iso(),
     }
 
@@ -148,15 +167,43 @@ def _build_initial_execution(project_id: str, flow_name: str, steps: list[dict[s
         if command:
             current_step = str(item.get("id") or "").strip()
             break
-    return {
+    execution = {
         "project_id": str(project_id or "").strip(),
         "flow_name": str(flow_name or "").strip(),
         "status": "running",
         "current_step": current_step,
         "steps": normalized_steps,
         "recovery": _normalize_recovery(None),
+        "timeline": [],
         "updated_at": _utc_now_iso(),
     }
+    append_timeline(
+        execution,
+        {
+            "type": "flow_start",
+            "status": "running",
+            "detail": f"Flow {str(flow_name or '').strip() or 'Plan Flow'} started",
+        },
+    )
+    return execution
+
+
+def append_timeline(execution: dict[str, Any], event: dict[str, Any]) -> None:
+    if not isinstance(execution, dict) or not isinstance(event, dict):
+        return
+    timeline = execution.get("timeline")
+    if not isinstance(timeline, list):
+        timeline = []
+        execution["timeline"] = timeline
+    normalized = _normalize_timeline_event(
+        {
+            **event,
+            "id": str(event.get("id") or f"event_{len(timeline) + 1}").strip() or f"event_{len(timeline) + 1}",
+            "at": str(event.get("at") or _utc_now_iso()).strip() or _utc_now_iso(),
+        },
+        len(timeline),
+    )
+    timeline.append(normalized)
 
 
 def _set_step_status(execution: dict[str, Any], step_id: str, status: str) -> None:
@@ -361,6 +408,15 @@ def handle_failure_with_recovery(
             "status": "completed",
         }
         prepared, resume_step_id = _prepare_execution_for_resume(execution)
+        append_timeline(
+            prepared,
+            {
+                "type": "resume",
+                "status": "running",
+                "step_id": str(resume_step_id or "").strip(),
+                "detail": "Resume without recovery steps",
+            },
+        )
         return {
             "ok": True,
             "failure_class": normalized_failure_class,
@@ -377,16 +433,43 @@ def handle_failure_with_recovery(
         "status": "running",
     }
     execution["recovery"] = recovery_log
+    append_timeline(
+        execution,
+        {
+            "type": "recovery_start",
+            "status": "running",
+            "step_id": str(failed_step_id or "").strip(),
+            "detail": normalized_failure_class,
+        },
+    )
     for command in recovery_steps:
         cmd = str(command or "").strip()
         if not cmd:
             continue
         recovery_step = {"command": cmd, "status": "running"}
         recovery_log["steps"].append(recovery_step)
+        append_timeline(
+            execution,
+            {
+                "type": "recovery_step",
+                "status": "running",
+                "command": cmd,
+                "detail": "Recovery step running",
+            },
+        )
         recovery_result = execute_command(cmd, project_id, source="ui-flow-recovery")
         if not bool(recovery_result.get("ok")):
             recovery_step["status"] = "failed"
             recovery_log["status"] = "failed"
+            append_timeline(
+                execution,
+                {
+                    "type": "recovery_step",
+                    "status": "failed",
+                    "command": cmd,
+                    "detail": str(recovery_result.get("error") or recovery_result.get("detail") or "recovery failed").strip(),
+                },
+            )
             return {
                 "ok": False,
                 "failure_class": normalized_failure_class,
@@ -397,8 +480,26 @@ def handle_failure_with_recovery(
             }
         recovery_step["status"] = "done"
         executed_recovery_steps.append(cmd)
+        append_timeline(
+            execution,
+            {
+                "type": "recovery_step",
+                "status": "done",
+                "command": cmd,
+                "detail": "Recovery step done",
+            },
+        )
     recovery_log["status"] = "completed"
     prepared, resume_step_id = _prepare_execution_for_resume(execution)
+    append_timeline(
+        prepared,
+        {
+            "type": "resume",
+            "status": "running",
+            "step_id": str(resume_step_id or "").strip(),
+            "detail": "Resume after recovery",
+        },
+    )
     if not resume_step_id:
         return {
             "ok": True,
@@ -442,24 +543,63 @@ def _run_flow_execution(project_dir: Path, project_id: str) -> None:
                     _set_step_status(execution, step_id, "failed")
                     execution["status"] = "failed"
                     execution["current_step"] = step_id
+                    append_timeline(
+                        execution,
+                        {
+                            "type": "step",
+                            "status": "failed",
+                            "step_id": step_id,
+                            "detail": "Missing command",
+                        },
+                    )
                     _persist_flow_execution(project_dir, execution)
                     return
 
                 execution["status"] = "running"
                 execution["current_step"] = step_id
                 _set_step_status(execution, step_id, "running")
+                append_timeline(
+                    execution,
+                    {
+                        "type": "step",
+                        "status": "running",
+                        "step_id": step_id,
+                        "command": command,
+                        "detail": "Step running",
+                    },
+                )
                 _persist_flow_execution(project_dir, execution)
 
                 result = execute_command(command, project_id, source="ui-flow-run")
                 ok = bool(result.get("ok"))
                 if ok:
                     _set_step_status(execution, step_id, "done")
+                    append_timeline(
+                        execution,
+                        {
+                            "type": "step",
+                            "status": "done",
+                            "step_id": step_id,
+                            "command": command,
+                            "detail": "Step done",
+                        },
+                    )
                     _persist_flow_execution(project_dir, execution)
                     continue
 
                 _set_step_status(execution, step_id, "failed")
                 execution["status"] = "failed"
                 execution["current_step"] = step_id
+                append_timeline(
+                    execution,
+                    {
+                        "type": "step",
+                        "status": "failed",
+                        "step_id": step_id,
+                        "command": command,
+                        "detail": str(result.get("error") or result.get("detail") or "step failed").strip(),
+                    },
+                )
                 _persist_flow_execution(project_dir, execution)
 
                 if step_id in recovery_attempted_steps:
@@ -484,6 +624,14 @@ def _run_flow_execution(project_dir: Path, project_id: str) -> None:
 
             execution["status"] = "completed"
             execution["current_step"] = ""
+            append_timeline(
+                execution,
+                {
+                    "type": "flow_complete",
+                    "status": "done",
+                    "detail": "Flow completed",
+                },
+            )
             _persist_flow_execution(project_dir, execution)
             return
 
@@ -569,6 +717,16 @@ def resume_flow_execution(
                 "flow_execution": current,
             }
         prepared, resume_step_id = _prepare_execution_for_resume(current)
+        if resume_step_id:
+            append_timeline(
+                prepared,
+                {
+                    "type": "resume",
+                    "status": "running",
+                    "step_id": resume_step_id,
+                    "detail": "Manual resume requested",
+                },
+            )
         _persist_flow_execution(project_dir, prepared)
 
     if not resume_step_id:
