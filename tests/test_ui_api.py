@@ -1853,6 +1853,15 @@ def test_ui_project_detail_includes_flow_execution_and_reload_returns_same_state
                     {"id": "s2", "status": "running"},
                     {"id": "s3", "status": "pending"},
                 ],
+                "recovery": {
+                    "triggered": True,
+                    "reason": "runtime-error",
+                    "status": "running",
+                    "steps": [
+                        {"command": "/restart", "status": "done"},
+                        {"command": "/improve", "status": "running"},
+                    ],
+                },
                 "updated_at": "2026-04-06T00:00:00Z",
             }
         ),
@@ -1872,6 +1881,10 @@ def test_ui_project_detail_includes_flow_execution_and_reload_returns_same_state
     assert execution_a["flow_name"] == "Core Flow"
     assert execution_a["status"] == "running"
     assert execution_a["current_step"] == "s2"
+    assert execution_a["recovery"]["triggered"] is True
+    assert execution_a["recovery"]["reason"] == "runtime-error"
+    assert execution_a["recovery"]["status"] == "running"
+    assert [item["command"] for item in execution_a["recovery"]["steps"]] == ["/restart", "/improve"]
     assert execution_a == execution_b
 
 
@@ -2094,6 +2107,11 @@ def test_ui_run_flow_failure_triggers_recovery_and_resumes_original_flow(monkeyp
     payload = response.json()
     assert payload["ok"] is True
     assert payload["flow_execution"]["status"] == "completed"
+    assert payload["flow_execution"]["recovery"]["triggered"] is True
+    assert payload["flow_execution"]["recovery"]["reason"] == "runtime-error"
+    assert payload["flow_execution"]["recovery"]["status"] == "completed"
+    assert [item["command"] for item in payload["flow_execution"]["recovery"]["steps"]] == ["/restart", "/improve"]
+    assert [item["status"] for item in payload["flow_execution"]["recovery"]["steps"]] == ["done", "done"]
     statuses = {step["id"]: step["status"] for step in payload["flow_execution"]["steps"]}
     assert statuses["s1"] == "done"
     assert statuses["s2"] == "done"
@@ -2104,6 +2122,11 @@ def test_ui_run_flow_failure_triggers_recovery_and_resumes_original_flow(monkeyp
         "ui-flow-run:/add_api GET /notes",
         "ui-flow-run:/add_page notes/list",
     ]
+    persisted = json.loads((projects_root / "flow-recovery-runtime" / ".archmind" / "flow_execution.json").read_text(encoding="utf-8"))
+    assert persisted["recovery"]["triggered"] is True
+    assert persisted["recovery"]["reason"] == "runtime-error"
+    assert persisted["recovery"]["status"] == "completed"
+    assert [item["status"] for item in persisted["recovery"]["steps"]] == ["done", "done"]
 
 
 def test_ui_run_flow_recovery_mapping_frontend_clean_uses_restart_only(monkeypatch, tmp_path: Path) -> None:
@@ -2785,6 +2808,13 @@ def test_plan_overview_flow_execution_triggers_refresh_after_flow_run() -> None:
     source = Path("frontend/components/PlanOverviewCard.tsx").read_text(encoding="utf-8")
     assert "setRunningFlowName(\"\");" in source
     assert "router.refresh();" in source
+
+
+def test_plan_overview_source_renders_recovery_block_when_triggered() -> None:
+    source = Path("frontend/components/PlanOverviewCard.tsx").read_text(encoding="utf-8")
+    assert "recovery?.triggered" in source
+    assert "Reason: {recoveryReason || \"default\"}" in source
+    assert "recoverySteps.map" in source
 
 
 def test_plan_overview_component_keeps_individual_run_and_copy_actions() -> None:

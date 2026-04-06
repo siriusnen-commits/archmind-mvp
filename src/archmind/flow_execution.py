@@ -12,6 +12,7 @@ from archmind.command_executor import execute_command
 
 _STATUS_VALUES = {"pending", "running", "completed", "failed"}
 _STEP_STATUS_VALUES = {"pending", "running", "done", "failed"}
+_RECOVERY_STATUS_VALUES = {"running", "completed", "failed"}
 _FLOW_LOCKS: dict[str, threading.Lock] = {}
 _FLOW_THREADS: dict[str, threading.Thread] = {}
 _GUARD = threading.Lock()
@@ -53,6 +54,13 @@ def _normalize_step_status(value: Any) -> str:
     return "pending"
 
 
+def _normalize_recovery_status(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if text in _RECOVERY_STATUS_VALUES:
+        return text
+    return "failed"
+
+
 def _normalize_step(step: dict[str, Any], idx: int) -> dict[str, Any]:
     step_id = str(step.get("id") or f"step_{idx + 1}").strip() or f"step_{idx + 1}"
     return {
@@ -61,6 +69,32 @@ def _normalize_step(step: dict[str, Any], idx: int) -> dict[str, Any]:
         "command": str(step.get("command") or "").strip(),
         "depends_on": [str(x).strip() for x in (step.get("depends_on") or []) if str(x).strip()],
         "status": _normalize_step_status(step.get("status") or "pending"),
+    }
+
+
+def _normalize_recovery(payload: dict[str, Any] | None) -> dict[str, Any]:
+    row = payload if isinstance(payload, dict) else {}
+    steps_raw = row.get("steps") if isinstance(row.get("steps"), list) else []
+    steps: list[dict[str, str]] = []
+    for item in steps_raw:
+        if not isinstance(item, dict):
+            continue
+        command = str(item.get("command") or "").strip()
+        if not command:
+            continue
+        steps.append(
+            {
+                "command": command,
+                "status": _normalize_step_status(item.get("status") or "pending"),
+            }
+        )
+    triggered = bool(row.get("triggered"))
+    default_status = "failed" if triggered else "completed"
+    return {
+        "triggered": triggered,
+        "reason": str(row.get("reason") or "").strip(),
+        "steps": steps,
+        "status": _normalize_recovery_status(row.get("status") or default_status),
     }
 
 
@@ -74,6 +108,7 @@ def _normalize_flow_execution(payload: dict[str, Any] | None) -> dict[str, Any]:
         "status": _normalize_status(row.get("status") or "pending"),
         "current_step": str(row.get("current_step") or "").strip(),
         "steps": steps,
+        "recovery": _normalize_recovery(row.get("recovery") if isinstance(row.get("recovery"), dict) else None),
         "updated_at": str(row.get("updated_at") or _utc_now_iso()).strip() or _utc_now_iso(),
     }
 
@@ -116,6 +151,7 @@ def _build_initial_execution(project_id: str, flow_name: str, steps: list[dict[s
         "status": "running",
         "current_step": current_step,
         "steps": normalized_steps,
+        "recovery": _normalize_recovery(None),
         "updated_at": _utc_now_iso(),
     }
 
@@ -212,20 +248,34 @@ def handle_failure_with_recovery(
     normalized_failure_class = _normalize_failure_class(raw_failure_class)
     recovery_steps = _select_recovery_steps(normalized_failure_class)
     executed_recovery_steps: list[str] = []
+    recovery_log: dict[str, Any] = {
+        "triggered": True,
+        "reason": normalized_failure_class,
+        "steps": [],
+        "status": "running",
+    }
+    execution["recovery"] = recovery_log
     for command in recovery_steps:
         cmd = str(command or "").strip()
         if not cmd:
             continue
+        recovery_step = {"command": cmd, "status": "running"}
+        recovery_log["steps"].append(recovery_step)
         recovery_result = execute_command(cmd, project_id, source="ui-flow-recovery")
         if not bool(recovery_result.get("ok")):
+            recovery_step["status"] = "failed"
+            recovery_log["status"] = "failed"
             return {
                 "ok": False,
                 "failure_class": normalized_failure_class,
                 "recovery_steps": recovery_steps,
                 "executed_recovery_steps": executed_recovery_steps,
                 "error": str(recovery_result.get("error") or recovery_result.get("detail") or "recovery failed").strip(),
+                "flow_execution": execution,
             }
+        recovery_step["status"] = "done"
         executed_recovery_steps.append(cmd)
+    recovery_log["status"] = "completed"
     prepared, resume_step_id = _prepare_execution_for_resume(execution)
     if not resume_step_id:
         return {
