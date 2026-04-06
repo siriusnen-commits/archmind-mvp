@@ -2037,7 +2037,7 @@ def _resolve_plan_flow_steps(plan_payload: dict[str, Any], flow_name: str) -> li
     return []
 
 
-def run_project_flow(project_dir: Path, flow_name: str) -> dict[str, Any]:
+def run_project_flow(project_dir: Path, flow_name: str, *, sync: bool | None = None) -> dict[str, Any]:
     target_flow_name = str(flow_name or "").strip()
     if not target_flow_name:
         return {
@@ -2102,6 +2102,7 @@ def run_project_flow(project_dir: Path, flow_name: str) -> dict[str, Any]:
         project_id=project_dir.name,
         flow_name=target_flow_name,
         steps=steps,
+        sync=sync,
     )
     return {
         "ok": bool(result.get("ok")),
