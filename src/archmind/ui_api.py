@@ -22,6 +22,7 @@ from archmind.project_query import (
     restart_project_runtime,
     run_project_all,
     run_project_backend,
+    run_project_flow,
     select_current_project,
     stop_project_runtime,
     update_project_provider_mode,
@@ -53,6 +54,8 @@ from archmind.ui_models import (
     RuntimeActionResponse,
     RunCommandRequest,
     RunCommandResponse,
+    RunFlowRequest,
+    RunFlowResponse,
     NewProjectWizardRequest,
     NewProjectWizardResponse,
 )
@@ -608,6 +611,42 @@ def post_ui_project_run_command(project_name: str, body: RunCommandRequest) -> R
             project_name=project_name,
             command=str(body.command or ""),
             detail="Failed to run command",
+            error=str(exc),
+        )
+
+
+@router.post("/projects/{project_name}/run_flow", response_model=RunFlowResponse)
+def post_ui_project_run_flow(project_name: str, body: RunFlowRequest) -> RunFlowResponse:
+    try:
+        project_dir = find_project_by_name(project_name)
+        if project_dir is None:
+            return RunFlowResponse(
+                ok=False,
+                started=False,
+                project_name=project_name,
+                flow_name=str(body.flow_name or "").strip(),
+                detail="Project not found",
+                error="Project not found",
+            )
+        flow_name = str(body.flow_name or "").strip()
+        result = run_project_flow(project_dir, flow_name)
+        return RunFlowResponse(
+            ok=bool(result.get("ok")),
+            started=bool(result.get("started")),
+            project_name=project_name,
+            flow_name=flow_name,
+            detail=str(result.get("detail") or ""),
+            error=str(result.get("error") or ""),
+            flow_execution=result.get("flow_execution") if isinstance(result.get("flow_execution"), dict) else {},
+        )
+    except Exception as exc:
+        logger.exception("Failed to run flow: %s", project_name)
+        return RunFlowResponse(
+            ok=False,
+            started=False,
+            project_name=project_name,
+            flow_name=str(body.flow_name or "").strip(),
+            detail="Failed to run flow",
             error=str(exc),
         )
 

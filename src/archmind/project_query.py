@@ -14,6 +14,7 @@ from archmind.deploy import get_local_runtime_status
 from archmind.next_suggester import analyze_spec_progression
 from archmind.project_analysis import analyze_project
 from archmind.execution_history import load_recent_execution_events
+from archmind.flow_execution import load_flow_execution, start_flow_execution
 from archmind.runtime_orchestrator import run_all_local_services
 from archmind.state import load_provider_mode, load_state, set_provider_mode, update_runtime_state, write_state
 from archmind.telegram_bot import (
@@ -1625,6 +1626,7 @@ def _empty_project_detail(project_dir: Path, warning: str = "") -> ProjectDetail
         },
         design={},
         plan={},
+        flow_execution=load_flow_execution(project_dir),
         logs={"default_source": "latest", "max_lines": _UI_LOG_MAX_LINES, "sources": []},
         auto_summary={},
         verification={},
@@ -1935,6 +1937,7 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
             spec_payload=spec if isinstance(spec, dict) else {},
             verification_payload=verification_overview if isinstance(verification_overview, dict) else {},
         )
+        flow_execution = load_flow_execution(project_dir)
         architecture = {
             "app_shape": str(state_payload.get("architecture_app_shape") or spec.get("shape") or "unknown").strip() or "unknown",
             "recommended_template": (
@@ -1989,6 +1992,7 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
             architecture=architecture,
             design=design_overview,
             plan=plan_overview,
+            flow_execution=flow_execution,
             logs=logs,
             auto_summary=auto_summary,
             verification=verification_overview,
@@ -1999,6 +2003,113 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
         )
     except Exception as exc:
         return _empty_project_detail(project_dir, warning=f"Failed to load full project detail: {exc}")
+
+
+def _resolve_plan_flow_steps(plan_payload: dict[str, Any], flow_name: str) -> list[dict[str, Any]]:
+    target_name = str(flow_name or "").strip().lower()
+    if not target_name:
+        return []
+    flows = plan_payload.get("flows") if isinstance(plan_payload.get("flows"), list) else []
+    for flow in flows:
+        if not isinstance(flow, dict):
+            continue
+        name = str(flow.get("name") or "").strip()
+        if str(name).lower() != target_name:
+            continue
+        steps_raw = flow.get("steps") if isinstance(flow.get("steps"), list) else []
+        steps: list[dict[str, Any]] = []
+        for item in steps_raw:
+            if not isinstance(item, dict):
+                continue
+            command = str(item.get("command") or "").strip()
+            if not command:
+                continue
+            steps.append(
+                {
+                    "id": str(item.get("id") or "").strip(),
+                    "title": str(item.get("title") or "").strip() or "Plan step",
+                    "command": command,
+                    "depends_on": [str(dep).strip() for dep in (item.get("depends_on") or []) if str(dep).strip()],
+                    "status": "pending",
+                }
+            )
+        return steps
+    return []
+
+
+def run_project_flow(project_dir: Path, flow_name: str) -> dict[str, Any]:
+    target_flow_name = str(flow_name or "").strip()
+    if not target_flow_name:
+        return {
+            "ok": False,
+            "started": False,
+            "detail": "Flow name is required",
+            "error": "flow name is required",
+            "flow_execution": load_flow_execution(project_dir),
+        }
+
+    state_payload = load_state(project_dir) or {}
+    spec, _ = _read_or_init_project_spec(project_dir)
+    runtime_payload = get_local_runtime_status(project_dir)
+    analysis_payload = analyze_project(
+        project_dir,
+        project_name=project_dir.name,
+        spec_payload=spec if isinstance(spec, dict) else {},
+        runtime_payload=runtime_payload if isinstance(runtime_payload, dict) else {},
+    )
+    recent_runs_raw = load_recent_execution_events(project_dir, limit=10)
+    recent_runs: list[dict[str, Any]] = []
+    for item in reversed(recent_runs_raw):
+        if not isinstance(item, dict):
+            continue
+        verification = _normalize_verification_payload(item.get("verification"))
+        recent_runs.append(
+            {
+                "timestamp": _normalize_ui_timestamp(item.get("timestamp")),
+                "source": str(item.get("source") or "").strip(),
+                "command": str(item.get("command") or "").strip(),
+                "status": str(item.get("status") or "").strip().lower(),
+                "message": str(item.get("message") or "").strip(),
+                "stop_reason": str(item.get("stop_reason") or "").strip(),
+                "verification_status": str(verification.get("overall_status") or "").strip().upper(),
+                "verification_issues": verification.get("issues") if isinstance(verification.get("issues"), list) else [],
+                "drift_summary": str(verification.get("drift_summary") or "").strip(),
+                "runtime_reflection": str(verification.get("runtime_reflection") or "").strip(),
+            }
+        )
+    auto_summary_raw = state_payload.get("auto_last_result") if isinstance(state_payload.get("auto_last_result"), dict) else {}
+    auto_summary = _normalize_auto_summary(auto_summary_raw)
+    verification_overview = _build_verification_overview(recent_runs)
+    plan_payload = _build_plan_overview(
+        project_dir,
+        analysis_payload=analysis_payload if isinstance(analysis_payload, dict) else {},
+        auto_summary=auto_summary,
+        spec_payload=spec if isinstance(spec, dict) else {},
+        verification_payload=verification_overview if isinstance(verification_overview, dict) else {},
+    )
+    steps = _resolve_plan_flow_steps(plan_payload if isinstance(plan_payload, dict) else {}, target_flow_name)
+    if not steps:
+        return {
+            "ok": False,
+            "started": False,
+            "detail": "Flow not found or flow has no executable steps",
+            "error": "flow not found",
+            "flow_execution": load_flow_execution(project_dir),
+        }
+
+    result = start_flow_execution(
+        project_dir,
+        project_id=project_dir.name,
+        flow_name=target_flow_name,
+        steps=steps,
+    )
+    return {
+        "ok": bool(result.get("ok")),
+        "started": bool(result.get("started")),
+        "detail": str(result.get("detail") or ""),
+        "error": str(result.get("error") or ""),
+        "flow_execution": result.get("flow_execution") if isinstance(result.get("flow_execution"), dict) else {},
+    }
 
 
 def update_project_provider_mode(project_dir: Path, mode: str) -> str:
