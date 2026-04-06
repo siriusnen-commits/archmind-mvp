@@ -1826,7 +1826,7 @@ def test_ui_run_flow_stops_on_failure_and_keeps_later_steps_pending(monkeypatch,
     assert statuses["s1"] == "done"
     assert statuses["s2"] == "failed"
     assert statuses["s3"] == "pending"
-    assert calls["count"] == 2
+    assert calls["count"] == 3
 
     persisted = json.loads((project_dir / ".archmind" / "flow_execution.json").read_text(encoding="utf-8"))
     assert persisted["status"] == "failed"
@@ -2003,7 +2003,7 @@ def test_ui_resume_flow_stops_on_failure_and_keeps_later_steps_pending(monkeypat
     assert statuses["s1"] == "done"
     assert statuses["s2"] == "failed"
     assert statuses["s3"] == "pending"
-    assert calls["count"] == 1
+    assert calls["count"] == 2
 
 
 def test_ui_resume_flow_completes_remaining_steps(monkeypatch, tmp_path: Path) -> None:
@@ -2042,6 +2042,197 @@ def test_ui_resume_flow_completes_remaining_steps(monkeypatch, tmp_path: Path) -
     assert statuses["s1"] == "done"
     assert statuses["s2"] == "done"
     assert statuses["s3"] == "done"
+
+
+def test_ui_run_flow_failure_triggers_recovery_and_resumes_original_flow(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "flow-recovery-runtime")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setenv("ARCHMIND_FLOW_EXEC_SYNC", "1")
+
+    def _fixed_plan(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return {
+            "goal": "recover_flow",
+            "priority": "high",
+            "why": "Need recovery flow",
+            "expected_effect": "Flow recovers and completes",
+            "steps": [],
+            "flows": [
+                {
+                    "name": "Core Flow",
+                    "flow_type": "crud",
+                    "steps": [
+                        {"id": "s1", "title": "Step1", "command": "/add_api GET /notes"},
+                        {"id": "s2", "title": "Step2", "command": "/add_page notes/list"},
+                    ],
+                }
+            ],
+        }
+
+    call_order: list[str] = []
+    run_attempts = {"s1": 0}
+
+    def _fake_execute(command: str, _project: str, *, source: str = "", **_kwargs):  # type: ignore[no-untyped-def]
+        call_order.append(f"{source}:{command}")
+        if source == "ui-flow-run" and command == "/add_api GET /notes":
+            run_attempts["s1"] += 1
+            if run_attempts["s1"] == 1:
+                return {"ok": False, "error": "runtime boom", "failure_class": "runtime-error"}
+            return {"ok": True, "detail": "ok"}
+        if source == "ui-flow-run" and command == "/add_page notes/list":
+            return {"ok": True, "detail": "ok"}
+        if source == "ui-flow-recovery":
+            return {"ok": True, "detail": "recovered"}
+        return {"ok": True, "detail": "ok"}
+
+    monkeypatch.setattr("archmind.project_query._build_plan_overview", _fixed_plan)
+    monkeypatch.setattr("archmind.flow_execution.execute_command", _fake_execute)
+
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/flow-recovery-runtime/run_flow", json={"flow_name": "Core Flow"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["flow_execution"]["status"] == "completed"
+    statuses = {step["id"]: step["status"] for step in payload["flow_execution"]["steps"]}
+    assert statuses["s1"] == "done"
+    assert statuses["s2"] == "done"
+    assert call_order == [
+        "ui-flow-run:/add_api GET /notes",
+        "ui-flow-recovery:/restart",
+        "ui-flow-recovery:/improve",
+        "ui-flow-run:/add_api GET /notes",
+        "ui-flow-run:/add_page notes/list",
+    ]
+
+
+def test_ui_run_flow_recovery_mapping_frontend_clean_uses_restart_only(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "flow-recovery-frontend")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setenv("ARCHMIND_FLOW_EXEC_SYNC", "1")
+
+    def _fixed_plan(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return {
+            "goal": "recover_flow",
+            "priority": "high",
+            "why": "Need recovery flow",
+            "expected_effect": "Flow recovers and completes",
+            "steps": [],
+            "flows": [{"name": "Core Flow", "flow_type": "crud", "steps": [{"id": "s1", "title": "Step1", "command": "/add_api GET /notes"}]}],
+        }
+
+    call_order: list[str] = []
+    attempts = {"run": 0}
+
+    def _fake_execute(command: str, _project: str, *, source: str = "", **_kwargs):  # type: ignore[no-untyped-def]
+        call_order.append(f"{source}:{command}")
+        if source == "ui-flow-run":
+            attempts["run"] += 1
+            if attempts["run"] == 1:
+                return {"ok": False, "error": "frontend lint fail", "failure_class": "frontend-clean"}
+            return {"ok": True, "detail": "ok"}
+        return {"ok": True, "detail": "ok"}
+
+    monkeypatch.setattr("archmind.project_query._build_plan_overview", _fixed_plan)
+    monkeypatch.setattr("archmind.flow_execution.execute_command", _fake_execute)
+
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/flow-recovery-frontend/run_flow", json={"flow_name": "Core Flow"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["flow_execution"]["status"] == "completed"
+    assert call_order == [
+        "ui-flow-run:/add_api GET /notes",
+        "ui-flow-recovery:/restart",
+        "ui-flow-run:/add_api GET /notes",
+    ]
+
+
+def test_ui_run_flow_recovery_mapping_generation_error_uses_improve(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "flow-recovery-generation")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setenv("ARCHMIND_FLOW_EXEC_SYNC", "1")
+
+    def _fixed_plan(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return {
+            "goal": "recover_flow",
+            "priority": "high",
+            "why": "Need recovery flow",
+            "expected_effect": "Flow recovers and completes",
+            "steps": [],
+            "flows": [{"name": "Core Flow", "flow_type": "crud", "steps": [{"id": "s1", "title": "Step1", "command": "/add_api GET /notes"}]}],
+        }
+
+    call_order: list[str] = []
+    attempts = {"run": 0}
+
+    def _fake_execute(command: str, _project: str, *, source: str = "", **_kwargs):  # type: ignore[no-untyped-def]
+        call_order.append(f"{source}:{command}")
+        if source == "ui-flow-run":
+            attempts["run"] += 1
+            if attempts["run"] == 1:
+                return {"ok": False, "error": "generation broken", "failure_class": "generation-error"}
+            return {"ok": True, "detail": "ok"}
+        return {"ok": True, "detail": "ok"}
+
+    monkeypatch.setattr("archmind.project_query._build_plan_overview", _fixed_plan)
+    monkeypatch.setattr("archmind.flow_execution.execute_command", _fake_execute)
+
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/flow-recovery-generation/run_flow", json={"flow_name": "Core Flow"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["flow_execution"]["status"] == "completed"
+    assert call_order == [
+        "ui-flow-run:/add_api GET /notes",
+        "ui-flow-recovery:/improve",
+        "ui-flow-run:/add_api GET /notes",
+    ]
+
+
+def test_ui_run_flow_recovery_default_fallback_uses_improve(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "flow-recovery-default")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setenv("ARCHMIND_FLOW_EXEC_SYNC", "1")
+
+    def _fixed_plan(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return {
+            "goal": "recover_flow",
+            "priority": "high",
+            "why": "Need recovery flow",
+            "expected_effect": "Flow recovers and completes",
+            "steps": [],
+            "flows": [{"name": "Core Flow", "flow_type": "crud", "steps": [{"id": "s1", "title": "Step1", "command": "/add_api GET /notes"}]}],
+        }
+
+    call_order: list[str] = []
+    attempts = {"run": 0}
+
+    def _fake_execute(command: str, _project: str, *, source: str = "", **_kwargs):  # type: ignore[no-untyped-def]
+        call_order.append(f"{source}:{command}")
+        if source == "ui-flow-run":
+            attempts["run"] += 1
+            if attempts["run"] == 1:
+                return {"ok": False, "error": "unknown fail class"}
+            return {"ok": True, "detail": "ok"}
+        return {"ok": True, "detail": "ok"}
+
+    monkeypatch.setattr("archmind.project_query._build_plan_overview", _fixed_plan)
+    monkeypatch.setattr("archmind.flow_execution.execute_command", _fake_execute)
+
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/flow-recovery-default/run_flow", json={"flow_name": "Core Flow"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["flow_execution"]["status"] == "completed"
+    assert call_order == [
+        "ui-flow-run:/add_api GET /notes",
+        "ui-flow-recovery:/improve",
+        "ui-flow-run:/add_api GET /notes",
+    ]
 
 
 def test_ui_add_entity_rejects_empty_name_safely(monkeypatch, tmp_path: Path) -> None:

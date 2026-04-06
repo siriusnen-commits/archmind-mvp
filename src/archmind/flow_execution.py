@@ -178,50 +178,141 @@ def _prepare_execution_for_resume(execution: dict[str, Any]) -> tuple[dict[str, 
     return execution, first_resume_step_id
 
 
+def _normalize_failure_class(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if "frontend-clean" in text:
+        return "frontend-clean"
+    if "runtime" in text:
+        return "runtime-error"
+    if "generation" in text:
+        return "generation-error"
+    return "default"
+
+
+def _select_recovery_steps(failure_class: str) -> list[str]:
+    key = _normalize_failure_class(failure_class)
+    if key == "frontend-clean":
+        return ["/restart"]
+    if key == "runtime-error":
+        return ["/restart", "/improve"]
+    if key == "generation-error":
+        return ["/improve"]
+    return ["/improve"]
+
+
+def handle_failure_with_recovery(
+    project_id: str,
+    execution: dict[str, Any],
+    *,
+    failed_step_id: str,
+    failure_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    row = failure_result if isinstance(failure_result, dict) else {}
+    raw_failure_class = str(row.get("failure_class") or row.get("error") or row.get("detail") or "").strip()
+    normalized_failure_class = _normalize_failure_class(raw_failure_class)
+    recovery_steps = _select_recovery_steps(normalized_failure_class)
+    executed_recovery_steps: list[str] = []
+    for command in recovery_steps:
+        cmd = str(command or "").strip()
+        if not cmd:
+            continue
+        recovery_result = execute_command(cmd, project_id, source="ui-flow-recovery")
+        if not bool(recovery_result.get("ok")):
+            return {
+                "ok": False,
+                "failure_class": normalized_failure_class,
+                "recovery_steps": recovery_steps,
+                "executed_recovery_steps": executed_recovery_steps,
+                "error": str(recovery_result.get("error") or recovery_result.get("detail") or "recovery failed").strip(),
+            }
+        executed_recovery_steps.append(cmd)
+    prepared, resume_step_id = _prepare_execution_for_resume(execution)
+    if not resume_step_id:
+        return {
+            "ok": True,
+            "failure_class": normalized_failure_class,
+            "recovery_steps": recovery_steps,
+            "executed_recovery_steps": executed_recovery_steps,
+            "resume_step_id": "",
+            "flow_execution": prepared,
+        }
+    return {
+        "ok": True,
+        "failure_class": normalized_failure_class,
+        "recovery_steps": recovery_steps,
+        "executed_recovery_steps": executed_recovery_steps,
+        "resume_step_id": resume_step_id,
+        "flow_execution": prepared,
+        "failed_step_id": str(failed_step_id or "").strip(),
+    }
+
+
 def _run_flow_execution(project_dir: Path, project_id: str) -> None:
     lock = _flow_lock(project_dir)
     with lock:
-        execution = load_flow_execution(project_dir)
-        if not execution or execution.get("status") != "running":
-            return
+        recovery_attempted_steps: set[str] = set()
+        while True:
+            execution = load_flow_execution(project_dir)
+            if not execution or execution.get("status") != "running":
+                return
 
-        steps = execution.get("steps") if isinstance(execution.get("steps"), list) else []
-        for step in steps:
-            if not isinstance(step, dict):
-                continue
-            step_id = str(step.get("id") or "").strip()
-            command = str(step.get("command") or "").strip()
-            current_status = _normalize_step_status(step.get("status") or "pending")
-            if current_status in {"done", "failed"}:
-                continue
-            if not command:
+            steps = execution.get("steps") if isinstance(execution.get("steps"), list) else []
+            failure_handled = False
+            for step in steps:
+                if not isinstance(step, dict):
+                    continue
+                step_id = str(step.get("id") or "").strip()
+                command = str(step.get("command") or "").strip()
+                current_status = _normalize_step_status(step.get("status") or "pending")
+                if current_status in {"done", "failed"}:
+                    continue
+                if not command:
+                    _set_step_status(execution, step_id, "failed")
+                    execution["status"] = "failed"
+                    execution["current_step"] = step_id
+                    _persist_flow_execution(project_dir, execution)
+                    return
+
+                execution["status"] = "running"
+                execution["current_step"] = step_id
+                _set_step_status(execution, step_id, "running")
+                _persist_flow_execution(project_dir, execution)
+
+                result = execute_command(command, project_id, source="ui-flow-run")
+                ok = bool(result.get("ok"))
+                if ok:
+                    _set_step_status(execution, step_id, "done")
+                    _persist_flow_execution(project_dir, execution)
+                    continue
+
                 _set_step_status(execution, step_id, "failed")
                 execution["status"] = "failed"
                 execution["current_step"] = step_id
                 _persist_flow_execution(project_dir, execution)
-                return
 
-            execution["status"] = "running"
-            execution["current_step"] = step_id
-            _set_step_status(execution, step_id, "running")
-            _persist_flow_execution(project_dir, execution)
+                if step_id in recovery_attempted_steps:
+                    return
+                recovery_attempted_steps.add(step_id)
+                recovery = handle_failure_with_recovery(
+                    project_id,
+                    execution,
+                    failed_step_id=step_id,
+                    failure_result=result if isinstance(result, dict) else {},
+                )
+                if not bool(recovery.get("ok")):
+                    return
+                resumed = recovery.get("flow_execution") if isinstance(recovery.get("flow_execution"), dict) else execution
+                _persist_flow_execution(project_dir, resumed if isinstance(resumed, dict) else execution)
+                failure_handled = True
+                break
 
-            result = execute_command(command, project_id, source="ui-flow-run")
-            ok = bool(result.get("ok"))
-            if ok:
-                _set_step_status(execution, step_id, "done")
-                _persist_flow_execution(project_dir, execution)
+            if failure_handled:
                 continue
 
-            _set_step_status(execution, step_id, "failed")
-            execution["status"] = "failed"
-            execution["current_step"] = step_id
+            execution["status"] = "completed"
+            execution["current_step"] = ""
             _persist_flow_execution(project_dir, execution)
             return
-
-        execution["status"] = "completed"
-        execution["current_step"] = ""
-        _persist_flow_execution(project_dir, execution)
 
 
 def start_flow_execution(
