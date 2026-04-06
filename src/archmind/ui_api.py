@@ -23,6 +23,7 @@ from archmind.project_query import (
     run_project_all,
     run_project_backend,
     run_project_flow,
+    run_project_resume_flow,
     select_current_project,
     stop_project_runtime,
     update_project_provider_mode,
@@ -647,6 +648,42 @@ def post_ui_project_run_flow(project_name: str, body: RunFlowRequest) -> RunFlow
             project_name=project_name,
             flow_name=str(body.flow_name or "").strip(),
             detail="Failed to run flow",
+            error=str(exc),
+        )
+
+
+@router.post("/projects/{project_name}/resume_flow", response_model=RunFlowResponse)
+def post_ui_project_resume_flow(project_name: str) -> RunFlowResponse:
+    try:
+        project_dir = find_project_by_name(project_name)
+        if project_dir is None:
+            return RunFlowResponse(
+                ok=False,
+                started=False,
+                project_name=project_name,
+                flow_name="",
+                detail="Project not found",
+                error="Project not found",
+            )
+        result = run_project_resume_flow(project_dir)
+        execution = result.get("flow_execution") if isinstance(result.get("flow_execution"), dict) else {}
+        return RunFlowResponse(
+            ok=bool(result.get("ok")),
+            started=bool(result.get("started")),
+            project_name=project_name,
+            flow_name=str(execution.get("flow_name") or ""),
+            detail=str(result.get("detail") or ""),
+            error=str(result.get("error") or ""),
+            flow_execution=execution,
+        )
+    except Exception as exc:
+        logger.exception("Failed to resume flow: %s", project_name)
+        return RunFlowResponse(
+            ok=False,
+            started=False,
+            project_name=project_name,
+            flow_name="",
+            detail="Failed to resume flow",
             error=str(exc),
         )
 

@@ -118,6 +118,25 @@ def _select_first_flow_from_plan(plan_payload: dict[str, Any]) -> tuple[str, lis
     return "", []
 
 
+def _select_flow_by_name(plan_payload: dict[str, Any], flow_name: str) -> tuple[str, list[dict[str, Any]]]:
+    target = str(flow_name or "").strip().lower()
+    if not target:
+        return "", []
+    flows = plan_payload.get("flows") if isinstance(plan_payload.get("flows"), list) else []
+    for flow in flows:
+        if not isinstance(flow, dict):
+            continue
+        name = str(flow.get("name") or "").strip()
+        if name.lower() != target:
+            continue
+        steps = flow.get("steps") if isinstance(flow.get("steps"), list) else []
+        normalized_steps = [item for item in steps if isinstance(item, dict)]
+        if normalized_steps:
+            return name, normalized_steps
+        return name, []
+    return "", []
+
+
 def _execute_auto_via_plan_flow(
     project_dir: Path,
     *,
@@ -126,7 +145,8 @@ def _execute_auto_via_plan_flow(
     run_id: str | None = None,
     auto_strategy: str | None = None,
 ) -> dict[str, Any]:
-    from archmind.project_query import build_project_detail, run_project_flow
+    from archmind.flow_execution import load_flow_execution
+    from archmind.project_query import build_project_detail, run_project_flow, run_project_resume_flow
     from archmind.state import load_state, write_state
 
     strategy = _normalize_auto_strategy(auto_strategy)
@@ -136,6 +156,11 @@ def _execute_auto_via_plan_flow(
         f"Strategy: {strategy}",
         "",
     ]
+
+    existing_execution = load_flow_execution(project_dir)
+    existing_status = str(existing_execution.get("status") or "").strip().lower()
+    existing_flow_name = str(existing_execution.get("flow_name") or "").strip()
+    should_resume_existing = existing_status in {"failed", "running"} and bool(existing_flow_name)
 
     detail = build_project_detail(project_dir)
     plan_payload = detail.plan if isinstance(getattr(detail, "plan", {}), dict) else {}
@@ -190,8 +215,19 @@ def _execute_auto_via_plan_flow(
             "verification": auto_result.get("verification"),
         }
 
-    summary_lines.append(f"Selected flow: {selected_flow_name}")
-    run_result = run_project_flow(project_dir, selected_flow_name, sync=True)
+    run_result: dict[str, Any]
+    if should_resume_existing:
+        matched_name, matched_steps = _select_flow_by_name(plan_payload if isinstance(plan_payload, dict) else {}, existing_flow_name)
+        selected_flow_name = matched_name or existing_flow_name
+        if matched_steps:
+            selected_flow_steps = matched_steps
+        summary_lines.append(f"Selected flow: {selected_flow_name}")
+        summary_lines.append("Execution mode: resume")
+        run_result = run_project_resume_flow(project_dir, sync=True)
+    else:
+        summary_lines.append(f"Selected flow: {selected_flow_name}")
+        summary_lines.append("Execution mode: new run")
+        run_result = run_project_flow(project_dir, selected_flow_name, sync=True)
     execution = run_result.get("flow_execution") if isinstance(run_result.get("flow_execution"), dict) else {}
     execution_steps = execution.get("steps") if isinstance(execution.get("steps"), list) else []
     done_steps = [row for row in execution_steps if isinstance(row, dict) and str(row.get("status") or "").strip().lower() == "done"]

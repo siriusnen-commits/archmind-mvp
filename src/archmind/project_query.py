@@ -14,7 +14,7 @@ from archmind.deploy import get_local_runtime_status
 from archmind.next_suggester import analyze_spec_progression
 from archmind.project_analysis import analyze_project
 from archmind.execution_history import load_recent_execution_events
-from archmind.flow_execution import load_flow_execution, start_flow_execution
+from archmind.flow_execution import load_flow_execution, resume_flow_execution, start_flow_execution
 from archmind.runtime_orchestrator import run_all_local_services
 from archmind.state import load_provider_mode, load_state, set_provider_mode, update_runtime_state, write_state
 from archmind.telegram_bot import (
@@ -2102,6 +2102,21 @@ def run_project_flow(project_dir: Path, flow_name: str, *, sync: bool | None = N
         project_id=project_dir.name,
         flow_name=target_flow_name,
         steps=steps,
+        sync=sync,
+    )
+    return {
+        "ok": bool(result.get("ok")),
+        "started": bool(result.get("started")),
+        "detail": str(result.get("detail") or ""),
+        "error": str(result.get("error") or ""),
+        "flow_execution": result.get("flow_execution") if isinstance(result.get("flow_execution"), dict) else {},
+    }
+
+
+def run_project_resume_flow(project_dir: Path, *, sync: bool | None = None) -> dict[str, Any]:
+    result = resume_flow_execution(
+        project_dir,
+        project_id=project_dir.name,
         sync=sync,
     )
     return {
