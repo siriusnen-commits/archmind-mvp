@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 import archmind.current_project as current_project_state
 import archmind.ui_api as ui_api
 from archmind.execution_history import append_execution_event
-from archmind.flow_execution import select_recovery_steps
+from archmind.flow_execution import sanitize_recovery_commands, select_recovery_steps
 from archmind.state import write_state
 from archmind.telegram_bot import clear_current_project, get_validated_current_project, set_current_project
 from archmind.ui_api import create_ui_app
@@ -2118,7 +2118,7 @@ def test_recovery_selection_frontend_healthy_skips_restart() -> None:
         }
     )
     assert "/restart" not in selected
-    assert selected == ["/improve"]
+    assert selected == ["/auto"]
 
 
 def test_recovery_selection_frontend_unhealthy_includes_restart() -> None:
@@ -2131,10 +2131,10 @@ def test_recovery_selection_frontend_unhealthy_includes_restart() -> None:
             "recent_command": "/add_page notes/list",
         }
     )
-    assert selected == ["/restart", "/improve"]
+    assert selected == ["/auto"]
 
 
-def test_recovery_selection_drift_includes_improve() -> None:
+def test_recovery_selection_drift_includes_auto() -> None:
     selected = select_recovery_steps(
         {
             "failure_class": "default",
@@ -2144,10 +2144,10 @@ def test_recovery_selection_drift_includes_improve() -> None:
             "recent_command": "/inspect",
         }
     )
-    assert "/improve" in selected
+    assert "/auto" in selected
 
 
-def test_recovery_selection_generation_error_only_improve() -> None:
+def test_recovery_selection_generation_error_only_auto() -> None:
     selected = select_recovery_steps(
         {
             "failure_class": "generation-error",
@@ -2157,10 +2157,10 @@ def test_recovery_selection_generation_error_only_improve() -> None:
             "recent_command": "/add_api GET /notes",
         }
     )
-    assert selected == ["/improve"]
+    assert selected == ["/auto"]
 
 
-def test_recovery_selection_no_signal_fallback_improve() -> None:
+def test_recovery_selection_no_signal_fallback_auto() -> None:
     selected = select_recovery_steps(
         {
             "failure_class": "default",
@@ -2170,7 +2170,34 @@ def test_recovery_selection_no_signal_fallback_improve() -> None:
             "recent_command": "",
         }
     )
-    assert selected == ["/improve"]
+    assert selected == ["/auto"]
+
+
+def test_recovery_selection_never_emits_fix_or_improve() -> None:
+    selected = select_recovery_steps(
+        {
+            "failure_class": "runtime-error",
+            "frontend_health": False,
+            "backend_health": False,
+            "drift": True,
+            "recent_command": "/add_api GET /notes",
+        }
+    )
+    assert "/fix" not in selected
+    assert "/improve" not in selected
+    assert all(command == "/auto" for command in selected)
+
+
+def test_recovery_sanitize_filters_unsupported_commands() -> None:
+    sanitized = sanitize_recovery_commands(["/improve", "/fix", "/add_page notes/list", "/auto"], fallback="/auto", allow_fallback=True)
+    assert "/improve" not in sanitized
+    assert "/fix" not in sanitized
+    assert sanitized == ["/add_page notes/list", "/auto"]
+
+
+def test_recovery_sanitize_uses_supported_fallback_only() -> None:
+    sanitized = sanitize_recovery_commands(["/improve", "/fix"], fallback="/auto", allow_fallback=True)
+    assert sanitized == ["/auto"]
 
 
 def test_ui_run_flow_failure_triggers_recovery_and_resumes_original_flow(monkeypatch, tmp_path: Path) -> None:
@@ -2226,8 +2253,8 @@ def test_ui_run_flow_failure_triggers_recovery_and_resumes_original_flow(monkeyp
     assert payload["flow_execution"]["recovery"]["triggered"] is True
     assert payload["flow_execution"]["recovery"]["reason"] == "runtime-error"
     assert payload["flow_execution"]["recovery"]["status"] == "completed"
-    assert [item["command"] for item in payload["flow_execution"]["recovery"]["steps"]] == ["/restart", "/improve"]
-    assert [item["status"] for item in payload["flow_execution"]["recovery"]["steps"]] == ["done", "done"]
+    assert [item["command"] for item in payload["flow_execution"]["recovery"]["steps"]] == ["/auto"]
+    assert [item["status"] for item in payload["flow_execution"]["recovery"]["steps"]] == ["done"]
     timeline_types = [str(item.get("type") or "") for item in payload["flow_execution"].get("timeline", [])]
     assert "recovery_start" in timeline_types
     assert "recovery_step" in timeline_types
@@ -2237,8 +2264,7 @@ def test_ui_run_flow_failure_triggers_recovery_and_resumes_original_flow(monkeyp
     assert statuses["s2"] == "done"
     assert call_order == [
         "ui-flow-run:/add_api GET /notes",
-        "ui-flow-recovery:/restart",
-        "ui-flow-recovery:/improve",
+        "ui-flow-recovery:/auto",
         "ui-flow-run:/add_api GET /notes",
         "ui-flow-run:/add_page notes/list",
     ]
@@ -2246,10 +2272,107 @@ def test_ui_run_flow_failure_triggers_recovery_and_resumes_original_flow(monkeyp
     assert persisted["recovery"]["triggered"] is True
     assert persisted["recovery"]["reason"] == "runtime-error"
     assert persisted["recovery"]["status"] == "completed"
-    assert [item["status"] for item in persisted["recovery"]["steps"]] == ["done", "done"]
+    assert [item["command"] for item in persisted["recovery"]["steps"]] == ["/auto"]
+    assert [item["status"] for item in persisted["recovery"]["steps"]] == ["done"]
 
 
-def test_ui_run_flow_recovery_mapping_frontend_clean_uses_restart_only(monkeypatch, tmp_path: Path) -> None:
+def test_ui_run_flow_recovery_filters_unsupported_and_avoids_unsupported_command_failure(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "flow-recovery-sanitize")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setenv("ARCHMIND_FLOW_EXEC_SYNC", "1")
+
+    def _fixed_plan(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return {
+            "goal": "recover_flow",
+            "priority": "high",
+            "why": "Need recovery flow",
+            "expected_effect": "Flow recovers and completes",
+            "steps": [],
+            "flows": [{"name": "Core Flow", "flow_type": "crud", "steps": [{"id": "s1", "title": "Step1", "command": "/add_api GET /notes"}]}],
+        }
+
+    call_order: list[str] = []
+    attempts = {"run": 0}
+
+    def _fake_execute(command: str, _project: str, *, source: str = "", **_kwargs):  # type: ignore[no-untyped-def]
+        call_order.append(f"{source}:{command}")
+        if source == "ui-flow-run":
+            attempts["run"] += 1
+            if attempts["run"] == 1:
+                return {"ok": False, "error": "runtime boom", "failure_class": "runtime-error"}
+            return {"ok": True, "detail": "ok"}
+        if source == "ui-flow-recovery" and command == "/auto":
+            return {"ok": True, "detail": "ok"}
+        if source == "ui-flow-recovery":
+            return {"ok": False, "error": "Unsupported command"}
+        return {"ok": True, "detail": "ok"}
+
+    monkeypatch.setattr("archmind.project_query._build_plan_overview", _fixed_plan)
+    monkeypatch.setattr("archmind.flow_execution.execute_command", _fake_execute)
+    monkeypatch.setattr("archmind.flow_execution.select_recovery_steps", lambda _ctx: ["/improve", "/fix"])  # type: ignore[no-untyped-def]
+
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/flow-recovery-sanitize/run_flow", json={"flow_name": "Core Flow"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["flow_execution"]["status"] == "completed"
+    assert [item["command"] for item in payload["flow_execution"]["recovery"]["steps"]] == ["/auto"]
+    assert not any("Unsupported command" in item for item in call_order)
+
+
+def test_ui_run_flow_recovery_skip_updates_timeline_safely(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "flow-recovery-skip")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setenv("ARCHMIND_FLOW_EXEC_SYNC", "1")
+
+    def _fixed_plan(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return {
+            "goal": "recover_flow",
+            "priority": "high",
+            "why": "Need recovery flow",
+            "expected_effect": "Flow recovers and completes",
+            "steps": [],
+            "flows": [{"name": "Core Flow", "flow_type": "crud", "steps": [{"id": "s1", "title": "Step1", "command": "/add_api GET /notes"}]}],
+        }
+
+    calls: list[str] = []
+    attempts = {"run": 0}
+
+    def _fake_execute(command: str, _project: str, *, source: str = "", **_kwargs):  # type: ignore[no-untyped-def]
+        calls.append(f"{source}:{command}")
+        if source == "ui-flow-run":
+            attempts["run"] += 1
+            if attempts["run"] == 1:
+                return {"ok": False, "error": "frontend lint fail", "failure_class": "frontend-clean"}
+            return {"ok": True, "detail": "ok"}
+        return {"ok": True, "detail": "ok"}
+
+    monkeypatch.setattr("archmind.project_query._build_plan_overview", _fixed_plan)
+    monkeypatch.setattr("archmind.flow_execution.execute_command", _fake_execute)
+    monkeypatch.setattr(
+        "archmind.flow_execution.get_local_runtime_status",
+        lambda *_args, **_kwargs: {
+            "services": {
+                "frontend": {"status": "RUNNING", "health": "SUCCESS"},
+                "backend": {"status": "RUNNING", "health": "SUCCESS"},
+            }
+        },
+    )
+
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/flow-recovery-skip/run_flow", json={"flow_name": "Core Flow"})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["flow_execution"]["status"] == "completed"
+    assert payload["flow_execution"]["recovery"]["triggered"] is False
+    timeline = payload["flow_execution"].get("timeline", [])
+    assert any(str(item.get("type") or "") == "recovery_start" and "skipped" in str(item.get("detail") or "").lower() for item in timeline)
+    assert not any(item.startswith("ui-flow-recovery:") for item in calls)
+
+
+def test_ui_run_flow_recovery_mapping_frontend_clean_uses_auto_only(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     _make_project(projects_root, "flow-recovery-frontend")
     monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
@@ -2287,12 +2410,12 @@ def test_ui_run_flow_recovery_mapping_frontend_clean_uses_restart_only(monkeypat
     assert payload["flow_execution"]["status"] == "completed"
     assert call_order == [
         "ui-flow-run:/add_api GET /notes",
-        "ui-flow-recovery:/restart",
+        "ui-flow-recovery:/auto",
         "ui-flow-run:/add_api GET /notes",
     ]
 
 
-def test_ui_run_flow_recovery_mapping_generation_error_uses_improve(monkeypatch, tmp_path: Path) -> None:
+def test_ui_run_flow_recovery_mapping_generation_error_uses_auto(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     _make_project(projects_root, "flow-recovery-generation")
     monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
@@ -2330,12 +2453,12 @@ def test_ui_run_flow_recovery_mapping_generation_error_uses_improve(monkeypatch,
     assert payload["flow_execution"]["status"] == "completed"
     assert call_order == [
         "ui-flow-run:/add_api GET /notes",
-        "ui-flow-recovery:/improve",
+        "ui-flow-recovery:/auto",
         "ui-flow-run:/add_api GET /notes",
     ]
 
 
-def test_ui_run_flow_recovery_default_fallback_uses_improve(monkeypatch, tmp_path: Path) -> None:
+def test_ui_run_flow_recovery_default_fallback_uses_auto(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     _make_project(projects_root, "flow-recovery-default")
     monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
@@ -2382,7 +2505,7 @@ def test_ui_run_flow_recovery_default_fallback_uses_improve(monkeypatch, tmp_pat
     assert payload["flow_execution"]["status"] == "completed"
     assert call_order == [
         "ui-flow-run:/add_api GET /notes",
-        "ui-flow-recovery:/improve",
+        "ui-flow-recovery:/auto",
         "ui-flow-run:/add_api GET /notes",
     ]
 
