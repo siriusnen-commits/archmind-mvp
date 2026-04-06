@@ -7,7 +7,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from archmind.command_executor import execute_command
+from archmind.command_executor import (
+    ADD_API_RE,
+    ADD_ENTITY_RE,
+    ADD_FIELD_RE,
+    ADD_IMPLEMENT_PAGE_RE,
+    ADD_PAGE_RE,
+    AUTO_RE,
+    execute_command,
+)
 from archmind.deploy import get_local_runtime_status
 from archmind.execution_history import load_recent_execution_events
 from archmind.state import load_state
@@ -275,17 +283,6 @@ def _normalize_failure_class(value: Any) -> str:
     return "default"
 
 
-def _select_recovery_steps(failure_class: str) -> list[str]:
-    key = _normalize_failure_class(failure_class)
-    if key == "frontend-clean":
-        return ["/restart"]
-    if key == "runtime-error":
-        return ["/restart", "/improve"]
-    if key == "generation-error":
-        return ["/improve"]
-    return ["/improve"]
-
-
 def _service_healthy(status: Any, health: Any) -> bool:
     normalized_status = str(status or "").strip().upper()
     normalized_health = str(health or "").strip().upper()
@@ -363,19 +360,19 @@ def select_recovery_steps(context: dict[str, Any]) -> list[str]:
     has_drift = bool(row.get("drift"))
 
     if failure_class == "generation-error":
-        return ["/improve"]
+        return ["/auto"]
     if failure_class == "frontend-clean" and frontend_healthy and not has_drift:
         return []
 
     steps: list[str] = []
     if not frontend_healthy:
-        steps.append("/restart")
+        steps.append("/auto")
     if has_drift:
-        steps.append("/improve")
-    if failure_class == "runtime-error" and "/improve" not in steps:
-        steps.append("/improve")
+        steps.append("/auto")
+    if failure_class == "runtime-error" and "/auto" not in steps:
+        steps.append("/auto")
     if not steps:
-        steps.append("/improve")
+        steps.append("/auto")
 
     deduped: list[str] = []
     seen: set[str] = set()
@@ -388,6 +385,44 @@ def select_recovery_steps(context: dict[str, Any]) -> list[str]:
     return deduped
 
 
+def is_supported_command(command: str) -> bool:
+    normalized = str(command or "").strip()
+    if not normalized:
+        return False
+    return bool(
+        ADD_ENTITY_RE.match(normalized)
+        or ADD_FIELD_RE.match(normalized)
+        or ADD_API_RE.match(normalized)
+        or ADD_PAGE_RE.match(normalized)
+        or ADD_IMPLEMENT_PAGE_RE.match(normalized)
+        or AUTO_RE.match(normalized)
+    )
+
+
+def sanitize_recovery_commands(
+    commands: list[str] | tuple[str, ...],
+    *,
+    fallback: str = "/auto",
+    allow_fallback: bool = True,
+) -> list[str]:
+    sanitized: list[str] = []
+    seen: set[str] = set()
+    for item in commands:
+        normalized = str(item or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        if not is_supported_command(normalized):
+            continue
+        seen.add(normalized)
+        sanitized.append(normalized)
+    if sanitized:
+        return sanitized
+    fallback_command = str(fallback or "").strip()
+    if allow_fallback and fallback_command and is_supported_command(fallback_command):
+        return [fallback_command]
+    return []
+
+
 def handle_failure_with_recovery(
     project_dir: Path,
     project_id: str,
@@ -398,7 +433,12 @@ def handle_failure_with_recovery(
 ) -> dict[str, Any]:
     context = build_recovery_context(project_dir, execution, failure_result)
     normalized_failure_class = _normalize_failure_class(context.get("failure_class"))
-    recovery_steps = select_recovery_steps(context)
+    selected_steps = select_recovery_steps(context)
+    recovery_steps = sanitize_recovery_commands(
+        selected_steps,
+        fallback="/auto",
+        allow_fallback=bool(selected_steps),
+    )
     executed_recovery_steps: list[str] = []
     if not recovery_steps:
         execution["recovery"] = {
@@ -407,6 +447,15 @@ def handle_failure_with_recovery(
             "steps": [],
             "status": "completed",
         }
+        append_timeline(
+            execution,
+            {
+                "type": "recovery_start",
+                "status": "done",
+                "step_id": str(failed_step_id or "").strip(),
+                "detail": "Recovery skipped (no supported command)",
+            },
+        )
         prepared, resume_step_id = _prepare_execution_for_resume(execution)
         append_timeline(
             prepared,
