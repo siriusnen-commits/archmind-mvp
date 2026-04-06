@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from archmind.command_executor import execute_command
+from archmind.deploy import get_local_runtime_status
+from archmind.execution_history import load_recent_execution_events
+from archmind.state import load_state
 
 
 _STATUS_VALUES = {"pending", "running", "completed", "failed"}
@@ -236,18 +239,137 @@ def _select_recovery_steps(failure_class: str) -> list[str]:
     return ["/improve"]
 
 
+def _service_healthy(status: Any, health: Any) -> bool:
+    normalized_status = str(status or "").strip().upper()
+    normalized_health = str(health or "").strip().upper()
+    return normalized_health == "SUCCESS" or normalized_status == "RUNNING"
+
+
+def _detect_runtime_drift(project_dir: Path) -> bool:
+    events = load_recent_execution_events(project_dir, limit=12)
+    for event in reversed(events):
+        if not isinstance(event, dict):
+            continue
+        verification = event.get("verification") if isinstance(event.get("verification"), dict) else {}
+        if not isinstance(verification, dict):
+            continue
+        overall_status = str(verification.get("overall_status") or "").strip().upper()
+        drift_summary = str(verification.get("drift_summary") or "").strip()
+        runtime_reflection = str(verification.get("runtime_reflection") or "").strip()
+        issues = verification.get("issues") if isinstance(verification.get("issues"), list) else []
+        if overall_status in {"PARTIAL", "FAILED"}:
+            return True
+        if drift_summary or runtime_reflection or bool(issues):
+            return True
+    return False
+
+
+def build_recovery_context(
+    project: Path | str,
+    execution: dict[str, Any],
+    failure_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    project_dir = Path(project).expanduser().resolve()
+    runtime_status = get_local_runtime_status(project_dir)
+    services = runtime_status.get("services") if isinstance(runtime_status.get("services"), dict) else {}
+    frontend_service = services.get("frontend") if isinstance(services.get("frontend"), dict) else {}
+    backend_service = services.get("backend") if isinstance(services.get("backend"), dict) else {}
+    state_payload = load_state(project_dir) or {}
+    row = failure_result if isinstance(failure_result, dict) else {}
+    raw_failure_class = str(row.get("failure_class") or row.get("error") or row.get("detail") or "").strip()
+    recent_events = load_recent_execution_events(project_dir, limit=8)
+    recent_command = ""
+    for event in reversed(recent_events):
+        if not isinstance(event, dict):
+            continue
+        command = str(event.get("command") or "").strip()
+        if command:
+            recent_command = command
+            break
+    if not recent_command:
+        current_step_id = str(execution.get("current_step") or "").strip()
+        for step in execution.get("steps") if isinstance(execution.get("steps"), list) else []:
+            if not isinstance(step, dict):
+                continue
+            step_id = str(step.get("id") or "").strip()
+            if step_id != current_step_id:
+                continue
+            recent_command = str(step.get("command") or "").strip()
+            if recent_command:
+                break
+
+    return {
+        "failure_class": _normalize_failure_class(raw_failure_class),
+        "frontend_health": _service_healthy(frontend_service.get("status"), frontend_service.get("health")),
+        "backend_health": _service_healthy(backend_service.get("status"), backend_service.get("health")),
+        "drift": _detect_runtime_drift(project_dir),
+        "recent_command": recent_command,
+        "runtime_failure_class": str(state_payload.get("runtime_failure_class") or "").strip(),
+        "last_failure_class": str(state_payload.get("last_failure_class") or "").strip(),
+    }
+
+
+def select_recovery_steps(context: dict[str, Any]) -> list[str]:
+    row = context if isinstance(context, dict) else {}
+    failure_class = _normalize_failure_class(row.get("failure_class"))
+    frontend_healthy = bool(row.get("frontend_health"))
+    has_drift = bool(row.get("drift"))
+
+    if failure_class == "generation-error":
+        return ["/improve"]
+    if failure_class == "frontend-clean" and frontend_healthy and not has_drift:
+        return []
+
+    steps: list[str] = []
+    if not frontend_healthy:
+        steps.append("/restart")
+    if has_drift:
+        steps.append("/improve")
+    if failure_class == "runtime-error" and "/improve" not in steps:
+        steps.append("/improve")
+    if not steps:
+        steps.append("/improve")
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for command in steps:
+        cmd = str(command or "").strip()
+        if not cmd or cmd in seen:
+            continue
+        seen.add(cmd)
+        deduped.append(cmd)
+    return deduped
+
+
 def handle_failure_with_recovery(
+    project_dir: Path,
     project_id: str,
     execution: dict[str, Any],
     *,
     failed_step_id: str,
     failure_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    row = failure_result if isinstance(failure_result, dict) else {}
-    raw_failure_class = str(row.get("failure_class") or row.get("error") or row.get("detail") or "").strip()
-    normalized_failure_class = _normalize_failure_class(raw_failure_class)
-    recovery_steps = _select_recovery_steps(normalized_failure_class)
+    context = build_recovery_context(project_dir, execution, failure_result)
+    normalized_failure_class = _normalize_failure_class(context.get("failure_class"))
+    recovery_steps = select_recovery_steps(context)
     executed_recovery_steps: list[str] = []
+    if not recovery_steps:
+        execution["recovery"] = {
+            "triggered": False,
+            "reason": normalized_failure_class,
+            "steps": [],
+            "status": "completed",
+        }
+        prepared, resume_step_id = _prepare_execution_for_resume(execution)
+        return {
+            "ok": True,
+            "failure_class": normalized_failure_class,
+            "recovery_steps": [],
+            "executed_recovery_steps": [],
+            "resume_step_id": resume_step_id,
+            "flow_execution": prepared,
+            "failed_step_id": str(failed_step_id or "").strip(),
+        }
     recovery_log: dict[str, Any] = {
         "triggered": True,
         "reason": normalized_failure_class,
@@ -344,6 +466,7 @@ def _run_flow_execution(project_dir: Path, project_id: str) -> None:
                     return
                 recovery_attempted_steps.add(step_id)
                 recovery = handle_failure_with_recovery(
+                    project_dir,
                     project_id,
                     execution,
                     failed_step_id=step_id,

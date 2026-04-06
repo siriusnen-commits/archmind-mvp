@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 import archmind.current_project as current_project_state
 import archmind.ui_api as ui_api
 from archmind.execution_history import append_execution_event
+from archmind.flow_execution import select_recovery_steps
 from archmind.state import write_state
 from archmind.telegram_bot import clear_current_project, get_validated_current_project, set_current_project
 from archmind.ui_api import create_ui_app
@@ -2057,6 +2058,72 @@ def test_ui_resume_flow_completes_remaining_steps(monkeypatch, tmp_path: Path) -
     assert statuses["s3"] == "done"
 
 
+def test_recovery_selection_frontend_healthy_skips_restart() -> None:
+    selected = select_recovery_steps(
+        {
+            "failure_class": "runtime-error",
+            "frontend_health": True,
+            "backend_health": True,
+            "drift": False,
+            "recent_command": "/add_page notes/list",
+        }
+    )
+    assert "/restart" not in selected
+    assert selected == ["/improve"]
+
+
+def test_recovery_selection_frontend_unhealthy_includes_restart() -> None:
+    selected = select_recovery_steps(
+        {
+            "failure_class": "runtime-error",
+            "frontend_health": False,
+            "backend_health": True,
+            "drift": False,
+            "recent_command": "/add_page notes/list",
+        }
+    )
+    assert selected == ["/restart", "/improve"]
+
+
+def test_recovery_selection_drift_includes_improve() -> None:
+    selected = select_recovery_steps(
+        {
+            "failure_class": "default",
+            "frontend_health": True,
+            "backend_health": True,
+            "drift": True,
+            "recent_command": "/inspect",
+        }
+    )
+    assert "/improve" in selected
+
+
+def test_recovery_selection_generation_error_only_improve() -> None:
+    selected = select_recovery_steps(
+        {
+            "failure_class": "generation-error",
+            "frontend_health": False,
+            "backend_health": False,
+            "drift": True,
+            "recent_command": "/add_api GET /notes",
+        }
+    )
+    assert selected == ["/improve"]
+
+
+def test_recovery_selection_no_signal_fallback_improve() -> None:
+    selected = select_recovery_steps(
+        {
+            "failure_class": "default",
+            "frontend_health": True,
+            "backend_health": True,
+            "drift": False,
+            "recent_command": "",
+        }
+    )
+    assert selected == ["/improve"]
+
+
 def test_ui_run_flow_failure_triggers_recovery_and_resumes_original_flow(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     _make_project(projects_root, "flow-recovery-runtime")
@@ -2245,6 +2312,15 @@ def test_ui_run_flow_recovery_default_fallback_uses_improve(monkeypatch, tmp_pat
 
     monkeypatch.setattr("archmind.project_query._build_plan_overview", _fixed_plan)
     monkeypatch.setattr("archmind.flow_execution.execute_command", _fake_execute)
+    monkeypatch.setattr(
+        "archmind.flow_execution.get_local_runtime_status",
+        lambda *_args, **_kwargs: {
+            "services": {
+                "frontend": {"status": "RUNNING", "health": "SUCCESS"},
+                "backend": {"status": "RUNNING", "health": "SUCCESS"},
+            }
+        },
+    )
 
     client = TestClient(create_ui_app())
     response = client.post("/ui/projects/flow-recovery-default/run_flow", json={"flow_name": "Core Flow"})
