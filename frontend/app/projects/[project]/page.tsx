@@ -4,6 +4,8 @@ import CurrentProjectIndicator from "@/components/CurrentProjectIndicator";
 import EvolutionCard from "@/components/EvolutionCard";
 import EvolutionHistoryCard from "@/components/EvolutionHistoryCard";
 import InspectOverviewCard from "@/components/InspectOverviewCard";
+import DesignOverviewCard from "@/components/DesignOverviewCard";
+import PlanOverviewCard from "@/components/PlanOverviewCard";
 import LogsViewerCard from "@/components/LogsViewerCard";
 import DriftSummaryCard from "@/components/inspect/DriftSummaryCard";
 import RuntimeConsistencyCard from "@/components/inspect/RuntimeConsistencyCard";
@@ -168,6 +170,24 @@ type ProjectDetail = {
     backend_entry?: string;
     backend_run_mode?: string;
   };
+  design?: {
+    architecture_summary?: string;
+    entities?: string[];
+    apis?: string[];
+    pages?: string[];
+    notes?: string;
+  };
+  plan?: {
+    goal?: string;
+    priority?: string;
+    why?: string;
+    expected_effect?: string;
+    steps?: Array<{
+      title?: string;
+      why?: string;
+      command?: string;
+    }>;
+  };
   logs?: {
     default_source?: string;
     max_lines?: number;
@@ -265,6 +285,8 @@ export default async function ProjectDetailPage({ params }: PageProps) {
         <section className="space-y-3">
           <ProjectSummaryCard project={detail} />
           <InspectOverviewCard project={detail} />
+          <DesignOverviewCard design={detail.design} />
+          <PlanOverviewCard projectName={detail.name} plan={detail.plan} />
           <RuntimeConsistencyCard verification={detail.verification} />
           <DriftSummaryCard verification={detail.verification} />
           <NextActionCard projectName={detail.name} nextAction={analysis?.next_action} />

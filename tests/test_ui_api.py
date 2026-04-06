@@ -298,6 +298,8 @@ def test_ui_project_detail_response_shape(monkeypatch, tmp_path: Path) -> None:
     assert isinstance(payload["logs"], dict)
     assert isinstance(payload["logs"].get("sources", []), list)
     assert isinstance(payload.get("auto_summary", {}), dict)
+    assert isinstance(payload.get("design", {}), dict)
+    assert isinstance(payload.get("plan", {}), dict)
     assert "repository" in payload
     assert payload["repository"]["status"] == "CREATED"
     assert payload["repository"]["url"] == "https://github.com/example/beta"
@@ -313,6 +315,73 @@ def test_ui_project_detail_response_shape(monkeypatch, tmp_path: Path) -> None:
     assert "backend_urls" in payload["runtime"]
     assert "frontend_urls" in payload["runtime"]
     assert payload["spec_summary"]["stage"].startswith("Stage")
+
+
+def test_ui_project_detail_includes_design_and_plan_when_available(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "design-plan")
+    archmind_dir = project_dir / ".archmind"
+    (archmind_dir / "design.json").write_text(
+        json.dumps(
+            {
+                "overview": "Fullstack todo architecture with API-first boundaries.",
+                "entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}]}],
+                "api_endpoints": ["GET /tasks", "POST /tasks"],
+                "frontend_pages": ["tasks/list", "tasks/new"],
+                "reasoning": "Keep read/write flows explicit for iterative generation.",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (archmind_dir / "plan_execution.json").write_text(
+        json.dumps(
+            {
+                "phases": [
+                    {
+                        "title": "Core APIs",
+                        "steps": ["/add_api GET /tasks/{id}", "/add_api PATCH /tasks/{id}"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def _analysis_with_next(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return {
+            "project_name": "design-plan",
+            "entities": ["Note"],
+            "fields_by_entity": {"Note": [{"name": "title", "type": "string"}]},
+            "apis": [{"method": "GET", "path": "/notes"}],
+            "pages": ["notes/list"],
+            "suggestions": [],
+            "next_candidates": [],
+            "next_action": {"kind": "none", "message": "none", "command": ""},
+            "next_action_explanation": {
+                "gap_type": "missing_crud_api",
+                "priority": "high",
+                "reason_summary": "Task detail mutation flow is incomplete.",
+                "expected_effect": "Unlock edit flow and improve runtime verification confidence.",
+            },
+        }
+
+    monkeypatch.setattr("archmind.project_query.analyze_project", _analysis_with_next)
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.get("/ui/projects/design-plan")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["design"]["architecture_summary"] == "Fullstack todo architecture with API-first boundaries."
+    assert payload["design"]["entities"] == ["Task"]
+    assert payload["design"]["apis"] == ["GET /tasks", "POST /tasks"]
+    assert payload["design"]["pages"] == ["tasks/list", "tasks/new"]
+    assert "iterative generation" in payload["design"]["notes"]
+    assert payload["plan"]["goal"] == "missing_crud_api"
+    assert payload["plan"]["priority"] == "high"
+    assert "Task detail mutation flow is incomplete" in payload["plan"]["why"]
+    assert payload["plan"]["steps"][0]["title"] == "Core APIs"
+    assert payload["plan"]["steps"][0]["command"] == "/add_api GET /tasks/{id}"
 
 
 def test_ui_project_detail_summary_counts_match_analysis_lists(monkeypatch, tmp_path: Path) -> None:
@@ -1548,6 +1617,19 @@ def test_project_detail_source_renders_inspect_overview_panel() -> None:
     assert "&& <InspectOverviewCard" not in project_detail_source
 
 
+def test_project_detail_source_renders_design_and_plan_overview_panels() -> None:
+    project_detail_source = Path("frontend/app/projects/[project]/page.tsx").read_text(encoding="utf-8")
+    assert 'import DesignOverviewCard from "@/components/DesignOverviewCard"' in project_detail_source
+    assert 'import PlanOverviewCard from "@/components/PlanOverviewCard"' in project_detail_source
+    assert "<DesignOverviewCard" in project_detail_source
+    assert "<PlanOverviewCard" in project_detail_source
+    assert "design={detail.design}" in project_detail_source
+    assert "plan={detail.plan}" in project_detail_source
+    assert "projectName={detail.name}" in project_detail_source
+    assert "&& <DesignOverviewCard" not in project_detail_source
+    assert "&& <PlanOverviewCard" not in project_detail_source
+
+
 def test_project_detail_source_renders_logs_viewer_panel() -> None:
     project_detail_source = Path("frontend/app/projects/[project]/page.tsx").read_text(encoding="utf-8")
     assert 'import LogsViewerCard from "@/components/LogsViewerCard"' in project_detail_source
@@ -1780,6 +1862,32 @@ def test_next_candidates_component_renders_empty_state_and_uses_command_executio
     assert "Completed" in source
     assert "hintByCommand" in source
     assert "Executed: {executedCommand}" in source
+    assert "return null" not in source
+
+
+def test_design_overview_component_renders_safe_empty_state() -> None:
+    source = Path("frontend/components/DesignOverviewCard.tsx").read_text(encoding="utf-8")
+    assert "Design Overview" in source
+    assert "No design result yet. Run /design to generate architecture guidance." in source
+    assert "Architecture Summary" in source
+    assert "Entities" in source
+    assert "APIs" in source
+    assert "Pages" in source
+    assert "Notes" in source
+    assert "return null" not in source
+
+
+def test_plan_overview_component_uses_existing_command_path_and_refetches_after_run() -> None:
+    source = Path("frontend/components/PlanOverviewCard.tsx").read_text(encoding="utf-8")
+    assert '"use client";' in source
+    assert "Plan Overview" in source
+    assert "No plan result yet. Run /plan to generate implementation steps." in source
+    assert "/commands" in source
+    assert "JSON.stringify({ command: normalizedCommand })" in source
+    assert "router.refresh();" in source
+    assert "navigator.clipboard" in source
+    assert "Running..." in source
+    assert "Completed" in source
     assert "return null" not in source
 
 

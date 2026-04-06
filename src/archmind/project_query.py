@@ -505,6 +505,207 @@ def _normalize_auto_summary(auto_summary: dict[str, Any] | None) -> dict[str, An
     return normalized
 
 
+def _unique_nonempty_strings(values: list[Any]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in values:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+    return out
+
+
+def _normalize_design_entities(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    rows: list[str] = []
+    for item in value:
+        if isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+            if name:
+                rows.append(name)
+            continue
+        text = str(item or "").strip()
+        if text:
+            rows.append(text)
+    return _unique_nonempty_strings(rows)
+
+
+def _load_saved_design_payload(project_dir: Path) -> dict[str, Any]:
+    for filename in ("design.json", "architecture_design.json"):
+        raw = _load_json(project_dir / ".archmind" / filename) or {}
+        if isinstance(raw, dict) and raw:
+            return raw
+    return {}
+
+
+def _build_design_overview(
+    project_dir: Path,
+    *,
+    state_payload: dict[str, Any],
+    spec_payload: dict[str, Any],
+    analysis_payload: dict[str, Any],
+) -> dict[str, Any]:
+    design_row = _load_saved_design_payload(project_dir)
+    summary = str(
+        design_row.get("architecture_summary")
+        or design_row.get("overview")
+        or design_row.get("summary")
+        or ""
+    ).strip()
+    notes = str(
+        design_row.get("notes")
+        or design_row.get("reasoning")
+        or state_payload.get("architecture_reason_summary")
+        or ""
+    ).strip()
+    entities = _normalize_design_entities(design_row.get("entities"))
+    apis = _unique_nonempty_strings(
+        [
+            str(item).strip()
+            for item in (
+                design_row.get("apis")
+                if isinstance(design_row.get("apis"), list)
+                else design_row.get("api_endpoints") if isinstance(design_row.get("api_endpoints"), list) else []
+            )
+            if str(item).strip()
+        ]
+    )
+    pages = _unique_nonempty_strings(
+        [
+            str(item).strip()
+            for item in (
+                design_row.get("pages")
+                if isinstance(design_row.get("pages"), list)
+                else design_row.get("frontend_pages") if isinstance(design_row.get("frontend_pages"), list) else []
+            )
+            if str(item).strip()
+        ]
+    )
+
+    if not entities:
+        entities = _unique_nonempty_strings(
+            [str(item).strip() for item in (analysis_payload.get("entities") or []) if str(item).strip()]
+        )
+    if not apis:
+        apis = _unique_nonempty_strings(
+            [
+                f"{str(item.get('method') or '').strip().upper()} {str(item.get('path') or '').strip()}".strip()
+                for item in (analysis_payload.get("apis") or [])
+                if isinstance(item, dict) and str(item.get("method") or "").strip() and str(item.get("path") or "").strip()
+            ]
+        )
+    if not pages:
+        pages = _unique_nonempty_strings([str(item).strip() for item in (analysis_payload.get("pages") or []) if str(item).strip()])
+    if not entities:
+        entities = _extract_entity_names(spec_payload)
+    if not apis:
+        apis = _extract_spec_api_endpoints(spec_payload)
+    if not pages:
+        pages = _extract_spec_pages(spec_payload)
+
+    if not summary:
+        shape = str(state_payload.get("architecture_app_shape") or spec_payload.get("shape") or "").strip()
+        template = str(state_payload.get("effective_template") or spec_payload.get("template") or "").strip()
+        if shape and template:
+            summary = f"{shape} architecture using {template}"
+        elif shape:
+            summary = f"{shape} architecture"
+        elif template:
+            summary = f"Template: {template}"
+
+    if not summary and not notes and not entities and not apis and not pages:
+        return {}
+    return {
+        "architecture_summary": summary,
+        "entities": entities,
+        "apis": apis,
+        "pages": pages,
+        "notes": notes,
+    }
+
+
+def _load_saved_plan_payload(project_dir: Path) -> dict[str, Any]:
+    raw = _load_json(project_dir / ".archmind" / "plan_execution.json") or {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _build_plan_overview(
+    project_dir: Path,
+    *,
+    analysis_payload: dict[str, Any],
+    auto_summary: dict[str, Any],
+) -> dict[str, Any]:
+    plan_row = _load_saved_plan_payload(project_dir)
+    explanation = (
+        analysis_payload.get("next_action_explanation")
+        if isinstance(analysis_payload.get("next_action_explanation"), dict)
+        else {}
+    )
+    goal = str(explanation.get("gap_type") or auto_summary.get("plan_goal") or "").strip()
+    priority = str(explanation.get("priority") or "").strip().lower()
+    why = str(explanation.get("reason_summary") or auto_summary.get("plan_reason") or "").strip()
+    expected_effect = str(explanation.get("expected_effect") or "").strip()
+
+    steps: list[dict[str, str]] = []
+    phases = plan_row.get("phases") if isinstance(plan_row.get("phases"), list) else []
+    for phase in phases:
+        if not isinstance(phase, dict):
+            continue
+        title = str(phase.get("title") or "Plan step").strip() or "Plan step"
+        phase_steps = phase.get("steps") if isinstance(phase.get("steps"), list) else []
+        for phase_step in phase_steps:
+            command = str(phase_step or "").strip()
+            if not command:
+                continue
+            steps.append(
+                {
+                    "title": title,
+                    "why": why,
+                    "command": command,
+                }
+            )
+
+    if not steps:
+        planned_steps = auto_summary.get("planned_steps") if isinstance(auto_summary.get("planned_steps"), list) else []
+        for item in planned_steps:
+            if not isinstance(item, dict):
+                continue
+            command = str(item.get("command") or "").strip()
+            if not command:
+                continue
+            kind = str(item.get("kind") or "").strip()
+            title = kind.replace("_", " ").strip().title() if kind else "Planned step"
+            steps.append(
+                {
+                    "title": title,
+                    "why": why,
+                    "command": command,
+                }
+            )
+
+    if not steps:
+        next_action = analysis_payload.get("next_action") if isinstance(analysis_payload.get("next_action"), dict) else {}
+        command = str(next_action.get("command") or "").strip()
+        if command:
+            steps.append({"title": "Next action", "why": why, "command": command})
+
+    if not goal and not priority and not why and not expected_effect and not steps:
+        return {}
+    return {
+        "goal": goal,
+        "priority": priority,
+        "why": why,
+        "expected_effect": expected_effect,
+        "steps": steps,
+    }
+
+
 def _build_evolution_history(
     recent_runs: list[dict[str, Any]],
     _recent_evolution: list[str],
@@ -846,6 +1047,8 @@ def _empty_project_detail(project_dir: Path, warning: str = "") -> ProjectDetail
             "backend_entry": "",
             "backend_run_mode": "",
         },
+        design={},
+        plan={},
         logs={"default_source": "latest", "max_lines": _UI_LOG_MAX_LINES, "sources": []},
         auto_summary={},
         verification={},
@@ -1140,6 +1343,17 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
             )
         auto_summary_raw = state_payload.get("auto_last_result") if isinstance(state_payload.get("auto_last_result"), dict) else {}
         auto_summary = _normalize_auto_summary(auto_summary_raw)
+        design_overview = _build_design_overview(
+            project_dir,
+            state_payload=state_payload if isinstance(state_payload, dict) else {},
+            spec_payload=spec if isinstance(spec, dict) else {},
+            analysis_payload=analysis if isinstance(analysis, dict) else {},
+        )
+        plan_overview = _build_plan_overview(
+            project_dir,
+            analysis_payload=analysis if isinstance(analysis, dict) else {},
+            auto_summary=auto_summary,
+        )
         recent_evolution = summarize_recent_evolution(spec, limit=5)
         evolution_history = _build_evolution_history(recent_runs, recent_evolution, auto_summary=auto_summary)
         verification_overview = _build_verification_overview(recent_runs)
@@ -1195,6 +1409,8 @@ def build_project_detail(project_dir: Path) -> ProjectDetailResponse:
             recent_runs=recent_runs,
             evolution_history=evolution_history,
             architecture=architecture,
+            design=design_overview,
+            plan=plan_overview,
             logs=logs,
             auto_summary=auto_summary,
             verification=verification_overview,
