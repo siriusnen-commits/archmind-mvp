@@ -1724,6 +1724,9 @@ def test_ui_run_flow_creates_execution_state_and_persists_file(monkeypatch, tmp_
     assert payload["flow_execution"]["flow_name"] == "Core Flow"
     assert payload["flow_execution"]["status"] == "completed"
     assert [step["status"] for step in payload["flow_execution"]["steps"]] == ["done", "done"]
+    timeline_types = [str(item.get("type") or "") for item in payload["flow_execution"].get("timeline", [])]
+    assert "flow_start" in timeline_types
+    assert "flow_complete" in timeline_types
 
     execution_path = project_dir / ".archmind" / "flow_execution.json"
     assert execution_path.exists()
@@ -1732,6 +1735,45 @@ def test_ui_run_flow_creates_execution_state_and_persists_file(monkeypatch, tmp_
     assert persisted["flow_name"] == "Core Flow"
     assert persisted["status"] == "completed"
     assert [step["status"] for step in persisted["steps"]] == ["done", "done"]
+    persisted_timeline_types = [str(item.get("type") or "") for item in persisted.get("timeline", [])]
+    assert "flow_start" in persisted_timeline_types
+    assert "flow_complete" in persisted_timeline_types
+
+
+def test_ui_run_flow_timeline_contains_step_events(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    _make_project(projects_root, "flow-timeline-steps")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    monkeypatch.setenv("ARCHMIND_FLOW_EXEC_SYNC", "1")
+
+    def _fixed_plan(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        return {
+            "goal": "timeline",
+            "priority": "high",
+            "why": "Need timeline events",
+            "expected_effect": "visible steps",
+            "steps": [],
+            "flows": [
+                {
+                    "name": "Core Flow",
+                    "flow_type": "crud",
+                    "steps": [{"id": "s1", "title": "Step1", "command": "/add_api GET /notes"}],
+                }
+            ],
+        }
+
+    monkeypatch.setattr("archmind.project_query._build_plan_overview", _fixed_plan)
+    monkeypatch.setattr("archmind.flow_execution.execute_command", lambda *_args, **_kwargs: {"ok": True, "detail": "ok"})
+
+    client = TestClient(create_ui_app())
+    response = client.post("/ui/projects/flow-timeline-steps/run_flow", json={"flow_name": "Core Flow"})
+    assert response.status_code == 200
+    payload = response.json()
+    timeline = payload["flow_execution"].get("timeline", [])
+    step_events = [item for item in timeline if str(item.get("type") or "") == "step"]
+    statuses = [str(item.get("status") or "") for item in step_events]
+    assert "running" in statuses
+    assert "done" in statuses
 
 
 def test_ui_run_flow_step_status_transitions_are_persisted_in_order(monkeypatch, tmp_path: Path) -> None:
@@ -1863,6 +1905,10 @@ def test_ui_project_detail_includes_flow_execution_and_reload_returns_same_state
                         {"command": "/improve", "status": "running"},
                     ],
                 },
+                "timeline": [
+                    {"id": "event_1", "type": "flow_start", "status": "running", "detail": "Flow started", "at": "2026-04-06T00:00:00Z"},
+                    {"id": "event_2", "type": "step", "status": "running", "step_id": "s2", "detail": "Step running", "at": "2026-04-06T00:00:01Z"},
+                ],
                 "updated_at": "2026-04-06T00:00:00Z",
             }
         ),
@@ -1886,6 +1932,7 @@ def test_ui_project_detail_includes_flow_execution_and_reload_returns_same_state
     assert execution_a["recovery"]["reason"] == "runtime-error"
     assert execution_a["recovery"]["status"] == "running"
     assert [item["command"] for item in execution_a["recovery"]["steps"]] == ["/restart", "/improve"]
+    assert [item["type"] for item in execution_a["timeline"]] == ["flow_start", "step"]
     assert execution_a == execution_b
 
 
@@ -1932,6 +1979,8 @@ def test_ui_resume_flow_skips_done_steps_and_starts_from_failed_step(monkeypatch
     assert statuses["s1"] == "done"
     assert statuses["s2"] == "done"
     assert statuses["s3"] == "done"
+    resume_events = [item for item in payload["flow_execution"].get("timeline", []) if str(item.get("type") or "") == "resume"]
+    assert len(resume_events) >= 1
 
 
 def test_ui_resume_flow_resets_running_step_and_resumes_from_it(monkeypatch, tmp_path: Path) -> None:
@@ -2179,6 +2228,10 @@ def test_ui_run_flow_failure_triggers_recovery_and_resumes_original_flow(monkeyp
     assert payload["flow_execution"]["recovery"]["status"] == "completed"
     assert [item["command"] for item in payload["flow_execution"]["recovery"]["steps"]] == ["/restart", "/improve"]
     assert [item["status"] for item in payload["flow_execution"]["recovery"]["steps"]] == ["done", "done"]
+    timeline_types = [str(item.get("type") or "") for item in payload["flow_execution"].get("timeline", [])]
+    assert "recovery_start" in timeline_types
+    assert "recovery_step" in timeline_types
+    assert "resume" in timeline_types
     statuses = {step["id"]: step["status"] for step in payload["flow_execution"]["steps"]}
     assert statuses["s1"] == "done"
     assert statuses["s2"] == "done"
@@ -2891,6 +2944,13 @@ def test_plan_overview_source_renders_recovery_block_when_triggered() -> None:
     assert "recovery?.triggered" in source
     assert "Reason: {recoveryReason || \"default\"}" in source
     assert "recoverySteps.map" in source
+
+
+def test_plan_overview_source_renders_execution_timeline_block() -> None:
+    source = Path("frontend/components/PlanOverviewCard.tsx").read_text(encoding="utf-8")
+    assert "Execution Timeline" in source
+    assert "timelineEventText" in source
+    assert "timeline.slice(-20).map" in source
 
 
 def test_plan_overview_component_keeps_individual_run_and_copy_actions() -> None:
