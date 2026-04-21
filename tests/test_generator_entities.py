@@ -430,8 +430,8 @@ def test_apply_entity_fields_to_scaffold_updates_models_and_schemas(tmp_path: Pa
     assert "due_date: datetime" in model_text
     assert "class TaskCreate" in schema_text
     assert "class TaskRead" in schema_text
-    assert 'label className="text-xs text-slate-300">Title<' in create_text
-    assert 'label className="text-xs text-slate-300">Due Date<' in create_text
+    assert '{"name": "title", "label": "Title", "placeholder": "title"}' in create_text
+    assert '{"name": "due_date", "label": "Due Date", "placeholder": "due_date"}' in create_text
 
 
 def test_apply_entity_fields_to_scaffold_reflects_priority_in_frontend_create_form(tmp_path: Path) -> None:
@@ -456,8 +456,53 @@ def test_apply_entity_fields_to_scaffold_reflects_priority_in_frontend_create_fo
 
     assert "frontend/app/tasks/new/page.tsx" in changed
     create_text = (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").read_text(encoding="utf-8")
-    assert 'label className="text-xs text-slate-300">Priority<' in create_text
     assert '"priority": values["priority"]' in create_text
+    assert '{"name": "priority", "label": "Priority", "placeholder": "priority"}' in create_text
+
+
+def test_generated_create_form_uses_stable_field_keys_and_mobile_safe_input_binding(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_mobile_form"
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "entities": [
+                    {
+                        "name": "Task",
+                        "fields": [
+                            {"name": "title", "type": "string"},
+                            {"name": "status", "type": "string"},
+                            {"name": "description", "type": "string"},
+                            {"name": "priority", "type": "string"},
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    apply_page_scaffold(project_dir, "tasks/new")
+    text = (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").read_text(encoding="utf-8")
+
+    assert "const formFields: FormFieldConfig[] = [" in text
+    assert '{"name": "title", "label": "Title", "placeholder": "title"}' in text
+    assert '{"name": "status", "label": "Status", "placeholder": "status"}' in text
+    assert '{"name": "priority", "label": "Priority", "placeholder": "priority"}' in text
+    assert "<div key={field.name}" in text
+    assert "key={index}" not in text
+    assert "onChange={onFieldValueChange(field.name)}" in text
+    assert "if (composingField && composingField !== fieldName) return;" in text
+    assert "onCompositionEnd={(event) => {" in text
+    assert "setFieldValue(field.name, event.currentTarget.value);" in text
+    assert 'name={field.name}' in text
+    assert 'autoComplete="off"' in text
+    assert '"title": values["title"]' in text
+    assert '"status": values["status"]' in text
+    assert '"status": values["title"]' not in text
+    assert '"priority": values["priority"]' in text
 
 
 def test_apply_entity_fields_to_scaffold_reflects_description_in_frontend_create_form(tmp_path: Path) -> None:
@@ -482,7 +527,7 @@ def test_apply_entity_fields_to_scaffold_reflects_description_in_frontend_create
 
     assert "frontend/app/tasks/new/page.tsx" in changed
     create_text = (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").read_text(encoding="utf-8")
-    assert 'label className="text-xs text-slate-300">Description<' in create_text
+    assert '{"name": "description", "label": "Description", "placeholder": "description"}' in create_text
     assert '"description": values["description"]' in create_text
 
 

@@ -2230,7 +2230,7 @@ def _render_frontend_entity_create_page(
             f"{prefix}Options.length > 0 ? (\n"
             f'          <div key="{field_name}" className="space-y-1">\n'
             f'            <label className="text-xs text-slate-300">{parent_label}</label>\n'
-            f'            <select value={{values["{field_name}"] || ""}} onChange={{(event) => setValues((prev) => ({{ ...prev, {field_name!r}: event.target.value }}))}} className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100">\n'
+            f'            <select id="field-{field_name}" name="{field_name}" value={{values["{field_name}"] || ""}} onChange={{onFieldValueChange("{field_name}")}} autoComplete="off" className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100">\n'
             '              <option value="">Select parent</option>\n'
             f"              {{{prefix}Options.map((opt) => (\n"
             "                <option key={opt.id} value={opt.id}>{opt.label}</option>\n"
@@ -2240,20 +2240,15 @@ def _render_frontend_entity_create_page(
             "        ) : (\n"
             f'          <div key="{field_name}" className="space-y-1">\n'
             f'            <label className="text-xs text-slate-300">{parent_label}</label>\n'
-            f'            <input value={{values["{field_name}"] || ""}} onChange={{(event) => setValues((prev) => ({{ ...prev, {field_name!r}: event.target.value }}))}} placeholder="{field_name}" className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100" />\n'
+            f'            <input id="field-{field_name}" name="{field_name}" value={{values["{field_name}"] || ""}} onChange={{onFieldValueChange("{field_name}")}} onCompositionStart={{() => setComposingField("{field_name}")}} onCompositionEnd={{(event) => {{ setComposingField(\"\"); setFieldValue("{field_name}", event.currentTarget.value); }}}} autoComplete="off" placeholder="{field_name}" className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100" />\n'
             f"            {{{prefix}Loading ? <p className=\"text-[11px] text-slate-400\">Loading options...</p> : null}}\n"
             f"            {{{prefix}Error ? <p className=\"text-[11px] text-slate-400\">Option fetch unavailable. Raw input fallback.</p> : null}}\n"
             "          </div>\n"
             "        )\n"
         )
     non_relation_fields = [item for item in normalized_fields if str(item.get("name") or "") not in relation_lookup]
-    non_relation_ui = "".join(
-        (
-            f'        <div key="{str(item.get("name") or "")}" className="space-y-1">\n'
-            f'          <label className="text-xs text-slate-300">{str(item.get("name") or "").replace("_", " ").title()}</label>\n'
-            f'          <input value={{values["{str(item.get("name") or "")}"] || ""}} onChange={{(event) => setValues((prev) => ({{ ...prev, {str(item.get("name") or "")!r}: event.target.value }}))}} placeholder="{str(item.get("name") or "")}" className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100" />\n'
-            "        </div>\n"
-        )
+    non_relation_field_rows = "".join(
+        f'    {{"name": {json.dumps(str(item.get("name") or ""))}, "label": {json.dumps(str(item.get("name") or "").replace("_", " ").title())}, "placeholder": {json.dumps(str(item.get("name") or ""))}}},\n'
         for item in non_relation_fields
     )
     payload_lines = ""
@@ -2273,10 +2268,11 @@ def _render_frontend_entity_create_page(
     return (
         '"use client";\n\n'
         'import { useRouter, useSearchParams } from "next/navigation";\n'
-        'import { FormEvent, useEffect, useState } from "react";\n'
+        'import { ChangeEvent, FormEvent, useEffect, useState } from "react";\n'
         f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n\n'
         "type EntityItem = Record<string, unknown>;\n"
-        "type RelationOption = { id: string; label: string };\n\n"
+        "type RelationOption = { id: string; label: string };\n"
+        "type FormFieldConfig = { name: string; label: string; placeholder: string };\n\n"
         "function extractRows(payload: unknown): EntityItem[] {\n"
         "  if (Array.isArray(payload)) return payload as EntityItem[];\n"
         "  if (payload && typeof payload === \"object\" && Array.isArray((payload as { items?: unknown[] }).items)) {\n"
@@ -2288,12 +2284,25 @@ def _render_frontend_entity_create_page(
         "  const searchParams = useSearchParams();\n"
         "  const router = useRouter();\n"
         "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n"
+        "  const formFields: FormFieldConfig[] = [\n"
+        f"{non_relation_field_rows}"
+        "  ];\n"
         f"  const [values, setValues] = useState<Record<string, string>>(() => ({{ {initial_map} }}));\n"
         "  const [saving, setSaving] = useState(false);\n"
         "  const [error, setError] = useState(\"\");\n"
         "  const [message, setMessage] = useState(\"\");\n"
+        "  const [composingField, setComposingField] = useState(\"\");\n"
         f"{relation_state_blocks}\n"
         f"{relation_effect_blocks}\n"
+        "  function setFieldValue(fieldName: string, nextValue: string) {\n"
+        "    setValues((prev) => ({ ...prev, [fieldName]: nextValue }));\n"
+        "  }\n\n"
+        "  function onFieldValueChange(fieldName: string) {\n"
+        "    return (event: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {\n"
+        "      if (composingField && composingField !== fieldName) return;\n"
+        "      setFieldValue(fieldName, event.target.value);\n"
+        "    };\n"
+        "  }\n\n"
         "  async function onSubmit(event: FormEvent<HTMLFormElement>) {\n"
         "    event.preventDefault();\n"
         "    if (!apiBaseUrl) {\n"
@@ -2330,7 +2339,25 @@ def _render_frontend_entity_create_page(
         '      <p className="text-xs text-slate-400">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>\n'
         '      <form onSubmit={onSubmit} className="space-y-3 rounded-md border border-slate-700 p-3">\n'
         f"{relation_ui_blocks}"
-        f"{non_relation_ui}"
+        "        {formFields.map((field) => (\n"
+        "          <div key={field.name} className=\"space-y-1\">\n"
+        "            <label htmlFor={`field-${field.name}`} className=\"text-xs text-slate-300\">{field.label}</label>\n"
+        "            <input\n"
+        "              id={`field-${field.name}`}\n"
+        "              name={field.name}\n"
+        "              value={values[field.name] || \"\"}\n"
+        "              onChange={onFieldValueChange(field.name)}\n"
+        "              onCompositionStart={() => setComposingField(field.name)}\n"
+        "              onCompositionEnd={(event) => {\n"
+        "                setComposingField(\"\");\n"
+        "                setFieldValue(field.name, event.currentTarget.value);\n"
+        "              }}\n"
+        "              autoComplete=\"off\"\n"
+        "              placeholder={field.placeholder}\n"
+        "              className=\"w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100\"\n"
+        "            />\n"
+        "          </div>\n"
+        "        ))}\n"
         "        <button type=\"submit\" disabled={saving || apiBaseLoading} className=\"rounded-md bg-emerald-400 px-3 py-2 text-sm font-semibold text-emerald-950 disabled:opacity-60\">\n"
         "          {saving ? \"Creating...\" : \"Create\"}\n"
         "        </button>\n"
