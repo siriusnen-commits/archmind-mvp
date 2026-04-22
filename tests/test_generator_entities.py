@@ -355,6 +355,11 @@ def test_generate_project_starter_add_field_persists_and_reflects_across_todo_di
         created = create.json()
         assert isinstance(created, dict)
         assert str(created.get("priority") or "") == "high"
+        detail = client.get(f"{endpoint}/{int(created.get('id') or 0)}")
+        assert detail.status_code == 200
+        detail_payload = detail.json()
+        assert isinstance(detail_payload, dict)
+        assert str(detail_payload.get("priority") or "") == "high"
 
         listing = client.get(endpoint)
         assert listing.status_code == 200
@@ -455,9 +460,13 @@ def test_apply_entity_fields_to_scaffold_reflects_priority_in_frontend_create_fo
     )
 
     assert "frontend/app/tasks/new/page.tsx" in changed
+    assert "frontend/app/tasks/[id]/page.tsx" in changed
     create_text = (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").read_text(encoding="utf-8")
+    detail_text = (project_dir / "frontend" / "app" / "tasks" / "[id]" / "page.tsx").read_text(encoding="utf-8")
     assert '"priority": values["priority"]' in create_text
     assert '{"name": "priority", "label": "Priority", "placeholder": "priority"}' in create_text
+    assert "Additional Fields" in detail_text
+    assert 'Priority: {String((item as Record<string, unknown>)["priority"] ?? "(unset)")}' in detail_text
 
 
 def test_generated_create_form_uses_stable_field_keys_and_mobile_safe_input_binding(tmp_path: Path) -> None:
@@ -831,6 +840,36 @@ def test_apply_frontend_page_scaffold_task_detail_shows_due_date_when_present(tm
     detail_text = (project_dir / "frontend" / "app" / "tasks" / "[id]" / "page.tsx").read_text(encoding="utf-8")
     assert 'due_date || (item as Record<string, unknown>).due' in detail_text
     assert "Due:" in detail_text
+
+
+def test_apply_frontend_page_scaffold_task_detail_renders_added_priority_field(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_task_detail_priority"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "entities": [
+                    {
+                        "name": "Task",
+                        "fields": [
+                            {"name": "title", "type": "string"},
+                            {"name": "status", "type": "string"},
+                            {"name": "description", "type": "string"},
+                            {"name": "priority", "type": "string"},
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    apply_page_scaffold(project_dir, "tasks/detail")
+    detail_text = (project_dir / "frontend" / "app" / "tasks" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+    assert "Additional Fields" in detail_text
+    assert 'Priority: {String((item as Record<string, unknown>)["priority"] ?? "(unset)")}' in detail_text
 
 
 def test_relation_surface_board_detail_includes_card_section(tmp_path: Path) -> None:
