@@ -1005,6 +1005,7 @@ def _sync_relation_detail_pages(project_dir: Path, generated: list[str]) -> None
             api_helper_import=helper_import,
             relation_sections=_relation_sections_for_parent(project_dir, parent_resource),
             relation_fields=_relation_inputs_for_child_resource(project_dir, parent_resource),
+            field_specs=_entity_field_specs_for_resource(project_dir, parent_resource),
         )
         _write_if_changed(detail_page, content, generated, project_dir)
 
@@ -1861,6 +1862,7 @@ def apply_frontend_page_scaffold(project_dir: Path, entity_name: str) -> list[st
             api_helper_import=detail_helper_import,
             relation_sections=_relation_sections_for_parent(project_dir, plural),
             relation_fields=_relation_inputs_for_child_resource(project_dir, plural),
+            field_specs=_entity_field_specs_for_resource(project_dir, plural),
         ),
         generated,
         project_dir,
@@ -1922,6 +1924,7 @@ def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
                 api_helper_import=helper_import,
                 relation_sections=_relation_sections_for_parent(project_dir, entity_path),
                 relation_fields=_relation_inputs_for_child_resource(project_dir, entity_path),
+                field_specs=_entity_field_specs_for_resource(project_dir, entity_path),
             ),
             generated,
             project_dir,
@@ -2392,6 +2395,7 @@ def _render_implemented_page_content(app_root: Path, target: Path, rel: str, pro
             api_helper_import=helper_import,
             relation_sections=_relation_sections_for_parent(project_dir, entity_path),
             relation_fields=_relation_inputs_for_child_resource(project_dir, entity_path),
+            field_specs=_entity_field_specs_for_resource(project_dir, entity_path),
         )
     if entity_path and route_kind == "create":
         singular = _singularize_resource_name(entity_path).replace("-", " ").replace("_", " ").title()
@@ -2628,6 +2632,7 @@ def _render_frontend_entity_detail_page(
     api_helper_import: str = "../../_lib/apiBase",
     relation_sections: list[dict[str, str]] | None = None,
     relation_fields: list[dict[str, str]] | None = None,
+    field_specs: list[dict[str, str]] | None = None,
 ) -> str:
     api_path = f"/{str(entity_path or '').strip('/')}"
     if _is_note_like_entity_path(entity_path):
@@ -2656,6 +2661,7 @@ def _render_frontend_entity_detail_page(
     is_card_like = _is_card_like_entity_path(entity_path)
     is_bookmark_like = _is_bookmark_like_entity_path(entity_path)
     relation_field_rows = relation_fields if isinstance(relation_fields, list) else []
+    configured_field_rows = field_specs if isinstance(field_specs, list) else []
     import_link_line = 'import Link from "next/link";\n' if sections else ""
     helper_extract_rows = ""
     relation_state_blocks = ""
@@ -2763,6 +2769,58 @@ def _render_frontend_entity_detail_page(
                 if str(row.get("field_name") or "").strip()
             )
             + "      </section>\n"
+        )
+    relation_field_names = {
+        str(row.get("field_name") or "").strip().lower()
+        for row in relation_field_rows
+        if str(row.get("field_name") or "").strip()
+    }
+    default_visible_names = {"id", "created_at", "updated_at"}
+    if is_board_like:
+        default_visible_names.update({"title", "description"})
+    elif is_card_like:
+        default_visible_names.update(
+            {
+                "title",
+                "status",
+                "board_id",
+                "due_date",
+                "due",
+                "assignee",
+                "owner",
+                "member",
+                "description",
+                "content",
+            }
+        )
+    elif is_task_like:
+        default_visible_names.update({"title", "status", "due_date", "due", "description", "content"})
+    elif is_diary_like:
+        default_visible_names.update({"title", "content"})
+    elif is_bookmark_like:
+        default_visible_names.update({"title", "url", "note", "description", "content", "category"})
+    hidden_names = default_visible_names | relation_field_names
+    additional_field_rows: list[tuple[str, str]] = []
+    seen_additional: set[str] = set()
+    for row in configured_field_rows:
+        field_name = str(row.get("name") or "").strip()
+        if not field_name:
+            continue
+        field_key = field_name.lower()
+        if field_key in hidden_names or field_key in seen_additional:
+            continue
+        seen_additional.add(field_key)
+        additional_field_rows.append((field_name, field_name.replace("_", " ").title()))
+    additional_field_ui = ""
+    if additional_field_rows:
+        additional_field_ui = (
+            '        <section className="space-y-2 rounded-md border border-slate-700 bg-slate-900/40 p-3">\n'
+            '          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-300">Additional Fields</h3>\n'
+            + "".join(
+                f'          <div className="text-xs text-slate-300">{label}: {{String((item as Record<string, unknown>)["{name}"] ?? "(unset)")}}</div>\n'
+                for name, label in additional_field_rows
+            )
+            + "        </section>\n"
         )
     return (
         '"use client";\n\n'
@@ -2906,6 +2964,7 @@ def _render_frontend_entity_detail_page(
             )
             )
         )
+        + additional_field_ui
         + "      ) : null}\n"
         f"{relation_field_ui}"
         f"{relation_ui_blocks}"
@@ -4009,6 +4068,36 @@ def _sync_frontend_entity_create_form(
     _sync_relation_detail_pages(project_dir, changed)
 
 
+def _sync_frontend_entity_detail_page(
+    project_dir: Path,
+    entity_name: str,
+    fields: list[dict[str, Any]],
+    changed: list[str],
+) -> None:
+    app_root = _resolve_frontend_app_root(project_dir)
+    if app_root is None:
+        return
+    class_name, _, plural = _entity_identity(entity_name)
+    if not class_name or not plural:
+        return
+    target = app_root / plural / "[id]" / "page.tsx"
+    _ensure_frontend_api_base_helper(app_root, changed, project_dir)
+    _ensure_frontend_navigation_helper(app_root, changed, project_dir)
+    _ensure_frontend_navigation_shell_upgrade(app_root, changed, project_dir)
+    helper_import = _api_base_helper_import_for_page(app_root, target)
+    content = _render_frontend_entity_detail_page(
+        component_name=_safe_component_name([plural, "detail"]),
+        title=class_name,
+        entity_path=plural,
+        api_helper_import=helper_import,
+        relation_sections=_relation_sections_for_parent(project_dir, plural),
+        relation_fields=_relation_inputs_for_child_resource(project_dir, plural),
+        field_specs=fields,
+    )
+    _write_if_changed(target, content, changed, project_dir)
+    _sync_relation_detail_pages(project_dir, changed)
+
+
 def apply_entity_fields_to_scaffold(project_dir: Path, entity_name: str, fields: list[dict[str, Any]]) -> list[str]:
     """
     Update model/schema placeholders with field metadata for an existing entity scaffold.
@@ -4041,6 +4130,7 @@ def apply_entity_fields_to_scaffold(project_dir: Path, entity_name: str, fields:
 
     frontend_fields = [{"name": name, "type": ftype} for name, ftype in normalized_fields]
     _sync_frontend_entity_create_form(project_dir, entity_name, frontend_fields, changed)
+    _sync_frontend_entity_detail_page(project_dir, entity_name, frontend_fields, changed)
     return changed
 
 
