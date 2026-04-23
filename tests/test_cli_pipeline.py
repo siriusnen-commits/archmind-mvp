@@ -796,7 +796,7 @@ def test_pipeline_writes_project_spec_and_module_alignment(tmp_path: Path, monke
 
 
 def test_pipeline_generated_project_spec_is_visible_to_inspect_and_next(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project)
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_seed_scaffold)
 
     exit_code = main(
         [
@@ -820,6 +820,16 @@ def test_pipeline_generated_project_spec_is_visible_to_inspect_and_next(tmp_path
 
     assert len(spec_payload.get("entities") or []) >= 1
     assert len(spec_payload.get("api_endpoints") or []) >= 1
+    pages = {
+        str(item or "").strip().lower().strip("/")
+        for item in (spec_payload.get("frontend_pages") or [])
+        if str(item or "").strip()
+    }
+    assert {"entries/list", "entries/new", "entries/detail"}.issubset(pages)
+
+    assert (project_dir / "frontend" / "app" / "entries" / "page.tsx").exists()
+    assert (project_dir / "frontend" / "app" / "entries" / "new" / "page.tsx").exists()
+    assert (project_dir / "frontend" / "app" / "entries" / "[id]" / "page.tsx").exists()
 
     detail = build_project_detail(project_dir)
     assert detail.spec_summary.entities >= 1
