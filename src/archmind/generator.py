@@ -2885,6 +2885,7 @@ def _render_frontend_entity_detail_page(
         "      {!loading && notFound ? <p className=\"text-sm text-slate-300\">Item not found.</p> : null}\n"
         "      {!loading && error ? <p className=\"text-sm text-rose-300\">Failed to load: {error}</p> : null}\n"
         "      {!loading && !notFound && !error && item ? (\n"
+        "        <>\n"
         + (
             "        <article className=\"space-y-3 rounded-xl border border-slate-700 bg-slate-950/50 p-4\">\n"
             "          <h2 className=\"text-xl font-semibold text-slate-100\">{String((item as Record<string, unknown>).title ?? `Board #${id}`)}</h2>\n"
@@ -2965,8 +2966,9 @@ def _render_frontend_entity_detail_page(
             )
         )
         + additional_field_ui
+        + relation_field_ui
+        + "        </>\n"
         + "      ) : null}\n"
-        f"{relation_field_ui}"
         f"{relation_ui_blocks}"
         "    </section>\n"
         "  );\n"
