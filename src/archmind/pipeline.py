@@ -73,6 +73,89 @@ class PipelineOptions:
 
 SUPPORTED_STARTER_PROFILES = {"todo", "diary", "kanban", "bookmark"}
 
+STARTER_PROFILE_BASELINES: dict[str, dict[str, Any]] = {
+    "todo": {
+        "entities": [
+            {
+                "name": "Task",
+                "fields": [
+                    {"name": "title", "type": "string"},
+                    {"name": "status", "type": "string"},
+                ],
+            }
+        ],
+        "api_endpoints": [
+            "GET /tasks",
+            "POST /tasks",
+            "GET /tasks/{id}",
+            "PATCH /tasks/{id}",
+            "DELETE /tasks/{id}",
+        ],
+        "frontend_pages": ["tasks/list", "tasks/new", "tasks/detail"],
+        "required_entity": "task",
+        "required_pages": ["tasks/list", "tasks/new", "tasks/detail"],
+        "required_frontend_files": [
+            "frontend/app/tasks/page.tsx",
+            "frontend/app/tasks/new/page.tsx",
+            "frontend/app/tasks/[id]/page.tsx",
+        ],
+    },
+    "diary": {
+        "entities": [
+            {
+                "name": "Entry",
+                "fields": [
+                    {"name": "title", "type": "string"},
+                    {"name": "content", "type": "string"},
+                    {"name": "created_at", "type": "datetime"},
+                ],
+            }
+        ],
+        "api_endpoints": [
+            "GET /entries",
+            "POST /entries",
+            "GET /entries/{id}",
+            "PATCH /entries/{id}",
+            "DELETE /entries/{id}",
+        ],
+        "frontend_pages": ["entries/list", "entries/new", "entries/detail"],
+        "required_entity": "entry",
+        "required_pages": ["entries/list", "entries/new", "entries/detail"],
+        "required_frontend_files": [
+            "frontend/app/entries/page.tsx",
+            "frontend/app/entries/new/page.tsx",
+            "frontend/app/entries/[id]/page.tsx",
+        ],
+    },
+    "bookmark": {
+        "entities": [
+            {
+                "name": "Bookmark",
+                "fields": [
+                    {"name": "title", "type": "string"},
+                    {"name": "url", "type": "string"},
+                    {"name": "note", "type": "string"},
+                ],
+            }
+        ],
+        "api_endpoints": [
+            "GET /bookmarks",
+            "POST /bookmarks",
+            "GET /bookmarks/{id}",
+            "PATCH /bookmarks/{id}",
+            "DELETE /bookmarks/{id}",
+        ],
+        "frontend_pages": ["bookmarks/list", "bookmarks/new", "bookmarks/detail"],
+        "required_entity": "bookmark",
+        "required_pages": ["bookmarks/list", "bookmarks/new", "bookmarks/detail"],
+        "required_frontend_files": [
+            "frontend/app/bookmarks/page.tsx",
+            "frontend/app/bookmarks/new/page.tsx",
+            "frontend/app/bookmarks/[id]/page.tsx",
+        ],
+    },
+}
+
 
 def _repository_default_payload(
     *,
@@ -380,55 +463,93 @@ def _detect_starter_profile_from_idea(idea: str) -> str:
     return ""
 
 
-def _ensure_todo_starter_seed(spec_seed: dict[str, Any] | None) -> dict[str, Any]:
+def _ensure_starter_profile_seed(starter_profile: str, spec_seed: dict[str, Any] | None) -> dict[str, Any]:
+    profile_key = _normalize_starter_profile(starter_profile)
+    baseline = STARTER_PROFILE_BASELINES.get(profile_key)
+    if not isinstance(baseline, dict):
+        return spec_seed if isinstance(spec_seed, dict) else {}
+
     seed = spec_seed if isinstance(spec_seed, dict) else {}
     out = dict(seed)
 
     entities_raw = out.get("entities") if isinstance(out.get("entities"), list) else []
     entities: list[dict[str, Any]] = [row for row in entities_raw if isinstance(row, dict)]
-    task_row: dict[str, Any] | None = None
-    for row in entities:
-        if str(row.get("name") or "").strip().lower() == "task":
-            task_row = row
-            break
-    if task_row is None:
-        task_row = {"name": "Task", "fields": []}
-        entities.append(task_row)
-    fields_raw = task_row.get("fields") if isinstance(task_row.get("fields"), list) else []
-    fields: list[dict[str, str]] = [item for item in fields_raw if isinstance(item, dict)]
-    by_field = {
-        str(item.get("name") or "").strip().lower(): item
-        for item in fields
-        if str(item.get("name") or "").strip()
+    by_entity = {
+        str(row.get("name") or "").strip().lower(): row
+        for row in entities
+        if str(row.get("name") or "").strip()
     }
-    if "title" not in by_field:
-        fields.append({"name": "title", "type": "string"})
-    if "status" not in by_field:
-        fields.append({"name": "status", "type": "string"})
-    task_row["fields"] = fields
-    out["entities"] = entities
+    for baseline_entity in baseline.get("entities") or []:
+        if not isinstance(baseline_entity, dict):
+            continue
+        entity_name = str(baseline_entity.get("name") or "").strip()
+        if not entity_name:
+            continue
+        entity_key = entity_name.lower()
+        row = by_entity.get(entity_key)
+        if row is None:
+            row = {"name": entity_name, "fields": []}
+            entities.append(row)
+            by_entity[entity_key] = row
+        fields_raw = row.get("fields") if isinstance(row.get("fields"), list) else []
+        fields: list[dict[str, str]] = [item for item in fields_raw if isinstance(item, dict)]
+        by_field = {
+            str(item.get("name") or "").strip().lower(): item
+            for item in fields
+            if str(item.get("name") or "").strip()
+        }
+        for field in baseline_entity.get("fields") or []:
+            if not isinstance(field, dict):
+                continue
+            field_name = str(field.get("name") or "").strip()
+            field_type = str(field.get("type") or "").strip().lower()
+            if not field_name or not field_type:
+                continue
+            if field_name.lower() not in by_field:
+                fields.append({"name": field_name, "type": field_type})
+                by_field[field_name.lower()] = fields[-1]
+        row["fields"] = fields
+    if entities:
+        out["entities"] = entities
 
     api_raw = out.get("api_endpoints") if isinstance(out.get("api_endpoints"), list) else []
     api_values = [str(item or "").strip() for item in api_raw if str(item or "").strip()]
     api_seen = {item.upper() for item in api_values}
-    for endpoint in ("GET /tasks", "POST /tasks", "GET /tasks/{id}"):
-        if endpoint.upper() not in api_seen:
-            api_values.append(endpoint)
-            api_seen.add(endpoint.upper())
-    out["api_endpoints"] = api_values
+    for endpoint in baseline.get("api_endpoints") or []:
+        endpoint_text = str(endpoint or "").strip()
+        if endpoint_text and endpoint_text.upper() not in api_seen:
+            api_values.append(endpoint_text)
+            api_seen.add(endpoint_text.upper())
+    if api_values:
+        out["api_endpoints"] = api_values
 
     pages_raw = out.get("frontend_pages") if isinstance(out.get("frontend_pages"), list) else []
     page_values = [str(item or "").strip().lower().strip("/") for item in pages_raw if str(item or "").strip()]
     page_seen = set(page_values)
-    for page in ("tasks/list", "tasks/new", "tasks/detail"):
-        if page not in page_seen:
-            page_values.append(page)
-            page_seen.add(page)
-    out["frontend_pages"] = page_values
+    for page in baseline.get("frontend_pages") or []:
+        page_text = str(page or "").strip().lower().strip("/")
+        if page_text and page_text not in page_seen:
+            page_values.append(page_text)
+            page_seen.add(page_text)
+    if page_values:
+        out["frontend_pages"] = page_values
     return out
 
 
-def _validate_todo_materialization(project_dir: Path, spec_seed: dict[str, Any] | None = None) -> tuple[bool, str]:
+def _ensure_todo_starter_seed(spec_seed: dict[str, Any] | None) -> dict[str, Any]:
+    return _ensure_starter_profile_seed("todo", spec_seed)
+
+
+def _validate_starter_materialization(
+    project_dir: Path,
+    starter_profile: str,
+    spec_seed: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
+    profile_key = _normalize_starter_profile(starter_profile)
+    baseline = STARTER_PROFILE_BASELINES.get(profile_key)
+    if not isinstance(baseline, dict):
+        return True, ""
+
     spec_path = project_dir / ".archmind" / "project_spec.json"
     try:
         spec_payload = json.loads(spec_path.read_text(encoding="utf-8")) if spec_path.exists() else {}
@@ -456,23 +577,23 @@ def _validate_todo_materialization(project_dir: Path, spec_seed: dict[str, Any] 
     }
 
     missing: list[str] = []
-    if "task" not in entity_names:
-        missing.append("missing Task entity in spec")
-    for endpoint in ("GET /TASKS", "POST /TASKS", "GET /TASKS/{ID}"):
-        if endpoint not in apis:
-            missing.append(f"missing baseline API endpoint: {endpoint}")
-    if "tasks/list" not in pages:
-        missing.append("missing tasks/list in spec frontend_pages")
-    if "tasks/detail" not in pages and "tasks/new" not in pages:
-        missing.append("missing tasks/detail or tasks/new in spec frontend_pages")
+    required_entity = str(baseline.get("required_entity") or "").strip().lower()
+    if required_entity and required_entity not in entity_names:
+        missing.append(f"missing {required_entity.title()} entity in spec")
+    for endpoint in baseline.get("api_endpoints") or []:
+        endpoint_text = str(endpoint or "").strip().upper()
+        if endpoint_text and endpoint_text not in apis:
+            missing.append(f"missing baseline API endpoint: {endpoint_text}")
+    for page in baseline.get("required_pages") or []:
+        page_text = str(page or "").strip().lower().strip("/")
+        if page_text and page_text not in pages:
+            missing.append(f"missing {page_text} in spec frontend_pages")
 
     app_root = project_dir / "frontend" / "app"
-    tasks_list_page = app_root / "tasks" / "page.tsx"
-    tasks_create_page = app_root / "tasks" / "new" / "page.tsx"
-    if not tasks_list_page.exists():
-        missing.append("missing frontend tasks list page")
-    if not tasks_create_page.exists():
-        missing.append("missing frontend tasks create page")
+    for frontend_file in baseline.get("required_frontend_files") or []:
+        rel = Path(str(frontend_file or "").strip())
+        if rel and not (project_dir / rel).exists():
+            missing.append(f"missing frontend {rel.as_posix().removeprefix('frontend/app/').removesuffix('/page.tsx')} page")
     root_page = app_root / "page.tsx"
     if root_page.exists():
         try:
@@ -485,6 +606,10 @@ def _validate_todo_materialization(project_dir: Path, spec_seed: dict[str, Any] 
     if missing:
         return False, "; ".join(missing)
     return True, ""
+
+
+def _validate_todo_materialization(project_dir: Path, spec_seed: dict[str, Any] | None = None) -> tuple[bool, str]:
+    return _validate_starter_materialization(project_dir, "todo", spec_seed)
 
 
 def compute_status(
@@ -1022,8 +1147,8 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
             project_spec_seed = suggest_project_spec(normalized_idea, architecture_reasoning)
         except Exception as exc:
             print(f"[WARN] project spec suggestion failed: {exc}", file=sys.stderr)
-    if starter_profile == "todo":
-        project_spec_seed = _ensure_todo_starter_seed(project_spec_seed)
+    if starter_profile in STARTER_PROFILE_BASELINES:
+        project_spec_seed = _ensure_starter_profile_seed(starter_profile, project_spec_seed)
 
     try:
         project_dir = _resolve_project_dir(
@@ -1126,8 +1251,12 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
 
     materialization_ok = True
     materialization_reason = ""
-    if starter_profile == "todo":
-        materialization_ok, materialization_reason = _validate_todo_materialization(project_dir, project_spec_seed)
+    if starter_profile in STARTER_PROFILE_BASELINES:
+        materialization_ok, materialization_reason = _validate_starter_materialization(
+            project_dir,
+            starter_profile,
+            project_spec_seed,
+        )
     if not materialization_ok:
         reason = str(materialization_reason or "starter profile materialization failed")
         print(f"[ERROR] generation-error: {reason}", file=sys.stderr)
