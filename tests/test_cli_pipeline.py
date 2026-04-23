@@ -300,8 +300,9 @@ def test_pipeline_todo_starter_profile_fails_when_project_is_only_generic_scaffo
     assert (
         "missing Task entity in spec" in detail
         or "frontend root is still generic fallback scaffold" in detail
-        or "missing frontend tasks list page" in detail
-        or "missing frontend tasks create page" in detail
+        or "missing frontend tasks page" in detail
+        or "missing frontend tasks/new page" in detail
+        or "missing frontend tasks/[id] page" in detail
     )
 
 
@@ -462,6 +463,139 @@ def test_pipeline_todo_starter_profile_enforces_seed_baseline_when_suggestion_is
     assert "task" in entity_names
     assert {"tasks/list", "tasks/new"}.issubset(pages)
 
+
+@pytest.mark.parametrize(
+    ("starter_profile", "entity_name", "collection", "list_label", "create_label", "detail_label"),
+    [
+        ("diary", "Entry", "entries", "Entries", "New Entry", "Entry Detail"),
+        ("bookmark", "Bookmark", "bookmarks", "Bookmarks", "New Bookmark", "Bookmark Detail"),
+    ],
+)
+def test_pipeline_starter_profiles_fail_when_project_is_only_generic_scaffold(
+    tmp_path: Path,
+    monkeypatch,
+    starter_profile: str,
+    entity_name: str,
+    collection: str,
+    list_label: str,
+    create_label: str,
+    detail_label: str,
+) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project)
+    monkeypatch.setattr("archmind.pipeline.suggest_project_spec", lambda *_args, **_kwargs: {})
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            f"{starter_profile} app",
+            "--template",
+            "fullstack-ddd",
+            "--starter-profile",
+            starter_profile,
+            "--out",
+            str(tmp_path),
+            "--name",
+            f"{starter_profile}_generic_only",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code != 0
+
+    project_dir = tmp_path / f"{starter_profile}_generic_only"
+    result_payload = json.loads((project_dir / ".archmind" / "result.json").read_text(encoding="utf-8"))
+    assert result_payload.get("status") == "FAIL"
+    assert result_payload.get("steps", {}).get("generate", {}).get("failure_class") == "generation-error"
+    detail = str(result_payload.get("steps", {}).get("generate", {}).get("detail") or "")
+    assert (
+        f"missing {entity_name} entity in spec" in detail
+        or f"missing frontend {collection} page" in detail
+        or "frontend root is still generic fallback scaffold" in detail
+    )
+
+
+@pytest.mark.parametrize(
+    ("starter_profile", "entity_name", "collection", "list_label", "create_label", "detail_label"),
+    [
+        ("todo", "Task", "tasks", "Tasks", "New Task", "Task Detail"),
+        ("diary", "Entry", "entries", "Entries", "New Entry", "Entry Detail"),
+        ("bookmark", "Bookmark", "bookmarks", "Bookmarks", "New Bookmark", "Bookmark Detail"),
+    ],
+)
+def test_pipeline_starter_profiles_preserve_domain_identity_when_suggestion_is_empty(
+    tmp_path: Path,
+    monkeypatch,
+    starter_profile: str,
+    entity_name: str,
+    collection: str,
+    list_label: str,
+    create_label: str,
+    detail_label: str,
+) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_generic_root_and_seed_scaffold)
+    monkeypatch.setattr("archmind.pipeline.suggest_project_spec", lambda *_args, **_kwargs: {})
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "simple app",
+            "--template",
+            "fullstack-ddd",
+            "--starter-profile",
+            starter_profile,
+            "--out",
+            str(tmp_path),
+            "--name",
+            f"{starter_profile}_seed_enforced",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+
+    project_dir = tmp_path / f"{starter_profile}_seed_enforced"
+    root_text = (project_dir / "frontend" / "app" / "page.tsx").read_text(encoding="utf-8")
+    assert "ArchMind Fullstack Workspace" not in root_text
+
+    list_page = project_dir / "frontend" / "app" / collection / "page.tsx"
+    create_page = project_dir / "frontend" / "app" / collection / "new" / "page.tsx"
+    detail_page = project_dir / "frontend" / "app" / collection / "[id]" / "page.tsx"
+    assert list_page.exists()
+    assert create_page.exists()
+    assert detail_page.exists()
+
+    list_text = list_page.read_text(encoding="utf-8")
+    create_text = create_page.read_text(encoding="utf-8")
+    detail_text = detail_page.read_text(encoding="utf-8")
+    assert list_label in list_text
+    assert create_label in create_text
+    assert detail_label in detail_text
+
+    spec_payload = json.loads((project_dir / ".archmind" / "project_spec.json").read_text(encoding="utf-8"))
+    entity_names = {
+        str(item.get("name") or "").strip().lower()
+        for item in (spec_payload.get("entities") or [])
+        if isinstance(item, dict)
+    }
+    pages = {
+        str(item or "").strip().lower().strip("/")
+        for item in (spec_payload.get("frontend_pages") or [])
+        if str(item or "").strip()
+    }
+    assert entity_name.lower() in entity_names
+    assert {f"{collection}/list", f"{collection}/new", f"{collection}/detail"}.issubset(pages)
+    if starter_profile != "todo":
+        assert "task" not in entity_names
+        assert "tasks/list" not in pages
+        assert not (project_dir / "frontend" / "app" / "tasks").exists()
 
 def test_pipeline_idea_generator_receives_effective_template_for_frontend_web(tmp_path: Path, monkeypatch) -> None:
     captured: dict[str, str] = {}
@@ -662,7 +796,7 @@ def test_pipeline_writes_project_spec_and_module_alignment(tmp_path: Path, monke
 
 
 def test_pipeline_generated_project_spec_is_visible_to_inspect_and_next(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project)
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_seed_scaffold)
 
     exit_code = main(
         [
@@ -686,6 +820,16 @@ def test_pipeline_generated_project_spec_is_visible_to_inspect_and_next(tmp_path
 
     assert len(spec_payload.get("entities") or []) >= 1
     assert len(spec_payload.get("api_endpoints") or []) >= 1
+    pages = {
+        str(item or "").strip().lower().strip("/")
+        for item in (spec_payload.get("frontend_pages") or [])
+        if str(item or "").strip()
+    }
+    assert {"entries/list", "entries/new", "entries/detail"}.issubset(pages)
+
+    assert (project_dir / "frontend" / "app" / "entries" / "page.tsx").exists()
+    assert (project_dir / "frontend" / "app" / "entries" / "new" / "page.tsx").exists()
+    assert (project_dir / "frontend" / "app" / "entries" / "[id]" / "page.tsx").exists()
 
     detail = build_project_detail(project_dir)
     assert detail.spec_summary.entities >= 1
@@ -871,6 +1015,8 @@ def test_pipeline_fullstack_seed_spec_projects_all_entities_and_pages(tmp_path: 
     project_dir = tmp_path / "diary_seed_multi_demo"
     assert (project_dir / "backend" / "app" / "routers" / "entry.py").exists()
     assert (project_dir / "backend" / "app" / "routers" / "tag.py").exists()
+    assert (project_dir / "backend" / "app" / "models" / "tag.py").exists()
+    assert (project_dir / "backend" / "app" / "schemas" / "tag.py").exists()
     assert (project_dir / "frontend" / "app" / "entries" / "page.tsx").exists()
     assert (project_dir / "frontend" / "app" / "tags" / "page.tsx").exists()
     assert (project_dir / "frontend" / "app" / "entries" / "new" / "page.tsx").exists()
@@ -881,6 +1027,12 @@ def test_pipeline_fullstack_seed_spec_projects_all_entities_and_pages(tmp_path: 
     assert 'href: "/entries/new"' in nav_text
 
     spec_payload = json.loads((project_dir / ".archmind" / "project_spec.json").read_text(encoding="utf-8"))
+    entity_names = {
+        str(item.get("name") or "").strip().lower()
+        for item in (spec_payload.get("entities") or [])
+        if isinstance(item, dict)
+    }
+    assert {"entry", "tag"}.issubset(entity_names)
     assert len(spec_payload.get("entities") or []) >= 2
     assert len(spec_payload.get("api_endpoints") or []) >= 3
     assert len(spec_payload.get("frontend_pages") or []) >= 3
@@ -971,6 +1123,45 @@ def test_pipeline_idea_preserves_multi_entity_projection_in_canonical_inspect(
     pages = {str(x) for x in (analysis.get("pages") or []) if str(x).strip()}
     resources_in_pages = {page.split("/", 1)[0] for page in pages if "/" in page}
     assert required_resources.issubset(resources_in_api | resources_in_pages)
+
+
+def test_pipeline_bookmark_backend_starter_does_not_require_frontend_pages(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_seed_scaffold)
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "bookmark manager with categories",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "bookmark_backend_no_frontend_requirement",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+
+    project_dir = tmp_path / "bookmark_backend_no_frontend_requirement"
+    spec_payload = json.loads((project_dir / ".archmind" / "project_spec.json").read_text(encoding="utf-8"))
+    entity_names = {
+        str(item.get("name") or "").strip()
+        for item in (spec_payload.get("entities") or [])
+        if isinstance(item, dict)
+    }
+    assert {"Bookmark", "Category"}.issubset(entity_names)
+    detail = build_project_detail(project_dir)
+    analysis = detail.analysis if isinstance(detail.analysis, dict) else {}
+    apis = analysis.get("apis") if isinstance(analysis.get("apis"), list) else []
+    resources_in_api = {
+        str(item.get("path") or "").strip().split("/", 2)[1]
+        for item in apis
+        if isinstance(item, dict) and str(item.get("path") or "").strip().startswith("/") and len(str(item.get("path") or "").strip().split("/")) >= 2
+    }
+    assert {"bookmarks", "categories"}.issubset(resources_in_api)
 
 
 def test_pipeline_continue_does_not_erase_persisted_spec(tmp_path: Path, monkeypatch) -> None:
