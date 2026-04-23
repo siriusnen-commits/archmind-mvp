@@ -560,6 +560,8 @@ def _validate_starter_materialization(
     project_dir: Path,
     starter_profile: str,
     spec_seed: dict[str, Any] | None = None,
+    *,
+    require_frontend: bool = True,
 ) -> tuple[bool, str]:
     profile_key = _normalize_starter_profile(starter_profile)
     baseline = STARTER_PROFILE_BASELINES.get(profile_key)
@@ -600,24 +602,25 @@ def _validate_starter_materialization(
         endpoint_text = str(endpoint or "").strip().upper()
         if endpoint_text and endpoint_text not in apis:
             missing.append(f"missing baseline API endpoint: {endpoint_text}")
-    for page in baseline.get("required_pages") or []:
-        page_text = str(page or "").strip().lower().strip("/")
-        if page_text and page_text not in pages:
-            missing.append(f"missing {page_text} in spec frontend_pages")
+    if require_frontend:
+        for page in baseline.get("required_pages") or []:
+            page_text = str(page or "").strip().lower().strip("/")
+            if page_text and page_text not in pages:
+                missing.append(f"missing {page_text} in spec frontend_pages")
 
-    app_root = project_dir / "frontend" / "app"
-    for frontend_file in baseline.get("required_frontend_files") or []:
-        rel = Path(str(frontend_file or "").strip())
-        if rel and not (project_dir / rel).exists():
-            missing.append(f"missing frontend {rel.as_posix().removeprefix('frontend/app/').removesuffix('/page.tsx')} page")
-    root_page = app_root / "page.tsx"
-    if root_page.exists():
-        try:
-            root_text = root_page.read_text(encoding="utf-8")
-        except Exception:
-            root_text = ""
-        if "ArchMind Fullstack Workspace" in root_text:
-            missing.append("frontend root is still generic fallback scaffold")
+        app_root = project_dir / "frontend" / "app"
+        for frontend_file in baseline.get("required_frontend_files") or []:
+            rel = Path(str(frontend_file or "").strip())
+            if rel and not (project_dir / rel).exists():
+                missing.append(f"missing frontend {rel.as_posix().removeprefix('frontend/app/').removesuffix('/page.tsx')} page")
+        root_page = app_root / "page.tsx"
+        if root_page.exists():
+            try:
+                root_text = root_page.read_text(encoding="utf-8")
+            except Exception:
+                root_text = ""
+            if "ArchMind Fullstack Workspace" in root_text:
+                missing.append("frontend root is still generic fallback scaffold")
 
     if missing:
         return False, "; ".join(missing)
@@ -1272,6 +1275,10 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
             project_dir,
             starter_profile,
             project_spec_seed,
+            require_frontend=(
+                effective_template in {"fullstack-ddd", "internal-tool"}
+                or (project_dir / "frontend" / "app").exists()
+            ),
         )
     if not materialization_ok:
         reason = str(materialization_reason or "starter profile materialization failed")

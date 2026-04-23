@@ -1125,6 +1125,45 @@ def test_pipeline_idea_preserves_multi_entity_projection_in_canonical_inspect(
     assert required_resources.issubset(resources_in_api | resources_in_pages)
 
 
+def test_pipeline_bookmark_backend_starter_does_not_require_frontend_pages(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_seed_scaffold)
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "bookmark manager with categories",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "bookmark_backend_no_frontend_requirement",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+
+    project_dir = tmp_path / "bookmark_backend_no_frontend_requirement"
+    spec_payload = json.loads((project_dir / ".archmind" / "project_spec.json").read_text(encoding="utf-8"))
+    entity_names = {
+        str(item.get("name") or "").strip()
+        for item in (spec_payload.get("entities") or [])
+        if isinstance(item, dict)
+    }
+    assert {"Bookmark", "Category"}.issubset(entity_names)
+    detail = build_project_detail(project_dir)
+    analysis = detail.analysis if isinstance(detail.analysis, dict) else {}
+    apis = analysis.get("apis") if isinstance(analysis.get("apis"), list) else []
+    resources_in_api = {
+        str(item.get("path") or "").strip().split("/", 2)[1]
+        for item in apis
+        if isinstance(item, dict) and str(item.get("path") or "").strip().startswith("/") and len(str(item.get("path") or "").strip().split("/")) >= 2
+    }
+    assert {"bookmarks", "categories"}.issubset(resources_in_api)
+
+
 def test_pipeline_continue_does_not_erase_persisted_spec(tmp_path: Path, monkeypatch) -> None:
     diary_spec = {
         "entities": [
