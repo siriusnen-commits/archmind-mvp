@@ -1015,6 +1015,8 @@ def test_pipeline_fullstack_seed_spec_projects_all_entities_and_pages(tmp_path: 
     project_dir = tmp_path / "diary_seed_multi_demo"
     assert (project_dir / "backend" / "app" / "routers" / "entry.py").exists()
     assert (project_dir / "backend" / "app" / "routers" / "tag.py").exists()
+    assert (project_dir / "backend" / "app" / "models" / "tag.py").exists()
+    assert (project_dir / "backend" / "app" / "schemas" / "tag.py").exists()
     assert (project_dir / "frontend" / "app" / "entries" / "page.tsx").exists()
     assert (project_dir / "frontend" / "app" / "tags" / "page.tsx").exists()
     assert (project_dir / "frontend" / "app" / "entries" / "new" / "page.tsx").exists()
@@ -1025,6 +1027,12 @@ def test_pipeline_fullstack_seed_spec_projects_all_entities_and_pages(tmp_path: 
     assert 'href: "/entries/new"' in nav_text
 
     spec_payload = json.loads((project_dir / ".archmind" / "project_spec.json").read_text(encoding="utf-8"))
+    entity_names = {
+        str(item.get("name") or "").strip().lower()
+        for item in (spec_payload.get("entities") or [])
+        if isinstance(item, dict)
+    }
+    assert {"entry", "tag"}.issubset(entity_names)
     assert len(spec_payload.get("entities") or []) >= 2
     assert len(spec_payload.get("api_endpoints") or []) >= 3
     assert len(spec_payload.get("frontend_pages") or []) >= 3

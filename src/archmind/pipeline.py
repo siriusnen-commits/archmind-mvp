@@ -473,12 +473,28 @@ def _ensure_starter_profile_seed(starter_profile: str, spec_seed: dict[str, Any]
     out = dict(seed)
 
     entities_raw = out.get("entities") if isinstance(out.get("entities"), list) else []
-    entities: list[dict[str, Any]] = [row for row in entities_raw if isinstance(row, dict)]
-    by_entity = {
-        str(row.get("name") or "").strip().lower(): row
-        for row in entities
-        if str(row.get("name") or "").strip()
-    }
+    entities: list[dict[str, Any]] = []
+    by_entity: dict[str, dict[str, Any]] = {}
+    for raw_entity in entities_raw:
+        row: dict[str, Any] | None = None
+        if isinstance(raw_entity, dict):
+            name = str(raw_entity.get("name") or "").strip()
+            if name:
+                row = {
+                    "name": name,
+                    "fields": raw_entity.get("fields") if isinstance(raw_entity.get("fields"), list) else [],
+                }
+        elif isinstance(raw_entity, str):
+            name = str(raw_entity).strip()
+            if name:
+                row = {"name": name, "fields": []}
+        if row is None:
+            continue
+        entity_key = str(row.get("name") or "").strip().lower()
+        if not entity_key or entity_key in by_entity:
+            continue
+        entities.append(row)
+        by_entity[entity_key] = row
     for baseline_entity in baseline.get("entities") or []:
         if not isinstance(baseline_entity, dict):
             continue
