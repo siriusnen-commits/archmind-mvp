@@ -39,6 +39,35 @@ def _import_generated_backend_app(project_dir: Path, db_url: str):
             os.environ["DB_URL"] = prev
 
 
+def _assert_tsx_syntax_ok(source: str) -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    typescript_module = repo_root / "frontend" / "node_modules" / "typescript" / "lib" / "typescript.js"
+    assert typescript_module.exists(), f"missing typescript module at {typescript_module}"
+    script = (
+        "const fs = require('fs');"
+        "const ts = require(process.argv[1]);"
+        "const source = fs.readFileSync(0, 'utf8');"
+        "const result = ts.transpileModule(source, {"
+        "  compilerOptions: { jsx: ts.JsxEmit.Preserve, target: ts.ScriptTarget.ES2020 },"
+        "  reportDiagnostics: true,"
+        "});"
+        "const diagnostics = (result.diagnostics || []).filter((item) => item.category === ts.DiagnosticCategory.Error);"
+        "if (diagnostics.length) {"
+        "  const message = diagnostics.map((item) => ts.flattenDiagnosticMessageText(item.messageText, '\\n')).join('\\n');"
+        "  console.error(message);"
+        "  process.exit(1);"
+        "}"
+    )
+    completed = subprocess.run(
+        ["node", "-e", script, str(typescript_module)],
+        input=source,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
 def test_apply_entity_scaffold_creates_backend_persistent_router_files(tmp_path: Path) -> None:
     project_dir = tmp_path / "backend_demo"
     (project_dir / "app").mkdir(parents=True, exist_ok=True)
@@ -778,6 +807,7 @@ def test_apply_frontend_page_scaffold_bookmark_detail_is_readable(tmp_path: Path
     assert "Category:" in detail_text
     assert "Saved:" in detail_text
     assert "No note yet." in detail_text
+    _assert_tsx_syntax_ok(detail_text)
 
 
 def test_apply_frontend_page_scaffold_diary_entry_detail_is_readable(tmp_path: Path) -> None:
@@ -840,6 +870,7 @@ def test_apply_frontend_page_scaffold_task_detail_shows_due_date_when_present(tm
     detail_text = (project_dir / "frontend" / "app" / "tasks" / "[id]" / "page.tsx").read_text(encoding="utf-8")
     assert 'due_date || (item as Record<string, unknown>).due' in detail_text
     assert "Due:" in detail_text
+    _assert_tsx_syntax_ok(detail_text)
 
 
 def test_apply_frontend_page_scaffold_task_detail_renders_added_priority_field(tmp_path: Path) -> None:
@@ -868,8 +899,42 @@ def test_apply_frontend_page_scaffold_task_detail_renders_added_priority_field(t
 
     apply_page_scaffold(project_dir, "tasks/detail")
     detail_text = (project_dir / "frontend" / "app" / "tasks" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+    assert "      {!loading && !notFound && !error && item ? (\n        <>\n" in detail_text
+    assert "      {!loading && !notFound && !error && item ? (\n        <article" not in detail_text
     assert "Additional Fields" in detail_text
     assert 'Priority: {String((item as Record<string, unknown>)["priority"] ?? "(unset)")}' in detail_text
+    _assert_tsx_syntax_ok(detail_text)
+
+
+def test_apply_frontend_page_scaffold_bookmark_detail_renders_added_priority_field_with_valid_tsx(tmp_path: Path) -> None:
+    project_dir = tmp_path / "fullstack_bookmark_detail_priority"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "entities": [
+                    {
+                        "name": "Bookmark",
+                        "fields": [
+                            {"name": "title", "type": "string"},
+                            {"name": "url", "type": "string"},
+                            {"name": "note", "type": "string"},
+                            {"name": "priority", "type": "string"},
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    apply_page_scaffold(project_dir, "bookmarks/detail")
+    detail_text = (project_dir / "frontend" / "app" / "bookmarks" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+    assert "Additional Fields" in detail_text
+    assert 'Priority: {String((item as Record<string, unknown>)["priority"] ?? "(unset)")}' in detail_text
+    _assert_tsx_syntax_ok(detail_text)
 
 
 def test_relation_surface_board_detail_includes_card_section(tmp_path: Path) -> None:
