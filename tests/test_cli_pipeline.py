@@ -339,18 +339,87 @@ def test_pipeline_todo_starter_profile_passes_when_task_baseline_is_materialized
     )
     assert exit_code == 0
 
-    project_dir = tmp_path / "todo_materialized"
-    task_list = project_dir / "frontend" / "app" / "tasks" / "page.tsx"
-    task_create = project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx"
-    assert task_list.exists()
-    assert task_create.exists()
-    spec_payload = json.loads((project_dir / ".archmind" / "project_spec.json").read_text(encoding="utf-8"))
-    entity_names = {
-        str(item.get("name") or "").strip().lower()
-        for item in (spec_payload.get("entities") or [])
-        if isinstance(item, dict)
-    }
-    assert "task" in entity_names
+
+def test_pipeline_non_starter_idea_does_not_force_todo_profile(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_seed_scaffold)
+    monkeypatch.setattr(
+        "archmind.pipeline.suggest_project_spec",
+        lambda *_args, **_kwargs: {
+            "entities": [
+                {"name": "Issue", "fields": [{"name": "title", "type": "string"}]},
+            ],
+            "api_endpoints": ["GET /issues", "POST /issues", "GET /issues/{id}"],
+            "frontend_pages": ["issues/list", "issues/new", "issues/detail"],
+        },
+    )
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "bug tracker for small software projects",
+            "--template",
+            "fullstack-ddd",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "bug_tracker",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+    project_spec = json.loads((tmp_path / "bug_tracker" / ".archmind" / "project_spec.json").read_text(encoding="utf-8"))
+    entity_names = {str(item.get("name") or "") for item in (project_spec.get("entities") or []) if isinstance(item, dict)}
+    assert "Issue" in entity_names
+    assert "Task" not in entity_names
+
+
+def test_pipeline_project_spec_persists_canonical_contract_keys(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_seed_scaffold)
+    monkeypatch.setattr(
+        "archmind.pipeline.suggest_project_spec",
+        lambda *_args, **_kwargs: {
+            "entities": [{"name": "Bookmark"}, {"name": "Category"}],
+            "apis": [{"method": "GET", "path": "/bookmarks"}, {"method": "GET", "path": "/categories"}],
+            "pages": [{"path": "bookmarks"}, {"path": "categories/[id]"}],
+        },
+    )
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "bookmark manager with categories",
+            "--template",
+            "fullstack-ddd",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "bookmark_categories",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+    spec = json.loads((tmp_path / "bookmark_categories" / ".archmind" / "project_spec.json").read_text(encoding="utf-8"))
+    assert isinstance(spec.get("resources"), list)
+    assert "bookmarks" in spec.get("resources")
+    assert "categories" in spec.get("resources")
+    assert isinstance(spec.get("apis"), list)
+    assert any(str(item.get("method") or "").upper() == "GET" and str(item.get("path") or "") == "/bookmarks" for item in spec.get("apis"))
+    assert any(str(item.get("method") or "").upper() == "GET" and str(item.get("path") or "") == "/categories" for item in spec.get("apis"))
+    assert isinstance(spec.get("pages"), list)
+    page_paths = {str(item.get("path") or "") for item in spec.get("pages") if isinstance(item, dict)}
+    assert "bookmarks" in page_paths
+    assert "bookmarks/[id]" in page_paths
+    assert "categories" in page_paths
+    assert "categories/[id]" in page_paths
 
 
 def test_pipeline_todo_real_path_materialization_avoids_generic_home_and_add_entity_bootstrap(tmp_path: Path, monkeypatch) -> None:

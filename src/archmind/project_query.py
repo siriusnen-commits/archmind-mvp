@@ -382,13 +382,20 @@ def _extract_entity_names(spec_payload: dict[str, Any]) -> list[str]:
 
 
 def _extract_spec_api_endpoints(spec_payload: dict[str, Any]) -> list[str]:
-    endpoints = spec_payload.get("api_endpoints")
-    if not isinstance(endpoints, list):
-        return []
+    endpoints: list[Any] = []
+    if isinstance(spec_payload.get("api_endpoints"), list):
+        endpoints.extend(spec_payload.get("api_endpoints") or [])
+    if isinstance(spec_payload.get("apis"), list):
+        endpoints.extend(spec_payload.get("apis") or [])
     rows: list[str] = []
     seen: set[str] = set()
     for item in endpoints:
-        text = str(item or "").strip()
+        if isinstance(item, dict):
+            method = str(item.get("method") or "").strip().upper()
+            path = str(item.get("path") or "").strip()
+            text = f"{method} {path}" if method and path else ""
+        else:
+            text = str(item or "").strip()
         if not text:
             continue
         key = text.lower()
@@ -400,13 +407,18 @@ def _extract_spec_api_endpoints(spec_payload: dict[str, Any]) -> list[str]:
 
 
 def _extract_spec_pages(spec_payload: dict[str, Any]) -> list[str]:
-    pages = spec_payload.get("frontend_pages")
-    if not isinstance(pages, list):
-        return []
+    pages: list[Any] = []
+    if isinstance(spec_payload.get("frontend_pages"), list):
+        pages.extend(spec_payload.get("frontend_pages") or [])
+    if isinstance(spec_payload.get("pages"), list):
+        pages.extend(spec_payload.get("pages") or [])
     rows: list[str] = []
     seen: set[str] = set()
     for item in pages:
-        text = str(item or "").strip()
+        if isinstance(item, dict):
+            text = str(item.get("path") or item.get("page") or "").strip()
+        else:
+            text = str(item or "").strip()
         if not text:
             continue
         key = text.lower()

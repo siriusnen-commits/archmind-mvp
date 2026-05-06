@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -452,13 +453,13 @@ def _normalize_starter_profile(value: str | None) -> str:
 
 def _detect_starter_profile_from_idea(idea: str) -> str:
     text = str(idea or "").strip().lower()
-    if any(token in text for token in ("todo", "task manager", "task app")):
+    if re.search(r"\b(to[\s-]?do|todo)\b", text):
         return "todo"
-    if any(token in text for token in ("diary", "journal", "entry app")):
+    if re.search(r"\b(diary|journal|journaling)\b", text):
         return "diary"
-    if any(token in text for token in ("kanban", "board", "cards")):
+    if re.search(r"\bkanban\b", text):
         return "kanban"
-    if any(token in text for token in ("bookmark", "saved link", "reading list")):
+    if re.search(r"\b(bookmark|bookmarks|reading list|saved links?)\b", text):
         return "bookmark"
     return ""
 
@@ -556,6 +557,22 @@ def _ensure_todo_starter_seed(spec_seed: dict[str, Any] | None) -> dict[str, Any
     return _ensure_starter_profile_seed("todo", spec_seed)
 
 
+def _is_strong_starter_match(idea: str, starter_profile: str) -> bool:
+    text = str(idea or "").strip().lower()
+    profile = _normalize_starter_profile(starter_profile)
+    if not text or not profile:
+        return False
+    if profile == "todo":
+        return bool(re.search(r"\b(to[\s-]?do|todo)\b", text))
+    if profile == "diary":
+        return bool(re.search(r"\b(diary|journal|journaling)\b", text))
+    if profile == "bookmark":
+        return bool(re.search(r"\b(bookmark|bookmarks|reading list|saved links?)\b", text))
+    if profile == "kanban":
+        return bool(re.search(r"\bkanban\b", text))
+    return False
+
+
 def _validate_starter_materialization(
     project_dir: Path,
     starter_profile: str,
@@ -563,6 +580,8 @@ def _validate_starter_materialization(
     *,
     require_frontend: bool = True,
 ) -> tuple[bool, str]:
+    from archmind.generator import normalize_project_spec  # type: ignore
+
     profile_key = _normalize_starter_profile(starter_profile)
     baseline = STARTER_PROFILE_BASELINES.get(profile_key)
     if not isinstance(baseline, dict):
@@ -573,9 +592,9 @@ def _validate_starter_materialization(
         spec_payload = json.loads(spec_path.read_text(encoding="utf-8")) if spec_path.exists() else {}
     except Exception:
         spec_payload = {}
-    spec = spec_payload if isinstance(spec_payload, dict) else {}
+    spec = normalize_project_spec(spec_payload if isinstance(spec_payload, dict) else {})
     if not spec and isinstance(spec_seed, dict):
-        spec = spec_seed
+        spec = normalize_project_spec(spec_seed)
 
     entities = spec.get("entities") if isinstance(spec.get("entities"), list) else []
     entity_names = {
@@ -893,7 +912,7 @@ def _write_project_spec(
     suggested_spec: dict[str, Any] | None = None,
 ) -> Optional[Path]:
     try:
-        from archmind.generator import normalize_project_spec_seed  # type: ignore
+        from archmind.generator import normalize_project_spec  # type: ignore
 
         out = project_dir / ".archmind" / "project_spec.json"
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -911,7 +930,10 @@ def _write_project_spec(
             or effective_template
             or "fastapi"
         )
-        suggestion = normalize_project_spec_seed(suggested_spec if isinstance(suggested_spec, dict) else {})
+        suggestion = normalize_project_spec(
+            suggested_spec if isinstance(suggested_spec, dict) else {},
+            architecture_reasoning.get("idea_normalized"),
+        )
         raw_entities = suggestion.get("entities") if isinstance(suggestion.get("entities"), list) else []
         entities: list[dict[str, Any]] = []
         seen_entities: set[str] = set()
@@ -1080,6 +1102,15 @@ def _write_project_spec(
             "frontend_pages": frontend_pages,
             "evolution": evolution,
         }
+        apis = suggestion.get("apis") if isinstance(suggestion.get("apis"), list) else []
+        pages = suggestion.get("pages") if isinstance(suggestion.get("pages"), list) else []
+        resources = suggestion.get("resources") if isinstance(suggestion.get("resources"), list) else []
+        if apis:
+            payload["apis"] = apis
+        if pages:
+            payload["pages"] = pages
+        if resources:
+            payload["resources"] = resources
         out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return out
     except Exception:
@@ -1094,6 +1125,59 @@ def _validate_generation_contract(project_dir: Path, *, app_shape: str, effectiv
         app_shape=app_shape,
         template_name=effective_template,
     )
+
+
+def _validate_spec_materialization_contract(project_dir: Path, spec_seed: dict[str, Any] | None) -> tuple[bool, str]:
+    from archmind.generator import normalize_project_spec  # type: ignore
+
+    if not (project_dir / "archmind_spec.json").exists():
+        return True, ""
+
+    spec = normalize_project_spec(spec_seed if isinstance(spec_seed, dict) else {})
+    entities = spec.get("entities") if isinstance(spec.get("entities"), list) else []
+    pages = spec.get("frontend_pages") if isinstance(spec.get("frontend_pages"), list) else []
+    if not entities:
+        return True, ""
+
+    backend_root = project_dir / "backend" if (project_dir / "backend" / "app").exists() else project_dir
+    app_root = backend_root / "app"
+    if not app_root.exists():
+        return True, ""
+    frontend_app = project_dir / "frontend" / "app"
+    frontend_enabled = frontend_app.exists()
+    missing: list[str] = []
+
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        name = str(entity.get("name") or "").strip()
+        if not name:
+            continue
+        slug = re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+        plural = f"{slug[:-1]}ies" if slug.endswith("y") and len(slug) > 1 and slug[-2] not in "aeiou" else (f"{slug}es" if slug.endswith(("s", "x", "z", "ch", "sh")) else f"{slug}s")
+        for rel in (f"models/{slug}.py", f"schemas/{slug}.py", f"routers/{slug}.py"):
+            if not (app_root / rel).exists():
+                missing.append(f"missing backend artifact: app/{rel}")
+        if frontend_enabled:
+            for rel in (f"{plural}/page.tsx", f"{plural}/new/page.tsx", f"{plural}/[id]/page.tsx"):
+                if not (frontend_app / rel).exists():
+                    missing.append(f"missing frontend artifact: frontend/app/{rel}")
+
+    if frontend_enabled:
+        for page in pages:
+            page_rel = str(page or "").strip().lower().strip("/")
+            if page_rel.endswith("/list"):
+                route = page_rel.removesuffix("/list")
+            elif page_rel.endswith("/detail"):
+                route = page_rel.removesuffix("/detail") + "/[id]"
+            else:
+                route = page_rel
+            if route and not (frontend_app / route / "page.tsx").exists():
+                missing.append(f"missing spec page artifact: frontend/app/{route}/page.tsx")
+
+    if missing:
+        return False, "; ".join(missing[:10])
+    return True, ""
 
 
 def run_pipeline_command(opts: PipelineOptions) -> int:
@@ -1166,7 +1250,8 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
             project_spec_seed = suggest_project_spec(normalized_idea, architecture_reasoning)
         except Exception as exc:
             print(f"[WARN] project spec suggestion failed: {exc}", file=sys.stderr)
-    if starter_profile in STARTER_PROFILE_BASELINES:
+    starter_profile_explicit = bool(_normalize_starter_profile(opts.starter_profile))
+    if starter_profile in STARTER_PROFILE_BASELINES and (starter_profile_explicit or _is_strong_starter_match(normalized_idea, starter_profile)):
         project_spec_seed = _ensure_starter_profile_seed(starter_profile, project_spec_seed)
 
     try:
@@ -1266,6 +1351,12 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
         }
         result_json, _ = write_result(project_dir, failure_payload)
         print(f"[FAIL] generation-error. result: {result_json}", file=sys.stderr)
+        return 1
+
+    spec_contract_ok, spec_contract_reason = _validate_spec_materialization_contract(project_dir, project_spec_seed)
+    if not spec_contract_ok:
+        reason = str(spec_contract_reason or "spec contract materialization failed")
+        print(f"[ERROR] generation-error: {reason}", file=sys.stderr)
         return 1
 
     materialization_ok = True
