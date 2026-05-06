@@ -19,6 +19,7 @@ from archmind.generator import (
     ensure_runtime_gitignore,
     generate_project,
     implement_page_scaffold,
+    normalize_project_spec,
 )
 
 
@@ -226,6 +227,47 @@ def test_generate_project_fullstack_ddd_normalizes_and_applies_multi_entity_seed
     navigation = (project_dir / "frontend" / "app" / "_lib" / "navigation.ts").read_text(encoding="utf-8")
     assert 'href: "/entries"' in navigation
     assert 'href: "/tags"' in navigation
+
+
+def test_normalize_project_spec_builds_canonical_resources_pages_and_apis() -> None:
+    normalized = normalize_project_spec(
+        {
+            "entities": ["Bookmark", {"name": "Category"}],
+            "apis": [{"method": "GET", "path": "/bookmark"}, {"method": "POST", "path": "/categories"}],
+            "pages": [{"path": "bookmarks"}, {"path": "categories/new"}],
+        },
+        "bookmark manager with categories",
+    )
+
+    resources = normalized.get("resources") if isinstance(normalized.get("resources"), list) else []
+    api_endpoints = normalized.get("api_endpoints") if isinstance(normalized.get("api_endpoints"), list) else []
+    frontend_pages = normalized.get("frontend_pages") if isinstance(normalized.get("frontend_pages"), list) else []
+    page_paths = [
+        str(item.get("path") or "").strip()
+        for item in (normalized.get("pages") or [])
+        if isinstance(item, dict) and str(item.get("path") or "").strip()
+    ]
+
+    assert "bookmarks" in resources
+    assert "categories" in resources
+    assert "GET /bookmarks" in api_endpoints
+    assert "POST /bookmarks" in api_endpoints
+    assert "GET /bookmarks/{id}" in api_endpoints
+    assert "GET /categories" in api_endpoints
+    assert "POST /categories" in api_endpoints
+    assert "GET /categories/{id}" in api_endpoints
+    assert "bookmarks/list" in frontend_pages
+    assert "bookmarks/new" in frontend_pages
+    assert "bookmarks/detail" in frontend_pages
+    assert "categories/list" in frontend_pages
+    assert "categories/new" in frontend_pages
+    assert "categories/detail" in frontend_pages
+    assert "bookmarks" in page_paths
+    assert "bookmarks/new" in page_paths
+    assert "bookmarks/[id]" in page_paths
+    assert "categories" in page_paths
+    assert "categories/new" in page_paths
+    assert "categories/[id]" in page_paths
 
 
 def test_generate_project_starter_crud_create_and_list_persist_across_todo_diary_bookmark(tmp_path: Path) -> None:

@@ -4412,7 +4412,56 @@ def _normalize_page_seed_item(raw: Any) -> str:
     return page
 
 
-def normalize_project_spec_seed(raw: Any) -> dict[str, Any]:
+def _entity_resources_from_entities(entities: list[dict[str, Any]]) -> list[str]:
+    resources: list[str] = []
+    seen: set[str] = set()
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        _, _, plural = _entity_identity(str(entity.get("name") or ""))
+        resource = str(plural or "").strip().lower()
+        if not resource or resource in seen:
+            continue
+        seen.add(resource)
+        resources.append(resource)
+    return resources
+
+
+def _page_rel_to_route_path(page_rel: str) -> str:
+    rel = _canonicalize_page_path(str(page_rel or ""))
+    if not rel:
+        return ""
+    parts = rel.split("/")
+    if len(parts) == 1:
+        return parts[0]
+    resource = parts[0]
+    action = parts[1]
+    if action == "list":
+        return resource
+    if action == "new":
+        return f"{resource}/new"
+    if action == "detail":
+        return f"{resource}/[id]"
+    return rel
+
+
+def _page_route_to_rel(page_path: str) -> str:
+    route = str(page_path or "").strip().replace("\\", "/").strip("/")
+    if not route:
+        return ""
+    parts = [part for part in route.split("/") if part]
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return _canonicalize_page_path(f"{parts[0]}/list")
+    if len(parts) == 2 and parts[1] == "new":
+        return _canonicalize_page_path(f"{parts[0]}/new")
+    if len(parts) == 2 and parts[1] in {"[id]", "{id}", ":id"}:
+        return _canonicalize_page_path(f"{parts[0]}/detail")
+    return _canonicalize_page_path(route)
+
+
+def normalize_project_spec(raw: Any, idea: str | None = None) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
 
@@ -4433,41 +4482,90 @@ def normalize_project_spec_seed(raw: Any) -> dict[str, Any]:
     if entities:
         payload["entities"] = entities
 
-    api_raw = raw.get("api_endpoints") if isinstance(raw.get("api_endpoints"), list) else []
+    api_raw: list[Any] = []
+    if isinstance(raw.get("api_endpoints"), list):
+        api_raw.extend(raw.get("api_endpoints") or [])
+    if isinstance(raw.get("apis"), list):
+        api_raw.extend(raw.get("apis") or [])
     api_endpoints: list[str] = []
     seen_api: set[str] = set()
     for item in api_raw:
         endpoint = _normalize_api_seed_item(item)
-        if not endpoint:
+        method, path = _parse_api_endpoint_hint(endpoint)
+        if not method or not path:
             continue
-        key = endpoint.lower()
+        canonical = f"{method} {path}"
+        key = canonical.lower()
         if key in seen_api:
             continue
         seen_api.add(key)
-        api_endpoints.append(endpoint)
+        api_endpoints.append(canonical)
     if api_endpoints:
         payload["api_endpoints"] = api_endpoints
+        payload["apis"] = [{"method": item.split(maxsplit=1)[0], "path": item.split(maxsplit=1)[1]} for item in api_endpoints]
 
-    pages_raw = raw.get("frontend_pages") if isinstance(raw.get("frontend_pages"), list) else []
+    pages_raw: list[Any] = []
+    if isinstance(raw.get("frontend_pages"), list):
+        pages_raw.extend(raw.get("frontend_pages") or [])
+    if isinstance(raw.get("pages"), list):
+        pages_raw.extend(raw.get("pages") or [])
     frontend_pages: list[str] = []
+    route_pages: list[dict[str, str]] = []
     seen_pages: set[str] = set()
     for item in pages_raw:
         page = _normalize_page_seed_item(item)
-        if not page:
+        if isinstance(item, dict):
+            page = str(item.get("path") or page).strip().strip("/")
+        rel = _page_route_to_rel(page)
+        if not rel:
             continue
-        key = page.lower()
+        key = rel.lower()
         if key in seen_pages:
             continue
         seen_pages.add(key)
-        frontend_pages.append(page)
+        frontend_pages.append(rel)
+        route_pages.append({"path": _page_rel_to_route_path(rel)})
     if frontend_pages:
         payload["frontend_pages"] = frontend_pages
+        payload["pages"] = route_pages
+
+    resources = _entity_resources_from_entities(entities)
+    if resources:
+        payload["resources"] = resources
+
+    if resources:
+        api_seed = payload.get("api_endpoints") if isinstance(payload.get("api_endpoints"), list) else []
+        page_seed = payload.get("frontend_pages") if isinstance(payload.get("frontend_pages"), list) else []
+        api_seen = {str(item).strip().lower() for item in api_seed if str(item).strip()}
+        page_seen = {str(item).strip().lower() for item in page_seed if str(item).strip()}
+        for resource in resources:
+            for endpoint in (f"GET /{resource}", f"POST /{resource}", f"GET /{resource}/{{id}}"):
+                key = endpoint.lower()
+                if key not in api_seen:
+                    api_seed.append(endpoint)
+                    api_seen.add(key)
+            for page in (f"{resource}/list", f"{resource}/new", f"{resource}/detail"):
+                key = page.lower()
+                if key not in page_seen:
+                    page_seed.append(page)
+                    page_seen.add(key)
+        payload["api_endpoints"] = api_seed
+        payload["apis"] = [{"method": item.split(maxsplit=1)[0], "path": item.split(maxsplit=1)[1]} for item in api_seed]
+        payload["frontend_pages"] = page_seed
+        payload["pages"] = [{"path": _page_rel_to_route_path(page)} for page in page_seed]
+
+    if isinstance(idea, str) and idea.strip() and "summary" not in payload:
+        payload["summary"] = idea.strip()
 
     return payload
 
 
+def normalize_project_spec_seed(raw: Any) -> dict[str, Any]:
+    return normalize_project_spec(raw)
+
+
 def _normalize_spec_seed(raw: Any) -> dict[str, Any]:
-    return normalize_project_spec_seed(raw)
+    return normalize_project_spec(raw)
 
 
 def _parse_api_endpoint_hint(raw: str) -> tuple[str, str]:
@@ -4486,7 +4584,8 @@ def _parse_api_endpoint_hint(raw: str) -> tuple[str, str]:
 
 def _apply_spec_scaffolds(project_dir: Path, spec: dict[str, Any]) -> list[str]:
     changed: list[str] = []
-    entities_raw = spec.get("entities") if isinstance(spec.get("entities"), list) else []
+    normalized = normalize_project_spec(spec)
+    entities_raw = normalized.get("entities") if isinstance(normalized.get("entities"), list) else []
     for item in entities_raw:
         if not isinstance(item, dict):
             continue
@@ -4499,13 +4598,13 @@ def _apply_spec_scaffolds(project_dir: Path, spec: dict[str, Any]) -> list[str]:
             changed.extend(apply_entity_fields_to_scaffold(project_dir, entity_name, fields))
         changed.extend(apply_frontend_page_scaffold(project_dir, entity_name))
 
-    api_endpoints = spec.get("api_endpoints") if isinstance(spec.get("api_endpoints"), list) else []
+    api_endpoints = normalized.get("api_endpoints") if isinstance(normalized.get("api_endpoints"), list) else []
     for endpoint in api_endpoints:
         method, path = _parse_api_endpoint_hint(str(endpoint or ""))
         if method and path:
             changed.extend(apply_api_scaffold(project_dir, method, path))
 
-    frontend_pages = spec.get("frontend_pages") if isinstance(spec.get("frontend_pages"), list) else []
+    frontend_pages = normalized.get("frontend_pages") if isinstance(normalized.get("frontend_pages"), list) else []
     for page in frontend_pages:
         changed.extend(apply_page_scaffold(project_dir, str(page or "")))
 

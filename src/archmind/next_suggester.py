@@ -38,7 +38,12 @@ def _normalized_api_endpoints(values: Any) -> set[str]:
     if not isinstance(values, list):
         return out
     for raw in values:
-        text = str(raw or "").strip()
+        if isinstance(raw, dict):
+            method = str(raw.get("method") or "").strip().upper()
+            path = str(raw.get("path") or "").strip()
+            text = f"{method} {path}" if method and path else ""
+        else:
+            text = str(raw or "").strip()
         if not text:
             continue
         parts = text.split(maxsplit=1)
@@ -59,7 +64,11 @@ def _normalized_frontend_pages(values: Any) -> set[str]:
     if not isinstance(values, list):
         return out
     for raw in values:
-        page = str(raw or "").strip().replace("\\", "/")
+        if isinstance(raw, dict):
+            page = str(raw.get("path") or raw.get("page") or "").strip()
+        else:
+            page = str(raw or "").strip()
+        page = page.replace("\\", "/")
         page = re.sub(r"/{2,}", "/", page).strip("/")
         if not page or " " in page:
             continue
@@ -101,8 +110,18 @@ def _has_minimum_page_coverage(entity_names: list[str], frontend_pages: set[str]
 
 def analyze_spec_progression(spec: dict[str, Any]) -> dict[str, Any]:
     entities = _normalized_entities(spec)
-    api_endpoints = _normalized_api_endpoints(spec.get("api_endpoints"))
-    frontend_pages = _normalized_frontend_pages(spec.get("frontend_pages"))
+    api_seed = spec.get("api_endpoints")
+    if not isinstance(api_seed, list):
+        api_seed = []
+    if isinstance(spec.get("apis"), list):
+        api_seed = [*api_seed, *(spec.get("apis") or [])]
+    page_seed = spec.get("frontend_pages")
+    if not isinstance(page_seed, list):
+        page_seed = []
+    if isinstance(spec.get("pages"), list):
+        page_seed = [*page_seed, *(spec.get("pages") or [])]
+    api_endpoints = _normalized_api_endpoints(api_seed)
+    frontend_pages = _normalized_frontend_pages(page_seed)
     entity_names = _entity_name_list(entities)
     first_entity = entity_names[0] if entity_names else ""
     first_entity_without_fields = ""
