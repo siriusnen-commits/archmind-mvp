@@ -110,7 +110,10 @@ def test_infer_project_shape_routes_app_ideas_to_fullstack(idea: str) -> None:
         ("inventory backend service", "backend", "fastapi"),
         ("stock microservice", "backend", "fastapi"),
         ("batch inventory importer", "worker", "worker-api"),
-        ("CLI inventory tool", "cli", "fastapi"),
+        ("CLI inventory tool", "cli", "cli"),
+        ("python cli tool for csv merge", "cli", "cli"),
+        ("command-line csv merger", "cli", "cli"),
+        ("terminal tool for logs", "cli", "cli"),
     ],
 )
 def test_infer_project_shape_preserves_backend_worker_cli_exceptions(
@@ -120,7 +123,7 @@ def test_infer_project_shape_preserves_backend_worker_cli_exceptions(
 ) -> None:
     assert infer_project_shape_from_idea(idea) == expected_shape
     out = reason_architecture_from_idea(idea)
-    if expected_shape in {"worker", "cli"}:
+    if expected_shape in {"worker"}:
         assert out["app_shape"] == "backend"
     else:
         assert out["app_shape"] == expected_shape

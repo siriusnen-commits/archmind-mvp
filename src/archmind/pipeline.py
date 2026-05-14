@@ -873,6 +873,8 @@ def _project_type_from_app_shape(app_shape: str) -> str:
         return "backend-api"
     if shape == "frontend":
         return "frontend-web"
+    if shape == "cli":
+        return "cli-tool"
     return "unknown"
 
 
