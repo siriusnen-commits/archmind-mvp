@@ -538,8 +538,8 @@ def test_apply_entity_fields_to_scaffold_updates_models_and_schemas(tmp_path: Pa
     assert "due_date: datetime" in model_text
     assert "class TaskCreate" in schema_text
     assert "class TaskRead" in schema_text
-    assert '{"name": "title", "label": "Title", "placeholder": "title"}' in create_text
-    assert '{"name": "due_date", "label": "Due Date", "placeholder": "due_date"}' in create_text
+    assert '{"name": "title", "label": "Title", "placeholder": "title", "inputType": "text"}' in create_text
+    assert '{"name": "due_date", "label": "Due Date", "placeholder": "due_date", "inputType": "text"}' in create_text
 
 
 def test_apply_entity_fields_to_scaffold_reflects_priority_in_frontend_create_form(tmp_path: Path) -> None:
@@ -567,7 +567,7 @@ def test_apply_entity_fields_to_scaffold_reflects_priority_in_frontend_create_fo
     create_text = (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").read_text(encoding="utf-8")
     detail_text = (project_dir / "frontend" / "app" / "tasks" / "[id]" / "page.tsx").read_text(encoding="utf-8")
     assert '"priority": values["priority"]' in create_text
-    assert '{"name": "priority", "label": "Priority", "placeholder": "priority"}' in create_text
+    assert '{"name": "priority", "label": "Priority", "placeholder": "priority", "inputType": "text"}' in create_text
     assert "Additional Fields" in detail_text
     assert 'Priority: {String((item as Record<string, unknown>)["priority"] ?? "(unset)")}' in detail_text
 
@@ -600,9 +600,9 @@ def test_generated_create_form_uses_stable_field_keys_and_mobile_safe_input_bind
     text = (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").read_text(encoding="utf-8")
 
     assert "const formFields: FormFieldConfig[] = [" in text
-    assert '{"name": "title", "label": "Title", "placeholder": "title"}' in text
-    assert '{"name": "status", "label": "Status", "placeholder": "status"}' in text
-    assert '{"name": "priority", "label": "Priority", "placeholder": "priority"}' in text
+    assert '{"name": "title", "label": "Title", "placeholder": "title", "inputType": "text"}' in text
+    assert '{"name": "status", "label": "Status", "placeholder": "status", "inputType": "text"}' in text
+    assert '{"name": "priority", "label": "Priority", "placeholder": "priority", "inputType": "text"}' in text
     assert "<div key={field.name}" in text
     assert "key={index}" not in text
     assert "onChange={onFieldValueChange(field.name)}" in text
@@ -639,7 +639,7 @@ def test_apply_entity_fields_to_scaffold_reflects_description_in_frontend_create
 
     assert "frontend/app/tasks/new/page.tsx" in changed
     create_text = (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").read_text(encoding="utf-8")
-    assert '{"name": "description", "label": "Description", "placeholder": "description"}' in create_text
+    assert '{"name": "description", "label": "Description", "placeholder": "description", "inputType": "text"}' in create_text
     assert '"description": values["description"]' in create_text
 
 
@@ -705,6 +705,89 @@ def test_apply_frontend_page_scaffold_creates_pages_for_frontend_structure(tmp_p
     assert 'from "../../_lib/apiBase"' in detail_text
     assert "useApiBaseUrl()" in detail_text
     assert "placeholder" not in detail_text.lower()
+
+
+def test_inventory_frontend_pages_render_domain_mvp_without_raw_json(tmp_path: Path) -> None:
+    project_dir = tmp_path / "inventory_mvp"
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "entities": [
+                    {
+                        "name": "Item",
+                        "fields": [
+                            {"name": "name", "type": "string"},
+                            {"name": "quantity", "type": "int"},
+                            {"name": "sku", "type": "string"},
+                            {"name": "category", "type": "string"},
+                            {"name": "price", "type": "float"},
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    apply_frontend_page_scaffold(project_dir, "Item")
+    apply_page_scaffold(project_dir, "items/new")
+
+    list_text = (project_dir / "frontend" / "app" / "items" / "page.tsx").read_text(encoding="utf-8")
+    detail_text = (project_dir / "frontend" / "app" / "items" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+    create_text = (project_dir / "frontend" / "app" / "items" / "new" / "page.tsx").read_text(encoding="utf-8")
+
+    assert "JSON.stringify(item, null, 2)" not in list_text
+    assert "JSON.stringify(item, null, 2)" not in detail_text
+    assert "Search items..." in list_text
+    assert "Track item names, quantities" in list_text
+    assert "Qty {quantity" in list_text
+    assert "Open detail" in list_text
+    assert '"name": "name"' in list_text
+    assert '"name": "quantity"' in list_text
+    assert "Quantity: {formatFieldValue(item, quantityField)}" in detail_text
+    assert "low stock" in detail_text
+    assert "Additional Fields" in detail_text
+    assert "Metadata" in detail_text
+    assert "Created" in detail_text
+    assert "Updated" in detail_text
+    assert '"name": "quantity", "label": "Quantity", "placeholder": "quantity", "inputType": "number"' in create_text
+    assert '"name": "price", "label": "Price", "placeholder": "price", "inputType": "number"' in create_text
+    assert "onCompositionStart={() => setComposingField(field.name)}" in create_text
+    assert "onCompositionEnd={(event) =>" in create_text
+
+
+def test_generic_crud_detail_uses_structured_fallback_without_raw_json(tmp_path: Path) -> None:
+    project_dir = tmp_path / "generic_structured_detail"
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "entities": [
+                    {
+                        "name": "Widget",
+                        "fields": [
+                            {"name": "title", "type": "string"},
+                            {"name": "status", "type": "string"},
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    apply_frontend_page_scaffold(project_dir, "Widget")
+    detail_text = (project_dir / "frontend" / "app" / "widgets" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+
+    assert "JSON.stringify(item, null, 2)" not in detail_text
+    assert "Additional Fields" in detail_text
+    assert "Metadata" in detail_text
+    assert "displayTitle(item)" in detail_text
 
 
 def test_ensure_runtime_gitignore_merges_without_overwriting_existing_rules(tmp_path: Path) -> None:
@@ -1471,10 +1554,10 @@ def test_apply_page_scaffold_creates_explicit_page_and_is_idempotent(tmp_path: P
     assert second == []
     page_text = (project_dir / "frontend" / "app" / "reports" / "page.tsx").read_text(encoding="utf-8")
     assert "Loading..." in page_text
-    assert "No items found." in page_text
+    assert "No records yet." in page_text
     assert "fetch(`${apiBaseUrl}/reports`" in page_text
     assert 'from "../_lib/apiBase"' in page_text
-    assert "placeholder" not in page_text.lower()
+    assert "page placeholder" not in page_text.lower()
 
 
 def test_apply_page_scaffold_detail_generates_non_placeholder_page(tmp_path: Path) -> None:
@@ -1490,7 +1573,7 @@ def test_apply_page_scaffold_detail_generates_non_placeholder_page(tmp_path: Pat
     assert "Item not found." in page_text
     assert "fetch(`${apiBaseUrl}/notes/${id}`" in page_text
     assert 'from "../../_lib/apiBase"' in page_text
-    assert "placeholder" not in page_text.lower()
+    assert "page placeholder" not in page_text.lower()
 
 
 def test_apply_page_scaffold_generic_page_uses_shared_api_base_helper(tmp_path: Path) -> None:
