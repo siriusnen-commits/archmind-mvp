@@ -34,7 +34,7 @@ BRAIN_CASES = [
     {
         "idea": "personal habit tracker with analytics",
         "expected_shape": "fullstack",
-        "expected_template": "data-tool",
+        "expected_template": "fullstack-ddd",
         "expected_domains": [],
     },
     {
@@ -58,7 +58,19 @@ BRAIN_CASES = [
     {
         "idea": "inventory management api tool for small business",
         "expected_shape": "backend",
-        "expected_template": "data-tool",
+        "expected_template": "fastapi",
+        "expected_domains": ["inventory"],
+    },
+    {
+        "idea": "inventory",
+        "expected_shape": "fullstack",
+        "expected_template": "fullstack-ddd",
+        "expected_domains": ["inventory"],
+    },
+    {
+        "idea": "inventory web app",
+        "expected_shape": "fullstack",
+        "expected_template": "fullstack-ddd",
         "expected_domains": ["inventory"],
     },
 ]

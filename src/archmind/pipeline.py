@@ -1253,6 +1253,9 @@ def run_pipeline_command(opts: PipelineOptions) -> int:
     starter_profile_explicit = bool(_normalize_starter_profile(opts.starter_profile))
     if starter_profile in STARTER_PROFILE_BASELINES and (starter_profile_explicit or _is_strong_starter_match(normalized_idea, starter_profile)):
         project_spec_seed = _ensure_starter_profile_seed(starter_profile, project_spec_seed)
+    if architecture_reasoning:
+        project_spec_seed["shape"] = str(architecture_reasoning.get("app_shape") or "").strip().lower()
+        project_spec_seed["template"] = str(effective_template or selected_template or "").strip().lower()
 
     try:
         project_dir = _resolve_project_dir(

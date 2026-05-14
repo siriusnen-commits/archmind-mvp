@@ -2809,6 +2809,7 @@ def test_project_create_api_source_waits_for_project_registration_before_success
     assert "PROJECT_READY_INTERVAL_MS" in source
     assert "selectCurrentProject(projectName)" in source
     assert "project registration did not complete in time" in source
+    assert 'ok: true' in source
 
 
 def test_create_project_error_card_source_has_retryable_structured_error_actions() -> None:
