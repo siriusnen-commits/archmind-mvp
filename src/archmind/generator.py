@@ -903,7 +903,7 @@ def _relation_sections_for_parent(project_dir: Path, parent_resource: str) -> li
     return out
 
 
-def _entity_field_specs_for_resource(project_dir: Path, resource: str) -> list[dict[str, str]]:
+def _entity_field_specs_for_resource(project_dir: Path, resource: str) -> list[dict[str, Any]]:
     normalized_resource = _pluralize_resource_name(_normalize_resource_segment(resource))
     if not normalized_resource:
         return []
@@ -919,17 +919,17 @@ def _entity_field_specs_for_resource(project_dir: Path, resource: str) -> list[d
         if str(entity_resource or "").strip().lower() != normalized_resource:
             continue
         fields_raw = raw.get("fields") if isinstance(raw.get("fields"), list) else []
-        out: list[dict[str, str]] = []
+        out: list[dict[str, Any]] = []
         seen: set[str] = set()
         for item in fields_raw:
-            if not isinstance(item, dict):
+            field = _normalize_field_spec(item)
+            if field is None:
                 continue
-            field_name = str(item.get("name") or "").strip().lower()
-            field_type = str(item.get("type") or "string").strip().lower() or "string"
+            field_name = str(field.get("name") or "").strip().lower()
             if not field_name or field_name in seen:
                 continue
             seen.add(field_name)
-            out.append({"name": field_name, "type": field_type})
+            out.append(field)
         return out
     return []
 
@@ -2208,16 +2208,31 @@ def _is_metadata_field_name(name: str) -> bool:
 
 
 def _input_type_for_field(field: dict[str, str]) -> str:
+    explicit = str(field.get("input_type") or "").strip().lower()
+    if explicit:
+        return explicit
     name = str(field.get("name") or "")
     field_type = str(field.get("type") or "").strip().lower()
+    semantic = str(field.get("semantic_type") or "").strip().lower()
     if field_type in {"int", "integer", "float", "double", "decimal", "number"}:
         return "number"
+    if field_type in {"bool", "boolean"} or semantic == "boolean":
+        return "checkbox"
+    if semantic == "date" or field_type in {"date", "datetime"}:
+        return "date"
+    if semantic == "email":
+        return "email"
+    if semantic == "url":
+        return "url"
     if _is_quantity_field_name(name) or _is_price_field_name(name):
         return "number"
     return "text"
 
 
 def _field_kind_for_field(field: dict[str, str]) -> str:
+    semantic = str(field.get("semantic_type") or "").strip().lower()
+    if semantic:
+        return semantic
     name = str(field.get("name") or "")
     if _is_quantity_field_name(name):
         return "quantity"
@@ -2232,8 +2247,133 @@ def _field_kind_for_field(field: dict[str, str]) -> str:
     return "text"
 
 
+def _canonical_field_type(raw_type: str | None) -> str:
+    value = str(raw_type or "").strip().lower()
+    aliases = {
+        "": "string",
+        "str": "string",
+        "text": "string",
+        "int": "integer",
+        "integer": "integer",
+        "float": "number",
+        "double": "number",
+        "decimal": "number",
+        "number": "number",
+        "bool": "boolean",
+        "boolean": "boolean",
+        "date": "date",
+        "datetime": "datetime",
+        "timestamp": "datetime",
+    }
+    return aliases.get(value, value or "string")
+
+
+def infer_field_semantics(field_name: str, raw_type: str | None = None) -> dict[str, Any]:
+    name = str(field_name or "").strip()
+    key = _field_name_key(name)
+    explicit_type = _canonical_field_type(raw_type)
+    type_is_generic = explicit_type in {"", "string", "text"}
+
+    inferred_type = explicit_type or "string"
+    semantic_type = "text"
+    renderer = "text"
+    input_type = "text"
+    sortable = False
+    filterable = True
+
+    if key in {"quantity", "qty", "stock", "stock_count", "count", "total_count", "inventory_count", "units", "available", "on_hand"}:
+        inferred_type = "integer" if type_is_generic else explicit_type
+        semantic_type = "quantity"
+        renderer = "metric"
+        input_type = "number"
+        sortable = True
+    elif key in {"price", "unit_price", "cost", "amount", "total", "balance", "rate", "score", "percentage", "value"}:
+        inferred_type = "number" if type_is_generic else explicit_type
+        semantic_type = "price" if key in {"price", "unit_price", "cost"} else "number"
+        renderer = "metric"
+        input_type = "number"
+        sortable = True
+    elif key in {"completed", "is_done", "done", "is_active", "active", "enabled", "archived", "checked"} or key.startswith("is_"):
+        inferred_type = "boolean" if type_is_generic else explicit_type
+        semantic_type = "boolean"
+        renderer = "boolean"
+        input_type = "checkbox"
+        sortable = True
+    elif key in {"date", "due_date", "deadline", "created_at", "updated_at", "started_at", "ended_at", "timestamp"} or key.endswith("_date") or key.endswith("_at"):
+        inferred_type = "date" if type_is_generic else explicit_type
+        semantic_type = "date"
+        renderer = "date"
+        input_type = "date"
+        sortable = True
+    elif key in {"url", "link", "website"} or key.endswith("_url"):
+        inferred_type = "string" if type_is_generic else explicit_type
+        semantic_type = "url"
+        renderer = "link"
+        input_type = "url"
+    elif key in {"email", "owner_email", "contact_email"} or key.endswith("_email"):
+        inferred_type = "string" if type_is_generic else explicit_type
+        semantic_type = "email"
+        renderer = "email"
+        input_type = "email"
+    elif key in {"status", "state"}:
+        inferred_type = "string" if type_is_generic else explicit_type
+        semantic_type = "status"
+        renderer = "badge"
+    elif key in {"priority", "severity"}:
+        inferred_type = "string" if type_is_generic else explicit_type
+        semantic_type = "priority"
+        renderer = "badge"
+    elif key in {"title", "name", "description", "note", "content", "summary"}:
+        inferred_type = "string" if type_is_generic else explicit_type
+        semantic_type = "text"
+        renderer = "text"
+    else:
+        inferred_type = explicit_type or "string"
+        semantic_type = "text" if inferred_type in {"string", "text"} else inferred_type
+        renderer = "text"
+
+    return {
+        "name": name,
+        "type": inferred_type,
+        "semantic_type": semantic_type,
+        "input_type": input_type,
+        "renderer": renderer,
+        "sortable": sortable,
+        "filterable": filterable,
+    }
+
+
+def _split_field_name_and_type(raw: str) -> tuple[str, str | None]:
+    text = str(raw or "").strip()
+    if ":" not in text:
+        return text, None
+    name, raw_type = text.split(":", 1)
+    return name.strip(), raw_type.strip() or None
+
+
+def _normalize_field_spec(raw: Any) -> dict[str, Any] | None:
+    if isinstance(raw, str):
+        field_name, field_type = _split_field_name_and_type(raw)
+        extras: dict[str, Any] = {}
+    elif isinstance(raw, dict):
+        field_name = str(raw.get("name") or raw.get("field") or "").strip()
+        field_type = str(raw.get("type") or "").strip() or None
+        extras = {
+            key: raw[key]
+            for key in ("semantic_type", "input_type", "renderer", "sortable", "filterable")
+            if key in raw
+        }
+    else:
+        return None
+    if not field_name:
+        return None
+    semantic = infer_field_semantics(field_name, field_type)
+    semantic.update({key: value for key, value in extras.items() if value not in (None, "")})
+    return semantic
+
+
 def _field_config_rows_for_frontend(field_specs: list[dict[str, str]] | None) -> str:
-    normalized = [item for item in (field_specs or []) if str(item.get("name") or "").strip()]
+    normalized = [field for item in (field_specs or []) if (field := _normalize_field_spec(item)) is not None]
     if not normalized:
         normalized = [{"name": "title", "type": "string"}]
     rows = []
@@ -2271,7 +2411,7 @@ def _render_frontend_entity_create_page(
     field_specs: list[dict[str, str]],
     relation_specs: list[dict[str, str]],
 ) -> str:
-    normalized_fields = [item for item in field_specs if str(item.get("name") or "").strip()]
+    normalized_fields = [field for item in field_specs if (field := _normalize_field_spec(item)) is not None]
     if not normalized_fields:
         normalized_fields = [{"name": "title", "type": "string"}]
     initial_map = ", ".join(f'{str(item["name"])}: ""' for item in normalized_fields)
@@ -2364,11 +2504,11 @@ def _render_frontend_entity_create_page(
         field_type = str(item.get("type") or "string").strip().lower()
         if not name:
             continue
-        if field_type == "int":
+        if field_type in {"int", "integer"}:
             payload_lines += f'      "{name}": values["{name}"] ? Number(values["{name}"]) : undefined,\n'
-        elif field_type == "float":
+        elif field_type in {"float", "number"}:
             payload_lines += f'      "{name}": values["{name}"] ? Number(values["{name}"]) : undefined,\n'
-        elif field_type == "bool":
+        elif field_type in {"bool", "boolean"}:
             payload_lines += f'      "{name}": values["{name}"] === "true" || values["{name}"] === "1",\n'
         else:
             payload_lines += f'      "{name}": values["{name}"],\n'
@@ -2407,7 +2547,9 @@ def _render_frontend_entity_create_page(
         "  function onFieldValueChange(fieldName: string) {\n"
         "    return (event: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {\n"
         "      if (composingField && composingField !== fieldName) return;\n"
-        "      setFieldValue(fieldName, event.target.value);\n"
+        "      const target = event.target;\n"
+        "      const nextValue = target instanceof HTMLInputElement && target.type === \"checkbox\" ? String(target.checked) : target.value;\n"
+        "      setFieldValue(fieldName, nextValue);\n"
         "    };\n"
         "  }\n\n"
         "  async function onSubmit(event: FormEvent<HTMLFormElement>) {\n"
@@ -2453,7 +2595,9 @@ def _render_frontend_entity_create_page(
         "              id={`field-${field.name}`}\n"
         "              name={field.name}\n"
         "              type={field.inputType}\n"
-        "              value={values[field.name] || \"\"}\n"
+        "              value={field.inputType === \"checkbox\" ? \"true\" : values[field.name] || \"\"}\n"
+        "              checked={field.inputType === \"checkbox\" ? values[field.name] === \"true\" : undefined}\n"
+        "              step={field.inputType === \"number\" ? \"any\" : undefined}\n"
         "              onChange={onFieldValueChange(field.name)}\n"
         "              onCompositionStart={() => setComposingField(field.name)}\n"
         "              onCompositionEnd={(event) => {\n"
@@ -2702,6 +2846,7 @@ def _render_frontend_entity_list_page(
         "  const value = textValue(item, field);\n"
         "  if (!value) return \"(unset)\";\n"
         "  if (field.kind === \"price\") return `$${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;\n"
+        "  if (field.kind === \"boolean\") return value === \"true\" ? \"Yes\" : \"No\";\n"
         "  return value;\n"
         "}\n\n"
         f"export default function {component_name}() {{\n"
@@ -3091,6 +3236,7 @@ def _render_frontend_entity_detail_page(
         "  const value = textValue(item, field);\n"
         "  if (!value) return \"(unset)\";\n"
         "  if (field.kind === \"price\") return `$${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;\n"
+        "  if (field.kind === \"boolean\") return value === \"true\" ? \"Yes\" : \"No\";\n"
         "  return value;\n"
         "}\n\n"
         f"{helper_extract_rows}\n"
@@ -4276,31 +4422,40 @@ def _render_frontend_note_detail_page(
     )
 
 
-def _normalize_field_entries(fields: list[dict[str, Any]]) -> list[tuple[str, str]]:
-    normalized: list[tuple[str, str]] = []
+def _normalize_field_entries(fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in fields:
-        if not isinstance(item, dict):
+        field = _normalize_field_spec(item)
+        if field is None:
             continue
-        name = str(item.get("name") or "").strip()
-        ftype = str(item.get("type") or "").strip().lower()
-        if not name or not ftype:
+        name = str(field.get("name") or "").strip()
+        if not name:
             continue
         key = name.lower()
         if key in seen:
             continue
         seen.add(key)
-        normalized.append((name, ftype))
+        normalized.append(field)
     return normalized
 
 
 def _python_type(field_type: str) -> str:
     mapping = {
         "string": "str",
+        "text": "str",
         "int": "int",
+        "integer": "int",
         "float": "float",
+        "number": "float",
         "bool": "bool",
+        "boolean": "bool",
+        "date": "str",
         "datetime": "datetime",
+        "url": "str",
+        "email": "str",
+        "status": "str",
+        "priority": "str",
     }
     return mapping.get(str(field_type).strip().lower(), "str")
 
@@ -4392,8 +4547,11 @@ def apply_entity_fields_to_scaffold(project_dir: Path, entity_name: str, fields:
     if _has_backend_structure(project_dir):
         backend_app_root = _resolve_backend_app_root(project_dir)
         if backend_app_root is not None:
-            need_datetime = any(ftype == "datetime" for _, ftype in normalized_fields)
-            field_lines = [f"    {name}: {_python_type(ftype)}" for name, ftype in normalized_fields]
+            need_datetime = any(str(field.get("type") or "").strip().lower() == "datetime" for field in normalized_fields)
+            field_lines = [
+                f"    {field['name']}: {_python_type(str(field.get('type') or 'string'))}"
+                for field in normalized_fields
+            ]
             body = "\n".join(field_lines) if field_lines else "    pass"
             prefix = "from datetime import datetime\n\n" if need_datetime else ""
 
@@ -4407,7 +4565,7 @@ def apply_entity_fields_to_scaffold(project_dir: Path, entity_name: str, fields:
             _write_if_changed(backend_app_root / "models" / f"{slug}.py", model_content, changed, project_dir)
             _write_if_changed(backend_app_root / "schemas" / f"{slug}.py", schema_content, changed, project_dir)
 
-    frontend_fields = [{"name": name, "type": ftype} for name, ftype in normalized_fields]
+    frontend_fields = normalized_fields
     _sync_frontend_entity_create_form(project_dir, entity_name, frontend_fields, changed)
     _sync_frontend_entity_detail_page(project_dir, entity_name, frontend_fields, changed)
     return changed
@@ -4643,25 +4801,21 @@ def _normalize_entity_seed_item(raw: Any) -> dict[str, Any] | None:
         return None
 
     fields_raw = raw.get("fields")
-    fields: list[dict[str, str]] = []
+    fields: list[dict[str, Any]] = []
     seen_fields: set[str] = set()
     if isinstance(fields_raw, list):
-        for field in fields_raw:
-            if isinstance(field, str):
-                field_name = str(field).strip()
-                field_type = "string"
-            elif isinstance(field, dict):
-                field_name = str(field.get("name") or field.get("field") or "").strip()
-                field_type = str(field.get("type") or "string").strip().lower() or "string"
-            else:
+        for raw_field in fields_raw:
+            field = _normalize_field_spec(raw_field)
+            if field is None:
                 continue
+            field_name = str(field.get("name") or "").strip()
             if not field_name:
                 continue
             key = field_name.lower()
             if key in seen_fields:
                 continue
             seen_fields.add(key)
-            fields.append({"name": field_name, "type": field_type})
+            fields.append(field)
     return {"name": name, "fields": fields}
 
 

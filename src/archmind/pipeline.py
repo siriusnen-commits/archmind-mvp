@@ -936,6 +936,17 @@ def _write_project_spec(
             suggested_spec if isinstance(suggested_spec, dict) else {},
             architecture_reasoning.get("idea_normalized"),
         )
+        def _field_payload(field: dict[str, Any]) -> dict[str, Any] | None:
+            field_name = str(field.get("name") or "").strip()
+            field_type = str(field.get("type") or "").strip().lower()
+            if not field_name or not field_type:
+                return None
+            payload: dict[str, Any] = {"name": field_name, "type": field_type}
+            for key in ("semantic_type", "input_type", "renderer", "sortable", "filterable"):
+                if key in field:
+                    payload[key] = field[key]
+            return payload
+
         raw_entities = suggestion.get("entities") if isinstance(suggestion.get("entities"), list) else []
         entities: list[dict[str, Any]] = []
         seen_entities: set[str] = set()
@@ -950,20 +961,20 @@ def _write_project_spec(
                 continue
             seen_entities.add(key)
             fields_raw = item.get("fields") if isinstance(item.get("fields"), list) else []
-            fields: list[dict[str, str]] = []
+            fields: list[dict[str, Any]] = []
             seen_fields: set[str] = set()
             for field in fields_raw:
                 if not isinstance(field, dict):
                     continue
-                field_name = str(field.get("name") or "").strip()
-                field_type = str(field.get("type") or "").strip().lower()
-                if not field_name or not field_type:
+                normalized_field = _field_payload(field)
+                if normalized_field is None:
                     continue
+                field_name = str(normalized_field.get("name") or "")
                 field_key = field_name.lower()
                 if field_key in seen_fields:
                     continue
                 seen_fields.add(field_key)
-                fields.append({"name": field_name, "type": field_type})
+                fields.append(normalized_field)
             entities.append({"name": name, "fields": fields})
             if len(entities) >= 10:
                 break
@@ -1012,20 +1023,20 @@ def _write_project_spec(
                 continue
             seen_entities.add(key)
             fields_raw = item.get("fields") if isinstance(item.get("fields"), list) else []
-            fields: list[dict[str, str]] = []
+            fields: list[dict[str, Any]] = []
             seen_fields: set[str] = set()
             for field in fields_raw:
                 if not isinstance(field, dict):
                     continue
-                field_name = str(field.get("name") or "").strip()
-                field_type = str(field.get("type") or "").strip().lower()
-                if not field_name or not field_type:
+                normalized_field = _field_payload(field)
+                if normalized_field is None:
                     continue
+                field_name = str(normalized_field.get("name") or "")
                 field_key = field_name.lower()
                 if field_key in seen_fields:
                     continue
                 seen_fields.add(field_key)
-                fields.append({"name": field_name, "type": field_type})
+                fields.append(normalized_field)
             entities.append({"name": name, "fields": fields})
             if len(entities) >= 10:
                 break
