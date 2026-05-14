@@ -2271,7 +2271,7 @@ def _render_frontend_entity_create_page(
     return (
         '"use client";\n\n'
         'import { useRouter, useSearchParams } from "next/navigation";\n'
-        'import { ChangeEvent, FormEvent, useEffect, useState } from "react";\n'
+        'import { ChangeEvent, FormEvent, Suspense, useEffect, useState } from "react";\n'
         f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n\n'
         "type EntityItem = Record<string, unknown>;\n"
         "type RelationOption = { id: string; label: string };\n"
@@ -2283,7 +2283,7 @@ def _render_frontend_entity_create_page(
         "  }\n"
         "  return [];\n"
         "}\n\n"
-        f"export default function {component_name}() {{\n"
+        f"function {component_name}Content() {{\n"
         "  const searchParams = useSearchParams();\n"
         "  const router = useRouter();\n"
         "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n"
@@ -2368,6 +2368,13 @@ def _render_frontend_entity_create_page(
         "        {message ? <p className=\"text-xs text-emerald-300\">{message}</p> : null}\n"
         "      </form>\n"
         "    </section>\n"
+        "  );\n"
+        "}\n\n"
+        f"export default function {component_name}() {{\n"
+        "  return (\n"
+        "    <Suspense fallback={<p className=\"text-sm text-slate-300\">Loading form...</p>}>\n"
+        f"      <{component_name}Content />\n"
+        "    </Suspense>\n"
         "  );\n"
         "}\n"
     )
@@ -4466,6 +4473,17 @@ def normalize_project_spec(raw: Any, idea: str | None = None) -> dict[str, Any]:
         return {}
 
     payload: dict[str, Any] = {}
+    raw_shape = str(raw.get("shape") or raw.get("app_shape") or "").strip().lower()
+    raw_template = str(raw.get("template") or "").strip().lower()
+    frontend_allowed = raw_shape not in {"backend", "worker", "cli"} and raw_template not in {
+        "fastapi",
+        "fastapi-ddd",
+        "worker-api",
+    }
+    if raw_shape:
+        payload["shape"] = raw_shape
+    if raw_template:
+        payload["template"] = raw_template
 
     entities_raw = raw.get("entities") if isinstance(raw.get("entities"), list) else []
     entities: list[dict[str, Any]] = []
@@ -4505,9 +4523,9 @@ def normalize_project_spec(raw: Any, idea: str | None = None) -> dict[str, Any]:
         payload["apis"] = [{"method": item.split(maxsplit=1)[0], "path": item.split(maxsplit=1)[1]} for item in api_endpoints]
 
     pages_raw: list[Any] = []
-    if isinstance(raw.get("frontend_pages"), list):
+    if frontend_allowed and isinstance(raw.get("frontend_pages"), list):
         pages_raw.extend(raw.get("frontend_pages") or [])
-    if isinstance(raw.get("pages"), list):
+    if frontend_allowed and isinstance(raw.get("pages"), list):
         pages_raw.extend(raw.get("pages") or [])
     frontend_pages: list[str] = []
     route_pages: list[dict[str, str]] = []
@@ -4544,15 +4562,17 @@ def normalize_project_spec(raw: Any, idea: str | None = None) -> dict[str, Any]:
                 if key not in api_seen:
                     api_seed.append(endpoint)
                     api_seen.add(key)
-            for page in (f"{resource}/list", f"{resource}/new", f"{resource}/detail"):
-                key = page.lower()
-                if key not in page_seen:
-                    page_seed.append(page)
-                    page_seen.add(key)
+            if frontend_allowed:
+                for page in (f"{resource}/list", f"{resource}/new", f"{resource}/detail"):
+                    key = page.lower()
+                    if key not in page_seen:
+                        page_seed.append(page)
+                        page_seen.add(key)
         payload["api_endpoints"] = api_seed
         payload["apis"] = [{"method": item.split(maxsplit=1)[0], "path": item.split(maxsplit=1)[1]} for item in api_seed]
-        payload["frontend_pages"] = page_seed
-        payload["pages"] = [{"path": _page_rel_to_route_path(page)} for page in page_seed]
+        if frontend_allowed:
+            payload["frontend_pages"] = page_seed
+            payload["pages"] = [{"path": _page_rel_to_route_path(page)} for page in page_seed]
 
     if isinstance(idea, str) and idea.strip() and "summary" not in payload:
         payload["summary"] = idea.strip()

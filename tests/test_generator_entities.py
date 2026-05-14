@@ -810,6 +810,8 @@ def test_generated_create_page_confirms_success_after_api_and_redirects_to_list(
     assert "await response.json();" in text
     assert 'router.push("/tasks");' in text
     assert "router.refresh();" in text
+    assert "Suspense" in text
+    assert "function TasksNewPageContent()" in text
 
 
 def test_generated_create_page_never_uses_userouter_without_next_navigation_import(tmp_path: Path) -> None:
