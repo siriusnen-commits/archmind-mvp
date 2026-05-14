@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from archmind.execution_history import load_recent_execution_events
+from archmind.generator import infer_field_semantics
 from archmind.runtime_status import build_runtime_snapshot
 from archmind.state import load_state
 
@@ -161,29 +162,48 @@ def _canonicalize_api_path(value: str) -> str:
     return "/" + "/".join(canonical_parts)
 
 
-def _normalize_fields(item: Any) -> list[dict[str, str]]:
+def _split_field_name_and_type(raw: str) -> tuple[str, str | None]:
+    text = str(raw or "").strip()
+    if ":" not in text:
+        return text, None
+    name, raw_type = text.split(":", 1)
+    return name.strip(), raw_type.strip() or None
+
+
+def _normalize_fields(item: Any) -> list[dict[str, Any]]:
     rows = item if isinstance(item, list) else []
-    out: list[dict[str, str]] = []
+    out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for raw in rows:
-        if not isinstance(raw, dict):
+        if isinstance(raw, str):
+            field_name, field_type = _split_field_name_and_type(raw)
+            extras: dict[str, Any] = {}
+        elif isinstance(raw, dict):
+            field_name = str(raw.get("name") or "").strip()
+            field_type = str(raw.get("type") or "").strip().lower() or None
+            extras = {
+                key: raw[key]
+                for key in ("semantic_type", "input_type", "renderer", "sortable", "filterable")
+                if key in raw
+            }
+        else:
             continue
-        field_name = str(raw.get("name") or "").strip()
-        field_type = str(raw.get("type") or "").strip().lower()
-        if not field_name or not field_type:
+        if not field_name:
             continue
         key = field_name.lower()
         if key in seen:
             continue
         seen.add(key)
-        out.append({"name": field_name, "type": field_type})
+        field = infer_field_semantics(field_name, field_type)
+        field.update({meta_key: value for meta_key, value in extras.items() if value not in (None, "")})
+        out.append(field)
     return out
 
 
-def _extract_entities(spec_payload: dict[str, Any]) -> tuple[list[str], dict[str, list[dict[str, str]]]]:
+def _extract_entities(spec_payload: dict[str, Any]) -> tuple[list[str], dict[str, list[dict[str, Any]]]]:
     entities = spec_payload.get("entities") if isinstance(spec_payload.get("entities"), list) else []
     names: list[str] = []
-    fields_by_entity: dict[str, list[dict[str, str]]] = {}
+    fields_by_entity: dict[str, list[dict[str, Any]]] = {}
     seen: set[str] = set()
     for raw in entities:
         if not isinstance(raw, dict):
@@ -225,12 +245,12 @@ def _normalize_class_entity_name(raw_name: str) -> str:
     return _normalize_entity_name(value)
 
 
-def _infer_fields_by_entity_from_python_model(path: Path) -> dict[str, list[dict[str, str]]]:
+def _infer_fields_by_entity_from_python_model(path: Path) -> dict[str, list[dict[str, Any]]]:
     try:
         content = path.read_text(encoding="utf-8")
     except Exception:
         return {}
-    out: dict[str, list[dict[str, str]]] = {}
+    out: dict[str, list[dict[str, Any]]] = {}
     seen_by_entity: dict[str, set[str]] = {}
     current_entity = ""
     current_indent = -1
@@ -257,8 +277,10 @@ def _infer_fields_by_entity_from_python_model(path: Path) -> dict[str, list[dict
             continue
         field_name = ""
         field_match = re.match(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*([^=\n#]+)", raw_line)
+        raw_type = None
         if field_match:
             field_name = _normalize_inferred_field_name(field_match.group(1))
+            raw_type = str(field_match.group(2) or "").strip()
         else:
             assign_match = re.match(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(.+)$", raw_line)
             if not assign_match:
@@ -274,7 +296,7 @@ def _infer_fields_by_entity_from_python_model(path: Path) -> dict[str, list[dict
         if key in seen:
             continue
         seen.add(key)
-        out.setdefault(current_entity, []).append({"name": field_name, "type": "string"})
+        out.setdefault(current_entity, []).append(infer_field_semantics(field_name, raw_type))
     return out
 
 
@@ -287,8 +309,8 @@ def _backend_model_roots(project_dir: Path) -> list[Path]:
     ]
 
 
-def _extract_backend_fields_by_entity(project_dir: Path) -> dict[str, list[dict[str, str]]]:
-    out: dict[str, list[dict[str, str]]] = {}
+def _extract_backend_fields_by_entity(project_dir: Path) -> dict[str, list[dict[str, Any]]]:
+    out: dict[str, list[dict[str, Any]]] = {}
     seen: dict[str, set[str]] = {}
     for root in _backend_model_roots(project_dir):
         if not root.exists():
@@ -313,10 +335,10 @@ def _extract_backend_fields_by_entity(project_dir: Path) -> dict[str, list[dict[
 def _resolve_fields_by_source(
     project_dir: Path,
     entities: list[str],
-    spec_fields_by_entity: dict[str, list[dict[str, str]]],
-) -> tuple[dict[str, list[dict[str, str]]], dict[str, bool]]:
+    spec_fields_by_entity: dict[str, list[dict[str, Any]]],
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, bool]]:
     backend_fields_by_entity = _extract_backend_fields_by_entity(project_dir)
-    merged: dict[str, list[dict[str, str]]] = {}
+    merged: dict[str, list[dict[str, Any]]] = {}
     backend_presence: dict[str, bool] = {}
     for entity in entities:
         backend_rows = list(backend_fields_by_entity.get(entity) or [])

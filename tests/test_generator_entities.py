@@ -19,6 +19,7 @@ from archmind.generator import (
     ensure_runtime_gitignore,
     generate_project,
     implement_page_scaffold,
+    infer_field_semantics,
     normalize_project_spec,
 )
 
@@ -99,6 +100,44 @@ def test_assert_tsx_syntax_ok_runs_when_typescript_available(monkeypatch, tmp_pa
     )
 
     _assert_tsx_syntax_ok("export default function Page(){ return <section />; }")
+
+
+@pytest.mark.parametrize(
+    ("field_name", "expected_type", "expected_semantic", "expected_input"),
+    [
+        ("quantity", "integer", "quantity", "number"),
+        ("stock", "integer", "quantity", "number"),
+        ("price", "number", "price", "number"),
+        ("completed", "boolean", "boolean", "checkbox"),
+        ("is_done", "boolean", "boolean", "checkbox"),
+        ("due_date", "date", "date", "date"),
+        ("deadline", "date", "date", "date"),
+        ("email", "string", "email", "email"),
+        ("url", "string", "url", "url"),
+        ("summary", "string", "text", "text"),
+    ],
+)
+def test_infer_field_semantics_for_common_domain_fields(
+    field_name: str,
+    expected_type: str,
+    expected_semantic: str,
+    expected_input: str,
+) -> None:
+    field = infer_field_semantics(field_name)
+
+    assert field["type"] == expected_type
+    assert field["semantic_type"] == expected_semantic
+    assert field["input_type"] == expected_input
+
+
+def test_infer_field_semantics_preserves_specific_explicit_type() -> None:
+    quantity = infer_field_semantics("quantity", "float")
+    due_date = infer_field_semantics("due_date", "datetime")
+
+    assert quantity["type"] == "number"
+    assert quantity["semantic_type"] == "quantity"
+    assert due_date["type"] == "datetime"
+    assert due_date["semantic_type"] == "date"
 
 
 def test_apply_entity_scaffold_creates_backend_persistent_router_files(tmp_path: Path) -> None:
@@ -268,6 +307,34 @@ def test_normalize_project_spec_builds_canonical_resources_pages_and_apis() -> N
     assert "categories" in page_paths
     assert "categories/new" in page_paths
     assert "categories/[id]" in page_paths
+
+
+def test_normalize_project_spec_infers_semantic_field_metadata() -> None:
+    normalized = normalize_project_spec(
+        {
+            "entities": [
+                {
+                    "name": "Item",
+                    "fields": [
+                        {"name": "name", "type": "string"},
+                        {"name": "quantity", "type": "string"},
+                        "price:string",
+                        "url",
+                    ],
+                }
+            ]
+        },
+        "inventory app",
+    )
+
+    item = normalized["entities"][0]
+    fields = {field["name"]: field for field in item["fields"]}
+    assert fields["quantity"]["type"] == "integer"
+    assert fields["quantity"]["semantic_type"] == "quantity"
+    assert fields["quantity"]["input_type"] == "number"
+    assert fields["price"]["type"] == "number"
+    assert fields["url"]["semantic_type"] == "url"
+    assert fields["name"]["type"] == "string"
 
 
 def test_generate_project_starter_crud_create_and_list_persist_across_todo_diary_bookmark(tmp_path: Path) -> None:
@@ -539,7 +606,7 @@ def test_apply_entity_fields_to_scaffold_updates_models_and_schemas(tmp_path: Pa
     assert "class TaskCreate" in schema_text
     assert "class TaskRead" in schema_text
     assert '{"name": "title", "label": "Title", "placeholder": "title", "inputType": "text"}' in create_text
-    assert '{"name": "due_date", "label": "Due Date", "placeholder": "due_date", "inputType": "text"}' in create_text
+    assert '{"name": "due_date", "label": "Due Date", "placeholder": "due_date", "inputType": "date"}' in create_text
 
 
 def test_apply_entity_fields_to_scaffold_reflects_priority_in_frontend_create_form(tmp_path: Path) -> None:
@@ -757,6 +824,54 @@ def test_inventory_frontend_pages_render_domain_mvp_without_raw_json(tmp_path: P
     assert '"name": "price", "label": "Price", "placeholder": "price", "inputType": "number"' in create_text
     assert "onCompositionStart={() => setComposingField(field.name)}" in create_text
     assert "onCompositionEnd={(event) =>" in create_text
+
+
+def test_inventory_semantic_quantity_reaches_backend_and_inspect(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    opt = GenerateOptions(out=tmp_path, force=False, name="inventory_semantics", template="fullstack-ddd")
+    setattr(
+        opt,
+        "project_spec",
+        {
+            "entities": [
+                {
+                    "name": "Item",
+                    "fields": [
+                        {"name": "name", "type": "string"},
+                        {"name": "quantity", "type": "string"},
+                    ],
+                }
+            ],
+            "frontend_pages": ["items/list", "items/new", "items/detail"],
+        },
+    )
+
+    project_dir = Path(generate_project("inventory app", opt))
+
+    model_text = (project_dir / "backend" / "app" / "models" / "item.py").read_text(encoding="utf-8")
+    schema_text = (project_dir / "backend" / "app" / "schemas" / "item.py").read_text(encoding="utf-8")
+    spec_payload = normalize_project_spec(getattr(opt, "project_spec"), "inventory app")
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(json.dumps(spec_payload), encoding="utf-8")
+    item_fields = {field["name"]: field for field in spec_payload["entities"][0]["fields"]}
+
+    assert "quantity: int" in model_text
+    assert "quantity: int" in schema_text
+    assert item_fields["quantity"]["type"] == "integer"
+    assert item_fields["quantity"]["semantic_type"] == "quantity"
+
+    app = _import_generated_backend_app(project_dir / "backend", f"sqlite:///{tmp_path / 'inventory.db'}")
+    client = TestClient(app)
+    created = client.post("/items", json={"name": "Keyboard", "quantity": 123})
+    assert created.status_code == 200
+    assert created.json()["quantity"] == 123
+
+    from archmind.project_analysis import analyze_project
+
+    analysis = analyze_project(project_dir, spec_payload=spec_payload)
+    fields = {field["name"]: field for field in analysis["fields_by_entity"]["Item"]}
+    assert fields["quantity"]["type"] == "integer"
 
 
 def test_generic_crud_detail_uses_structured_fallback_without_raw_json(tmp_path: Path) -> None:
