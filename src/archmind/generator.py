@@ -735,14 +735,16 @@ def _normalize_resource_segment(value: str) -> str:
 
 
 def _load_project_spec_payload(project_dir: Path) -> dict[str, Any]:
-    spec_path = project_dir / ".archmind" / "project_spec.json"
-    if not spec_path.exists():
-        return {}
-    try:
-        payload = json.loads(spec_path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    for spec_path in (project_dir / ".archmind" / "project_spec.json", project_dir / "archmind_spec.json"):
+        if not spec_path.exists():
+            continue
+        try:
+            payload = json.loads(spec_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return {}
 
 
 def _extract_relation_entities_from_spec(spec_payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1849,6 +1851,7 @@ def apply_frontend_page_scaffold(project_dir: Path, entity_name: str) -> list[st
             title=plural_title,
             entity_path=plural,
             api_helper_import=list_helper_import,
+            field_specs=_entity_field_specs_for_resource(project_dir, plural),
         ),
         generated,
         project_dir,
@@ -1908,6 +1911,7 @@ def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
                 title=title,
                 entity_path=entity_path,
                 api_helper_import=helper_import,
+                field_specs=_entity_field_specs_for_resource(project_dir, entity_path),
             ),
             generated,
             project_dir,
@@ -2158,6 +2162,106 @@ def _render_frontend_relation_page(
     )
 
 
+def _field_name_key(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(name or "").strip().lower()).strip("_")
+
+
+def _format_field_label(name: str) -> str:
+    key = _field_name_key(name)
+    if not key:
+        return "Field"
+    known = {
+        "id": "ID",
+        "sku": "SKU",
+        "url": "URL",
+        "created_at": "Created",
+        "updated_at": "Updated",
+    }
+    if key in known:
+        return known[key]
+    return key.replace("_", " ").title()
+
+
+def _is_quantity_field_name(name: str) -> bool:
+    key = _field_name_key(name)
+    return key in {"quantity", "qty", "stock", "stock_count", "count", "available", "on_hand"}
+
+
+def _is_price_field_name(name: str) -> bool:
+    key = _field_name_key(name)
+    return key in {"price", "unit_price", "amount", "cost", "value"}
+
+
+def _is_category_field_name(name: str) -> bool:
+    key = _field_name_key(name)
+    return key in {"category", "category_id", "type", "group", "location"}
+
+
+def _is_sku_field_name(name: str) -> bool:
+    key = _field_name_key(name)
+    return key in {"sku", "barcode", "serial", "serial_number", "asset_tag"}
+
+
+def _is_metadata_field_name(name: str) -> bool:
+    key = _field_name_key(name)
+    return key in {"id", "created_at", "updated_at", "created", "updated", "deleted_at"}
+
+
+def _input_type_for_field(field: dict[str, str]) -> str:
+    name = str(field.get("name") or "")
+    field_type = str(field.get("type") or "").strip().lower()
+    if field_type in {"int", "integer", "float", "double", "decimal", "number"}:
+        return "number"
+    if _is_quantity_field_name(name) or _is_price_field_name(name):
+        return "number"
+    return "text"
+
+
+def _field_kind_for_field(field: dict[str, str]) -> str:
+    name = str(field.get("name") or "")
+    if _is_quantity_field_name(name):
+        return "quantity"
+    if _is_price_field_name(name):
+        return "price"
+    if _is_category_field_name(name):
+        return "category"
+    if _is_sku_field_name(name):
+        return "sku"
+    if _is_metadata_field_name(name):
+        return "metadata"
+    return "text"
+
+
+def _field_config_rows_for_frontend(field_specs: list[dict[str, str]] | None) -> str:
+    normalized = [item for item in (field_specs or []) if str(item.get("name") or "").strip()]
+    if not normalized:
+        normalized = [{"name": "title", "type": "string"}]
+    rows = []
+    for item in normalized:
+        name = str(item.get("name") or "").strip()
+        rows.append(
+            {
+                "name": name,
+                "label": _format_field_label(name),
+                "kind": _field_kind_for_field(item),
+                "inputType": _input_type_for_field(item),
+                "metadata": _is_metadata_field_name(name),
+            }
+        )
+    return "".join(f"  {json.dumps(row)},\n" for row in rows)
+
+
+def _is_inventory_like_resource(resource: str, field_specs: list[dict[str, str]] | None) -> bool:
+    resource_key = _field_name_key(resource)
+    if resource_key in {"item", "items", "inventory", "stock", "stocks", "asset", "assets", "supplies"}:
+        return True
+    for field in field_specs or []:
+        name = str(field.get("name") or "")
+        if _is_quantity_field_name(name) or _is_sku_field_name(name):
+            return True
+    return False
+
+
 def _render_frontend_entity_create_page(
     *,
     component_name: str,
@@ -2251,7 +2355,7 @@ def _render_frontend_entity_create_page(
         )
     non_relation_fields = [item for item in normalized_fields if str(item.get("name") or "") not in relation_lookup]
     non_relation_field_rows = "".join(
-        f'    {{"name": {json.dumps(str(item.get("name") or ""))}, "label": {json.dumps(str(item.get("name") or "").replace("_", " ").title())}, "placeholder": {json.dumps(str(item.get("name") or ""))}}},\n'
+        f'    {{"name": {json.dumps(str(item.get("name") or ""))}, "label": {json.dumps(_format_field_label(str(item.get("name") or "")))}, "placeholder": {json.dumps(str(item.get("name") or ""))}, "inputType": {json.dumps(_input_type_for_field(item))}}},\n'
         for item in non_relation_fields
     )
     payload_lines = ""
@@ -2275,7 +2379,7 @@ def _render_frontend_entity_create_page(
         f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n\n'
         "type EntityItem = Record<string, unknown>;\n"
         "type RelationOption = { id: string; label: string };\n"
-        "type FormFieldConfig = { name: string; label: string; placeholder: string };\n\n"
+        "type FormFieldConfig = { name: string; label: string; placeholder: string; inputType: string };\n\n"
         "function extractRows(payload: unknown): EntityItem[] {\n"
         "  if (Array.isArray(payload)) return payload as EntityItem[];\n"
         "  if (payload && typeof payload === \"object\" && Array.isArray((payload as { items?: unknown[] }).items)) {\n"
@@ -2348,6 +2452,7 @@ def _render_frontend_entity_create_page(
         "            <input\n"
         "              id={`field-${field.name}`}\n"
         "              name={field.name}\n"
+        "              type={field.inputType}\n"
         "              value={values[field.name] || \"\"}\n"
         "              onChange={onFieldValueChange(field.name)}\n"
         "              onCompositionStart={() => setComposingField(field.name)}\n"
@@ -2508,6 +2613,7 @@ def _render_frontend_entity_list_page(
     detail_link_mode: str = "path",
     detail_href_base: str | None = None,
     api_helper_import: str = "../_lib/apiBase",
+    field_specs: list[dict[str, str]] | None = None,
 ) -> str:
     api_path = f"/{str(entity_path or '').strip('/')}"
     if _is_board_like_entity_path(entity_path):
@@ -2553,17 +2659,65 @@ def _render_frontend_entity_list_page(
         if detail_link_mode != "query"
         else f"`{detail_base}?id=${{String(item.id)}}`"
     )
+    field_config_rows = _field_config_rows_for_frontend(field_specs)
+    is_inventory_like = _is_inventory_like_resource(entity_path, field_specs)
+    helper_text = (
+        "Track item names, quantities, and useful inventory attributes."
+        if is_inventory_like
+        else "Review generated records and open a detail page for structured fields."
+    )
+    empty_text = (
+        "No items yet. Create the first inventory item to start tracking stock."
+        if is_inventory_like
+        else "No records yet. Create the first record to populate this view."
+    )
+    create_label = "New item" if is_inventory_like else "New record"
+    search_placeholder = "Search items..." if is_inventory_like else "Search records..."
     return (
         '"use client";\n\n'
         'import Link from "next/link";\n'
-        'import { useEffect, useState } from "react";\n'
+        'import { useEffect, useMemo, useState } from "react";\n'
         f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n\n'
-        "type EntityItem = Record<string, unknown> & { id?: number | string };\n\n"
+        "type EntityItem = Record<string, unknown> & { id?: number | string };\n"
+        "type FieldConfig = { name: string; label: string; kind: string; inputType: string; metadata: boolean };\n\n"
+        "const fieldConfigs: FieldConfig[] = [\n"
+        f"{field_config_rows}"
+        "];\n\n"
+        "function textValue(item: EntityItem, field?: FieldConfig): string {\n"
+        "  if (!field) return \"\";\n"
+        "  const value = item[field.name];\n"
+        "  if (value === undefined || value === null || value === \"\") return \"\";\n"
+        "  return String(value);\n"
+        "}\n\n"
+        "function numberValue(item: EntityItem, field?: FieldConfig): number | null {\n"
+        "  if (!field) return null;\n"
+        "  const value = Number(item[field.name]);\n"
+        "  return Number.isFinite(value) ? value : null;\n"
+        "}\n\n"
+        "function displayTitle(item: EntityItem, index: number): string {\n"
+        "  const primary = fieldConfigs.find((field) => [\"name\", \"title\", \"label\"].includes(field.name));\n"
+        "  return textValue(item, primary) || String(item.name ?? item.title ?? `Item #${item.id ?? index + 1}`);\n"
+        "}\n\n"
+        "function formatFieldValue(item: EntityItem, field: FieldConfig): string {\n"
+        "  const value = textValue(item, field);\n"
+        "  if (!value) return \"(unset)\";\n"
+        "  if (field.kind === \"price\") return `$${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;\n"
+        "  return value;\n"
+        "}\n\n"
         f"export default function {component_name}() {{\n"
         "  const [items, setItems] = useState<EntityItem[]>([]);\n"
+        "  const [query, setQuery] = useState(\"\");\n"
         "  const [loading, setLoading] = useState(true);\n"
         "  const [error, setError] = useState(\"\");\n"
         "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
+        "  const primaryField = fieldConfigs.find((field) => [\"name\", \"title\", \"label\"].includes(field.name));\n"
+        "  const quantityField = fieldConfigs.find((field) => field.kind === \"quantity\");\n"
+        "  const summaryFields = fieldConfigs.filter((field) => [\"category\", \"sku\", \"price\"].includes(field.kind));\n"
+        "  const visibleItems = useMemo(() => {\n"
+        "    const needle = query.trim().toLowerCase();\n"
+        "    if (!needle) return items;\n"
+        "    return items.filter((item) => Object.values(item).some((value) => String(value ?? \"\").toLowerCase().includes(needle)));\n"
+        "  }, [items, query]);\n\n"
         "  useEffect(() => {\n"
         "    if (apiBaseLoading || !apiBaseUrl) {\n"
         "      setLoading(true);\n"
@@ -2603,25 +2757,56 @@ def _render_frontend_entity_list_page(
         "    };\n"
         "  }, [apiBaseLoading, apiBaseUrl]);\n\n"
         "  return (\n"
-        '    <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">\n'
-        f'      <h1 className="text-lg font-semibold">{title}</h1>\n'
-        '      <p className="text-xs text-slate-400">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>\n'
+        '    <section className="space-y-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">\n'
+        '      <div className="flex flex-wrap items-start justify-between gap-3">\n'
+        "        <div>\n"
+        f'          <h1 className="text-lg font-semibold">{title}</h1>\n'
+        f'          <p className="text-sm text-slate-300">{helper_text}</p>\n'
+        '          <p className="text-xs text-slate-500">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>\n'
+        "        </div>\n"
+        f'        <Link href="{api_path}/new" className="rounded-md bg-emerald-400 px-3 py-2 text-sm font-semibold text-emerald-950 hover:bg-emerald-300">{create_label}</Link>\n'
+        "      </div>\n"
+        f'      <input value={{query}} onChange={{(event) => setQuery(event.target.value)}} placeholder="{search_placeholder}" className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100" />\n'
         "      {loading ? <p className=\"text-sm text-slate-300\">{apiBaseLoading ? \"Resolving API base...\" : \"Loading...\"}</p> : null}\n"
         "      {!loading && error ? <p className=\"text-sm text-rose-300\">Failed to load: {error}</p> : null}\n"
-        "      {!loading && !error && items.length === 0 ? <p className=\"text-sm text-slate-300\">No items found.</p> : null}\n"
-        "      {!loading && !error && items.length > 0 ? (\n"
-        '        <ul className="space-y-2 text-sm">\n'
-        "          {items.map((item, index) => (\n"
-        '            <li key={String(item.id ?? index)} className="rounded-md border border-slate-700 p-2">\n'
-        "              <div className=\"font-medium\">#{String(item.id ?? index)}</div>\n"
-        "              <pre className=\"mt-1 overflow-x-auto text-xs text-slate-300\">{JSON.stringify(item, null, 2)}</pre>\n"
+        f"      {{!loading && !error && items.length === 0 ? <p className=\"rounded-md border border-dashed border-slate-700 p-4 text-sm text-slate-300\">{empty_text}</p> : null}}\n"
+        "      {!loading && !error && items.length > 0 && visibleItems.length === 0 ? <p className=\"text-sm text-slate-300\">No items match your search.</p> : null}\n"
+        "      {!loading && !error && visibleItems.length > 0 ? (\n"
+        '        <ul className="grid gap-2 text-sm sm:grid-cols-2">\n'
+        "          {visibleItems.map((item, index) => {\n"
+        "            const quantity = numberValue(item, quantityField);\n"
+        "            const lowStock = quantity !== null && quantity <= 5;\n"
+        "            return (\n"
+        '            <li key={String(item.id ?? index)} className="rounded-md border border-slate-700 bg-slate-950/60 p-3">\n'
+        '              <div className="flex items-start justify-between gap-2">\n'
+        '                <div className="min-w-0">\n'
+        '                  <h2 className="truncate text-base font-semibold text-slate-100">{displayTitle(item, index)}</h2>\n'
+        '                  <p className="text-xs text-slate-500">ID: {String(item.id ?? index + 1)}</p>\n'
+        "                </div>\n"
+        "                {quantityField ? (\n"
+        '                  <span className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold ${lowStock ? "border-amber-400/50 bg-amber-400/10 text-amber-200" : "border-emerald-400/40 bg-emerald-400/10 text-emerald-200"}`}>\n'
+        "                    Qty {quantity ?? \"-\"}{lowStock ? \" low\" : \"\"}\n"
+        "                  </span>\n"
+        "                ) : null}\n"
+        "              </div>\n"
+        "              {summaryFields.length > 0 ? (\n"
+        '                <dl className="mt-3 grid gap-2 text-xs text-slate-300">\n'
+        "                  {summaryFields.map((field) => (\n"
+        '                    <div key={field.name} className="flex justify-between gap-3 rounded bg-slate-900/70 px-2 py-1">\n'
+        "                      <dt className=\"text-slate-500\">{field.label}</dt>\n"
+        "                      <dd className=\"truncate text-slate-200\">{formatFieldValue(item, field)}</dd>\n"
+        "                    </div>\n"
+        "                  ))}\n"
+        "                </dl>\n"
+        "              ) : null}\n"
         "              {item.id !== undefined ? (\n"
         f"                <Link href={{{link_expression}}} className=\"mt-2 inline-block text-xs text-cyan-300 underline\">\n"
         "                  Open detail\n"
         "                </Link>\n"
         "              ) : null}\n"
         "            </li>\n"
-        "          ))}\n"
+        "            );\n"
+        "          })}\n"
         "        </ul>\n"
         "      ) : null}\n"
         "    </section>\n"
@@ -2667,9 +2852,11 @@ def _render_frontend_entity_detail_page(
     is_board_like = _is_board_like_entity_path(entity_path)
     is_card_like = _is_card_like_entity_path(entity_path)
     is_bookmark_like = _is_bookmark_like_entity_path(entity_path)
+    is_generic_like = not (is_board_like or is_card_like or is_task_like or is_diary_like or is_bookmark_like)
     relation_field_rows = relation_fields if isinstance(relation_fields, list) else []
     configured_field_rows = field_specs if isinstance(field_specs, list) else []
-    import_link_line = 'import Link from "next/link";\n' if sections else ""
+    field_config_rows = _field_config_rows_for_frontend(configured_field_rows)
+    import_link_line = 'import Link from "next/link";\n' if sections or is_generic_like else ""
     helper_extract_rows = ""
     relation_state_blocks = ""
     relation_effect_blocks = ""
@@ -2819,7 +3006,7 @@ def _render_frontend_entity_detail_page(
         seen_additional.add(field_key)
         additional_field_rows.append((field_name, field_name.replace("_", " ").title()))
     additional_field_ui = ""
-    if additional_field_rows:
+    if additional_field_rows and not is_generic_like:
         additional_field_ui = (
             '        <section className="space-y-2 rounded-md border border-slate-700 bg-slate-900/40 p-3">\n'
             '          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-300">Additional Fields</h3>\n'
@@ -2829,13 +3016,83 @@ def _render_frontend_entity_detail_page(
             )
             + "        </section>\n"
         )
+    generic_detail_article = (
+        "        <article className=\"space-y-4 rounded-xl border border-slate-700 bg-slate-950/50 p-4\">\n"
+        "          <div className=\"flex flex-wrap items-start justify-between gap-3\">\n"
+        "            <div className=\"min-w-0\">\n"
+        "              <p className=\"text-xs font-semibold uppercase tracking-wide text-slate-500\">Item</p>\n"
+        "              <h2 className=\"break-words text-xl font-semibold text-slate-100\">{displayTitle(item)}</h2>\n"
+        "            </div>\n"
+        "            {quantityField ? (\n"
+        "              <span className={`rounded-full border px-3 py-1.5 text-sm font-semibold ${isLowStock(item) ? \"border-amber-400/50 bg-amber-400/10 text-amber-200\" : \"border-emerald-400/40 bg-emerald-400/10 text-emerald-200\"}`}>\n"
+        "                Quantity: {formatFieldValue(item, quantityField)}{isLowStock(item) ? \" low stock\" : \"\"}\n"
+        "              </span>\n"
+        "            ) : null}\n"
+        "          </div>\n"
+        "          {highlightFields.length > 0 ? (\n"
+        "            <dl className=\"grid gap-2 text-sm sm:grid-cols-3\">\n"
+        "              {highlightFields.map((field) => (\n"
+        "                <div key={field.name} className=\"rounded-md border border-slate-800 bg-slate-900/70 p-3\">\n"
+        "                  <dt className=\"text-xs uppercase tracking-wide text-slate-500\">{field.label}</dt>\n"
+        "                  <dd className=\"mt-1 font-medium text-slate-100\">{formatFieldValue(item, field)}</dd>\n"
+        "                </div>\n"
+        "              ))}\n"
+        "            </dl>\n"
+        "          ) : null}\n"
+        "          <section className=\"space-y-2 rounded-md border border-slate-800 bg-slate-900/40 p-3\">\n"
+        "            <h3 className=\"text-xs font-semibold uppercase tracking-wide text-slate-300\">Additional Fields</h3>\n"
+        "            {additionalFields.length > 0 ? (\n"
+        "              <dl className=\"grid gap-2 text-sm sm:grid-cols-2\">\n"
+        "                {additionalFields.map((field) => (\n"
+        "                  <div key={field.name} className=\"flex justify-between gap-3 border-b border-slate-800 pb-1 last:border-0\">\n"
+        "                    <dt className=\"text-slate-500\">{field.label}</dt>\n"
+        "                    <dd className=\"break-words text-right text-slate-200\">{formatFieldValue(item, field)}</dd>\n"
+        "                  </div>\n"
+        "                ))}\n"
+        "              </dl>\n"
+        "            ) : <p className=\"text-sm text-slate-400\">No additional fields yet.</p>}\n"
+        "          </section>\n"
+        "          <section className=\"space-y-2 rounded-md border border-slate-800 bg-slate-900/40 p-3\">\n"
+        "            <h3 className=\"text-xs font-semibold uppercase tracking-wide text-slate-300\">Metadata</h3>\n"
+        "            <dl className=\"grid gap-2 text-xs text-slate-300 sm:grid-cols-3\">\n"
+        "              <div><dt className=\"text-slate-500\">ID</dt><dd>{String((item as Record<string, unknown>).id ?? id)}</dd></div>\n"
+        "              <div><dt className=\"text-slate-500\">Created</dt><dd>{String((item as Record<string, unknown>).created_at ?? (item as Record<string, unknown>).created ?? \"(unset)\")}</dd></div>\n"
+        "              <div><dt className=\"text-slate-500\">Updated</dt><dd>{String((item as Record<string, unknown>).updated_at ?? (item as Record<string, unknown>).updated ?? \"(unset)\")}</dd></div>\n"
+        "              {metadataFields.map((field) => (\n"
+        "                <div key={field.name}><dt className=\"text-slate-500\">{field.label}</dt><dd>{formatFieldValue(item, field)}</dd></div>\n"
+        "              ))}\n"
+        "            </dl>\n"
+        "          </section>\n"
+        "          <div className=\"flex gap-3 text-xs\">\n"
+        f"            <Link href=\"{api_path}\" className=\"text-cyan-300 underline\">Back to list</Link>\n"
+        f"            <Link href=\"{api_path}/new\" className=\"text-emerald-300 underline\">Create another</Link>\n"
+        "          </div>\n"
+        "        </article>\n"
+    )
     return (
         '"use client";\n\n'
         f"{import_link_line}"
         "import { useEffect, useState } from \"react\";\n"
         f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n'
         f"{imports}\n"
-        "type EntityItem = Record<string, unknown>;\n\n"
+        "type EntityItem = Record<string, unknown>;\n"
+        "type FieldConfig = { name: string; label: string; kind: string; inputType: string; metadata: boolean };\n\n"
+        "const fieldConfigs: FieldConfig[] = [\n"
+        f"{field_config_rows}"
+        "];\n\n"
+        "function textValue(item: EntityItem, field?: FieldConfig): string {\n"
+        "  if (!field) return \"\";\n"
+        "  const value = item[field.name];\n"
+        "  if (value === undefined || value === null || value === \"\") return \"\";\n"
+        "  return String(value);\n"
+        "}\n\n"
+        "function formatFieldValue(item: EntityItem, field?: FieldConfig): string {\n"
+        "  if (!field) return \"(unset)\";\n"
+        "  const value = textValue(item, field);\n"
+        "  if (!value) return \"(unset)\";\n"
+        "  if (field.kind === \"price\") return `$${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;\n"
+        "  return value;\n"
+        "}\n\n"
         f"{helper_extract_rows}\n"
         f"export default function {component_name}() {{\n"
         f"  {hook}\n"
@@ -2845,6 +3102,19 @@ def _render_frontend_entity_detail_page(
         "  const [notFound, setNotFound] = useState(false);\n"
         "  const [error, setError] = useState(\"\");\n"
         "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
+        "  const primaryField = fieldConfigs.find((field) => [\"name\", \"title\", \"label\"].includes(field.name));\n"
+        "  const quantityField = fieldConfigs.find((field) => field.kind === \"quantity\");\n"
+        "  const highlightFields = fieldConfigs.filter((field) => [\"category\", \"sku\", \"price\"].includes(field.kind));\n"
+        "  const metadataFields = fieldConfigs.filter((field) => field.metadata && field.name !== \"id\");\n"
+        "  const additionalFields = fieldConfigs.filter((field) => !field.metadata && field.name !== primaryField?.name && field.name !== quantityField?.name && !highlightFields.some((highlight) => highlight.name === field.name));\n"
+        "  function displayTitle(current: EntityItem): string {\n"
+        "    return textValue(current, primaryField) || String((current as Record<string, unknown>).name ?? (current as Record<string, unknown>).title ?? `Item #${id}`);\n"
+        "  }\n"
+        "  function isLowStock(current: EntityItem): boolean {\n"
+        "    if (!quantityField) return false;\n"
+        "    const value = Number((current as Record<string, unknown>)[quantityField.name]);\n"
+        "    return Number.isFinite(value) && value <= 5;\n"
+        "  }\n\n"
         f"{relation_state_blocks}\n"
         "  useEffect(() => {\n"
         "    if (!id) {\n"
@@ -2966,7 +3236,7 @@ def _render_frontend_entity_detail_page(
             "          </div>\n"
             "        </article>\n"
             if is_bookmark_like
-            else "        <pre className=\"overflow-x-auto text-xs text-slate-300\">{JSON.stringify(item, null, 2)}</pre>\n"
+            else generic_detail_article
             )
             )
             )
