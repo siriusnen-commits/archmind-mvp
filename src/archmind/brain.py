@@ -423,7 +423,7 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
         app_shape = "backend"
     elif inferred_shape == "cli":
         backend_needed = True
-        app_shape = "backend"
+        app_shape = "cli"
     elif inferred_shape == "backend":
         backend_needed = True
         frontend_needed = False
@@ -510,7 +510,7 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
     elif inferred_shape == "worker":
         recommended_template = "worker-api"
     elif inferred_shape == "cli":
-        recommended_template = "fastapi"
+        recommended_template = "cli"
     elif inferred_shape == "internal":
         recommended_template = "internal-tool"
     elif app_shape == "fullstack":
