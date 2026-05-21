@@ -22,7 +22,7 @@ from archmind.generator import (
     infer_field_semantics,
     normalize_project_spec,
 )
-from archmind.app_patterns import infer_app_patterns
+from archmind.app_patterns import compose_app_patterns, infer_app_patterns
 
 
 def _import_generated_backend_app(project_dir: Path, db_url: str):
@@ -362,14 +362,127 @@ def test_infer_app_patterns_from_common_fields(fields: list[dict[str, str]], exp
     assert expected_pattern in pattern_types
 
 
+@pytest.mark.parametrize(
+    ("fields", "expected_composed", "expected_hint"),
+    [
+        (
+            [{"name": "status"}, {"name": "assignee"}, {"name": "created_at"}],
+            "workflow_tracking",
+            "show_status_filters",
+        ),
+        (
+            [{"name": "quantity"}, {"name": "category"}],
+            "measurable_collection",
+            "metric_emphasis",
+        ),
+        (
+            [{"name": "category"}, {"name": "url"}, {"name": "updated_at"}],
+            "knowledge_collection",
+            "compact_metadata_cards",
+        ),
+        (
+            [{"name": "owner"}, {"name": "status"}],
+            "ownership_workflow",
+            "ownership_grouping",
+        ),
+    ],
+)
+def test_compose_app_patterns_from_reusable_pattern_sets(
+    fields: list[dict[str, str]], expected_composed: str, expected_hint: str
+) -> None:
+    entity = {"name": "Record", "fields": fields}
+    patterns = infer_app_patterns({"entities": [entity]})
+
+    composition = compose_app_patterns(patterns, [entity])
+
+    composed_types = {str(row.get("type") or "") for row in composition["app_patterns"]}
+    assert expected_composed in composed_types
+    assert expected_hint in composition["ui_hints"]
+
+
 def test_normalize_project_spec_adds_entity_level_patterns_and_accepts_old_specs() -> None:
-    old_spec = {"entities": [{"name": "Case", "fields": [{"name": "status", "type": "string"}]}]}
+    old_spec = {
+        "entities": [
+            {
+                "name": "Case",
+                "fields": [
+                    {"name": "status", "type": "string"},
+                    {"name": "owner", "type": "string"},
+                    {"name": "created_at", "type": "date"},
+                ],
+            }
+        ]
+    }
 
     normalized = normalize_project_spec(old_spec, "support case manager")
 
     assert "patterns" in normalized
     assert normalized["patterns"][0]["type"] == "workflow_status"
     assert normalized["entities"][0]["patterns"][0]["type"] == "workflow_status"
+    composed_types = {str(row.get("type") or "") for row in normalized.get("composed_patterns", []) if isinstance(row, dict)}
+    assert "workflow_tracking" in composed_types
+    assert "show_status_filters" in normalized["ui_hints"]
+
+
+@pytest.mark.parametrize(
+    ("entity", "expected_composed"),
+    [
+        (
+            {
+                "name": "Ticket",
+                "fields": [
+                    {"name": "title", "type": "string"},
+                    {"name": "status", "type": "string"},
+                    {"name": "priority", "type": "string"},
+                    {"name": "assignee", "type": "string"},
+                    {"name": "created_at", "type": "date"},
+                ],
+            },
+            "workflow_tracking",
+        ),
+        (
+            {
+                "name": "Lead",
+                "fields": [
+                    {"name": "name", "type": "string"},
+                    {"name": "status", "type": "string"},
+                    {"name": "owner", "type": "string"},
+                ],
+            },
+            "ownership_workflow",
+        ),
+        (
+            {
+                "name": "Asset",
+                "fields": [
+                    {"name": "name", "type": "string"},
+                    {"name": "quantity", "type": "int"},
+                    {"name": "value", "type": "float"},
+                    {"name": "category", "type": "string"},
+                ],
+            },
+            "measurable_collection",
+        ),
+        (
+            {
+                "name": "Vendor",
+                "fields": [
+                    {"name": "name", "type": "string"},
+                    {"name": "email", "type": "string"},
+                    {"name": "website", "type": "string"},
+                    {"name": "category", "type": "string"},
+                    {"name": "updated_at", "type": "date"},
+                ],
+            },
+            "knowledge_collection",
+        ),
+    ],
+)
+def test_normalize_project_spec_composes_cross_domain_pattern_mixes(entity: dict[str, object], expected_composed: str) -> None:
+    normalized = normalize_project_spec({"entities": [entity]}, "generic operations app")
+
+    composed_types = {str(row.get("type") or "") for row in normalized.get("composed_patterns", []) if isinstance(row, dict)}
+    assert expected_composed in composed_types
 
 
 def test_generate_project_starter_crud_create_and_list_persist_across_todo_diary_bookmark(tmp_path: Path) -> None:
@@ -874,6 +987,8 @@ def test_issue_frontend_pages_render_status_priority_badges_without_raw_json(tmp
                             {"name": "description", "type": "string"},
                             {"name": "status", "type": "string"},
                             {"name": "priority", "type": "string"},
+                            {"name": "assignee", "type": "string"},
+                            {"name": "created_at", "type": "date"},
                         ],
                     }
                 ]
@@ -894,6 +1009,10 @@ def test_issue_frontend_pages_render_status_priority_badges_without_raw_json(tmp
     assert "JSON.stringify(item, null, 2)" not in list_text
     assert "JSON.stringify(item, null, 2)" not in detail_text
     assert "Search issues..." in list_text
+    assert "statusValues" in list_text
+    assert "setActiveStatus" in list_text
+    assert "Recent activity" in list_text
+    assert "Owner:" in list_text
     assert "statusTone(item.status)" in list_text
     assert "priorityTone(priorityValue(item))" in list_text
     assert "Open issue" in list_text
@@ -919,6 +1038,8 @@ def test_repair_tracker_uses_workflow_pattern_without_bug_domain(tmp_path: Path)
                             {"name": "title", "type": "string"},
                             {"name": "status", "type": "string"},
                             {"name": "severity", "type": "string"},
+                            {"name": "assignee", "type": "string"},
+                            {"name": "scheduled_at", "type": "date"},
                         ],
                     }
                 ]
@@ -935,9 +1056,15 @@ def test_repair_tracker_uses_workflow_pattern_without_bug_domain(tmp_path: Path)
     detail_text = (project_dir / "frontend" / "app" / "repairs" / "[id]" / "page.tsx").read_text(encoding="utf-8")
 
     assert "workflowFields" in list_text
+    assert "statusValues" in list_text
+    assert "activeStatus" in list_text
+    assert "recentItems" in list_text
+    assert "ownershipFields" in list_text
     assert "badgeTone(field, value)" in list_text
     assert '"kind": "severity"' in list_text
+    assert '"kind": "ownership"' in list_text
     assert "workflowFields" in detail_text
+    assert "Ownership" in detail_text
     _assert_tsx_syntax_ok(list_text)
     _assert_tsx_syntax_ok(detail_text)
 

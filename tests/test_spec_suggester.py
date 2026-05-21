@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from archmind.generator import normalize_project_spec
 from archmind.spec_suggester import suggest_project_spec
 
 
@@ -10,7 +11,7 @@ def test_suggest_project_spec_defects_domain() -> None:
     assert "GET /defects" in out["api_endpoints"]
     defect = next(entity for entity in out["entities"] if entity["name"] == "Defect")
     field_names = {str(field.get("name") or "") for field in defect.get("fields", []) if isinstance(field, dict)}
-    assert {"title", "description", "status", "severity"}.issubset(field_names)
+    assert {"title", "description", "status", "severity", "assignee", "created_at"}.issubset(field_names)
 
 
 def test_suggest_project_spec_bug_tracker_routes_to_issue_mvp_not_task() -> None:
@@ -20,7 +21,7 @@ def test_suggest_project_spec_bug_tracker_routes_to_issue_mvp_not_task() -> None
     assert "Task" not in names
     issue = next(entity for entity in out["entities"] if entity["name"] == "Issue")
     field_names = {str(field.get("name") or "") for field in issue.get("fields", []) if isinstance(field, dict)}
-    assert {"title", "description", "status", "priority"}.issubset(field_names)
+    assert {"title", "description", "status", "priority", "assignee", "created_at"}.issubset(field_names)
     assert "GET /issues" in out["api_endpoints"]
     assert "POST /issues" in out["api_endpoints"]
     assert "PATCH /issues/{id}" in out["api_endpoints"]
@@ -35,7 +36,10 @@ def test_suggest_project_spec_support_ticket_uses_ticket_workflow_fields() -> No
     assert "Ticket" in names
     ticket = next(entity for entity in out["entities"] if entity["name"] == "Ticket")
     field_names = {str(field.get("name") or "") for field in ticket.get("fields", []) if isinstance(field, dict)}
-    assert {"title", "description", "status", "priority"}.issubset(field_names)
+    assert {"title", "description", "status", "priority", "assignee", "created_at"}.issubset(field_names)
+    normalized = normalize_project_spec(out, "support ticket manager")
+    composed_types = {str(row.get("type") or "") for row in normalized.get("composed_patterns", []) if isinstance(row, dict)}
+    assert "workflow_tracking" in composed_types
     assert "tickets/list" in out["frontend_pages"]
 
 
@@ -48,7 +52,10 @@ def test_suggest_project_spec_asset_and_vendor_starters_use_pattern_friendly_fie
     vendor = suggest_project_spec("vendor directory", {"domains": [], "frontend_needed": True})
     vendor_entity = next(entity for entity in vendor["entities"] if entity["name"] == "Vendor")
     vendor_fields = {str(field.get("name") or "") for field in vendor_entity.get("fields", []) if isinstance(field, dict)}
-    assert {"name", "email", "website"}.issubset(vendor_fields)
+    assert {"name", "email", "website", "category", "updated_at"}.issubset(vendor_fields)
+    normalized_vendor = normalize_project_spec(vendor, "vendor directory")
+    composed_types = {str(row.get("type") or "") for row in normalized_vendor.get("composed_patterns", []) if isinstance(row, dict)}
+    assert "knowledge_collection" in composed_types
 
 
 def test_suggest_project_spec_tasks_domain() -> None:

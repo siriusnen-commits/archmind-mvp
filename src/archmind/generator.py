@@ -10,7 +10,7 @@ from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional
 
-from .app_patterns import infer_app_patterns, infer_entity_patterns
+from .app_patterns import compose_app_patterns, infer_app_patterns, infer_entity_patterns
 from .templates.fastapi import enforce_fastapi_runtime
 from .templates.fastapi_ddd import enforce_fastapi_ddd
 from .templates.nextjs import enforce_nextjs_runtime
@@ -2332,6 +2332,10 @@ def infer_field_semantics(field_name: str, raw_type: str | None = None) -> dict[
         inferred_type = "string" if type_is_generic else explicit_type
         semantic_type = "category"
         renderer = "badge"
+    elif key in {"owner", "assignee", "created_by", "responsible", "contact"}:
+        inferred_type = "string" if type_is_generic else explicit_type
+        semantic_type = "ownership"
+        renderer = "text"
     elif key in {"title", "name", "description", "note", "content", "summary"}:
         inferred_type = "string" if type_is_generic else explicit_type
         semantic_type = "text"
@@ -2888,6 +2892,7 @@ def _render_frontend_entity_list_page(
         f"export default function {component_name}() {{\n"
         "  const [items, setItems] = useState<EntityItem[]>([]);\n"
         "  const [query, setQuery] = useState(\"\");\n"
+        "  const [activeStatus, setActiveStatus] = useState(\"all\");\n"
         "  const [loading, setLoading] = useState(true);\n"
         "  const [error, setError] = useState(\"\");\n"
         "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
@@ -2897,12 +2902,32 @@ def _render_frontend_entity_list_page(
         "  const metricFields = fieldConfigs.filter((field) => [\"quantity\", \"price\", \"number\"].includes(field.kind));\n"
         "  const classificationFields = fieldConfigs.filter((field) => field.kind === \"category\");\n"
         "  const referenceFields = fieldConfigs.filter((field) => [\"url\", \"email\"].includes(field.kind));\n"
+        "  const ownershipFields = fieldConfigs.filter((field) => field.kind === \"ownership\");\n"
+        "  const dateFields = fieldConfigs.filter((field) => field.kind === \"date\");\n"
         "  const summaryFields = fieldConfigs.filter((field) => [\"sku\"].includes(field.kind));\n"
-        "  const visibleItems = useMemo(() => {\n"
+        "  const statusField = workflowFields.find((field) => field.kind === \"status\");\n"
+        "  const hasSummaryMetrics = metricFields.length > 0 || workflowFields.length > 0;\n"
+        "  const searchableItems = useMemo(() => {\n"
         "    const needle = query.trim().toLowerCase();\n"
         "    if (!needle) return items;\n"
         "    return items.filter((item) => Object.values(item).some((value) => String(value ?? \"\").toLowerCase().includes(needle)));\n"
         "  }, [items, query]);\n\n"
+        "  const statusValues = useMemo(() => {\n"
+        "    if (!statusField) return [];\n"
+        "    return Array.from(new Set(searchableItems.map((item) => String(item[statusField.name] ?? \"\").trim()).filter(Boolean))).sort();\n"
+        "  }, [searchableItems, statusField]);\n\n"
+        "  const visibleItems = useMemo(() => {\n"
+        "    if (!statusField || activeStatus === \"all\") return searchableItems;\n"
+        "    return searchableItems.filter((item) => String(item[statusField.name] ?? \"\").trim() === activeStatus);\n"
+        "  }, [activeStatus, searchableItems, statusField]);\n\n"
+        "  const recentItems = useMemo(() => {\n"
+        "    const dateField = dateFields[0];\n"
+        "    if (!dateField) return [];\n"
+        "    return [...items]\n"
+        "      .filter((item) => item[dateField.name])\n"
+        "      .sort((a, b) => String(b[dateField.name] ?? \"\").localeCompare(String(a[dateField.name] ?? \"\")))\n"
+        "      .slice(0, 3);\n"
+        "  }, [items, dateFields]);\n\n"
         "  useEffect(() => {\n"
         "    if (apiBaseLoading || !apiBaseUrl) {\n"
         "      setLoading(true);\n"
@@ -2951,11 +2976,53 @@ def _render_frontend_entity_list_page(
         "        </div>\n"
         f'        <Link href="{api_path}/new" className="rounded-md bg-emerald-400 px-3 py-2 text-sm font-semibold text-emerald-950 hover:bg-emerald-300">{create_label}</Link>\n'
         "      </div>\n"
+        "      {hasSummaryMetrics ? (\n"
+        "        <dl className=\"grid gap-2 text-xs sm:grid-cols-3\">\n"
+        "          <div className=\"rounded-md border border-slate-700 bg-slate-950/70 px-3 py-2\">\n"
+        "            <dt className=\"text-slate-500\">Total</dt>\n"
+        "            <dd className=\"text-lg font-semibold text-slate-100\">{items.length}</dd>\n"
+        "          </div>\n"
+        "          {statusField ? (\n"
+        "            <div className=\"rounded-md border border-slate-700 bg-slate-950/70 px-3 py-2\">\n"
+        "              <dt className=\"text-slate-500\">Statuses</dt>\n"
+        "              <dd className=\"text-lg font-semibold text-slate-100\">{statusValues.length}</dd>\n"
+        "            </div>\n"
+        "          ) : null}\n"
+        "          {metricFields[0] ? (\n"
+        "            <div className=\"rounded-md border border-slate-700 bg-slate-950/70 px-3 py-2\">\n"
+        "              <dt className=\"text-slate-500\">{metricFields[0].label}</dt>\n"
+        "              <dd className=\"text-lg font-semibold text-slate-100\">{items.reduce((total, item) => total + (numberValue(item, metricFields[0]) ?? 0), 0)}</dd>\n"
+        "            </div>\n"
+        "          ) : null}\n"
+        "        </dl>\n"
+        "      ) : null}\n"
+        "      {statusField && statusValues.length > 0 ? (\n"
+        "        <div className=\"flex flex-wrap gap-2\">\n"
+        "          {[\"all\", ...statusValues].map((value) => (\n"
+        "            <button key={value} type=\"button\" onClick={() => setActiveStatus(value)} className={`rounded-full border px-3 py-1 text-xs font-semibold ${activeStatus === value ? \"border-cyan-300 bg-cyan-300/15 text-cyan-100\" : \"border-slate-700 bg-slate-950 text-slate-300\"}`}>\n"
+        "              {value === \"all\" ? \"All\" : value}\n"
+        "            </button>\n"
+        "          ))}\n"
+        "        </div>\n"
+        "      ) : null}\n"
         f'      <input value={{query}} onChange={{(event) => setQuery(event.target.value)}} placeholder="{search_placeholder}" className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100" />\n'
         "      {loading ? <p className=\"text-sm text-slate-300\">{apiBaseLoading ? \"Resolving API base...\" : \"Loading...\"}</p> : null}\n"
         "      {!loading && error ? <p className=\"text-sm text-rose-300\">Failed to load: {error}</p> : null}\n"
         f"      {{!loading && !error && items.length === 0 ? <p className=\"rounded-md border border-dashed border-slate-700 p-4 text-sm text-slate-300\">{empty_text}</p> : null}}\n"
         "      {!loading && !error && items.length > 0 && visibleItems.length === 0 ? <p className=\"text-sm text-slate-300\">No items match your search.</p> : null}\n"
+        "      {!loading && !error && recentItems.length > 0 ? (\n"
+        "        <section className=\"rounded-md border border-slate-800 bg-slate-950/50 p-3\">\n"
+        "          <h2 className=\"text-sm font-semibold text-slate-100\">Recent activity</h2>\n"
+        "          <div className=\"mt-2 grid gap-2 sm:grid-cols-3\">\n"
+        "            {recentItems.map((item, index) => (\n"
+        "              <div key={String(item.id ?? index)} className=\"rounded border border-slate-800 bg-slate-900/70 px-2 py-1 text-xs\">\n"
+        "                <div className=\"truncate font-semibold text-slate-200\">{displayTitle(item, index)}</div>\n"
+        "                <div className=\"text-slate-500\">{dateFields[0] ? formatFieldValue(item, dateFields[0]) : \"\"}</div>\n"
+        "              </div>\n"
+        "            ))}\n"
+        "          </div>\n"
+        "        </section>\n"
+        "      ) : null}\n"
         "      {!loading && !error && visibleItems.length > 0 ? (\n"
         '        <ul className="grid gap-2 text-sm sm:grid-cols-2">\n'
         "          {visibleItems.map((item, index) => {\n"
@@ -2995,6 +3062,11 @@ def _render_frontend_entity_list_page(
         "              {classificationFields.length > 0 ? (\n"
         "                <div className=\"mt-3 flex flex-wrap gap-1\">\n"
         "                  {classificationFields.map((field) => <span key={field.name} className=\"rounded-full border border-slate-600 bg-slate-800 px-2 py-0.5 text-[11px] text-slate-200\">{formatFieldValue(item, field)}</span>)}\n"
+        "                </div>\n"
+        "              ) : null}\n"
+        "              {ownershipFields.length > 0 ? (\n"
+        "                <div className=\"mt-3 text-xs text-slate-400\">\n"
+        "                  {ownershipFields.map((field) => <span key={field.name}>{field.label}: <span className=\"font-semibold text-slate-200\">{formatFieldValue(item, field)}</span></span>)}\n"
         "                </div>\n"
         "              ) : null}\n"
         "              {referenceFields.length > 0 ? (\n"
@@ -3300,6 +3372,19 @@ def _render_frontend_entity_detail_page(
         "              ))}\n"
         "            </dl>\n"
         "          ) : null}\n"
+        "          {ownershipFields.length > 0 ? (\n"
+        "            <section className=\"space-y-2 rounded-md border border-slate-800 bg-slate-900/40 p-3\">\n"
+        "              <h3 className=\"text-xs font-semibold uppercase tracking-wide text-slate-300\">Ownership</h3>\n"
+        "              <dl className=\"grid gap-2 text-sm sm:grid-cols-2\">\n"
+        "                {ownershipFields.map((field) => (\n"
+        "                  <div key={field.name} className=\"rounded bg-slate-950/60 px-2 py-1\">\n"
+        "                    <dt className=\"text-xs text-slate-500\">{field.label}</dt>\n"
+        "                    <dd className=\"font-semibold text-slate-100\">{formatFieldValue(item, field)}</dd>\n"
+        "                  </div>\n"
+        "                ))}\n"
+        "              </dl>\n"
+        "            </section>\n"
+        "          ) : null}\n"
         "          <section className=\"space-y-2 rounded-md border border-slate-800 bg-slate-900/40 p-3\">\n"
         "            <h3 className=\"text-xs font-semibold uppercase tracking-wide text-slate-300\">Additional Fields</h3>\n"
         "            {additionalFields.length > 0 ? (\n"
@@ -3390,9 +3475,10 @@ def _render_frontend_entity_detail_page(
         "  const metricFields = fieldConfigs.filter((field) => [\"quantity\", \"price\", \"number\"].includes(field.kind));\n"
         "  const classificationFields = fieldConfigs.filter((field) => field.kind === \"category\");\n"
         "  const referenceFields = fieldConfigs.filter((field) => [\"url\", \"email\"].includes(field.kind));\n"
+        "  const ownershipFields = fieldConfigs.filter((field) => field.kind === \"ownership\");\n"
         "  const highlightFields = fieldConfigs.filter((field) => [\"sku\"].includes(field.kind));\n"
         "  const metadataFields = fieldConfigs.filter((field) => field.metadata && field.name !== \"id\");\n"
-        "  const additionalFields = fieldConfigs.filter((field) => !field.metadata && field.name !== primaryField?.name && !metricFields.some((metric) => metric.name === field.name) && !workflowFields.some((workflow) => workflow.name === field.name) && !classificationFields.some((classification) => classification.name === field.name) && !referenceFields.some((reference) => reference.name === field.name) && !highlightFields.some((highlight) => highlight.name === field.name));\n"
+        "  const additionalFields = fieldConfigs.filter((field) => !field.metadata && field.name !== primaryField?.name && !metricFields.some((metric) => metric.name === field.name) && !workflowFields.some((workflow) => workflow.name === field.name) && !classificationFields.some((classification) => classification.name === field.name) && !referenceFields.some((reference) => reference.name === field.name) && !ownershipFields.some((owner) => owner.name === field.name) && !highlightFields.some((highlight) => highlight.name === field.name));\n"
         "  function displayTitle(current: EntityItem): string {\n"
         "    return textValue(current, primaryField) || String((current as Record<string, unknown>).name ?? (current as Record<string, unknown>).title ?? `Item #${id}`);\n"
         "  }\n"
@@ -3998,6 +4084,10 @@ def _render_frontend_issue_list_page(
         "  status?: string;\n"
         "  priority?: string;\n"
         "  severity?: string;\n"
+        "  assignee?: string;\n"
+        "  owner?: string;\n"
+        "  created_at?: string;\n"
+        "  updated_at?: string;\n"
         "};\n\n"
         "function extractItems(payload: unknown): IssueItem[] {\n"
         "  if (Array.isArray(payload)) return payload as IssueItem[];\n"
@@ -4034,6 +4124,7 @@ def _render_frontend_issue_list_page(
         f"export default function {component_name}() {{\n"
         "  const [items, setItems] = useState<IssueItem[]>([]);\n"
         "  const [query, setQuery] = useState(\"\");\n"
+        "  const [activeStatus, setActiveStatus] = useState(\"all\");\n"
         "  const [loading, setLoading] = useState(true);\n"
         "  const [error, setError] = useState(\"\");\n"
         "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
@@ -4070,6 +4161,15 @@ def _render_frontend_issue_list_page(
         "    if (!needle) return items;\n"
         "    return items.filter((item) => [item.title, item.description, item.status, item.priority, item.severity].some((value) => String(value ?? \"\").toLowerCase().includes(needle)));\n"
         "  }, [items, query]);\n\n"
+        "  const statusValues = useMemo(() => Array.from(new Set(filtered.map((item) => String(item.status ?? \"\").trim()).filter(Boolean))).sort(), [filtered]);\n\n"
+        "  const visibleItems = useMemo(() => {\n"
+        "    if (activeStatus === \"all\") return filtered;\n"
+        "    return filtered.filter((item) => String(item.status ?? \"\").trim() === activeStatus);\n"
+        "  }, [activeStatus, filtered]);\n\n"
+        "  const recentItems = useMemo(() => [...items]\n"
+        "    .filter((item) => item.created_at || item.updated_at)\n"
+        "    .sort((a, b) => String(b.updated_at ?? b.created_at ?? \"\").localeCompare(String(a.updated_at ?? a.created_at ?? \"\")))\n"
+        "    .slice(0, 3), [items]);\n\n"
         "  return (\n"
         '    <section className="mx-auto w-full max-w-2xl space-y-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4 sm:p-5">\n'
         '      <div className="space-y-2">\n'
@@ -4077,18 +4177,45 @@ def _render_frontend_issue_list_page(
         '        <p className="text-xs text-slate-400">Track reported software issues by status and priority.</p>\n'
         '        <p className="text-xs text-slate-500">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>\n'
         "      </div>\n"
+        "      <dl className=\"grid gap-2 text-xs sm:grid-cols-3\">\n"
+        "        <div className=\"rounded-md border border-slate-700 bg-slate-950/70 px-3 py-2\"><dt className=\"text-slate-500\">Total</dt><dd className=\"text-lg font-semibold text-slate-100\">{items.length}</dd></div>\n"
+        "        <div className=\"rounded-md border border-slate-700 bg-slate-950/70 px-3 py-2\"><dt className=\"text-slate-500\">Statuses</dt><dd className=\"text-lg font-semibold text-slate-100\">{statusValues.length}</dd></div>\n"
+        "        <div className=\"rounded-md border border-slate-700 bg-slate-950/70 px-3 py-2\"><dt className=\"text-slate-500\">Visible</dt><dd className=\"text-lg font-semibold text-slate-100\">{visibleItems.length}</dd></div>\n"
+        "      </dl>\n"
         '      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">\n'
         '        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search issues..." className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100" />\n'
         f'        <Link href="{api_path}/new" className="inline-flex items-center justify-center rounded-md bg-emerald-400 px-3 py-2 text-sm font-semibold text-emerald-950 hover:bg-emerald-300">New issue</Link>\n'
         "      </div>\n"
+        "      {statusValues.length > 0 ? (\n"
+        "        <div className=\"flex flex-wrap gap-2\">\n"
+        "          {[\"all\", ...statusValues].map((value) => (\n"
+        "            <button key={value} type=\"button\" onClick={() => setActiveStatus(value)} className={`rounded-full border px-3 py-1 text-xs font-semibold ${activeStatus === value ? \"border-cyan-300 bg-cyan-300/15 text-cyan-100\" : \"border-slate-700 bg-slate-950 text-slate-300\"}`}>\n"
+        "              {value === \"all\" ? \"All\" : value}\n"
+        "            </button>\n"
+        "          ))}\n"
+        "        </div>\n"
+        "      ) : null}\n"
         "      {loading ? <p className=\"text-sm text-slate-300\">{apiBaseLoading ? \"Resolving API base...\" : \"Loading issues...\"}</p> : null}\n"
         "      {!loading && error ? <p className=\"text-sm text-rose-300\">Failed to load: {error}</p> : null}\n"
-        "      {!loading && !error && filtered.length === 0 ? (\n"
+        "      {!loading && !error && visibleItems.length === 0 ? (\n"
         '        <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950/40 p-4 text-sm text-slate-300">No issues found.</div>\n'
         "      ) : null}\n"
-        "      {!loading && !error && filtered.length > 0 ? (\n"
+        "      {!loading && !error && recentItems.length > 0 ? (\n"
+        "        <section className=\"rounded-md border border-slate-800 bg-slate-950/50 p-3\">\n"
+        "          <h2 className=\"text-sm font-semibold text-slate-100\">Recent activity</h2>\n"
+        "          <div className=\"mt-2 grid gap-2 sm:grid-cols-3\">\n"
+        "            {recentItems.map((item, index) => (\n"
+        "              <div key={String(item.id ?? index)} className=\"rounded border border-slate-800 bg-slate-900/70 px-2 py-1 text-xs\">\n"
+        "                <div className=\"truncate font-semibold text-slate-200\">{String(item.title || `Untitled issue #${item.id ?? index}`)}</div>\n"
+        "                <div className=\"text-slate-500\">{String(item.updated_at ?? item.created_at ?? \"\")}</div>\n"
+        "              </div>\n"
+        "            ))}\n"
+        "          </div>\n"
+        "        </section>\n"
+        "      ) : null}\n"
+        "      {!loading && !error && visibleItems.length > 0 ? (\n"
         '        <ul className="space-y-3">\n'
-        "          {filtered.map((item, index) => (\n"
+        "          {visibleItems.map((item, index) => (\n"
         '            <li key={String(item.id ?? index)} className="space-y-2 rounded-lg border border-slate-700 bg-slate-950/50 p-4">\n'
         '              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">\n'
         '                <h2 className="text-base font-semibold text-slate-100">{String(item.title || `Untitled issue #${item.id ?? index}`)}</h2>\n'
@@ -4098,6 +4225,7 @@ def _render_frontend_issue_list_page(
         "                </div>\n"
         "              </div>\n"
         '              <p className="whitespace-pre-wrap text-sm leading-6 text-slate-200">{previewText(item)}</p>\n'
+        "              {item.assignee || item.owner ? <p className=\"text-xs text-slate-400\">Owner: <span className=\"font-semibold text-slate-200\">{String(item.assignee ?? item.owner)}</span></p> : null}\n"
         "              {item.id !== undefined ? (\n"
         f'                <Link href={{`{api_path}/${{String(item.id)}}`}} className="inline-block text-xs font-medium text-cyan-300 underline">Open issue</Link>\n'
         "              ) : null}\n"
@@ -5425,6 +5553,13 @@ def normalize_project_spec(raw: Any, idea: str | None = None) -> dict[str, Any]:
             entity_patterns = infer_entity_patterns(entity)
             if entity_patterns:
                 entity["patterns"] = entity_patterns
+        composition = compose_app_patterns(patterns, entity_rows, idea)
+        composed_patterns = composition.get("app_patterns") if isinstance(composition, dict) else []
+        ui_hints = composition.get("ui_hints") if isinstance(composition, dict) else []
+        if composed_patterns:
+            payload["composed_patterns"] = composed_patterns
+        if ui_hints:
+            payload["ui_hints"] = ui_hints
 
     return payload
 

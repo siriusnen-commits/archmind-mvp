@@ -1128,6 +1128,8 @@ def test_ui_project_analysis_exposes_inferred_patterns(monkeypatch, tmp_path: Pa
                 {"name": "title", "type": "string"},
                 {"name": "status", "type": "string"},
                 {"name": "priority", "type": "string"},
+                {"name": "assignee", "type": "string"},
+                {"name": "created_at", "type": "date"},
             ],
         }
     ]
@@ -1142,6 +1144,9 @@ def test_ui_project_analysis_exposes_inferred_patterns(monkeypatch, tmp_path: Pa
     data = response.json()
     pattern_types = {str(row.get("type") or "") for row in data.get("patterns", []) if isinstance(row, dict)}
     assert "workflow_status" in pattern_types
+    composed_types = {str(row.get("type") or "") for row in data.get("composed_patterns", []) if isinstance(row, dict)}
+    assert "workflow_tracking" in composed_types
+    assert "show_status_filters" in data.get("ui_hints", [])
 
 
 def test_ui_project_analysis_endpoint_filters_and_limits_next_candidates(monkeypatch, tmp_path: Path) -> None:

@@ -1116,7 +1116,7 @@ def _write_project_spec(
             "evolution": evolution,
         }
         try:
-            from archmind.app_patterns import infer_app_patterns, infer_entity_patterns
+            from archmind.app_patterns import compose_app_patterns, infer_app_patterns, infer_entity_patterns
 
             patterns = infer_app_patterns(payload, architecture_reasoning.get("idea_normalized"))
             if patterns:
@@ -1126,6 +1126,13 @@ def _write_project_spec(
                         entity_patterns = infer_entity_patterns(entity)
                         if entity_patterns:
                             entity["patterns"] = entity_patterns
+                composition = compose_app_patterns(patterns, entities, architecture_reasoning.get("idea_normalized"))
+                composed_patterns = composition.get("app_patterns") if isinstance(composition, dict) else []
+                ui_hints = composition.get("ui_hints") if isinstance(composition, dict) else []
+                if composed_patterns:
+                    payload["composed_patterns"] = composed_patterns
+                if ui_hints:
+                    payload["ui_hints"] = ui_hints
         except Exception:
             pass
         apis = suggestion.get("apis") if isinstance(suggestion.get("apis"), list) else []
