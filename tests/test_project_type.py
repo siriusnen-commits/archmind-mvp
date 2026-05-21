@@ -12,12 +12,17 @@ def test_detect_project_type_backend_api() -> None:
 
 
 def test_detect_project_type_frontend_web() -> None:
-    assert detect_project_type("simple nextjs counter dashboard") == "frontend-web"
+    assert detect_project_type("simple landing page for product showcase") == "frontend-web"
 
 
 def test_detect_project_type_fullstack_web() -> None:
     idea = "fullstack todo app with fastapi backend and nextjs frontend"
     assert detect_project_type(idea) == "fullstack-web"
+
+
+def test_detect_project_type_bug_tracker_defaults_to_fullstack_web() -> None:
+    assert detect_project_type("bug tracker") == "fullstack-web"
+    assert detect_project_type("software issue manager") == "fullstack-web"
 
 
 def test_detect_project_type_cli_tool() -> None:
@@ -37,16 +42,23 @@ def test_detect_project_type_worker_api() -> None:
 
 
 def test_detect_project_type_data_tool() -> None:
-    assert detect_project_type("inventory management tool for small business") == "data-tool"
+    assert detect_project_type("inventory management tool for small business") == "fullstack-web"
 
 
 def test_detect_project_type_unknown() -> None:
-    assert detect_project_type("something helpful for teams") == "unknown"
+    assert detect_project_type("something helpful for teams") == "fullstack-web"
 
 
 def test_detect_project_type_webapp_keywords_force_fullstack() -> None:
     idea = "개인용 블로그형식의 다이어리 webapp"
     assert detect_project_type(idea) == "fullstack-web"
+
+
+def test_detect_project_type_backend_only_exceptions() -> None:
+    assert detect_project_type("inventory API") == "backend-api"
+    assert detect_project_type("inventory backend service") == "backend-api"
+    assert detect_project_type("batch inventory importer") == "worker-api"
+    assert detect_project_type("CLI inventory tool") == "cli-tool"
 
 
 def test_state_shows_project_type_from_result(tmp_path: Path) -> None:

@@ -153,15 +153,11 @@ export async function createProject(values: CreateProjectFormValues): Promise<Cr
 
     const ready = await waitForProjectReady(projectName);
     if (!ready) {
+      await selectCurrentProject(projectName);
       return {
-        ok: false,
-        error: {
-          code: "PROJECT_INIT_FAILED",
-          message: "프로젝트 생성은 시작되었지만 상세 정보가 아직 준비되지 않았습니다. 잠시 후 다시 시도해 주세요.",
-          detail: "project registration did not complete in time",
-          retryable: true,
-          projectName,
-        },
+        ok: true,
+        projectName,
+        detail: "Started generation; project registration did not complete in time, but the project can be opened once indexing catches up.",
       };
     }
     await selectCurrentProject(projectName);

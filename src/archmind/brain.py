@@ -61,6 +61,144 @@ def _extract_domains(text: str) -> list[str]:
     return domains
 
 
+def infer_project_shape_from_idea(idea: str) -> str:
+    text = re.sub(r"\s+", " ", str(idea or "").strip().lower())
+    if not text:
+        return "unknown"
+
+    explicit_fullstack = _has_any(
+        text,
+        [
+            r"\bfullstack\b",
+            r"\bfull-stack\b",
+            r"\bfrontend and backend\b",
+            r"\bbackend and frontend\b",
+            r"\bapi with frontend\b",
+            r"\bweb app with api\b",
+        ],
+    )
+    frontend_only = _has_any(text, [r"\bfrontend only\b", r"\bfrontend-only\b", r"프론트엔드만"])
+    static_frontend = _has_any(
+        text,
+        [
+            r"\blanding page\b",
+            r"\bmarketing page\b",
+            r"\bshowcase\b",
+            r"\bstatic site\b",
+            r"\bwebsite\b",
+            r"\bweb game\b",
+            r"\bgame\b",
+        ],
+    )
+    internal_tool = _has_any(
+        text,
+        [
+            r"\binternal\b",
+            r"\badmin tool\b",
+            r"\binternal admin\b",
+            r"사내용",
+            r"내부용",
+            r"관리툴",
+        ],
+    )
+    cli_intent = _has_any(
+        text,
+        [
+            r"\bcli\b",
+            r"\bcommand[\s-]?line\b",
+            r"\bterminal\b",
+            r"\bargparse\b",
+            r"\btyper\b",
+            r"\bclick\b",
+        ],
+    )
+    automation_intent = _has_any(
+        text,
+        [
+            r"\bautomation\b",
+            r"\bscript\b",
+            r"\bworkflow\b",
+            r"\bsync tool\b",
+            r"\btelegram bot\b",
+        ],
+    )
+    worker_intent = _has_any(
+        text,
+        [
+            r"\bworker\b",
+            r"\bbatch\b",
+            r"\bimporter\b",
+            r"\basync job\b",
+            r"\bbackground job\b",
+            r"\bscheduler\b",
+            r"\bcron\b",
+            r"\bqueue\b",
+            r"\bdata pipeline\b",
+            r"배치",
+            r"백그라운드",
+        ],
+    )
+    backend_intent = _has_any(
+        text,
+        [
+            r"\bapi\b",
+            r"\bbackend\b",
+            r"\bserver\b",
+            r"\bservice\b",
+            r"\bmicroservice\b",
+            r"\bfastapi\b",
+            r"\brest\b",
+            r"\bgraphql\b",
+        ],
+    )
+    app_intent = _has_any(
+        text,
+        [
+            r"\bweb[\s-]?app\b",
+            r"\bapp\b",
+            r"\bdashboard\b",
+            r"\bmanager\b",
+            r"\btracker\b",
+            r"\btool\b",
+            r"\bportal\b",
+            r"\bfrontend\b",
+            r"\bui\b",
+            r"\bweb ui\b",
+            r"웹앱",
+            r"앱",
+            r"대시보드",
+            r"관리화면",
+            r"화면",
+        ],
+    )
+
+    if explicit_fullstack:
+        return "fullstack"
+    if frontend_only:
+        return "frontend"
+    if cli_intent:
+        return "cli"
+    if automation_intent and not app_intent and not backend_intent:
+        return "automation"
+    if internal_tool and not backend_intent and not worker_intent:
+        return "internal"
+    if worker_intent and not app_intent:
+        return "worker"
+    if backend_intent and not app_intent:
+        return "backend"
+    if backend_intent and worker_intent:
+        return "worker"
+    if backend_intent:
+        return "backend"
+    if static_frontend and not backend_intent:
+        return "frontend"
+    if app_intent:
+        return "fullstack"
+    if _extract_domains(text) or _crud_content_hint(text):
+        return "fullstack"
+    return "fullstack"
+
+
 def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
     text = re.sub(r"\s+", " ", str(idea or "").strip().lower())
     if not text:
@@ -243,7 +381,8 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
             r"프론트엔드만",
         ],
     )
-    fullstack_priority = _has_any(
+    inferred_shape = infer_project_shape_from_idea(text)
+    fullstack_priority = inferred_shape == "fullstack" or _has_any(
         text,
         [
             r"\bwebapp\b",
@@ -279,6 +418,22 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
         backend_needed = True
         frontend_needed = True
         app_shape = "fullstack"
+    elif inferred_shape == "worker":
+        backend_needed = True
+        app_shape = "backend"
+    elif inferred_shape == "cli":
+        backend_needed = True
+        app_shape = "cli"
+    elif inferred_shape == "backend":
+        backend_needed = True
+        frontend_needed = False
+        app_shape = "backend"
+    elif inferred_shape == "frontend":
+        frontend_needed = True
+        app_shape = "frontend"
+    elif inferred_shape == "internal":
+        frontend_needed = True
+        app_shape = "frontend"
     else:
         # RULE 2
         if auth_needed and db_needed:
@@ -347,10 +502,17 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
                 app_shape = "backend"
             else:
                 backend_needed = True
-                app_shape = "backend"
+                frontend_needed = True
+                app_shape = "fullstack"
 
     if fullstack_priority:
         recommended_template = "fullstack-ddd"
+    elif inferred_shape == "worker":
+        recommended_template = "worker-api"
+    elif inferred_shape == "cli":
+        recommended_template = "cli"
+    elif inferred_shape == "internal":
+        recommended_template = "internal-tool"
     elif app_shape == "fullstack":
         recommended_template = "fullstack-ddd"
     elif app_shape == "backend":
@@ -364,9 +526,9 @@ def reason_architecture_from_idea(idea: str) -> dict[str, Any]:
     data_tool_intent = is_data_tool and (_has_any(text, [r"\btool\b", r"\bviewer\b", r"관리", r"조회"]) or dashboard_needed)
     if not fullstack_priority and internal_tool and dashboard_needed:
         recommended_template = "internal-tool"
-    elif not fullstack_priority and worker_needed and backend_needed and not frontend_needed:
+    elif not fullstack_priority and (inferred_shape == "worker" or (worker_needed and backend_needed and not frontend_needed)):
         recommended_template = "worker-api"
-    elif not fullstack_priority and data_tool_intent:
+    elif not fullstack_priority and inferred_shape not in {"backend", "cli", "fullstack", "worker"} and data_tool_intent:
         recommended_template = "data-tool"
 
     if app_shape == "fullstack":

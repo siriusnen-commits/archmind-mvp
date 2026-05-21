@@ -5169,7 +5169,7 @@ def test_add_field_priority_reflects_frontend_create_form(tmp_path: Path, monkey
 
     create_text = (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").read_text(encoding="utf-8")
     detail_text = (project_dir / "frontend" / "app" / "tasks" / "[id]" / "page.tsx").read_text(encoding="utf-8")
-    assert '{"name": "priority", "label": "Priority", "placeholder": "priority"}' in create_text
+    assert '{"name": "priority", "label": "Priority", "placeholder": "priority", "inputType": "text"}' in create_text
     assert '"priority": values["priority"]' in create_text
     assert "Additional Fields" in detail_text
     assert 'Priority: {String((item as Record<string, unknown>)["priority"] ?? "(unset)")}' in detail_text
@@ -5205,7 +5205,7 @@ def test_add_field_description_reflects_frontend_create_form(tmp_path: Path, mon
     asyncio.run(command_add_field(update, DummyContext(args=["Task", "description:string"])))
 
     create_text = (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").read_text(encoding="utf-8")
-    assert '{"name": "description", "label": "Description", "placeholder": "description"}' in create_text
+    assert '{"name": "description", "label": "Description", "placeholder": "description", "inputType": "text"}' in create_text
     assert '"description": values["description"]' in create_text
 
 

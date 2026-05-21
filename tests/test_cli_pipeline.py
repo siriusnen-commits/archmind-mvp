@@ -685,7 +685,7 @@ def test_pipeline_idea_generator_receives_effective_template_for_frontend_web(tm
         [
             "pipeline",
             "--idea",
-            "simple nextjs counter dashboard",
+            "simple landing page for product showcase",
             "--out",
             str(tmp_path),
             "--name",
@@ -698,7 +698,7 @@ def test_pipeline_idea_generator_receives_effective_template_for_frontend_web(tm
         ]
     )
     assert exit_code == 0
-    assert captured.get("idea") == "simple nextjs counter dashboard"
+    assert captured.get("idea") == "simple landing page for product showcase"
     assert captured.get("template") == "nextjs"
 
     result_payload = json.loads((tmp_path / "idea_frontend_route" / ".archmind" / "result.json").read_text(encoding="utf-8"))
@@ -712,7 +712,7 @@ def test_pipeline_idea_generator_receives_effective_template_for_frontend_web(tm
     [
         ("internal admin dashboard for device status", "internal-tool"),
         ("background batch processing api", "worker-api"),
-        ("inventory management tool for small business", "data-tool"),
+        ("inventory management api tool for small business", "fastapi"),
     ],
 )
 def test_pipeline_idea_routes_to_new_templates(
@@ -761,7 +761,7 @@ def test_pipeline_frontend_web_routes_to_nextjs_without_fallback(tmp_path: Path,
         [
             "pipeline",
             "--idea",
-            "simple nextjs counter dashboard",
+            "simple landing page for product showcase",
             "--out",
             str(tmp_path),
             "--name",
@@ -785,6 +785,78 @@ def test_pipeline_frontend_web_routes_to_nextjs_without_fallback(tmp_path: Path,
     state_payload = json.loads((project_dir / ".archmind" / "state.json").read_text(encoding="utf-8"))
     assert state_payload.get("effective_template") == "nextjs"
     assert state_payload.get("template_fallback_reason") in ("", None)
+
+
+@pytest.mark.parametrize("idea", ["inventory web app", "inventory"])
+def test_pipeline_app_ideas_generate_fullstack_with_frontend_pages(tmp_path: Path, monkeypatch, idea: str) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_seed_scaffold)
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            idea,
+            "--out",
+            str(tmp_path),
+            "--name",
+            idea.replace(" ", "_"),
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+
+    project_dir = tmp_path / idea.replace(" ", "_")
+    result_payload = json.loads((project_dir / ".archmind" / "result.json").read_text(encoding="utf-8"))
+    spec_payload = json.loads((project_dir / ".archmind" / "project_spec.json").read_text(encoding="utf-8"))
+
+    assert result_payload.get("status") == "SUCCESS"
+    assert result_payload.get("project_type") == "fullstack-web"
+    assert result_payload.get("selected_template") == "fullstack-ddd"
+    assert result_payload.get("effective_template") == "fullstack-ddd"
+    assert result_payload.get("last_failure_class") in (None, "")
+    assert spec_payload.get("shape") == "fullstack"
+    assert spec_payload.get("template") == "fullstack-ddd"
+    assert (project_dir / "backend" / "app" / "main.py").exists()
+    assert (project_dir / "frontend" / "app" / "items" / "page.tsx").exists()
+    assert (project_dir / "frontend" / "app" / "items" / "new" / "page.tsx").exists()
+    assert (project_dir / "frontend" / "app" / "items" / "[id]" / "page.tsx").exists()
+    assert {"items/list", "items/new", "items/detail"}.issubset(set(spec_payload.get("frontend_pages") or []))
+
+
+def test_pipeline_inventory_api_routes_backend_only(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_seed_scaffold)
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "inventory API",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "inventory_api",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+    assert exit_code == 0
+
+    project_dir = tmp_path / "inventory_api"
+    result_payload = json.loads((project_dir / ".archmind" / "result.json").read_text(encoding="utf-8"))
+    spec_payload = json.loads((project_dir / ".archmind" / "project_spec.json").read_text(encoding="utf-8"))
+
+    assert result_payload.get("project_type") == "backend-api"
+    assert result_payload.get("selected_template") == "fastapi"
+    assert result_payload.get("effective_template") == "fastapi"
+    assert spec_payload.get("shape") == "backend"
+    assert spec_payload.get("template") == "fastapi"
 
 
 def test_pipeline_writes_architecture_reasoning_artifact_and_state_fields(tmp_path: Path, monkeypatch) -> None:

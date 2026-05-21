@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from .brain import infer_project_shape_from_idea
+
 PROJECT_TYPES = (
     "backend-api",
     "frontend-web",
@@ -32,6 +34,22 @@ def detect_project_type(idea: str) -> str:
     text = re.sub(r"\s+", " ", str(idea or "").strip().lower())
     if not text:
         return "unknown"
+
+    inferred_shape = infer_project_shape_from_idea(text)
+    if inferred_shape == "fullstack":
+        return "fullstack-web"
+    if inferred_shape == "backend":
+        return "backend-api"
+    if inferred_shape == "frontend":
+        return "frontend-web"
+    if inferred_shape == "worker":
+        return "worker-api"
+    if inferred_shape == "cli":
+        return "cli-tool"
+    if inferred_shape == "internal":
+        return "internal-tool"
+    if inferred_shape == "automation":
+        return "automation-script"
 
     fullstack_priority_patterns = [
         r"\bwebapp\b",

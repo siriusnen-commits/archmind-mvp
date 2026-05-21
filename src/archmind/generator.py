@@ -735,14 +735,16 @@ def _normalize_resource_segment(value: str) -> str:
 
 
 def _load_project_spec_payload(project_dir: Path) -> dict[str, Any]:
-    spec_path = project_dir / ".archmind" / "project_spec.json"
-    if not spec_path.exists():
-        return {}
-    try:
-        payload = json.loads(spec_path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    for spec_path in (project_dir / ".archmind" / "project_spec.json", project_dir / "archmind_spec.json"):
+        if not spec_path.exists():
+            continue
+        try:
+            payload = json.loads(spec_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return {}
 
 
 def _extract_relation_entities_from_spec(spec_payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -901,7 +903,7 @@ def _relation_sections_for_parent(project_dir: Path, parent_resource: str) -> li
     return out
 
 
-def _entity_field_specs_for_resource(project_dir: Path, resource: str) -> list[dict[str, str]]:
+def _entity_field_specs_for_resource(project_dir: Path, resource: str) -> list[dict[str, Any]]:
     normalized_resource = _pluralize_resource_name(_normalize_resource_segment(resource))
     if not normalized_resource:
         return []
@@ -917,17 +919,17 @@ def _entity_field_specs_for_resource(project_dir: Path, resource: str) -> list[d
         if str(entity_resource or "").strip().lower() != normalized_resource:
             continue
         fields_raw = raw.get("fields") if isinstance(raw.get("fields"), list) else []
-        out: list[dict[str, str]] = []
+        out: list[dict[str, Any]] = []
         seen: set[str] = set()
         for item in fields_raw:
-            if not isinstance(item, dict):
+            field = _normalize_field_spec(item)
+            if field is None:
                 continue
-            field_name = str(item.get("name") or "").strip().lower()
-            field_type = str(item.get("type") or "string").strip().lower() or "string"
+            field_name = str(field.get("name") or "").strip().lower()
             if not field_name or field_name in seen:
                 continue
             seen.add(field_name)
-            out.append({"name": field_name, "type": field_type})
+            out.append(field)
         return out
     return []
 
@@ -1849,6 +1851,7 @@ def apply_frontend_page_scaffold(project_dir: Path, entity_name: str) -> list[st
             title=plural_title,
             entity_path=plural,
             api_helper_import=list_helper_import,
+            field_specs=_entity_field_specs_for_resource(project_dir, plural),
         ),
         generated,
         project_dir,
@@ -1908,6 +1911,7 @@ def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
                 title=title,
                 entity_path=entity_path,
                 api_helper_import=helper_import,
+                field_specs=_entity_field_specs_for_resource(project_dir, entity_path),
             ),
             generated,
             project_dir,
@@ -2158,6 +2162,250 @@ def _render_frontend_relation_page(
     )
 
 
+def _field_name_key(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(name or "").strip().lower()).strip("_")
+
+
+def _format_field_label(name: str) -> str:
+    key = _field_name_key(name)
+    if not key:
+        return "Field"
+    known = {
+        "id": "ID",
+        "sku": "SKU",
+        "url": "URL",
+        "created_at": "Created",
+        "updated_at": "Updated",
+    }
+    if key in known:
+        return known[key]
+    return key.replace("_", " ").title()
+
+
+def _is_quantity_field_name(name: str) -> bool:
+    key = _field_name_key(name)
+    return key in {"quantity", "qty", "stock", "stock_count", "count", "available", "on_hand"}
+
+
+def _is_price_field_name(name: str) -> bool:
+    key = _field_name_key(name)
+    return key in {"price", "unit_price", "amount", "cost", "value"}
+
+
+def _is_category_field_name(name: str) -> bool:
+    key = _field_name_key(name)
+    return key in {"category", "category_id", "type", "group", "location"}
+
+
+def _is_sku_field_name(name: str) -> bool:
+    key = _field_name_key(name)
+    return key in {"sku", "barcode", "serial", "serial_number", "asset_tag"}
+
+
+def _is_metadata_field_name(name: str) -> bool:
+    key = _field_name_key(name)
+    return key in {"id", "created_at", "updated_at", "created", "updated", "deleted_at"}
+
+
+def _input_type_for_field(field: dict[str, str]) -> str:
+    explicit = str(field.get("input_type") or "").strip().lower()
+    if explicit:
+        return explicit
+    name = str(field.get("name") or "")
+    field_type = str(field.get("type") or "").strip().lower()
+    semantic = str(field.get("semantic_type") or "").strip().lower()
+    if field_type in {"int", "integer", "float", "double", "decimal", "number"}:
+        return "number"
+    if field_type in {"bool", "boolean"} or semantic == "boolean":
+        return "checkbox"
+    if semantic == "date" or field_type in {"date", "datetime"}:
+        return "date"
+    if semantic == "email":
+        return "email"
+    if semantic == "url":
+        return "url"
+    if _is_quantity_field_name(name) or _is_price_field_name(name):
+        return "number"
+    return "text"
+
+
+def _field_kind_for_field(field: dict[str, str]) -> str:
+    semantic = str(field.get("semantic_type") or "").strip().lower()
+    if semantic:
+        return semantic
+    name = str(field.get("name") or "")
+    if _is_quantity_field_name(name):
+        return "quantity"
+    if _is_price_field_name(name):
+        return "price"
+    if _is_category_field_name(name):
+        return "category"
+    if _is_sku_field_name(name):
+        return "sku"
+    if _is_metadata_field_name(name):
+        return "metadata"
+    return "text"
+
+
+def _canonical_field_type(raw_type: str | None) -> str:
+    value = str(raw_type or "").strip().lower()
+    aliases = {
+        "": "string",
+        "str": "string",
+        "text": "string",
+        "int": "integer",
+        "integer": "integer",
+        "float": "number",
+        "double": "number",
+        "decimal": "number",
+        "number": "number",
+        "bool": "boolean",
+        "boolean": "boolean",
+        "date": "date",
+        "datetime": "datetime",
+        "timestamp": "datetime",
+    }
+    return aliases.get(value, value or "string")
+
+
+def infer_field_semantics(field_name: str, raw_type: str | None = None) -> dict[str, Any]:
+    name = str(field_name or "").strip()
+    key = _field_name_key(name)
+    explicit_type = _canonical_field_type(raw_type)
+    type_is_generic = explicit_type in {"", "string", "text"}
+
+    inferred_type = explicit_type or "string"
+    semantic_type = "text"
+    renderer = "text"
+    input_type = "text"
+    sortable = False
+    filterable = True
+
+    if key in {"quantity", "qty", "stock", "stock_count", "count", "total_count", "inventory_count", "units", "available", "on_hand"}:
+        inferred_type = "integer" if type_is_generic else explicit_type
+        semantic_type = "quantity"
+        renderer = "metric"
+        input_type = "number"
+        sortable = True
+    elif key in {"price", "unit_price", "cost", "amount", "total", "balance", "rate", "score", "percentage", "value"}:
+        inferred_type = "number" if type_is_generic else explicit_type
+        semantic_type = "price" if key in {"price", "unit_price", "cost"} else "number"
+        renderer = "metric"
+        input_type = "number"
+        sortable = True
+    elif key in {"completed", "is_done", "done", "is_active", "active", "enabled", "archived", "checked"} or key.startswith("is_"):
+        inferred_type = "boolean" if type_is_generic else explicit_type
+        semantic_type = "boolean"
+        renderer = "boolean"
+        input_type = "checkbox"
+        sortable = True
+    elif key in {"date", "due_date", "deadline", "created_at", "updated_at", "started_at", "ended_at", "timestamp"} or key.endswith("_date") or key.endswith("_at"):
+        inferred_type = "date" if type_is_generic else explicit_type
+        semantic_type = "date"
+        renderer = "date"
+        input_type = "date"
+        sortable = True
+    elif key in {"url", "link", "website"} or key.endswith("_url"):
+        inferred_type = "string" if type_is_generic else explicit_type
+        semantic_type = "url"
+        renderer = "link"
+        input_type = "url"
+    elif key in {"email", "owner_email", "contact_email"} or key.endswith("_email"):
+        inferred_type = "string" if type_is_generic else explicit_type
+        semantic_type = "email"
+        renderer = "email"
+        input_type = "email"
+    elif key in {"status", "state"}:
+        inferred_type = "string" if type_is_generic else explicit_type
+        semantic_type = "status"
+        renderer = "badge"
+    elif key == "priority":
+        inferred_type = "string" if type_is_generic else explicit_type
+        semantic_type = "priority"
+        renderer = "badge"
+    elif key == "severity":
+        inferred_type = "string" if type_is_generic else explicit_type
+        semantic_type = "severity"
+        renderer = "badge"
+    elif key in {"title", "name", "description", "note", "content", "summary"}:
+        inferred_type = "string" if type_is_generic else explicit_type
+        semantic_type = "text"
+        renderer = "text"
+    else:
+        inferred_type = explicit_type or "string"
+        semantic_type = "text" if inferred_type in {"string", "text"} else inferred_type
+        renderer = "text"
+
+    return {
+        "name": name,
+        "type": inferred_type,
+        "semantic_type": semantic_type,
+        "input_type": input_type,
+        "renderer": renderer,
+        "sortable": sortable,
+        "filterable": filterable,
+    }
+
+
+def _split_field_name_and_type(raw: str) -> tuple[str, str | None]:
+    text = str(raw or "").strip()
+    if ":" not in text:
+        return text, None
+    name, raw_type = text.split(":", 1)
+    return name.strip(), raw_type.strip() or None
+
+
+def _normalize_field_spec(raw: Any) -> dict[str, Any] | None:
+    if isinstance(raw, str):
+        field_name, field_type = _split_field_name_and_type(raw)
+        extras: dict[str, Any] = {}
+    elif isinstance(raw, dict):
+        field_name = str(raw.get("name") or raw.get("field") or "").strip()
+        field_type = str(raw.get("type") or "").strip() or None
+        extras = {
+            key: raw[key]
+            for key in ("semantic_type", "input_type", "renderer", "sortable", "filterable")
+            if key in raw
+        }
+    else:
+        return None
+    if not field_name:
+        return None
+    semantic = infer_field_semantics(field_name, field_type)
+    semantic.update({key: value for key, value in extras.items() if value not in (None, "")})
+    return semantic
+
+
+def _field_config_rows_for_frontend(field_specs: list[dict[str, str]] | None) -> str:
+    normalized = [field for item in (field_specs or []) if (field := _normalize_field_spec(item)) is not None]
+    if not normalized:
+        normalized = [{"name": "title", "type": "string"}]
+    rows = []
+    for item in normalized:
+        name = str(item.get("name") or "").strip()
+        rows.append(
+            {
+                "name": name,
+                "label": _format_field_label(name),
+                "kind": _field_kind_for_field(item),
+                "inputType": _input_type_for_field(item),
+                "metadata": _is_metadata_field_name(name),
+            }
+        )
+    return "".join(f"  {json.dumps(row)},\n" for row in rows)
+
+
+def _is_inventory_like_resource(resource: str, field_specs: list[dict[str, str]] | None) -> bool:
+    resource_key = _field_name_key(resource)
+    if resource_key in {"item", "items", "inventory", "stock", "stocks", "asset", "assets", "supplies"}:
+        return True
+    for field in field_specs or []:
+        name = str(field.get("name") or "")
+        if _is_quantity_field_name(name) or _is_sku_field_name(name):
+            return True
+    return False
+
+
 def _render_frontend_entity_create_page(
     *,
     component_name: str,
@@ -2167,7 +2415,7 @@ def _render_frontend_entity_create_page(
     field_specs: list[dict[str, str]],
     relation_specs: list[dict[str, str]],
 ) -> str:
-    normalized_fields = [item for item in field_specs if str(item.get("name") or "").strip()]
+    normalized_fields = [field for item in field_specs if (field := _normalize_field_spec(item)) is not None]
     if not normalized_fields:
         normalized_fields = [{"name": "title", "type": "string"}]
     initial_map = ", ".join(f'{str(item["name"])}: ""' for item in normalized_fields)
@@ -2251,7 +2499,7 @@ def _render_frontend_entity_create_page(
         )
     non_relation_fields = [item for item in normalized_fields if str(item.get("name") or "") not in relation_lookup]
     non_relation_field_rows = "".join(
-        f'    {{"name": {json.dumps(str(item.get("name") or ""))}, "label": {json.dumps(str(item.get("name") or "").replace("_", " ").title())}, "placeholder": {json.dumps(str(item.get("name") or ""))}}},\n'
+        f'    {{"name": {json.dumps(str(item.get("name") or ""))}, "label": {json.dumps(_format_field_label(str(item.get("name") or "")))}, "placeholder": {json.dumps(str(item.get("name") or ""))}, "inputType": {json.dumps(_input_type_for_field(item))}}},\n'
         for item in non_relation_fields
     )
     payload_lines = ""
@@ -2260,22 +2508,22 @@ def _render_frontend_entity_create_page(
         field_type = str(item.get("type") or "string").strip().lower()
         if not name:
             continue
-        if field_type == "int":
+        if field_type in {"int", "integer"}:
             payload_lines += f'      "{name}": values["{name}"] ? Number(values["{name}"]) : undefined,\n'
-        elif field_type == "float":
+        elif field_type in {"float", "number"}:
             payload_lines += f'      "{name}": values["{name}"] ? Number(values["{name}"]) : undefined,\n'
-        elif field_type == "bool":
+        elif field_type in {"bool", "boolean"}:
             payload_lines += f'      "{name}": values["{name}"] === "true" || values["{name}"] === "1",\n'
         else:
             payload_lines += f'      "{name}": values["{name}"],\n'
     return (
         '"use client";\n\n'
         'import { useRouter, useSearchParams } from "next/navigation";\n'
-        'import { ChangeEvent, FormEvent, useEffect, useState } from "react";\n'
+        'import { ChangeEvent, FormEvent, Suspense, useEffect, useState } from "react";\n'
         f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n\n'
         "type EntityItem = Record<string, unknown>;\n"
         "type RelationOption = { id: string; label: string };\n"
-        "type FormFieldConfig = { name: string; label: string; placeholder: string };\n\n"
+        "type FormFieldConfig = { name: string; label: string; placeholder: string; inputType: string };\n\n"
         "function extractRows(payload: unknown): EntityItem[] {\n"
         "  if (Array.isArray(payload)) return payload as EntityItem[];\n"
         "  if (payload && typeof payload === \"object\" && Array.isArray((payload as { items?: unknown[] }).items)) {\n"
@@ -2283,7 +2531,7 @@ def _render_frontend_entity_create_page(
         "  }\n"
         "  return [];\n"
         "}\n\n"
-        f"export default function {component_name}() {{\n"
+        f"function {component_name}Content() {{\n"
         "  const searchParams = useSearchParams();\n"
         "  const router = useRouter();\n"
         "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n"
@@ -2303,7 +2551,9 @@ def _render_frontend_entity_create_page(
         "  function onFieldValueChange(fieldName: string) {\n"
         "    return (event: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {\n"
         "      if (composingField && composingField !== fieldName) return;\n"
-        "      setFieldValue(fieldName, event.target.value);\n"
+        "      const target = event.target;\n"
+        "      const nextValue = target instanceof HTMLInputElement && target.type === \"checkbox\" ? String(target.checked) : target.value;\n"
+        "      setFieldValue(fieldName, nextValue);\n"
         "    };\n"
         "  }\n\n"
         "  async function onSubmit(event: FormEvent<HTMLFormElement>) {\n"
@@ -2348,7 +2598,10 @@ def _render_frontend_entity_create_page(
         "            <input\n"
         "              id={`field-${field.name}`}\n"
         "              name={field.name}\n"
-        "              value={values[field.name] || \"\"}\n"
+        "              type={field.inputType}\n"
+        "              value={field.inputType === \"checkbox\" ? \"true\" : values[field.name] || \"\"}\n"
+        "              checked={field.inputType === \"checkbox\" ? values[field.name] === \"true\" : undefined}\n"
+        "              step={field.inputType === \"number\" ? \"any\" : undefined}\n"
         "              onChange={onFieldValueChange(field.name)}\n"
         "              onCompositionStart={() => setComposingField(field.name)}\n"
         "              onCompositionEnd={(event) => {\n"
@@ -2368,6 +2621,13 @@ def _render_frontend_entity_create_page(
         "        {message ? <p className=\"text-xs text-emerald-300\">{message}</p> : null}\n"
         "      </form>\n"
         "    </section>\n"
+        "  );\n"
+        "}\n\n"
+        f"export default function {component_name}() {{\n"
+        "  return (\n"
+        "    <Suspense fallback={<p className=\"text-sm text-slate-300\">Loading form...</p>}>\n"
+        f"      <{component_name}Content />\n"
+        "    </Suspense>\n"
         "  );\n"
         "}\n"
     )
@@ -2501,6 +2761,7 @@ def _render_frontend_entity_list_page(
     detail_link_mode: str = "path",
     detail_href_base: str | None = None,
     api_helper_import: str = "../_lib/apiBase",
+    field_specs: list[dict[str, str]] | None = None,
 ) -> str:
     api_path = f"/{str(entity_path or '').strip('/')}"
     if _is_board_like_entity_path(entity_path):
@@ -2519,6 +2780,13 @@ def _render_frontend_entity_list_page(
         )
     if _is_task_like_entity_path(entity_path):
         return _render_frontend_task_list_page(
+            component_name=component_name,
+            title=title,
+            api_path=api_path,
+            api_helper_import=api_helper_import,
+        )
+    if _is_issue_like_entity_path(entity_path):
+        return _render_frontend_issue_list_page(
             component_name=component_name,
             title=title,
             api_path=api_path,
@@ -2546,17 +2814,66 @@ def _render_frontend_entity_list_page(
         if detail_link_mode != "query"
         else f"`{detail_base}?id=${{String(item.id)}}`"
     )
+    field_config_rows = _field_config_rows_for_frontend(field_specs)
+    is_inventory_like = _is_inventory_like_resource(entity_path, field_specs)
+    helper_text = (
+        "Track item names, quantities, and useful inventory attributes."
+        if is_inventory_like
+        else "Review generated records and open a detail page for structured fields."
+    )
+    empty_text = (
+        "No items yet. Create the first inventory item to start tracking stock."
+        if is_inventory_like
+        else "No records yet. Create the first record to populate this view."
+    )
+    create_label = "New item" if is_inventory_like else "New record"
+    search_placeholder = "Search items..." if is_inventory_like else "Search records..."
     return (
         '"use client";\n\n'
         'import Link from "next/link";\n'
-        'import { useEffect, useState } from "react";\n'
+        'import { useEffect, useMemo, useState } from "react";\n'
         f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n\n'
-        "type EntityItem = Record<string, unknown> & { id?: number | string };\n\n"
+        "type EntityItem = Record<string, unknown> & { id?: number | string };\n"
+        "type FieldConfig = { name: string; label: string; kind: string; inputType: string; metadata: boolean };\n\n"
+        "const fieldConfigs: FieldConfig[] = [\n"
+        f"{field_config_rows}"
+        "];\n\n"
+        "function textValue(item: EntityItem, field?: FieldConfig): string {\n"
+        "  if (!field) return \"\";\n"
+        "  const value = item[field.name];\n"
+        "  if (value === undefined || value === null || value === \"\") return \"\";\n"
+        "  return String(value);\n"
+        "}\n\n"
+        "function numberValue(item: EntityItem, field?: FieldConfig): number | null {\n"
+        "  if (!field) return null;\n"
+        "  const value = Number(item[field.name]);\n"
+        "  return Number.isFinite(value) ? value : null;\n"
+        "}\n\n"
+        "function displayTitle(item: EntityItem, index: number): string {\n"
+        "  const primary = fieldConfigs.find((field) => [\"name\", \"title\", \"label\"].includes(field.name));\n"
+        "  return textValue(item, primary) || String(item.name ?? item.title ?? `Item #${item.id ?? index + 1}`);\n"
+        "}\n\n"
+        "function formatFieldValue(item: EntityItem, field: FieldConfig): string {\n"
+        "  const value = textValue(item, field);\n"
+        "  if (!value) return \"(unset)\";\n"
+        "  if (field.kind === \"price\") return `$${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;\n"
+        "  if (field.kind === \"boolean\") return value === \"true\" ? \"Yes\" : \"No\";\n"
+        "  return value;\n"
+        "}\n\n"
         f"export default function {component_name}() {{\n"
         "  const [items, setItems] = useState<EntityItem[]>([]);\n"
+        "  const [query, setQuery] = useState(\"\");\n"
         "  const [loading, setLoading] = useState(true);\n"
         "  const [error, setError] = useState(\"\");\n"
         "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
+        "  const primaryField = fieldConfigs.find((field) => [\"name\", \"title\", \"label\"].includes(field.name));\n"
+        "  const quantityField = fieldConfigs.find((field) => field.kind === \"quantity\");\n"
+        "  const summaryFields = fieldConfigs.filter((field) => [\"category\", \"sku\", \"price\"].includes(field.kind));\n"
+        "  const visibleItems = useMemo(() => {\n"
+        "    const needle = query.trim().toLowerCase();\n"
+        "    if (!needle) return items;\n"
+        "    return items.filter((item) => Object.values(item).some((value) => String(value ?? \"\").toLowerCase().includes(needle)));\n"
+        "  }, [items, query]);\n\n"
         "  useEffect(() => {\n"
         "    if (apiBaseLoading || !apiBaseUrl) {\n"
         "      setLoading(true);\n"
@@ -2596,25 +2913,56 @@ def _render_frontend_entity_list_page(
         "    };\n"
         "  }, [apiBaseLoading, apiBaseUrl]);\n\n"
         "  return (\n"
-        '    <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">\n'
-        f'      <h1 className="text-lg font-semibold">{title}</h1>\n'
-        '      <p className="text-xs text-slate-400">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>\n'
+        '    <section className="space-y-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">\n'
+        '      <div className="flex flex-wrap items-start justify-between gap-3">\n'
+        "        <div>\n"
+        f'          <h1 className="text-lg font-semibold">{title}</h1>\n'
+        f'          <p className="text-sm text-slate-300">{helper_text}</p>\n'
+        '          <p className="text-xs text-slate-500">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>\n'
+        "        </div>\n"
+        f'        <Link href="{api_path}/new" className="rounded-md bg-emerald-400 px-3 py-2 text-sm font-semibold text-emerald-950 hover:bg-emerald-300">{create_label}</Link>\n'
+        "      </div>\n"
+        f'      <input value={{query}} onChange={{(event) => setQuery(event.target.value)}} placeholder="{search_placeholder}" className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100" />\n'
         "      {loading ? <p className=\"text-sm text-slate-300\">{apiBaseLoading ? \"Resolving API base...\" : \"Loading...\"}</p> : null}\n"
         "      {!loading && error ? <p className=\"text-sm text-rose-300\">Failed to load: {error}</p> : null}\n"
-        "      {!loading && !error && items.length === 0 ? <p className=\"text-sm text-slate-300\">No items found.</p> : null}\n"
-        "      {!loading && !error && items.length > 0 ? (\n"
-        '        <ul className="space-y-2 text-sm">\n'
-        "          {items.map((item, index) => (\n"
-        '            <li key={String(item.id ?? index)} className="rounded-md border border-slate-700 p-2">\n'
-        "              <div className=\"font-medium\">#{String(item.id ?? index)}</div>\n"
-        "              <pre className=\"mt-1 overflow-x-auto text-xs text-slate-300\">{JSON.stringify(item, null, 2)}</pre>\n"
+        f"      {{!loading && !error && items.length === 0 ? <p className=\"rounded-md border border-dashed border-slate-700 p-4 text-sm text-slate-300\">{empty_text}</p> : null}}\n"
+        "      {!loading && !error && items.length > 0 && visibleItems.length === 0 ? <p className=\"text-sm text-slate-300\">No items match your search.</p> : null}\n"
+        "      {!loading && !error && visibleItems.length > 0 ? (\n"
+        '        <ul className="grid gap-2 text-sm sm:grid-cols-2">\n'
+        "          {visibleItems.map((item, index) => {\n"
+        "            const quantity = numberValue(item, quantityField);\n"
+        "            const lowStock = quantity !== null && quantity <= 5;\n"
+        "            return (\n"
+        '            <li key={String(item.id ?? index)} className="rounded-md border border-slate-700 bg-slate-950/60 p-3">\n'
+        '              <div className="flex items-start justify-between gap-2">\n'
+        '                <div className="min-w-0">\n'
+        '                  <h2 className="truncate text-base font-semibold text-slate-100">{displayTitle(item, index)}</h2>\n'
+        '                  <p className="text-xs text-slate-500">ID: {String(item.id ?? index + 1)}</p>\n'
+        "                </div>\n"
+        "                {quantityField ? (\n"
+        '                  <span className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold ${lowStock ? "border-amber-400/50 bg-amber-400/10 text-amber-200" : "border-emerald-400/40 bg-emerald-400/10 text-emerald-200"}`}>\n'
+        "                    Qty {quantity ?? \"-\"}{lowStock ? \" low\" : \"\"}\n"
+        "                  </span>\n"
+        "                ) : null}\n"
+        "              </div>\n"
+        "              {summaryFields.length > 0 ? (\n"
+        '                <dl className="mt-3 grid gap-2 text-xs text-slate-300">\n'
+        "                  {summaryFields.map((field) => (\n"
+        '                    <div key={field.name} className="flex justify-between gap-3 rounded bg-slate-900/70 px-2 py-1">\n'
+        "                      <dt className=\"text-slate-500\">{field.label}</dt>\n"
+        "                      <dd className=\"truncate text-slate-200\">{formatFieldValue(item, field)}</dd>\n"
+        "                    </div>\n"
+        "                  ))}\n"
+        "                </dl>\n"
+        "              ) : null}\n"
         "              {item.id !== undefined ? (\n"
         f"                <Link href={{{link_expression}}} className=\"mt-2 inline-block text-xs text-cyan-300 underline\">\n"
         "                  Open detail\n"
         "                </Link>\n"
         "              ) : null}\n"
         "            </li>\n"
-        "          ))}\n"
+        "            );\n"
+        "          })}\n"
         "        </ul>\n"
         "      ) : null}\n"
         "    </section>\n"
@@ -2643,6 +2991,14 @@ def _render_frontend_entity_detail_page(
             id_mode=id_mode,
             api_helper_import=api_helper_import,
         )
+    if _is_issue_like_entity_path(entity_path):
+        return _render_frontend_issue_detail_page(
+            component_name=component_name,
+            title=title,
+            api_path=api_path,
+            id_mode=id_mode,
+            api_helper_import=api_helper_import,
+        )
     id_source = (
         'const id = String(searchParams.get("id") || "").trim();'
         if id_mode == "query"
@@ -2660,9 +3016,11 @@ def _render_frontend_entity_detail_page(
     is_board_like = _is_board_like_entity_path(entity_path)
     is_card_like = _is_card_like_entity_path(entity_path)
     is_bookmark_like = _is_bookmark_like_entity_path(entity_path)
+    is_generic_like = not (is_board_like or is_card_like or is_task_like or is_diary_like or is_bookmark_like)
     relation_field_rows = relation_fields if isinstance(relation_fields, list) else []
     configured_field_rows = field_specs if isinstance(field_specs, list) else []
-    import_link_line = 'import Link from "next/link";\n' if sections else ""
+    field_config_rows = _field_config_rows_for_frontend(configured_field_rows)
+    import_link_line = 'import Link from "next/link";\n' if sections or is_generic_like else ""
     helper_extract_rows = ""
     relation_state_blocks = ""
     relation_effect_blocks = ""
@@ -2812,7 +3170,7 @@ def _render_frontend_entity_detail_page(
         seen_additional.add(field_key)
         additional_field_rows.append((field_name, field_name.replace("_", " ").title()))
     additional_field_ui = ""
-    if additional_field_rows:
+    if additional_field_rows and not is_generic_like:
         additional_field_ui = (
             '        <section className="space-y-2 rounded-md border border-slate-700 bg-slate-900/40 p-3">\n'
             '          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-300">Additional Fields</h3>\n'
@@ -2822,13 +3180,84 @@ def _render_frontend_entity_detail_page(
             )
             + "        </section>\n"
         )
+    generic_detail_article = (
+        "        <article className=\"space-y-4 rounded-xl border border-slate-700 bg-slate-950/50 p-4\">\n"
+        "          <div className=\"flex flex-wrap items-start justify-between gap-3\">\n"
+        "            <div className=\"min-w-0\">\n"
+        "              <p className=\"text-xs font-semibold uppercase tracking-wide text-slate-500\">Item</p>\n"
+        "              <h2 className=\"break-words text-xl font-semibold text-slate-100\">{displayTitle(item)}</h2>\n"
+        "            </div>\n"
+        "            {quantityField ? (\n"
+        "              <span className={`rounded-full border px-3 py-1.5 text-sm font-semibold ${isLowStock(item) ? \"border-amber-400/50 bg-amber-400/10 text-amber-200\" : \"border-emerald-400/40 bg-emerald-400/10 text-emerald-200\"}`}>\n"
+        "                Quantity: {formatFieldValue(item, quantityField)}{isLowStock(item) ? \" low stock\" : \"\"}\n"
+        "              </span>\n"
+        "            ) : null}\n"
+        "          </div>\n"
+        "          {highlightFields.length > 0 ? (\n"
+        "            <dl className=\"grid gap-2 text-sm sm:grid-cols-3\">\n"
+        "              {highlightFields.map((field) => (\n"
+        "                <div key={field.name} className=\"rounded-md border border-slate-800 bg-slate-900/70 p-3\">\n"
+        "                  <dt className=\"text-xs uppercase tracking-wide text-slate-500\">{field.label}</dt>\n"
+        "                  <dd className=\"mt-1 font-medium text-slate-100\">{formatFieldValue(item, field)}</dd>\n"
+        "                </div>\n"
+        "              ))}\n"
+        "            </dl>\n"
+        "          ) : null}\n"
+        "          <section className=\"space-y-2 rounded-md border border-slate-800 bg-slate-900/40 p-3\">\n"
+        "            <h3 className=\"text-xs font-semibold uppercase tracking-wide text-slate-300\">Additional Fields</h3>\n"
+        "            {additionalFields.length > 0 ? (\n"
+        "              <dl className=\"grid gap-2 text-sm sm:grid-cols-2\">\n"
+        "                {additionalFields.map((field) => (\n"
+        "                  <div key={field.name} className=\"flex justify-between gap-3 border-b border-slate-800 pb-1 last:border-0\">\n"
+        "                    <dt className=\"text-slate-500\">{field.label}</dt>\n"
+        "                    <dd className=\"break-words text-right text-slate-200\">{formatFieldValue(item, field)}</dd>\n"
+        "                  </div>\n"
+        "                ))}\n"
+        "              </dl>\n"
+        "            ) : <p className=\"text-sm text-slate-400\">No additional fields yet.</p>}\n"
+        "          </section>\n"
+        "          <section className=\"space-y-2 rounded-md border border-slate-800 bg-slate-900/40 p-3\">\n"
+        "            <h3 className=\"text-xs font-semibold uppercase tracking-wide text-slate-300\">Metadata</h3>\n"
+        "            <dl className=\"grid gap-2 text-xs text-slate-300 sm:grid-cols-3\">\n"
+        "              <div><dt className=\"text-slate-500\">ID</dt><dd>{String((item as Record<string, unknown>).id ?? id)}</dd></div>\n"
+        "              <div><dt className=\"text-slate-500\">Created</dt><dd>{String((item as Record<string, unknown>).created_at ?? (item as Record<string, unknown>).created ?? \"(unset)\")}</dd></div>\n"
+        "              <div><dt className=\"text-slate-500\">Updated</dt><dd>{String((item as Record<string, unknown>).updated_at ?? (item as Record<string, unknown>).updated ?? \"(unset)\")}</dd></div>\n"
+        "              {metadataFields.map((field) => (\n"
+        "                <div key={field.name}><dt className=\"text-slate-500\">{field.label}</dt><dd>{formatFieldValue(item, field)}</dd></div>\n"
+        "              ))}\n"
+        "            </dl>\n"
+        "          </section>\n"
+        "          <div className=\"flex gap-3 text-xs\">\n"
+        f"            <Link href=\"{api_path}\" className=\"text-cyan-300 underline\">Back to list</Link>\n"
+        f"            <Link href=\"{api_path}/new\" className=\"text-emerald-300 underline\">Create another</Link>\n"
+        "          </div>\n"
+        "        </article>\n"
+    )
     return (
         '"use client";\n\n'
         f"{import_link_line}"
         "import { useEffect, useState } from \"react\";\n"
         f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n'
         f"{imports}\n"
-        "type EntityItem = Record<string, unknown>;\n\n"
+        "type EntityItem = Record<string, unknown>;\n"
+        "type FieldConfig = { name: string; label: string; kind: string; inputType: string; metadata: boolean };\n\n"
+        "const fieldConfigs: FieldConfig[] = [\n"
+        f"{field_config_rows}"
+        "];\n\n"
+        "function textValue(item: EntityItem, field?: FieldConfig): string {\n"
+        "  if (!field) return \"\";\n"
+        "  const value = item[field.name];\n"
+        "  if (value === undefined || value === null || value === \"\") return \"\";\n"
+        "  return String(value);\n"
+        "}\n\n"
+        "function formatFieldValue(item: EntityItem, field?: FieldConfig): string {\n"
+        "  if (!field) return \"(unset)\";\n"
+        "  const value = textValue(item, field);\n"
+        "  if (!value) return \"(unset)\";\n"
+        "  if (field.kind === \"price\") return `$${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })}`;\n"
+        "  if (field.kind === \"boolean\") return value === \"true\" ? \"Yes\" : \"No\";\n"
+        "  return value;\n"
+        "}\n\n"
         f"{helper_extract_rows}\n"
         f"export default function {component_name}() {{\n"
         f"  {hook}\n"
@@ -2838,6 +3267,19 @@ def _render_frontend_entity_detail_page(
         "  const [notFound, setNotFound] = useState(false);\n"
         "  const [error, setError] = useState(\"\");\n"
         "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
+        "  const primaryField = fieldConfigs.find((field) => [\"name\", \"title\", \"label\"].includes(field.name));\n"
+        "  const quantityField = fieldConfigs.find((field) => field.kind === \"quantity\");\n"
+        "  const highlightFields = fieldConfigs.filter((field) => [\"category\", \"sku\", \"price\"].includes(field.kind));\n"
+        "  const metadataFields = fieldConfigs.filter((field) => field.metadata && field.name !== \"id\");\n"
+        "  const additionalFields = fieldConfigs.filter((field) => !field.metadata && field.name !== primaryField?.name && field.name !== quantityField?.name && !highlightFields.some((highlight) => highlight.name === field.name));\n"
+        "  function displayTitle(current: EntityItem): string {\n"
+        "    return textValue(current, primaryField) || String((current as Record<string, unknown>).name ?? (current as Record<string, unknown>).title ?? `Item #${id}`);\n"
+        "  }\n"
+        "  function isLowStock(current: EntityItem): boolean {\n"
+        "    if (!quantityField) return false;\n"
+        "    const value = Number((current as Record<string, unknown>)[quantityField.name]);\n"
+        "    return Number.isFinite(value) && value <= 5;\n"
+        "  }\n\n"
         f"{relation_state_blocks}\n"
         "  useEffect(() => {\n"
         "    if (!id) {\n"
@@ -2959,7 +3401,7 @@ def _render_frontend_entity_detail_page(
             "          </div>\n"
             "        </article>\n"
             if is_bookmark_like
-            else "        <pre className=\"overflow-x-auto text-xs text-slate-300\">{JSON.stringify(item, null, 2)}</pre>\n"
+            else generic_detail_article
             )
             )
             )
@@ -3006,6 +3448,14 @@ def _is_task_like_entity_path(entity_path: str) -> bool:
         return False
     leaf = normalized.split("/")[-1]
     return leaf in {"task", "tasks", "todo", "todos"}
+
+
+def _is_issue_like_entity_path(entity_path: str) -> bool:
+    normalized = str(entity_path or "").strip("/").lower()
+    if not normalized:
+        return False
+    leaf = normalized.split("/")[-1]
+    return leaf in {"issue", "issues", "defect", "defects", "bug", "bugs", "ticket", "tickets"}
 
 
 def _is_diary_like_entity_path(entity_path: str) -> bool:
@@ -3401,6 +3851,268 @@ def _render_frontend_task_list_page(
         "            </li>\n"
         "          ))}\n"
         "        </ul>\n"
+        "      ) : null}\n"
+        "    </section>\n"
+        "  );\n"
+        "}\n"
+    )
+
+
+def _render_frontend_issue_list_page(
+    *,
+    component_name: str,
+    title: str,
+    api_path: str,
+    api_helper_import: str,
+) -> str:
+    return (
+        '"use client";\n\n'
+        'import Link from "next/link";\n'
+        'import { useEffect, useMemo, useState } from "react";\n'
+        f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n\n'
+        "type IssueItem = Record<string, unknown> & {\n"
+        "  id?: number | string;\n"
+        "  title?: string;\n"
+        "  description?: string;\n"
+        "  status?: string;\n"
+        "  priority?: string;\n"
+        "  severity?: string;\n"
+        "};\n\n"
+        "function extractItems(payload: unknown): IssueItem[] {\n"
+        "  if (Array.isArray(payload)) return payload as IssueItem[];\n"
+        "  if (payload && typeof payload === \"object\" && Array.isArray((payload as { items?: unknown[] }).items)) {\n"
+        "    return ((payload as { items: unknown[] }).items ?? []) as IssueItem[];\n"
+        "  }\n"
+        "  return [];\n"
+        "}\n\n"
+        "function statusTone(rawStatus: unknown): string {\n"
+        "  const status = String(rawStatus || \"\").trim().toLowerCase();\n"
+        "  if ([\"open\", \"new\", \"reported\", \"todo\"].includes(status)) return \"border-amber-500/40 bg-amber-500/10 text-amber-200\";\n"
+        "  if ([\"triaged\", \"in_progress\", \"in-progress\", \"investigating\"].includes(status)) return \"border-sky-500/40 bg-sky-500/10 text-sky-200\";\n"
+        "  if ([\"blocked\", \"reopened\"].includes(status)) return \"border-rose-500/40 bg-rose-500/10 text-rose-200\";\n"
+        "  if ([\"resolved\", \"closed\", \"done\", \"fixed\"].includes(status)) return \"border-emerald-500/40 bg-emerald-500/10 text-emerald-200\";\n"
+        "  return \"border-slate-500/40 bg-slate-500/10 text-slate-200\";\n"
+        "}\n\n"
+        "function priorityTone(rawPriority: unknown): string {\n"
+        "  const priority = String(rawPriority || \"\").trim().toLowerCase();\n"
+        "  if ([\"critical\", \"blocker\", \"p0\", \"sev1\"].includes(priority)) return \"border-rose-500/50 bg-rose-500/10 text-rose-200\";\n"
+        "  if ([\"high\", \"p1\", \"major\", \"sev2\"].includes(priority)) return \"border-orange-500/50 bg-orange-500/10 text-orange-200\";\n"
+        "  if ([\"medium\", \"normal\", \"p2\", \"minor\", \"sev3\"].includes(priority)) return \"border-cyan-500/40 bg-cyan-500/10 text-cyan-200\";\n"
+        "  if ([\"low\", \"p3\", \"trivial\", \"sev4\"].includes(priority)) return \"border-slate-500/40 bg-slate-500/10 text-slate-200\";\n"
+        "  return \"border-slate-500/40 bg-slate-500/10 text-slate-200\";\n"
+        "}\n\n"
+        "function priorityValue(item: IssueItem): string {\n"
+        "  return String(item.priority ?? item.severity ?? \"unprioritized\");\n"
+        "}\n\n"
+        "function previewText(item: IssueItem): string {\n"
+        "  const text = String(item.description ?? item.content ?? item.summary ?? \"\").trim();\n"
+        "  if (!text) return \"No description provided.\";\n"
+        "  if (text.length <= 150) return text;\n"
+        "  return `${text.slice(0, 150)}...`;\n"
+        "}\n\n"
+        f"export default function {component_name}() {{\n"
+        "  const [items, setItems] = useState<IssueItem[]>([]);\n"
+        "  const [query, setQuery] = useState(\"\");\n"
+        "  const [loading, setLoading] = useState(true);\n"
+        "  const [error, setError] = useState(\"\");\n"
+        "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
+        "  useEffect(() => {\n"
+        "    if (apiBaseLoading || !apiBaseUrl) {\n"
+        "      setLoading(true);\n"
+        "      return;\n"
+        "    }\n"
+        "    let mounted = true;\n"
+        "    (async () => {\n"
+        "      setLoading(true);\n"
+        "      setError(\"\");\n"
+        "      try {\n"
+        f'        const response = await fetch(`${{apiBaseUrl}}{api_path}`, {{ cache: "no-store" }});\n'
+        "        if (!response.ok) throw new Error(`HTTP ${response.status}`);\n"
+        "        const rows = extractItems(await response.json());\n"
+        "        if (mounted) setItems(rows);\n"
+        "      } catch (e) {\n"
+        "        const message = e instanceof Error ? e.message : String(e || \"unknown error\");\n"
+        "        if (mounted) {\n"
+        "          setError(message);\n"
+        "          setItems([]);\n"
+        "        }\n"
+        "      } finally {\n"
+        "        if (mounted) setLoading(false);\n"
+        "      }\n"
+        "    })();\n"
+        "    return () => {\n"
+        "      mounted = false;\n"
+        "    };\n"
+        "  }, [apiBaseLoading, apiBaseUrl]);\n\n"
+        "  const filtered = useMemo(() => {\n"
+        "    const needle = query.trim().toLowerCase();\n"
+        "    if (!needle) return items;\n"
+        "    return items.filter((item) => [item.title, item.description, item.status, item.priority, item.severity].some((value) => String(value ?? \"\").toLowerCase().includes(needle)));\n"
+        "  }, [items, query]);\n\n"
+        "  return (\n"
+        '    <section className="mx-auto w-full max-w-2xl space-y-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4 sm:p-5">\n'
+        '      <div className="space-y-2">\n'
+        f'        <h1 className="text-lg font-semibold">{title}</h1>\n'
+        '        <p className="text-xs text-slate-400">Track reported software issues by status and priority.</p>\n'
+        '        <p className="text-xs text-slate-500">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>\n'
+        "      </div>\n"
+        '      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">\n'
+        '        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search issues..." className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100" />\n'
+        f'        <Link href="{api_path}/new" className="inline-flex items-center justify-center rounded-md bg-emerald-400 px-3 py-2 text-sm font-semibold text-emerald-950 hover:bg-emerald-300">New issue</Link>\n'
+        "      </div>\n"
+        "      {loading ? <p className=\"text-sm text-slate-300\">{apiBaseLoading ? \"Resolving API base...\" : \"Loading issues...\"}</p> : null}\n"
+        "      {!loading && error ? <p className=\"text-sm text-rose-300\">Failed to load: {error}</p> : null}\n"
+        "      {!loading && !error && filtered.length === 0 ? (\n"
+        '        <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950/40 p-4 text-sm text-slate-300">No issues found.</div>\n'
+        "      ) : null}\n"
+        "      {!loading && !error && filtered.length > 0 ? (\n"
+        '        <ul className="space-y-3">\n'
+        "          {filtered.map((item, index) => (\n"
+        '            <li key={String(item.id ?? index)} className="space-y-2 rounded-lg border border-slate-700 bg-slate-950/50 p-4">\n'
+        '              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">\n'
+        '                <h2 className="text-base font-semibold text-slate-100">{String(item.title || `Untitled issue #${item.id ?? index}`)}</h2>\n'
+        '                <div className="flex flex-wrap gap-2">\n'
+        '                  <span className={`inline-flex w-fit items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${statusTone(item.status)}`}>{String(item.status || "unknown")}</span>\n'
+        '                  <span className={`inline-flex w-fit items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${priorityTone(priorityValue(item))}`}>{priorityValue(item)}</span>\n'
+        "                </div>\n"
+        "              </div>\n"
+        '              <p className="whitespace-pre-wrap text-sm leading-6 text-slate-200">{previewText(item)}</p>\n'
+        "              {item.id !== undefined ? (\n"
+        f'                <Link href={{`{api_path}/${{String(item.id)}}`}} className="inline-block text-xs font-medium text-cyan-300 underline">Open issue</Link>\n'
+        "              ) : null}\n"
+        "            </li>\n"
+        "          ))}\n"
+        "        </ul>\n"
+        "      ) : null}\n"
+        "    </section>\n"
+        "  );\n"
+        "}\n"
+    )
+
+
+def _render_frontend_issue_detail_page(
+    *,
+    component_name: str,
+    title: str,
+    api_path: str,
+    id_mode: str,
+    api_helper_import: str,
+) -> str:
+    id_source = (
+        'const id = String(searchParams.get("id") || "").trim();'
+        if id_mode == "query"
+        else 'const id = String(params.id || "").trim();'
+    )
+    imports = (
+        'import { useSearchParams } from "next/navigation";\n'
+        if id_mode == "query"
+        else 'import { useParams } from "next/navigation";\n'
+    )
+    hook = "const searchParams = useSearchParams();" if id_mode == "query" else "const params = useParams();"
+    return (
+        '"use client";\n\n'
+        'import Link from "next/link";\n'
+        "import { useEffect, useState } from \"react\";\n"
+        f"{imports}"
+        f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n\n'
+        "type IssueItem = Record<string, unknown>;\n\n"
+        "function statusTone(rawStatus: unknown): string {\n"
+        "  const status = String(rawStatus || \"\").trim().toLowerCase();\n"
+        "  if ([\"open\", \"new\", \"reported\", \"todo\"].includes(status)) return \"border-amber-500/40 bg-amber-500/10 text-amber-200\";\n"
+        "  if ([\"triaged\", \"in_progress\", \"in-progress\", \"investigating\"].includes(status)) return \"border-sky-500/40 bg-sky-500/10 text-sky-200\";\n"
+        "  if ([\"blocked\", \"reopened\"].includes(status)) return \"border-rose-500/40 bg-rose-500/10 text-rose-200\";\n"
+        "  if ([\"resolved\", \"closed\", \"done\", \"fixed\"].includes(status)) return \"border-emerald-500/40 bg-emerald-500/10 text-emerald-200\";\n"
+        "  return \"border-slate-500/40 bg-slate-500/10 text-slate-200\";\n"
+        "}\n\n"
+        "function priorityTone(rawPriority: unknown): string {\n"
+        "  const priority = String(rawPriority || \"\").trim().toLowerCase();\n"
+        "  if ([\"critical\", \"blocker\", \"p0\", \"sev1\"].includes(priority)) return \"border-rose-500/50 bg-rose-500/10 text-rose-200\";\n"
+        "  if ([\"high\", \"p1\", \"major\", \"sev2\"].includes(priority)) return \"border-orange-500/50 bg-orange-500/10 text-orange-200\";\n"
+        "  if ([\"medium\", \"normal\", \"p2\", \"minor\", \"sev3\"].includes(priority)) return \"border-cyan-500/40 bg-cyan-500/10 text-cyan-200\";\n"
+        "  return \"border-slate-500/40 bg-slate-500/10 text-slate-200\";\n"
+        "}\n\n"
+        "function priorityValue(item: IssueItem): string {\n"
+        "  return String(item.priority ?? item.severity ?? \"unprioritized\");\n"
+        "}\n\n"
+        f"export default function {component_name}() {{\n"
+        f"  {hook}\n"
+        f"  {id_source}\n"
+        "  const [item, setItem] = useState<IssueItem | null>(null);\n"
+        "  const [loading, setLoading] = useState(true);\n"
+        "  const [notFound, setNotFound] = useState(false);\n"
+        "  const [error, setError] = useState(\"\");\n"
+        "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
+        "  useEffect(() => {\n"
+        "    if (!id) {\n"
+        "      setLoading(false);\n"
+        "      setNotFound(true);\n"
+        "      return;\n"
+        "    }\n"
+        "    if (apiBaseLoading || !apiBaseUrl) {\n"
+        "      setLoading(true);\n"
+        "      return;\n"
+        "    }\n"
+        "    let mounted = true;\n"
+        "    (async () => {\n"
+        "      setLoading(true);\n"
+        "      setNotFound(false);\n"
+        "      setError(\"\");\n"
+        "      try {\n"
+        f'        const response = await fetch(`${{apiBaseUrl}}{api_path}/${{id}}`, {{ cache: "no-store" }});\n'
+        "        if (response.status === 404) {\n"
+        "          if (mounted) setNotFound(true);\n"
+        "          return;\n"
+        "        }\n"
+        "        if (!response.ok) throw new Error(`HTTP ${response.status}`);\n"
+        "        const payload = (await response.json()) as IssueItem;\n"
+        "        if (mounted) setItem(payload);\n"
+        "      } catch (e) {\n"
+        "        const message = e instanceof Error ? e.message : String(e || \"unknown error\");\n"
+        "        if (mounted) setError(message);\n"
+        "      } finally {\n"
+        "        if (mounted) setLoading(false);\n"
+        "      }\n"
+        "    })();\n"
+        "    return () => {\n"
+        "      mounted = false;\n"
+        "    };\n"
+        "  }, [apiBaseLoading, apiBaseUrl, id]);\n\n"
+        "  return (\n"
+        '    <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">\n'
+        f'      <h1 className="text-lg font-semibold">{title} Detail</h1>\n'
+        "      {!id ? <p className=\"text-sm text-slate-300\">Missing issue id.</p> : null}\n"
+        "      {loading ? <p className=\"text-sm text-slate-300\">{apiBaseLoading ? \"Resolving API base...\" : \"Loading issue...\"}</p> : null}\n"
+        "      {!loading && notFound ? <p className=\"text-sm text-slate-300\">Issue not found.</p> : null}\n"
+        "      {!loading && error ? <p className=\"text-sm text-rose-300\">Failed to load: {error}</p> : null}\n"
+        "      {!loading && !notFound && !error && item ? (\n"
+        '        <article className="space-y-4 rounded-xl border border-slate-700 bg-slate-950/50 p-4">\n'
+        '          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">\n'
+        "            <div className=\"min-w-0 space-y-1\">\n"
+        '              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Issue</p>\n'
+        "              <h2 className=\"break-words text-xl font-semibold text-slate-100\">{String(item.title ?? `Issue #${id}`)}</h2>\n"
+        "            </div>\n"
+        '            <div className="flex flex-wrap gap-2">\n'
+        '              <span className={`inline-flex w-fit items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${statusTone(item.status)}`}>{String(item.status ?? "unknown")}</span>\n'
+        '              <span className={`inline-flex w-fit items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${priorityTone(priorityValue(item))}`}>{priorityValue(item)}</span>\n'
+        "            </div>\n"
+        "          </div>\n"
+        '          <section className="space-y-2 rounded-md border border-slate-800 bg-slate-900/40 p-3">\n'
+        '            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-300">Description</h3>\n'
+        "            <p className=\"whitespace-pre-wrap text-sm leading-7 text-slate-200\">{String(item.description ?? item.content ?? item.summary ?? \"No description provided.\")}</p>\n"
+        "          </section>\n"
+        '          <section className="space-y-2 rounded-md border border-slate-800 bg-slate-900/40 p-3">\n'
+        '            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-300">Metadata</h3>\n'
+        '            <dl className="grid gap-2 text-xs text-slate-300 sm:grid-cols-3">\n'
+        "              <div><dt className=\"text-slate-500\">ID</dt><dd>{String(item.id ?? id)}</dd></div>\n"
+        "              <div><dt className=\"text-slate-500\">Created</dt><dd>{String(item.created_at ?? item.created ?? \"(unset)\")}</dd></div>\n"
+        "              <div><dt className=\"text-slate-500\">Updated</dt><dd>{String(item.updated_at ?? item.updated ?? \"(unset)\")}</dd></div>\n"
+        "            </dl>\n"
+        "          </section>\n"
+        '          <div className="flex gap-3 text-xs">\n'
+        f'            <Link href="{api_path}" className="text-cyan-300 underline">Back to list</Link>\n'
+        f'            <Link href="{api_path}/new" className="text-emerald-300 underline">Create another</Link>\n'
+        "          </div>\n"
+        "        </article>\n"
         "      ) : null}\n"
         "    </section>\n"
         "  );\n"
@@ -3999,31 +4711,40 @@ def _render_frontend_note_detail_page(
     )
 
 
-def _normalize_field_entries(fields: list[dict[str, Any]]) -> list[tuple[str, str]]:
-    normalized: list[tuple[str, str]] = []
+def _normalize_field_entries(fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in fields:
-        if not isinstance(item, dict):
+        field = _normalize_field_spec(item)
+        if field is None:
             continue
-        name = str(item.get("name") or "").strip()
-        ftype = str(item.get("type") or "").strip().lower()
-        if not name or not ftype:
+        name = str(field.get("name") or "").strip()
+        if not name:
             continue
         key = name.lower()
         if key in seen:
             continue
         seen.add(key)
-        normalized.append((name, ftype))
+        normalized.append(field)
     return normalized
 
 
 def _python_type(field_type: str) -> str:
     mapping = {
         "string": "str",
+        "text": "str",
         "int": "int",
+        "integer": "int",
         "float": "float",
+        "number": "float",
         "bool": "bool",
+        "boolean": "bool",
+        "date": "str",
         "datetime": "datetime",
+        "url": "str",
+        "email": "str",
+        "status": "str",
+        "priority": "str",
     }
     return mapping.get(str(field_type).strip().lower(), "str")
 
@@ -4115,8 +4836,11 @@ def apply_entity_fields_to_scaffold(project_dir: Path, entity_name: str, fields:
     if _has_backend_structure(project_dir):
         backend_app_root = _resolve_backend_app_root(project_dir)
         if backend_app_root is not None:
-            need_datetime = any(ftype == "datetime" for _, ftype in normalized_fields)
-            field_lines = [f"    {name}: {_python_type(ftype)}" for name, ftype in normalized_fields]
+            need_datetime = any(str(field.get("type") or "").strip().lower() == "datetime" for field in normalized_fields)
+            field_lines = [
+                f"    {field['name']}: {_python_type(str(field.get('type') or 'string'))}"
+                for field in normalized_fields
+            ]
             body = "\n".join(field_lines) if field_lines else "    pass"
             prefix = "from datetime import datetime\n\n" if need_datetime else ""
 
@@ -4130,7 +4854,7 @@ def apply_entity_fields_to_scaffold(project_dir: Path, entity_name: str, fields:
             _write_if_changed(backend_app_root / "models" / f"{slug}.py", model_content, changed, project_dir)
             _write_if_changed(backend_app_root / "schemas" / f"{slug}.py", schema_content, changed, project_dir)
 
-    frontend_fields = [{"name": name, "type": ftype} for name, ftype in normalized_fields]
+    frontend_fields = normalized_fields
     _sync_frontend_entity_create_form(project_dir, entity_name, frontend_fields, changed)
     _sync_frontend_entity_detail_page(project_dir, entity_name, frontend_fields, changed)
     return changed
@@ -4366,25 +5090,21 @@ def _normalize_entity_seed_item(raw: Any) -> dict[str, Any] | None:
         return None
 
     fields_raw = raw.get("fields")
-    fields: list[dict[str, str]] = []
+    fields: list[dict[str, Any]] = []
     seen_fields: set[str] = set()
     if isinstance(fields_raw, list):
-        for field in fields_raw:
-            if isinstance(field, str):
-                field_name = str(field).strip()
-                field_type = "string"
-            elif isinstance(field, dict):
-                field_name = str(field.get("name") or field.get("field") or "").strip()
-                field_type = str(field.get("type") or "string").strip().lower() or "string"
-            else:
+        for raw_field in fields_raw:
+            field = _normalize_field_spec(raw_field)
+            if field is None:
                 continue
+            field_name = str(field.get("name") or "").strip()
             if not field_name:
                 continue
             key = field_name.lower()
             if key in seen_fields:
                 continue
             seen_fields.add(key)
-            fields.append({"name": field_name, "type": field_type})
+            fields.append(field)
     return {"name": name, "fields": fields}
 
 
@@ -4466,6 +5186,17 @@ def normalize_project_spec(raw: Any, idea: str | None = None) -> dict[str, Any]:
         return {}
 
     payload: dict[str, Any] = {}
+    raw_shape = str(raw.get("shape") or raw.get("app_shape") or "").strip().lower()
+    raw_template = str(raw.get("template") or "").strip().lower()
+    frontend_allowed = raw_shape not in {"backend", "worker", "cli"} and raw_template not in {
+        "fastapi",
+        "fastapi-ddd",
+        "worker-api",
+    }
+    if raw_shape:
+        payload["shape"] = raw_shape
+    if raw_template:
+        payload["template"] = raw_template
 
     entities_raw = raw.get("entities") if isinstance(raw.get("entities"), list) else []
     entities: list[dict[str, Any]] = []
@@ -4505,9 +5236,9 @@ def normalize_project_spec(raw: Any, idea: str | None = None) -> dict[str, Any]:
         payload["apis"] = [{"method": item.split(maxsplit=1)[0], "path": item.split(maxsplit=1)[1]} for item in api_endpoints]
 
     pages_raw: list[Any] = []
-    if isinstance(raw.get("frontend_pages"), list):
+    if frontend_allowed and isinstance(raw.get("frontend_pages"), list):
         pages_raw.extend(raw.get("frontend_pages") or [])
-    if isinstance(raw.get("pages"), list):
+    if frontend_allowed and isinstance(raw.get("pages"), list):
         pages_raw.extend(raw.get("pages") or [])
     frontend_pages: list[str] = []
     route_pages: list[dict[str, str]] = []
@@ -4544,15 +5275,17 @@ def normalize_project_spec(raw: Any, idea: str | None = None) -> dict[str, Any]:
                 if key not in api_seen:
                     api_seed.append(endpoint)
                     api_seen.add(key)
-            for page in (f"{resource}/list", f"{resource}/new", f"{resource}/detail"):
-                key = page.lower()
-                if key not in page_seen:
-                    page_seed.append(page)
-                    page_seen.add(key)
+            if frontend_allowed:
+                for page in (f"{resource}/list", f"{resource}/new", f"{resource}/detail"):
+                    key = page.lower()
+                    if key not in page_seen:
+                        page_seed.append(page)
+                        page_seen.add(key)
         payload["api_endpoints"] = api_seed
         payload["apis"] = [{"method": item.split(maxsplit=1)[0], "path": item.split(maxsplit=1)[1]} for item in api_seed]
-        payload["frontend_pages"] = page_seed
-        payload["pages"] = [{"path": _page_rel_to_route_path(page)} for page in page_seed]
+        if frontend_allowed:
+            payload["frontend_pages"] = page_seed
+            payload["pages"] = [{"path": _page_rel_to_route_path(page)} for page in page_seed]
 
     if isinstance(idea, str) and idea.strip() and "summary" not in payload:
         payload["summary"] = idea.strip()

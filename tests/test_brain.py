@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from archmind.brain import reason_architecture_from_idea
+from archmind.brain import infer_project_shape_from_idea, reason_architecture_from_idea
 from tests.brain_cases import BRAIN_CASES
 
 
@@ -66,16 +66,68 @@ def test_reason_architecture_recommends_worker_api_template() -> None:
 
 def test_reason_architecture_recommends_data_tool_template() -> None:
     out = reason_architecture_from_idea("inventory management tool for small business")
-    assert out["recommended_template"] == "data-tool"
+    assert out["app_shape"] == "fullstack"
+    assert out["recommended_template"] == "fullstack-ddd"
 
 
 def test_reason_architecture_unknown_fallback_defaults() -> None:
     out = reason_architecture_from_idea("hello")
-    assert out["app_shape"] == "backend"
-    assert out["recommended_template"] == "fastapi"
+    assert out["app_shape"] == "fullstack"
+    assert out["recommended_template"] == "fullstack-ddd"
     assert out["modules"] == []
     assert out["db_needed"] is False
     assert out["dashboard_needed"] is False
+
+
+@pytest.mark.parametrize(
+    "idea",
+    [
+        "inventory web app",
+        "inventory app",
+        "inventory manager",
+        "bug tracker",
+        "defect tracker dashboard",
+        "meeting notes app",
+        "workout tracker",
+        "personal asset dashboard",
+        "bookmark manager with categories",
+        "inventory",
+        "expenses",
+        "habit tracker",
+    ],
+)
+def test_infer_project_shape_routes_app_ideas_to_fullstack(idea: str) -> None:
+    assert infer_project_shape_from_idea(idea) == "fullstack"
+    out = reason_architecture_from_idea(idea)
+    assert out["app_shape"] == "fullstack"
+    assert out["recommended_template"] == "fullstack-ddd"
+
+
+@pytest.mark.parametrize(
+    ("idea", "expected_shape", "expected_template"),
+    [
+        ("inventory API", "backend", "fastapi"),
+        ("inventory backend service", "backend", "fastapi"),
+        ("stock microservice", "backend", "fastapi"),
+        ("batch inventory importer", "worker", "worker-api"),
+        ("CLI inventory tool", "cli", "cli"),
+        ("python cli tool for csv merge", "cli", "cli"),
+        ("command-line csv merger", "cli", "cli"),
+        ("terminal tool for logs", "cli", "cli"),
+    ],
+)
+def test_infer_project_shape_preserves_backend_worker_cli_exceptions(
+    idea: str,
+    expected_shape: str,
+    expected_template: str,
+) -> None:
+    assert infer_project_shape_from_idea(idea) == expected_shape
+    out = reason_architecture_from_idea(idea)
+    if expected_shape in {"worker"}:
+        assert out["app_shape"] == "backend"
+    else:
+        assert out["app_shape"] == expected_shape
+    assert out["recommended_template"] == expected_template
 
 
 def test_reason_architecture_simple_todo_app_defaults_to_fullstack() -> None:
