@@ -335,6 +335,12 @@ def resolve_default_template() -> str:
 
 
 def resolve_template_for_idea(idea: str) -> str:
+    text = str(idea or "").strip().lower()
+    if re.search(r"\b(nextjs|next\.js|react)\b", text) and not re.search(
+        r"\b(fullstack|backend|api|fastapi|database|db)\b",
+        text,
+    ):
+        return "nextjs"
     project_type = normalize_project_type(detect_project_type(idea))
     selected_template = select_template_for_project_type(project_type, idea)
     if is_supported_template(selected_template):

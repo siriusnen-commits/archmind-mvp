@@ -114,6 +114,10 @@ def test_assert_tsx_syntax_ok_runs_when_typescript_available(monkeypatch, tmp_pa
         ("deadline", "date", "date", "date"),
         ("email", "string", "email", "email"),
         ("url", "string", "url", "url"),
+        ("status", "string", "status", "text"),
+        ("state", "string", "status", "text"),
+        ("priority", "string", "priority", "text"),
+        ("severity", "string", "severity", "text"),
         ("summary", "string", "text", "text"),
     ],
 )
@@ -823,6 +827,52 @@ def test_inventory_frontend_pages_render_domain_mvp_without_raw_json(tmp_path: P
     assert '"name": "quantity", "label": "Quantity", "placeholder": "quantity", "inputType": "number"' in create_text
     assert '"name": "price", "label": "Price", "placeholder": "price", "inputType": "number"' in create_text
     assert "onCompositionStart={() => setComposingField(field.name)}" in create_text
+
+
+def test_issue_frontend_pages_render_status_priority_badges_without_raw_json(tmp_path: Path) -> None:
+    project_dir = tmp_path / "issue_mvp"
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "entities": [
+                    {
+                        "name": "Issue",
+                        "fields": [
+                            {"name": "title", "type": "string"},
+                            {"name": "description", "type": "string"},
+                            {"name": "status", "type": "string"},
+                            {"name": "priority", "type": "string"},
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    apply_frontend_page_scaffold(project_dir, "Issue")
+    apply_page_scaffold(project_dir, "issues/new")
+
+    list_text = (project_dir / "frontend" / "app" / "issues" / "page.tsx").read_text(encoding="utf-8")
+    detail_text = (project_dir / "frontend" / "app" / "issues" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+    create_text = (project_dir / "frontend" / "app" / "issues" / "new" / "page.tsx").read_text(encoding="utf-8")
+
+    assert "JSON.stringify(item, null, 2)" not in list_text
+    assert "JSON.stringify(item, null, 2)" not in detail_text
+    assert "Search issues..." in list_text
+    assert "statusTone(item.status)" in list_text
+    assert "priorityTone(priorityValue(item))" in list_text
+    assert "Open issue" in list_text
+    assert "Description" in detail_text
+    assert "Metadata" in detail_text
+    assert "item.description ?? item.content ?? item.summary" in detail_text
+    assert '"name": "priority", "label": "Priority", "placeholder": "priority", "inputType": "text"' in create_text
+    assert "onCompositionStart={() => setComposingField(field.name)}" in create_text
+    _assert_tsx_syntax_ok(list_text)
+    _assert_tsx_syntax_ok(detail_text)
     assert "onCompositionEnd={(event) =>" in create_text
 
 

@@ -8,6 +8,25 @@ def test_suggest_project_spec_defects_domain() -> None:
     names = [entity["name"] for entity in out["entities"]]
     assert "Defect" in names
     assert "GET /defects" in out["api_endpoints"]
+    defect = next(entity for entity in out["entities"] if entity["name"] == "Defect")
+    field_names = {str(field.get("name") or "") for field in defect.get("fields", []) if isinstance(field, dict)}
+    assert {"title", "description", "status", "severity"}.issubset(field_names)
+
+
+def test_suggest_project_spec_bug_tracker_routes_to_issue_mvp_not_task() -> None:
+    out = suggest_project_spec("bug tracker for software teams", {"domains": ["defects"], "frontend_needed": True})
+    names = [entity["name"] for entity in out["entities"]]
+    assert "Issue" in names
+    assert "Task" not in names
+    issue = next(entity for entity in out["entities"] if entity["name"] == "Issue")
+    field_names = {str(field.get("name") or "") for field in issue.get("fields", []) if isinstance(field, dict)}
+    assert {"title", "description", "status", "priority"}.issubset(field_names)
+    assert "GET /issues" in out["api_endpoints"]
+    assert "POST /issues" in out["api_endpoints"]
+    assert "PATCH /issues/{id}" in out["api_endpoints"]
+    assert "issues/list" in out["frontend_pages"]
+    assert "issues/new" in out["frontend_pages"]
+    assert "issues/detail" in out["frontend_pages"]
 
 
 def test_suggest_project_spec_tasks_domain() -> None:

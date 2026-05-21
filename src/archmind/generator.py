@@ -2319,9 +2319,13 @@ def infer_field_semantics(field_name: str, raw_type: str | None = None) -> dict[
         inferred_type = "string" if type_is_generic else explicit_type
         semantic_type = "status"
         renderer = "badge"
-    elif key in {"priority", "severity"}:
+    elif key == "priority":
         inferred_type = "string" if type_is_generic else explicit_type
         semantic_type = "priority"
+        renderer = "badge"
+    elif key == "severity":
+        inferred_type = "string" if type_is_generic else explicit_type
+        semantic_type = "severity"
         renderer = "badge"
     elif key in {"title", "name", "description", "note", "content", "summary"}:
         inferred_type = "string" if type_is_generic else explicit_type
@@ -2781,6 +2785,13 @@ def _render_frontend_entity_list_page(
             api_path=api_path,
             api_helper_import=api_helper_import,
         )
+    if _is_issue_like_entity_path(entity_path):
+        return _render_frontend_issue_list_page(
+            component_name=component_name,
+            title=title,
+            api_path=api_path,
+            api_helper_import=api_helper_import,
+        )
     if _is_bookmark_like_entity_path(entity_path):
         return _render_frontend_bookmark_list_page(
             component_name=component_name,
@@ -2974,6 +2985,14 @@ def _render_frontend_entity_detail_page(
     api_path = f"/{str(entity_path or '').strip('/')}"
     if _is_note_like_entity_path(entity_path):
         return _render_frontend_note_detail_page(
+            component_name=component_name,
+            title=title,
+            api_path=api_path,
+            id_mode=id_mode,
+            api_helper_import=api_helper_import,
+        )
+    if _is_issue_like_entity_path(entity_path):
+        return _render_frontend_issue_detail_page(
             component_name=component_name,
             title=title,
             api_path=api_path,
@@ -3431,6 +3450,14 @@ def _is_task_like_entity_path(entity_path: str) -> bool:
     return leaf in {"task", "tasks", "todo", "todos"}
 
 
+def _is_issue_like_entity_path(entity_path: str) -> bool:
+    normalized = str(entity_path or "").strip("/").lower()
+    if not normalized:
+        return False
+    leaf = normalized.split("/")[-1]
+    return leaf in {"issue", "issues", "defect", "defects", "bug", "bugs", "ticket", "tickets"}
+
+
 def _is_diary_like_entity_path(entity_path: str) -> bool:
     normalized = str(entity_path or "").strip("/").lower()
     if not normalized:
@@ -3824,6 +3851,268 @@ def _render_frontend_task_list_page(
         "            </li>\n"
         "          ))}\n"
         "        </ul>\n"
+        "      ) : null}\n"
+        "    </section>\n"
+        "  );\n"
+        "}\n"
+    )
+
+
+def _render_frontend_issue_list_page(
+    *,
+    component_name: str,
+    title: str,
+    api_path: str,
+    api_helper_import: str,
+) -> str:
+    return (
+        '"use client";\n\n'
+        'import Link from "next/link";\n'
+        'import { useEffect, useMemo, useState } from "react";\n'
+        f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n\n'
+        "type IssueItem = Record<string, unknown> & {\n"
+        "  id?: number | string;\n"
+        "  title?: string;\n"
+        "  description?: string;\n"
+        "  status?: string;\n"
+        "  priority?: string;\n"
+        "  severity?: string;\n"
+        "};\n\n"
+        "function extractItems(payload: unknown): IssueItem[] {\n"
+        "  if (Array.isArray(payload)) return payload as IssueItem[];\n"
+        "  if (payload && typeof payload === \"object\" && Array.isArray((payload as { items?: unknown[] }).items)) {\n"
+        "    return ((payload as { items: unknown[] }).items ?? []) as IssueItem[];\n"
+        "  }\n"
+        "  return [];\n"
+        "}\n\n"
+        "function statusTone(rawStatus: unknown): string {\n"
+        "  const status = String(rawStatus || \"\").trim().toLowerCase();\n"
+        "  if ([\"open\", \"new\", \"reported\", \"todo\"].includes(status)) return \"border-amber-500/40 bg-amber-500/10 text-amber-200\";\n"
+        "  if ([\"triaged\", \"in_progress\", \"in-progress\", \"investigating\"].includes(status)) return \"border-sky-500/40 bg-sky-500/10 text-sky-200\";\n"
+        "  if ([\"blocked\", \"reopened\"].includes(status)) return \"border-rose-500/40 bg-rose-500/10 text-rose-200\";\n"
+        "  if ([\"resolved\", \"closed\", \"done\", \"fixed\"].includes(status)) return \"border-emerald-500/40 bg-emerald-500/10 text-emerald-200\";\n"
+        "  return \"border-slate-500/40 bg-slate-500/10 text-slate-200\";\n"
+        "}\n\n"
+        "function priorityTone(rawPriority: unknown): string {\n"
+        "  const priority = String(rawPriority || \"\").trim().toLowerCase();\n"
+        "  if ([\"critical\", \"blocker\", \"p0\", \"sev1\"].includes(priority)) return \"border-rose-500/50 bg-rose-500/10 text-rose-200\";\n"
+        "  if ([\"high\", \"p1\", \"major\", \"sev2\"].includes(priority)) return \"border-orange-500/50 bg-orange-500/10 text-orange-200\";\n"
+        "  if ([\"medium\", \"normal\", \"p2\", \"minor\", \"sev3\"].includes(priority)) return \"border-cyan-500/40 bg-cyan-500/10 text-cyan-200\";\n"
+        "  if ([\"low\", \"p3\", \"trivial\", \"sev4\"].includes(priority)) return \"border-slate-500/40 bg-slate-500/10 text-slate-200\";\n"
+        "  return \"border-slate-500/40 bg-slate-500/10 text-slate-200\";\n"
+        "}\n\n"
+        "function priorityValue(item: IssueItem): string {\n"
+        "  return String(item.priority ?? item.severity ?? \"unprioritized\");\n"
+        "}\n\n"
+        "function previewText(item: IssueItem): string {\n"
+        "  const text = String(item.description ?? item.content ?? item.summary ?? \"\").trim();\n"
+        "  if (!text) return \"No description provided.\";\n"
+        "  if (text.length <= 150) return text;\n"
+        "  return `${text.slice(0, 150)}...`;\n"
+        "}\n\n"
+        f"export default function {component_name}() {{\n"
+        "  const [items, setItems] = useState<IssueItem[]>([]);\n"
+        "  const [query, setQuery] = useState(\"\");\n"
+        "  const [loading, setLoading] = useState(true);\n"
+        "  const [error, setError] = useState(\"\");\n"
+        "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
+        "  useEffect(() => {\n"
+        "    if (apiBaseLoading || !apiBaseUrl) {\n"
+        "      setLoading(true);\n"
+        "      return;\n"
+        "    }\n"
+        "    let mounted = true;\n"
+        "    (async () => {\n"
+        "      setLoading(true);\n"
+        "      setError(\"\");\n"
+        "      try {\n"
+        f'        const response = await fetch(`${{apiBaseUrl}}{api_path}`, {{ cache: "no-store" }});\n'
+        "        if (!response.ok) throw new Error(`HTTP ${response.status}`);\n"
+        "        const rows = extractItems(await response.json());\n"
+        "        if (mounted) setItems(rows);\n"
+        "      } catch (e) {\n"
+        "        const message = e instanceof Error ? e.message : String(e || \"unknown error\");\n"
+        "        if (mounted) {\n"
+        "          setError(message);\n"
+        "          setItems([]);\n"
+        "        }\n"
+        "      } finally {\n"
+        "        if (mounted) setLoading(false);\n"
+        "      }\n"
+        "    })();\n"
+        "    return () => {\n"
+        "      mounted = false;\n"
+        "    };\n"
+        "  }, [apiBaseLoading, apiBaseUrl]);\n\n"
+        "  const filtered = useMemo(() => {\n"
+        "    const needle = query.trim().toLowerCase();\n"
+        "    if (!needle) return items;\n"
+        "    return items.filter((item) => [item.title, item.description, item.status, item.priority, item.severity].some((value) => String(value ?? \"\").toLowerCase().includes(needle)));\n"
+        "  }, [items, query]);\n\n"
+        "  return (\n"
+        '    <section className="mx-auto w-full max-w-2xl space-y-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4 sm:p-5">\n'
+        '      <div className="space-y-2">\n'
+        f'        <h1 className="text-lg font-semibold">{title}</h1>\n'
+        '        <p className="text-xs text-slate-400">Track reported software issues by status and priority.</p>\n'
+        '        <p className="text-xs text-slate-500">API: {apiBaseLoading ? "(resolving...)" : apiBaseUrl}</p>\n'
+        "      </div>\n"
+        '      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">\n'
+        '        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search issues..." className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100" />\n'
+        f'        <Link href="{api_path}/new" className="inline-flex items-center justify-center rounded-md bg-emerald-400 px-3 py-2 text-sm font-semibold text-emerald-950 hover:bg-emerald-300">New issue</Link>\n'
+        "      </div>\n"
+        "      {loading ? <p className=\"text-sm text-slate-300\">{apiBaseLoading ? \"Resolving API base...\" : \"Loading issues...\"}</p> : null}\n"
+        "      {!loading && error ? <p className=\"text-sm text-rose-300\">Failed to load: {error}</p> : null}\n"
+        "      {!loading && !error && filtered.length === 0 ? (\n"
+        '        <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950/40 p-4 text-sm text-slate-300">No issues found.</div>\n'
+        "      ) : null}\n"
+        "      {!loading && !error && filtered.length > 0 ? (\n"
+        '        <ul className="space-y-3">\n'
+        "          {filtered.map((item, index) => (\n"
+        '            <li key={String(item.id ?? index)} className="space-y-2 rounded-lg border border-slate-700 bg-slate-950/50 p-4">\n'
+        '              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">\n'
+        '                <h2 className="text-base font-semibold text-slate-100">{String(item.title || `Untitled issue #${item.id ?? index}`)}</h2>\n'
+        '                <div className="flex flex-wrap gap-2">\n'
+        '                  <span className={`inline-flex w-fit items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${statusTone(item.status)}`}>{String(item.status || "unknown")}</span>\n'
+        '                  <span className={`inline-flex w-fit items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${priorityTone(priorityValue(item))}`}>{priorityValue(item)}</span>\n'
+        "                </div>\n"
+        "              </div>\n"
+        '              <p className="whitespace-pre-wrap text-sm leading-6 text-slate-200">{previewText(item)}</p>\n'
+        "              {item.id !== undefined ? (\n"
+        f'                <Link href={{`{api_path}/${{String(item.id)}}`}} className="inline-block text-xs font-medium text-cyan-300 underline">Open issue</Link>\n'
+        "              ) : null}\n"
+        "            </li>\n"
+        "          ))}\n"
+        "        </ul>\n"
+        "      ) : null}\n"
+        "    </section>\n"
+        "  );\n"
+        "}\n"
+    )
+
+
+def _render_frontend_issue_detail_page(
+    *,
+    component_name: str,
+    title: str,
+    api_path: str,
+    id_mode: str,
+    api_helper_import: str,
+) -> str:
+    id_source = (
+        'const id = String(searchParams.get("id") || "").trim();'
+        if id_mode == "query"
+        else 'const id = String(params.id || "").trim();'
+    )
+    imports = (
+        'import { useSearchParams } from "next/navigation";\n'
+        if id_mode == "query"
+        else 'import { useParams } from "next/navigation";\n'
+    )
+    hook = "const searchParams = useSearchParams();" if id_mode == "query" else "const params = useParams();"
+    return (
+        '"use client";\n\n'
+        'import Link from "next/link";\n'
+        "import { useEffect, useState } from \"react\";\n"
+        f"{imports}"
+        f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n\n'
+        "type IssueItem = Record<string, unknown>;\n\n"
+        "function statusTone(rawStatus: unknown): string {\n"
+        "  const status = String(rawStatus || \"\").trim().toLowerCase();\n"
+        "  if ([\"open\", \"new\", \"reported\", \"todo\"].includes(status)) return \"border-amber-500/40 bg-amber-500/10 text-amber-200\";\n"
+        "  if ([\"triaged\", \"in_progress\", \"in-progress\", \"investigating\"].includes(status)) return \"border-sky-500/40 bg-sky-500/10 text-sky-200\";\n"
+        "  if ([\"blocked\", \"reopened\"].includes(status)) return \"border-rose-500/40 bg-rose-500/10 text-rose-200\";\n"
+        "  if ([\"resolved\", \"closed\", \"done\", \"fixed\"].includes(status)) return \"border-emerald-500/40 bg-emerald-500/10 text-emerald-200\";\n"
+        "  return \"border-slate-500/40 bg-slate-500/10 text-slate-200\";\n"
+        "}\n\n"
+        "function priorityTone(rawPriority: unknown): string {\n"
+        "  const priority = String(rawPriority || \"\").trim().toLowerCase();\n"
+        "  if ([\"critical\", \"blocker\", \"p0\", \"sev1\"].includes(priority)) return \"border-rose-500/50 bg-rose-500/10 text-rose-200\";\n"
+        "  if ([\"high\", \"p1\", \"major\", \"sev2\"].includes(priority)) return \"border-orange-500/50 bg-orange-500/10 text-orange-200\";\n"
+        "  if ([\"medium\", \"normal\", \"p2\", \"minor\", \"sev3\"].includes(priority)) return \"border-cyan-500/40 bg-cyan-500/10 text-cyan-200\";\n"
+        "  return \"border-slate-500/40 bg-slate-500/10 text-slate-200\";\n"
+        "}\n\n"
+        "function priorityValue(item: IssueItem): string {\n"
+        "  return String(item.priority ?? item.severity ?? \"unprioritized\");\n"
+        "}\n\n"
+        f"export default function {component_name}() {{\n"
+        f"  {hook}\n"
+        f"  {id_source}\n"
+        "  const [item, setItem] = useState<IssueItem | null>(null);\n"
+        "  const [loading, setLoading] = useState(true);\n"
+        "  const [notFound, setNotFound] = useState(false);\n"
+        "  const [error, setError] = useState(\"\");\n"
+        "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
+        "  useEffect(() => {\n"
+        "    if (!id) {\n"
+        "      setLoading(false);\n"
+        "      setNotFound(true);\n"
+        "      return;\n"
+        "    }\n"
+        "    if (apiBaseLoading || !apiBaseUrl) {\n"
+        "      setLoading(true);\n"
+        "      return;\n"
+        "    }\n"
+        "    let mounted = true;\n"
+        "    (async () => {\n"
+        "      setLoading(true);\n"
+        "      setNotFound(false);\n"
+        "      setError(\"\");\n"
+        "      try {\n"
+        f'        const response = await fetch(`${{apiBaseUrl}}{api_path}/${{id}}`, {{ cache: "no-store" }});\n'
+        "        if (response.status === 404) {\n"
+        "          if (mounted) setNotFound(true);\n"
+        "          return;\n"
+        "        }\n"
+        "        if (!response.ok) throw new Error(`HTTP ${response.status}`);\n"
+        "        const payload = (await response.json()) as IssueItem;\n"
+        "        if (mounted) setItem(payload);\n"
+        "      } catch (e) {\n"
+        "        const message = e instanceof Error ? e.message : String(e || \"unknown error\");\n"
+        "        if (mounted) setError(message);\n"
+        "      } finally {\n"
+        "        if (mounted) setLoading(false);\n"
+        "      }\n"
+        "    })();\n"
+        "    return () => {\n"
+        "      mounted = false;\n"
+        "    };\n"
+        "  }, [apiBaseLoading, apiBaseUrl, id]);\n\n"
+        "  return (\n"
+        '    <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">\n'
+        f'      <h1 className="text-lg font-semibold">{title} Detail</h1>\n'
+        "      {!id ? <p className=\"text-sm text-slate-300\">Missing issue id.</p> : null}\n"
+        "      {loading ? <p className=\"text-sm text-slate-300\">{apiBaseLoading ? \"Resolving API base...\" : \"Loading issue...\"}</p> : null}\n"
+        "      {!loading && notFound ? <p className=\"text-sm text-slate-300\">Issue not found.</p> : null}\n"
+        "      {!loading && error ? <p className=\"text-sm text-rose-300\">Failed to load: {error}</p> : null}\n"
+        "      {!loading && !notFound && !error && item ? (\n"
+        '        <article className="space-y-4 rounded-xl border border-slate-700 bg-slate-950/50 p-4">\n'
+        '          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">\n'
+        "            <div className=\"min-w-0 space-y-1\">\n"
+        '              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Issue</p>\n'
+        "              <h2 className=\"break-words text-xl font-semibold text-slate-100\">{String(item.title ?? `Issue #${id}`)}</h2>\n"
+        "            </div>\n"
+        '            <div className="flex flex-wrap gap-2">\n'
+        '              <span className={`inline-flex w-fit items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${statusTone(item.status)}`}>{String(item.status ?? "unknown")}</span>\n'
+        '              <span className={`inline-flex w-fit items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${priorityTone(priorityValue(item))}`}>{priorityValue(item)}</span>\n'
+        "            </div>\n"
+        "          </div>\n"
+        '          <section className="space-y-2 rounded-md border border-slate-800 bg-slate-900/40 p-3">\n'
+        '            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-300">Description</h3>\n'
+        "            <p className=\"whitespace-pre-wrap text-sm leading-7 text-slate-200\">{String(item.description ?? item.content ?? item.summary ?? \"No description provided.\")}</p>\n"
+        "          </section>\n"
+        '          <section className="space-y-2 rounded-md border border-slate-800 bg-slate-900/40 p-3">\n'
+        '            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-300">Metadata</h3>\n'
+        '            <dl className="grid gap-2 text-xs text-slate-300 sm:grid-cols-3">\n'
+        "              <div><dt className=\"text-slate-500\">ID</dt><dd>{String(item.id ?? id)}</dd></div>\n"
+        "              <div><dt className=\"text-slate-500\">Created</dt><dd>{String(item.created_at ?? item.created ?? \"(unset)\")}</dd></div>\n"
+        "              <div><dt className=\"text-slate-500\">Updated</dt><dd>{String(item.updated_at ?? item.updated ?? \"(unset)\")}</dd></div>\n"
+        "            </dl>\n"
+        "          </section>\n"
+        '          <div className="flex gap-3 text-xs">\n'
+        f'            <Link href="{api_path}" className="text-cyan-300 underline">Back to list</Link>\n'
+        f'            <Link href="{api_path}/new" className="text-emerald-300 underline">Create another</Link>\n'
+        "          </div>\n"
+        "        </article>\n"
         "      ) : null}\n"
         "    </section>\n"
         "  );\n"

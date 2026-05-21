@@ -20,6 +20,11 @@ def test_detect_project_type_fullstack_web() -> None:
     assert detect_project_type(idea) == "fullstack-web"
 
 
+def test_detect_project_type_bug_tracker_defaults_to_fullstack_web() -> None:
+    assert detect_project_type("bug tracker") == "fullstack-web"
+    assert detect_project_type("software issue manager") == "fullstack-web"
+
+
 def test_detect_project_type_cli_tool() -> None:
     assert detect_project_type("python cli tool for csv merge") == "cli-tool"
 

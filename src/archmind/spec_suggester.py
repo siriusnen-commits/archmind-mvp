@@ -11,6 +11,8 @@ from .reasoning import try_generate_reasoning_json
 DOMAIN_ENTITY_MAP: dict[str, str] = {
     "tasks": "Task",
     "defects": "Defect",
+    "issues": "Issue",
+    "tickets": "Issue",
     "teams": "Team",
     "documents": "Document",
     "expenses": "Expense",
@@ -28,7 +30,18 @@ DOMAIN_ENTITY_MAP: dict[str, str] = {
 
 ENTITY_FIELD_MAP: dict[str, list[dict[str, str]]] = {
     "Task": [{"name": "title", "type": "string"}, {"name": "status", "type": "string"}],
-    "Defect": [{"name": "title", "type": "string"}, {"name": "status", "type": "string"}],
+    "Issue": [
+        {"name": "title", "type": "string"},
+        {"name": "description", "type": "string"},
+        {"name": "status", "type": "string"},
+        {"name": "priority", "type": "string"},
+    ],
+    "Defect": [
+        {"name": "title", "type": "string"},
+        {"name": "description", "type": "string"},
+        {"name": "status", "type": "string"},
+        {"name": "severity", "type": "string"},
+    ],
     "Device": [{"name": "model_name", "type": "string"}, {"name": "firmware_version", "type": "string"}],
     "TestRun": [{"name": "result", "type": "string"}, {"name": "executed_at", "type": "datetime"}],
     "Team": [{"name": "name", "type": "string"}],
@@ -62,6 +75,18 @@ ENTITY_FIELD_MAP: dict[str, list[dict[str, str]]] = {
 
 DIARY_SIGNAL_WORDS = ("diary", "journal", "journaling")
 TAGGING_SIGNAL_WORDS = ("tag", "tags", "tagging", "label", "labels", "category", "categories")
+ISSUE_TRACKER_SIGNAL_WORDS = (
+    "bug",
+    "bugs",
+    "defect",
+    "defects",
+    "issue",
+    "issues",
+    "issue tracker",
+    "software issue manager",
+    "ticket",
+    "tickets",
+)
 
 
 def _add_entity_once(out: list[str], seen: set[str], entity_name: str) -> None:
@@ -240,9 +265,31 @@ def _build_starter_profile(text: str, domains: list[str], frontend_needed: bool)
         _has_word(normalized, token)
         for token in ("bookmark", "bookmarks", "bookmark manager", "reading list", "saved link", "saved links", "link saver")
     ) or "bookmarks" in domain_set
+    has_issue_tracker = any(_has_word(normalized, token) for token in ISSUE_TRACKER_SIGNAL_WORDS) or any(
+        token in domain_set for token in ("defects", "issues", "tickets")
+    )
     has_diary_signal = _has_any_word(normalized, DIARY_SIGNAL_WORDS) or any(
         token in domain_set for token in ("diary", "journal", "journals", "journaling", "entries")
     )
+
+    if has_issue_tracker:
+        entity_name = "Defect" if any(_has_word(normalized, token) for token in ("defect", "defects")) else "Issue"
+        resource = "defects" if entity_name == "Defect" else "issues"
+        priority_field = "severity" if entity_name == "Defect" else "priority"
+        return {
+            "family": "issue_tracker",
+            "entities": [entity_name],
+            "entity_fields": {
+                entity_name: [
+                    {"name": "title", "type": "string"},
+                    {"name": "description", "type": "string"},
+                    {"name": "status", "type": "string"},
+                    {"name": priority_field, "type": "string"},
+                ]
+            },
+            "required_api_endpoints": _build_crud_endpoints(resource, full=True),
+            "required_frontend_pages": _build_core_pages(resource) if frontend_needed else [],
+        }
 
     if has_board:
         entities = ["Board", "Card"]
@@ -459,7 +506,10 @@ def suggest_project_spec(
             seen.add(entity_text)
             selected_entities.append(entity_text)
 
+    starter_family = str(starter_profile.get("family") or "").strip().lower() if isinstance(starter_profile, dict) else ""
     for domain in domains:
+        if starter_family == "issue_tracker" and domain in {"defects", "issues", "tickets"}:
+            continue
         entity = DOMAIN_ENTITY_MAP.get(domain)
         if not entity or entity in seen:
             continue
@@ -482,9 +532,10 @@ def suggest_project_spec(
     if "qa" in text and any(k in text for k in ("hardware", "defect", "bug", "issue", "tracker")) and "TestRun" not in seen:
         seen.add("TestRun")
         selected_entities.append("TestRun")
-    if any(k in text for k in ("defect", "bug", "issue")) and "Defect" not in seen:
-        seen.add("Defect")
-        selected_entities.append("Defect")
+    if any(k in text for k in ("defect", "bug", "issue", "ticket")) and not ({"Issue", "Defect"} & seen):
+        issue_entity = "Defect" if "defect" in text else "Issue"
+        seen.add(issue_entity)
+        selected_entities.append(issue_entity)
     if _has_any_word(text, DIARY_SIGNAL_WORDS) and "Entry" not in seen:
         seen.add("Entry")
         selected_entities.append("Entry")
@@ -533,7 +584,7 @@ def suggest_project_spec(
         _, plural = _entity_slug_and_plural(entity_name)
         if not plural:
             continue
-        full_crud = entity_name in {"Task", "Note", "Entry", "Tag"}
+        full_crud = entity_name in {"Task", "Note", "Entry", "Tag", "Issue", "Defect"}
         api_endpoints.extend(_build_crud_endpoints(plural, full=full_crud))
         if frontend_needed:
             pages.extend(_build_core_pages(plural))
