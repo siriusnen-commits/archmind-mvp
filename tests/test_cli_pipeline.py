@@ -378,6 +378,54 @@ def test_pipeline_non_starter_idea_does_not_force_todo_profile(tmp_path: Path, m
     assert "Task" not in entity_names
 
 
+def test_pipeline_project_spec_persists_inferred_patterns(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_seed_scaffold)
+    monkeypatch.setattr(
+        "archmind.pipeline.suggest_project_spec",
+        lambda *_args, **_kwargs: {
+            "entities": [
+                {
+                    "name": "Ticket",
+                    "fields": [
+                        {"name": "title", "type": "string"},
+                        {"name": "status", "type": "string"},
+                        {"name": "priority", "type": "string"},
+                    ],
+                }
+            ],
+            "api_endpoints": ["GET /tickets", "POST /tickets", "GET /tickets/{id}"],
+            "frontend_pages": ["tickets/list", "tickets/new", "tickets/detail"],
+        },
+    )
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "support ticket manager",
+            "--template",
+            "fullstack-ddd",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "ticket_patterns",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+
+    assert exit_code == 0
+    project_spec = json.loads((tmp_path / "ticket_patterns" / ".archmind" / "project_spec.json").read_text(encoding="utf-8"))
+    pattern_types = {str(row.get("type") or "") for row in project_spec.get("patterns", []) if isinstance(row, dict)}
+    assert "workflow_status" in pattern_types
+    ticket = next(entity for entity in project_spec["entities"] if entity["name"] == "Ticket")
+    entity_pattern_types = {str(row.get("type") or "") for row in ticket.get("patterns", []) if isinstance(row, dict)}
+    assert "workflow_status" in entity_pattern_types
+
+
 def test_pipeline_project_spec_persists_canonical_contract_keys(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_seed_scaffold)
     monkeypatch.setattr(

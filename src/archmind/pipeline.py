@@ -1115,6 +1115,19 @@ def _write_project_spec(
             "frontend_pages": frontend_pages,
             "evolution": evolution,
         }
+        try:
+            from archmind.app_patterns import infer_app_patterns, infer_entity_patterns
+
+            patterns = infer_app_patterns(payload, architecture_reasoning.get("idea_normalized"))
+            if patterns:
+                payload["patterns"] = patterns
+                for entity in entities:
+                    if isinstance(entity, dict):
+                        entity_patterns = infer_entity_patterns(entity)
+                        if entity_patterns:
+                            entity["patterns"] = entity_patterns
+        except Exception:
+            pass
         apis = suggestion.get("apis") if isinstance(suggestion.get("apis"), list) else []
         pages = suggestion.get("pages") if isinstance(suggestion.get("pages"), list) else []
         resources = suggestion.get("resources") if isinstance(suggestion.get("resources"), list) else []

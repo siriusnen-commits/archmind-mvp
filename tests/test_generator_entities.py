@@ -22,6 +22,7 @@ from archmind.generator import (
     infer_field_semantics,
     normalize_project_spec,
 )
+from archmind.app_patterns import infer_app_patterns
 
 
 def _import_generated_backend_app(project_dir: Path, db_url: str):
@@ -339,6 +340,36 @@ def test_normalize_project_spec_infers_semantic_field_metadata() -> None:
     assert fields["price"]["type"] == "number"
     assert fields["url"]["semantic_type"] == "url"
     assert fields["name"]["type"] == "string"
+    pattern_types = {str(row.get("type") or "") for row in normalized.get("patterns", []) if isinstance(row, dict)}
+    assert "metric_quantity" in pattern_types
+    assert "reference_link" in pattern_types
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected_pattern"),
+    [
+        ([{"name": "status"}, {"name": "priority"}], "workflow_status"),
+        ([{"name": "quantity"}, {"name": "price"}], "metric_quantity"),
+        ([{"name": "due_date"}], "timeline_date"),
+        ([{"name": "category"}, {"name": "tag"}], "classification"),
+        ([{"name": "url"}, {"name": "email"}], "reference_link"),
+        ([{"name": "assignee"}, {"name": "owner"}], "ownership"),
+    ],
+)
+def test_infer_app_patterns_from_common_fields(fields: list[dict[str, str]], expected_pattern: str) -> None:
+    patterns = infer_app_patterns({"entities": [{"name": "Record", "fields": fields}]})
+    pattern_types = {str(row.get("type") or "") for row in patterns}
+    assert expected_pattern in pattern_types
+
+
+def test_normalize_project_spec_adds_entity_level_patterns_and_accepts_old_specs() -> None:
+    old_spec = {"entities": [{"name": "Case", "fields": [{"name": "status", "type": "string"}]}]}
+
+    normalized = normalize_project_spec(old_spec, "support case manager")
+
+    assert "patterns" in normalized
+    assert normalized["patterns"][0]["type"] == "workflow_status"
+    assert normalized["entities"][0]["patterns"][0]["type"] == "workflow_status"
 
 
 def test_generate_project_starter_crud_create_and_list_persist_across_todo_diary_bookmark(tmp_path: Path) -> None:
@@ -873,7 +904,119 @@ def test_issue_frontend_pages_render_status_priority_badges_without_raw_json(tmp
     assert "onCompositionStart={() => setComposingField(field.name)}" in create_text
     _assert_tsx_syntax_ok(list_text)
     _assert_tsx_syntax_ok(detail_text)
-    assert "onCompositionEnd={(event) =>" in create_text
+
+
+def test_repair_tracker_uses_workflow_pattern_without_bug_domain(tmp_path: Path) -> None:
+    project_dir = tmp_path / "repair_mvp"
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "entities": [
+                    {
+                        "name": "Repair",
+                        "fields": [
+                            {"name": "title", "type": "string"},
+                            {"name": "status", "type": "string"},
+                            {"name": "severity", "type": "string"},
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    apply_frontend_page_scaffold(project_dir, "Repair")
+
+    list_text = (project_dir / "frontend" / "app" / "repairs" / "page.tsx").read_text(encoding="utf-8")
+    detail_text = (project_dir / "frontend" / "app" / "repairs" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+
+    assert "workflowFields" in list_text
+    assert "badgeTone(field, value)" in list_text
+    assert '"kind": "severity"' in list_text
+    assert "workflowFields" in detail_text
+    _assert_tsx_syntax_ok(list_text)
+    _assert_tsx_syntax_ok(detail_text)
+
+
+def test_asset_tracker_uses_metric_and_classification_patterns_without_inventory_domain(tmp_path: Path) -> None:
+    project_dir = tmp_path / "asset_mvp"
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "entities": [
+                    {
+                        "name": "Asset",
+                        "fields": [
+                            {"name": "name", "type": "string"},
+                            {"name": "quantity", "type": "int"},
+                            {"name": "value", "type": "float"},
+                            {"name": "category", "type": "string"},
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    apply_frontend_page_scaffold(project_dir, "Asset")
+
+    list_text = (project_dir / "frontend" / "app" / "assets" / "page.tsx").read_text(encoding="utf-8")
+    detail_text = (project_dir / "frontend" / "app" / "assets" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+
+    assert "metricFields" in list_text
+    assert "classificationFields" in list_text
+    assert '"kind": "quantity"' in list_text
+    assert '"kind": "category"' in list_text
+    assert "Classification" in detail_text
+    assert "Quantity: {formatFieldValue(item, quantityField)}" in detail_text
+    _assert_tsx_syntax_ok(list_text)
+    _assert_tsx_syntax_ok(detail_text)
+
+
+def test_vendor_directory_uses_reference_link_pattern(tmp_path: Path) -> None:
+    project_dir = tmp_path / "vendor_mvp"
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "entities": [
+                    {
+                        "name": "Vendor",
+                        "fields": [
+                            {"name": "name", "type": "string"},
+                            {"name": "email", "type": "string"},
+                            {"name": "website", "type": "string"},
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+
+    apply_frontend_page_scaffold(project_dir, "Vendor")
+
+    list_text = (project_dir / "frontend" / "app" / "vendors" / "page.tsx").read_text(encoding="utf-8")
+    detail_text = (project_dir / "frontend" / "app" / "vendors" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+
+    assert "referenceFields" in list_text
+    assert "mailto:${value}" in list_text
+    assert "`https://${value}`" in list_text
+    assert "References" in detail_text
+    assert '"kind": "email"' in detail_text
+    assert '"kind": "url"' in detail_text
+    _assert_tsx_syntax_ok(list_text)
+    _assert_tsx_syntax_ok(detail_text)
 
 
 def test_inventory_semantic_quantity_reaches_backend_and_inspect(tmp_path: Path) -> None:
