@@ -10,6 +10,7 @@ from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Any, Dict, List, Optional
 
+from .app_patterns import infer_app_patterns, infer_entity_patterns
 from .templates.fastapi import enforce_fastapi_runtime
 from .templates.fastapi_ddd import enforce_fastapi_ddd
 from .templates.nextjs import enforce_nextjs_runtime
@@ -2184,7 +2185,7 @@ def _format_field_label(name: str) -> str:
 
 def _is_quantity_field_name(name: str) -> bool:
     key = _field_name_key(name)
-    return key in {"quantity", "qty", "stock", "stock_count", "count", "available", "on_hand"}
+    return key in {"quantity", "qty", "stock", "stock_count", "count", "available", "on_hand", "balance", "score"}
 
 
 def _is_price_field_name(name: str) -> bool:
@@ -2194,7 +2195,7 @@ def _is_price_field_name(name: str) -> bool:
 
 def _is_category_field_name(name: str) -> bool:
     key = _field_name_key(name)
-    return key in {"category", "category_id", "type", "group", "location"}
+    return key in {"category", "category_id", "tag", "tags", "type", "group", "label", "labels", "location"}
 
 
 def _is_sku_field_name(name: str) -> bool:
@@ -2315,7 +2316,7 @@ def infer_field_semantics(field_name: str, raw_type: str | None = None) -> dict[
         semantic_type = "email"
         renderer = "email"
         input_type = "email"
-    elif key in {"status", "state"}:
+    elif key in {"status", "state", "stage"}:
         inferred_type = "string" if type_is_generic else explicit_type
         semantic_type = "status"
         renderer = "badge"
@@ -2326,6 +2327,10 @@ def infer_field_semantics(field_name: str, raw_type: str | None = None) -> dict[
     elif key == "severity":
         inferred_type = "string" if type_is_generic else explicit_type
         semantic_type = "severity"
+        renderer = "badge"
+    elif key in {"category", "tag", "tags", "type", "group", "label", "labels"}:
+        inferred_type = "string" if type_is_generic else explicit_type
+        semantic_type = "category"
         renderer = "badge"
     elif key in {"title", "name", "description", "note", "content", "summary"}:
         inferred_type = "string" if type_is_generic else explicit_type
@@ -2860,6 +2865,26 @@ def _render_frontend_entity_list_page(
         "  if (field.kind === \"boolean\") return value === \"true\" ? \"Yes\" : \"No\";\n"
         "  return value;\n"
         "}\n\n"
+        "function badgeTone(field: FieldConfig, value: string): string {\n"
+        "  const key = value.trim().toLowerCase();\n"
+        "  if (field.kind === \"status\") {\n"
+        "    if ([\"open\", \"new\", \"todo\", \"pending\"].includes(key)) return \"border-amber-500/40 bg-amber-500/10 text-amber-200\";\n"
+        "    if ([\"in_progress\", \"in-progress\", \"doing\", \"triaged\"].includes(key)) return \"border-sky-500/40 bg-sky-500/10 text-sky-200\";\n"
+        "    if ([\"blocked\", \"reopened\"].includes(key)) return \"border-rose-500/40 bg-rose-500/10 text-rose-200\";\n"
+        "    if ([\"done\", \"closed\", \"resolved\", \"fixed\", \"completed\"].includes(key)) return \"border-emerald-500/40 bg-emerald-500/10 text-emerald-200\";\n"
+        "  }\n"
+        "  if ([\"priority\", \"severity\"].includes(field.kind)) {\n"
+        "    if ([\"critical\", \"blocker\", \"p0\", \"sev1\"].includes(key)) return \"border-rose-500/50 bg-rose-500/10 text-rose-200\";\n"
+        "    if ([\"high\", \"p1\", \"major\", \"sev2\"].includes(key)) return \"border-orange-500/50 bg-orange-500/10 text-orange-200\";\n"
+        "    if ([\"medium\", \"normal\", \"p2\", \"minor\", \"sev3\"].includes(key)) return \"border-cyan-500/40 bg-cyan-500/10 text-cyan-200\";\n"
+        "  }\n"
+        "  return \"border-slate-500/40 bg-slate-500/10 text-slate-200\";\n"
+        "}\n\n"
+        "function referenceHref(field: FieldConfig, value: string): string {\n"
+        "  if (field.kind === \"email\") return `mailto:${value}`;\n"
+        "  if (field.kind === \"url\") return /^https?:\\/\\//i.test(value) ? value : `https://${value}`;\n"
+        "  return value;\n"
+        "}\n\n"
         f"export default function {component_name}() {{\n"
         "  const [items, setItems] = useState<EntityItem[]>([]);\n"
         "  const [query, setQuery] = useState(\"\");\n"
@@ -2868,7 +2893,11 @@ def _render_frontend_entity_list_page(
         "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
         "  const primaryField = fieldConfigs.find((field) => [\"name\", \"title\", \"label\"].includes(field.name));\n"
         "  const quantityField = fieldConfigs.find((field) => field.kind === \"quantity\");\n"
-        "  const summaryFields = fieldConfigs.filter((field) => [\"category\", \"sku\", \"price\"].includes(field.kind));\n"
+        "  const workflowFields = fieldConfigs.filter((field) => [\"status\", \"priority\", \"severity\"].includes(field.kind));\n"
+        "  const metricFields = fieldConfigs.filter((field) => [\"quantity\", \"price\", \"number\"].includes(field.kind));\n"
+        "  const classificationFields = fieldConfigs.filter((field) => field.kind === \"category\");\n"
+        "  const referenceFields = fieldConfigs.filter((field) => [\"url\", \"email\"].includes(field.kind));\n"
+        "  const summaryFields = fieldConfigs.filter((field) => [\"sku\"].includes(field.kind));\n"
         "  const visibleItems = useMemo(() => {\n"
         "    const needle = query.trim().toLowerCase();\n"
         "    if (!needle) return items;\n"
@@ -2944,7 +2973,38 @@ def _render_frontend_entity_list_page(
         "                    Qty {quantity ?? \"-\"}{lowStock ? \" low\" : \"\"}\n"
         "                  </span>\n"
         "                ) : null}\n"
+        "                {workflowFields.length > 0 ? (\n"
+        "                  <div className=\"flex flex-wrap justify-end gap-1\">\n"
+        "                    {workflowFields.map((field) => {\n"
+        "                      const value = formatFieldValue(item, field);\n"
+        "                      return <span key={field.name} className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${badgeTone(field, value)}`}>{value}</span>;\n"
+        "                    })}\n"
+        "                  </div>\n"
+        "                ) : null}\n"
         "              </div>\n"
+        "              {metricFields.length > 0 && !quantityField ? (\n"
+        "                <dl className=\"mt-3 grid gap-2 text-xs text-slate-300 sm:grid-cols-2\">\n"
+        "                  {metricFields.map((field) => (\n"
+        "                    <div key={field.name} className=\"rounded bg-slate-900/70 px-2 py-1\">\n"
+        "                      <dt className=\"text-slate-500\">{field.label}</dt>\n"
+        "                      <dd className=\"font-semibold text-slate-100\">{formatFieldValue(item, field)}</dd>\n"
+        "                    </div>\n"
+        "                  ))}\n"
+        "                </dl>\n"
+        "              ) : null}\n"
+        "              {classificationFields.length > 0 ? (\n"
+        "                <div className=\"mt-3 flex flex-wrap gap-1\">\n"
+        "                  {classificationFields.map((field) => <span key={field.name} className=\"rounded-full border border-slate-600 bg-slate-800 px-2 py-0.5 text-[11px] text-slate-200\">{formatFieldValue(item, field)}</span>)}\n"
+        "                </div>\n"
+        "              ) : null}\n"
+        "              {referenceFields.length > 0 ? (\n"
+        "                <div className=\"mt-3 flex flex-col gap-1 text-xs\">\n"
+        "                  {referenceFields.map((field) => {\n"
+        "                    const value = formatFieldValue(item, field);\n"
+        "                    return value === \"(unset)\" ? null : <a key={field.name} href={referenceHref(field, value)} className=\"break-all text-cyan-300 underline\">{value}</a>;\n"
+        "                  })}\n"
+        "                </div>\n"
+        "              ) : null}\n"
         "              {summaryFields.length > 0 ? (\n"
         '                <dl className="mt-3 grid gap-2 text-xs text-slate-300">\n'
         "                  {summaryFields.map((field) => (\n"
@@ -3192,7 +3252,44 @@ def _render_frontend_entity_detail_page(
         "                Quantity: {formatFieldValue(item, quantityField)}{isLowStock(item) ? \" low stock\" : \"\"}\n"
         "              </span>\n"
         "            ) : null}\n"
+        "            {workflowFields.length > 0 ? (\n"
+        "              <div className=\"flex flex-wrap gap-2\">\n"
+        "                {workflowFields.map((field) => {\n"
+        "                  const value = formatFieldValue(item, field);\n"
+        "                  return <span key={field.name} className={`rounded-full border px-3 py-1.5 text-xs font-semibold uppercase tracking-wide ${badgeTone(field, value)}`}>{field.label}: {value}</span>;\n"
+        "                })}\n"
+        "              </div>\n"
+        "            ) : null}\n"
         "          </div>\n"
+        "          {metricFields.length > 0 && !quantityField ? (\n"
+        "            <dl className=\"grid gap-2 text-sm sm:grid-cols-3\">\n"
+        "              {metricFields.map((field) => (\n"
+        "                <div key={field.name} className=\"rounded-md border border-slate-800 bg-slate-900/70 p-3\">\n"
+        "                  <dt className=\"text-xs uppercase tracking-wide text-slate-500\">{field.label}</dt>\n"
+        "                  <dd className=\"mt-1 font-semibold text-slate-100\">{formatFieldValue(item, field)}</dd>\n"
+        "                </div>\n"
+        "              ))}\n"
+        "            </dl>\n"
+        "          ) : null}\n"
+        "          {classificationFields.length > 0 ? (\n"
+        "            <section className=\"space-y-2 rounded-md border border-slate-800 bg-slate-900/40 p-3\">\n"
+        "              <h3 className=\"text-xs font-semibold uppercase tracking-wide text-slate-300\">Classification</h3>\n"
+        "              <div className=\"flex flex-wrap gap-2\">\n"
+        "                {classificationFields.map((field) => <span key={field.name} className=\"rounded-full border border-slate-600 bg-slate-800 px-2.5 py-1 text-xs text-slate-200\">{field.label}: {formatFieldValue(item, field)}</span>)}\n"
+        "              </div>\n"
+        "            </section>\n"
+        "          ) : null}\n"
+        "          {referenceFields.length > 0 ? (\n"
+        "            <section className=\"space-y-2 rounded-md border border-slate-800 bg-slate-900/40 p-3\">\n"
+        "              <h3 className=\"text-xs font-semibold uppercase tracking-wide text-slate-300\">References</h3>\n"
+        "              <div className=\"grid gap-2 text-sm\">\n"
+        "                {referenceFields.map((field) => {\n"
+        "                  const value = formatFieldValue(item, field);\n"
+        "                  return value === \"(unset)\" ? null : <a key={field.name} href={referenceHref(field, value)} className=\"break-all text-cyan-300 underline\">{field.label}: {value}</a>;\n"
+        "                })}\n"
+        "              </div>\n"
+        "            </section>\n"
+        "          ) : null}\n"
         "          {highlightFields.length > 0 ? (\n"
         "            <dl className=\"grid gap-2 text-sm sm:grid-cols-3\">\n"
         "              {highlightFields.map((field) => (\n"
@@ -3258,6 +3355,26 @@ def _render_frontend_entity_detail_page(
         "  if (field.kind === \"boolean\") return value === \"true\" ? \"Yes\" : \"No\";\n"
         "  return value;\n"
         "}\n\n"
+        "function badgeTone(field: FieldConfig, value: string): string {\n"
+        "  const key = value.trim().toLowerCase();\n"
+        "  if (field.kind === \"status\") {\n"
+        "    if ([\"open\", \"new\", \"todo\", \"pending\"].includes(key)) return \"border-amber-500/40 bg-amber-500/10 text-amber-200\";\n"
+        "    if ([\"in_progress\", \"in-progress\", \"doing\", \"triaged\"].includes(key)) return \"border-sky-500/40 bg-sky-500/10 text-sky-200\";\n"
+        "    if ([\"blocked\", \"reopened\"].includes(key)) return \"border-rose-500/40 bg-rose-500/10 text-rose-200\";\n"
+        "    if ([\"done\", \"closed\", \"resolved\", \"fixed\", \"completed\"].includes(key)) return \"border-emerald-500/40 bg-emerald-500/10 text-emerald-200\";\n"
+        "  }\n"
+        "  if ([\"priority\", \"severity\"].includes(field.kind)) {\n"
+        "    if ([\"critical\", \"blocker\", \"p0\", \"sev1\"].includes(key)) return \"border-rose-500/50 bg-rose-500/10 text-rose-200\";\n"
+        "    if ([\"high\", \"p1\", \"major\", \"sev2\"].includes(key)) return \"border-orange-500/50 bg-orange-500/10 text-orange-200\";\n"
+        "    if ([\"medium\", \"normal\", \"p2\", \"minor\", \"sev3\"].includes(key)) return \"border-cyan-500/40 bg-cyan-500/10 text-cyan-200\";\n"
+        "  }\n"
+        "  return \"border-slate-500/40 bg-slate-500/10 text-slate-200\";\n"
+        "}\n\n"
+        "function referenceHref(field: FieldConfig, value: string): string {\n"
+        "  if (field.kind === \"email\") return `mailto:${value}`;\n"
+        "  if (field.kind === \"url\") return /^https?:\\/\\//i.test(value) ? value : `https://${value}`;\n"
+        "  return value;\n"
+        "}\n\n"
         f"{helper_extract_rows}\n"
         f"export default function {component_name}() {{\n"
         f"  {hook}\n"
@@ -3269,9 +3386,13 @@ def _render_frontend_entity_detail_page(
         "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
         "  const primaryField = fieldConfigs.find((field) => [\"name\", \"title\", \"label\"].includes(field.name));\n"
         "  const quantityField = fieldConfigs.find((field) => field.kind === \"quantity\");\n"
-        "  const highlightFields = fieldConfigs.filter((field) => [\"category\", \"sku\", \"price\"].includes(field.kind));\n"
+        "  const workflowFields = fieldConfigs.filter((field) => [\"status\", \"priority\", \"severity\"].includes(field.kind));\n"
+        "  const metricFields = fieldConfigs.filter((field) => [\"quantity\", \"price\", \"number\"].includes(field.kind));\n"
+        "  const classificationFields = fieldConfigs.filter((field) => field.kind === \"category\");\n"
+        "  const referenceFields = fieldConfigs.filter((field) => [\"url\", \"email\"].includes(field.kind));\n"
+        "  const highlightFields = fieldConfigs.filter((field) => [\"sku\"].includes(field.kind));\n"
         "  const metadataFields = fieldConfigs.filter((field) => field.metadata && field.name !== \"id\");\n"
-        "  const additionalFields = fieldConfigs.filter((field) => !field.metadata && field.name !== primaryField?.name && field.name !== quantityField?.name && !highlightFields.some((highlight) => highlight.name === field.name));\n"
+        "  const additionalFields = fieldConfigs.filter((field) => !field.metadata && field.name !== primaryField?.name && !metricFields.some((metric) => metric.name === field.name) && !workflowFields.some((workflow) => workflow.name === field.name) && !classificationFields.some((classification) => classification.name === field.name) && !referenceFields.some((reference) => reference.name === field.name) && !highlightFields.some((highlight) => highlight.name === field.name));\n"
         "  function displayTitle(current: EntityItem): string {\n"
         "    return textValue(current, primaryField) || String((current as Record<string, unknown>).name ?? (current as Record<string, unknown>).title ?? `Item #${id}`);\n"
         "  }\n"
@@ -5105,7 +5226,11 @@ def _normalize_entity_seed_item(raw: Any) -> dict[str, Any] | None:
                 continue
             seen_fields.add(key)
             fields.append(field)
-    return {"name": name, "fields": fields}
+    entity = {"name": name, "fields": fields}
+    patterns = infer_entity_patterns(entity)
+    if patterns:
+        entity["patterns"] = patterns
+    return entity
 
 
 def _normalize_api_seed_item(raw: Any) -> str:
@@ -5289,6 +5414,17 @@ def normalize_project_spec(raw: Any, idea: str | None = None) -> dict[str, Any]:
 
     if isinstance(idea, str) and idea.strip() and "summary" not in payload:
         payload["summary"] = idea.strip()
+
+    patterns = infer_app_patterns(payload, idea)
+    if patterns:
+        payload["patterns"] = patterns
+        entity_rows = payload.get("entities") if isinstance(payload.get("entities"), list) else []
+        for entity in entity_rows:
+            if not isinstance(entity, dict):
+                continue
+            entity_patterns = infer_entity_patterns(entity)
+            if entity_patterns:
+                entity["patterns"] = entity_patterns
 
     return payload
 

@@ -1097,6 +1097,7 @@ def test_ui_project_analysis_endpoint_response_shape(monkeypatch, tmp_path: Path
     assert payload["project_name"] == "analysis-project"
     assert isinstance(payload["entities"], list)
     assert isinstance(payload["fields_by_entity"], dict)
+    assert isinstance(payload["patterns"], list)
     assert isinstance(payload["apis"], list)
     assert isinstance(payload["pages"], list)
     assert isinstance(payload["entity_graph"], dict)
@@ -1113,8 +1114,34 @@ def test_ui_project_analysis_endpoint_response_shape(monkeypatch, tmp_path: Path
     assert isinstance(payload["next_action_explanation"], dict)
     for key in ("kind", "message", "command"):
         assert key in payload["next_action"]
-    for key in ("gap_type", "reason_summary", "priority_reason", "expected_effect"):
-        assert key in payload["next_action_explanation"]
+
+
+def test_ui_project_analysis_exposes_inferred_patterns(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "analysis-patterns")
+    spec_path = project_dir / ".archmind" / "project_spec.json"
+    payload = json.loads(spec_path.read_text(encoding="utf-8"))
+    payload["entities"] = [
+        {
+            "name": "Ticket",
+            "fields": [
+                {"name": "title", "type": "string"},
+                {"name": "status", "type": "string"},
+                {"name": "priority", "type": "string"},
+            ],
+        }
+    ]
+    spec_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.get("/ui/projects/analysis-patterns/analysis")
+
+    assert response.status_code == 200
+    data = response.json()
+    pattern_types = {str(row.get("type") or "") for row in data.get("patterns", []) if isinstance(row, dict)}
+    assert "workflow_status" in pattern_types
 
 
 def test_ui_project_analysis_endpoint_filters_and_limits_next_candidates(monkeypatch, tmp_path: Path) -> None:

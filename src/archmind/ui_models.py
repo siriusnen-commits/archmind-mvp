@@ -222,6 +222,7 @@ class ProjectAnalysisResponse(BaseModel):
     project_name: str = ""
     entities: list[str] = Field(default_factory=list)
     fields_by_entity: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+    patterns: list[dict[str, Any]] = Field(default_factory=list)
     apis: list[dict[str, str]] = Field(default_factory=list)
     pages: list[str] = Field(default_factory=list)
     entity_graph: dict[str, Any] = Field(default_factory=dict)

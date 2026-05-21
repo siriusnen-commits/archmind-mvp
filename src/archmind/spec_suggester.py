@@ -12,7 +12,9 @@ DOMAIN_ENTITY_MAP: dict[str, str] = {
     "tasks": "Task",
     "defects": "Defect",
     "issues": "Issue",
-    "tickets": "Issue",
+    "tickets": "Ticket",
+    "assets": "Asset",
+    "vendors": "Vendor",
     "teams": "Team",
     "documents": "Document",
     "expenses": "Expense",
@@ -41,6 +43,30 @@ ENTITY_FIELD_MAP: dict[str, list[dict[str, str]]] = {
         {"name": "description", "type": "string"},
         {"name": "status", "type": "string"},
         {"name": "severity", "type": "string"},
+    ],
+    "Ticket": [
+        {"name": "title", "type": "string"},
+        {"name": "description", "type": "string"},
+        {"name": "status", "type": "string"},
+        {"name": "priority", "type": "string"},
+    ],
+    "Repair": [
+        {"name": "title", "type": "string"},
+        {"name": "status", "type": "string"},
+        {"name": "severity", "type": "string"},
+        {"name": "scheduled_at", "type": "datetime"},
+    ],
+    "Asset": [
+        {"name": "name", "type": "string"},
+        {"name": "quantity", "type": "int"},
+        {"name": "value", "type": "float"},
+        {"name": "category", "type": "string"},
+    ],
+    "Vendor": [
+        {"name": "name", "type": "string"},
+        {"name": "email", "type": "string"},
+        {"name": "website", "type": "string"},
+        {"name": "category", "type": "string"},
     ],
     "Device": [{"name": "model_name", "type": "string"}, {"name": "firmware_version", "type": "string"}],
     "TestRun": [{"name": "result", "type": "string"}, {"name": "executed_at", "type": "datetime"}],
@@ -265,16 +291,67 @@ def _build_starter_profile(text: str, domains: list[str], frontend_needed: bool)
         _has_word(normalized, token)
         for token in ("bookmark", "bookmarks", "bookmark manager", "reading list", "saved link", "saved links", "link saver")
     ) or "bookmarks" in domain_set
+    has_inventory = any(_has_word(normalized, token) for token in ("inventory", "stock", "asset inventory")) or "inventory" in domain_set
     has_issue_tracker = any(_has_word(normalized, token) for token in ISSUE_TRACKER_SIGNAL_WORDS) or any(
         token in domain_set for token in ("defects", "issues", "tickets")
     )
+    has_asset_tracker = any(_has_word(normalized, token) for token in ("asset", "assets", "asset tracker")) or "assets" in domain_set
+    has_vendor_directory = any(_has_word(normalized, token) for token in ("vendor", "vendors", "vendor directory", "directory")) or "vendors" in domain_set
+    has_repair_tracker = any(_has_word(normalized, token) for token in ("repair", "repairs", "repair tracker")) or "repairs" in domain_set
     has_diary_signal = _has_any_word(normalized, DIARY_SIGNAL_WORDS) or any(
         token in domain_set for token in ("diary", "journal", "journals", "journaling", "entries")
     )
 
+    if has_vendor_directory and any(_has_word(normalized, token) for token in ("vendor", "vendors")):
+        return {
+            "family": "reference_directory",
+            "entities": ["Vendor"],
+            "entity_fields": {"Vendor": ENTITY_FIELD_MAP["Vendor"]},
+            "required_api_endpoints": _build_crud_endpoints("vendors", full=True),
+            "required_frontend_pages": _build_core_pages("vendors") if frontend_needed else [],
+        }
+
+    if has_asset_tracker:
+        return {
+            "family": "metric_asset_tracker",
+            "entities": ["Asset"],
+            "entity_fields": {"Asset": ENTITY_FIELD_MAP["Asset"]},
+            "required_api_endpoints": _build_crud_endpoints("assets", full=True),
+            "required_frontend_pages": _build_core_pages("assets") if frontend_needed else [],
+        }
+
+    if has_inventory:
+        return {
+            "family": "metric_inventory",
+            "entities": ["Item"],
+            "entity_fields": {
+                "Item": [
+                    {"name": "name", "type": "string"},
+                    {"name": "quantity", "type": "int"},
+                    {"name": "category", "type": "string"},
+                ]
+            },
+            "required_api_endpoints": _build_crud_endpoints("items", full=True),
+            "required_frontend_pages": _build_core_pages("items") if frontend_needed else [],
+        }
+
+    if has_repair_tracker:
+        return {
+            "family": "workflow_repair_tracker",
+            "entities": ["Repair"],
+            "entity_fields": {"Repair": ENTITY_FIELD_MAP["Repair"]},
+            "required_api_endpoints": _build_crud_endpoints("repairs", full=True),
+            "required_frontend_pages": _build_core_pages("repairs") if frontend_needed else [],
+        }
+
     if has_issue_tracker:
-        entity_name = "Defect" if any(_has_word(normalized, token) for token in ("defect", "defects")) else "Issue"
-        resource = "defects" if entity_name == "Defect" else "issues"
+        if any(_has_word(normalized, token) for token in ("ticket", "tickets", "support")):
+            entity_name = "Ticket"
+        elif any(_has_word(normalized, token) for token in ("defect", "defects")):
+            entity_name = "Defect"
+        else:
+            entity_name = "Issue"
+        resource = "tickets" if entity_name == "Ticket" else ("defects" if entity_name == "Defect" else "issues")
         priority_field = "severity" if entity_name == "Defect" else "priority"
         return {
             "family": "issue_tracker",
@@ -532,8 +609,8 @@ def suggest_project_spec(
     if "qa" in text and any(k in text for k in ("hardware", "defect", "bug", "issue", "tracker")) and "TestRun" not in seen:
         seen.add("TestRun")
         selected_entities.append("TestRun")
-    if any(k in text for k in ("defect", "bug", "issue", "ticket")) and not ({"Issue", "Defect"} & seen):
-        issue_entity = "Defect" if "defect" in text else "Issue"
+    if any(k in text for k in ("defect", "bug", "issue", "ticket")) and not ({"Issue", "Defect", "Ticket"} & seen):
+        issue_entity = "Ticket" if "ticket" in text or "support" in text else ("Defect" if "defect" in text else "Issue")
         seen.add(issue_entity)
         selected_entities.append(issue_entity)
     if _has_any_word(text, DIARY_SIGNAL_WORDS) and "Entry" not in seen:
@@ -584,7 +661,7 @@ def suggest_project_spec(
         _, plural = _entity_slug_and_plural(entity_name)
         if not plural:
             continue
-        full_crud = entity_name in {"Task", "Note", "Entry", "Tag", "Issue", "Defect"}
+        full_crud = entity_name in {"Task", "Note", "Entry", "Tag", "Issue", "Defect", "Ticket", "Repair", "Asset", "Vendor"}
         api_endpoints.extend(_build_crud_endpoints(plural, full=full_crud))
         if frontend_needed:
             pages.extend(_build_core_pages(plural))

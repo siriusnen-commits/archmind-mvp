@@ -29,6 +29,28 @@ def test_suggest_project_spec_bug_tracker_routes_to_issue_mvp_not_task() -> None
     assert "issues/detail" in out["frontend_pages"]
 
 
+def test_suggest_project_spec_support_ticket_uses_ticket_workflow_fields() -> None:
+    out = suggest_project_spec("support ticket manager", {"domains": [], "frontend_needed": True})
+    names = [entity["name"] for entity in out["entities"]]
+    assert "Ticket" in names
+    ticket = next(entity for entity in out["entities"] if entity["name"] == "Ticket")
+    field_names = {str(field.get("name") or "") for field in ticket.get("fields", []) if isinstance(field, dict)}
+    assert {"title", "description", "status", "priority"}.issubset(field_names)
+    assert "tickets/list" in out["frontend_pages"]
+
+
+def test_suggest_project_spec_asset_and_vendor_starters_use_pattern_friendly_fields() -> None:
+    asset = suggest_project_spec("asset tracker", {"domains": [], "frontend_needed": True})
+    asset_entity = next(entity for entity in asset["entities"] if entity["name"] == "Asset")
+    asset_fields = {str(field.get("name") or "") for field in asset_entity.get("fields", []) if isinstance(field, dict)}
+    assert {"name", "quantity", "value", "category"}.issubset(asset_fields)
+
+    vendor = suggest_project_spec("vendor directory", {"domains": [], "frontend_needed": True})
+    vendor_entity = next(entity for entity in vendor["entities"] if entity["name"] == "Vendor")
+    vendor_fields = {str(field.get("name") or "") for field in vendor_entity.get("fields", []) if isinstance(field, dict)}
+    assert {"name", "email", "website"}.issubset(vendor_fields)
+
+
 def test_suggest_project_spec_tasks_domain() -> None:
     out = suggest_project_spec("task tracker", {"domains": ["tasks"], "frontend_needed": True})
     names = [entity["name"] for entity in out["entities"]]
@@ -51,6 +73,14 @@ def test_suggest_project_spec_inventory_domain() -> None:
     out = suggest_project_spec("inventory app", {"domains": ["inventory"], "frontend_needed": True})
     names = [entity["name"] for entity in out["entities"]]
     assert "Item" in names
+
+
+def test_suggest_project_spec_inventory_keyword_uses_metric_item_fields() -> None:
+    out = suggest_project_spec("inventory app", {"domains": [], "frontend_needed": True})
+    item = next(entity for entity in out["entities"] if entity["name"] == "Item")
+    field_names = {str(field.get("name") or "") for field in item.get("fields", []) if isinstance(field, dict)}
+    assert {"name", "quantity", "category"}.issubset(field_names)
+    assert "items/list" in out["frontend_pages"]
 
 
 def test_suggest_project_spec_backend_only_can_omit_pages() -> None:

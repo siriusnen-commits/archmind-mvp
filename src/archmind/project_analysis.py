@@ -4,6 +4,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from archmind.app_patterns import infer_app_patterns
+
 from archmind.execution_history import load_recent_execution_events
 from archmind.generator import infer_field_semantics
 from archmind.runtime_status import build_runtime_snapshot
@@ -2024,6 +2026,15 @@ def analyze_project(
     entity_graph = _build_entity_graph(entities, entity_crud_status, relation_pairs)
     api_map = _build_api_map(entities, apis)
     page_map = _build_page_map(entities, pages)
+    patterns = infer_app_patterns(
+        {
+            "entities": [
+                {"name": entity_name, "fields": fields_by_entity.get(entity_name) or []}
+                for entity_name in entities
+            ]
+        },
+        str(spec.get("summary") or spec.get("idea") or ""),
+    )
     visualization_gaps = _build_visualization_gaps(relation_pairs, apis, pages, placeholder_pages)
     suggestions, next_action = _build_suggestions(
         project_dir,
@@ -2093,6 +2104,7 @@ def analyze_project(
         else [],
         "entities": entities,
         "fields_by_entity": fields_by_entity,
+        "patterns": patterns,
         "apis": apis,
         "crud_coverage": final_crud_coverage,
         "pages": pages,
