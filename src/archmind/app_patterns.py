@@ -31,6 +31,33 @@ PATTERN_FIELD_RULES: dict[str, tuple[set[str], str]] = {
     ),
 }
 
+COMPOSED_PATTERN_RULES: list[dict[str, Any]] = [
+    {
+        "type": "workflow_tracking",
+        "source_patterns": ["workflow_status", "ownership", "timeline_date"],
+        "reason": "status + ownership + date fields imply workflow tracking",
+        "ui_hints": ["show_summary_metrics", "show_status_filters", "show_recent_activity", "workflow_badges"],
+    },
+    {
+        "type": "measurable_collection",
+        "source_patterns": ["metric_quantity", "classification"],
+        "reason": "metric + classification fields imply a measurable collection",
+        "ui_hints": ["show_summary_metrics", "metric_emphasis", "grouped_lists"],
+    },
+    {
+        "type": "knowledge_collection",
+        "source_patterns": ["classification", "reference_link", "timeline_date"],
+        "reason": "classification + reference + date fields imply a knowledge collection",
+        "ui_hints": ["compact_metadata_cards", "metadata_emphasis", "external_link_rendering", "tags_chips"],
+    },
+    {
+        "type": "ownership_workflow",
+        "source_patterns": ["ownership", "workflow_status"],
+        "reason": "ownership + status fields imply assigned workflow records",
+        "ui_hints": ["assignee_emphasis", "ownership_grouping", "workflow_grouping"],
+    },
+]
+
 
 def _field_key(value: Any) -> str:
     text = str(value or "").strip()
@@ -117,3 +144,61 @@ def infer_entity_patterns(entity: dict[str, Any]) -> list[dict[str, Any]]:
         if key:
             fields.append(key)
     return _pattern_rows_for_fields(fields)
+
+
+def _pattern_types(patterns: list[dict[str, Any]]) -> set[str]:
+    return {
+        str(pattern.get("type") or "").strip()
+        for pattern in patterns
+        if isinstance(pattern, dict) and str(pattern.get("type") or "").strip()
+    }
+
+
+def compose_app_patterns(
+    patterns: list[dict[str, Any]],
+    entities: list[dict[str, Any]],
+    idea: str | None = None,
+) -> dict[str, Any]:
+    del idea
+    if not isinstance(patterns, list):
+        patterns = []
+    if not isinstance(entities, list):
+        entities = []
+
+    app_pattern_types = _pattern_types(patterns)
+    entity_patterns: dict[str, list[str]] = {}
+    for entity in entities:
+        if not isinstance(entity, dict):
+            continue
+        entity_name = str(entity.get("name") or entity.get("entity") or "").strip()
+        if not entity_name:
+            continue
+        raw_entity_patterns = entity.get("patterns") if isinstance(entity.get("patterns"), list) else infer_entity_patterns(entity)
+        entity_pattern_types = sorted(_pattern_types(raw_entity_patterns))
+        if entity_pattern_types:
+            entity_patterns[entity_name] = entity_pattern_types
+
+    composed: list[dict[str, Any]] = []
+    ui_hints: list[str] = []
+    for rule in COMPOSED_PATTERN_RULES:
+        source_patterns = [str(item) for item in rule.get("source_patterns", []) if str(item)]
+        if not set(source_patterns).issubset(app_pattern_types):
+            continue
+        composed.append(
+            {
+                "type": str(rule.get("type") or ""),
+                "source_patterns": source_patterns,
+                "confidence": "high",
+                "reason": str(rule.get("reason") or ""),
+            }
+        )
+        for hint in rule.get("ui_hints", []):
+            hint_text = str(hint or "").strip()
+            if hint_text and hint_text not in ui_hints:
+                ui_hints.append(hint_text)
+
+    return {
+        "app_patterns": composed,
+        "entity_patterns": entity_patterns,
+        "ui_hints": ui_hints,
+    }

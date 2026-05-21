@@ -390,6 +390,8 @@ def test_pipeline_project_spec_persists_inferred_patterns(tmp_path: Path, monkey
                         {"name": "title", "type": "string"},
                         {"name": "status", "type": "string"},
                         {"name": "priority", "type": "string"},
+                        {"name": "assignee", "type": "string"},
+                        {"name": "created_at", "type": "date"},
                     ],
                 }
             ],
@@ -421,6 +423,9 @@ def test_pipeline_project_spec_persists_inferred_patterns(tmp_path: Path, monkey
     project_spec = json.loads((tmp_path / "ticket_patterns" / ".archmind" / "project_spec.json").read_text(encoding="utf-8"))
     pattern_types = {str(row.get("type") or "") for row in project_spec.get("patterns", []) if isinstance(row, dict)}
     assert "workflow_status" in pattern_types
+    composed_types = {str(row.get("type") or "") for row in project_spec.get("composed_patterns", []) if isinstance(row, dict)}
+    assert "workflow_tracking" in composed_types
+    assert "show_status_filters" in project_spec.get("ui_hints", [])
     ticket = next(entity for entity in project_spec["entities"] if entity["name"] == "Ticket")
     entity_pattern_types = {str(row.get("type") or "") for row in ticket.get("patterns", []) if isinstance(row, dict)}
     assert "workflow_status" in entity_pattern_types
