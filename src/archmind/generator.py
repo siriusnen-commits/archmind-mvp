@@ -5264,6 +5264,37 @@ def normalize_project_spec(raw: Any, idea: str | None = None) -> dict[str, Any]:
     if resources:
         payload["resources"] = resources
 
+    relationships_raw = raw.get("relationships") if isinstance(raw.get("relationships"), list) else []
+    relationships: list[dict[str, str]] = []
+    seen_relationships: set[tuple[str, str, str]] = set()
+    entity_names = {str(entity.get("name") or "").strip().lower() for entity in entities if isinstance(entity, dict)}
+    for item in relationships_raw:
+        if not isinstance(item, dict):
+            continue
+        source = str(item.get("source_entity") or item.get("child_entity") or item.get("from") or "").strip()
+        target = str(item.get("target_entity") or item.get("parent_entity") or item.get("to") or "").strip()
+        field = str(item.get("field") or "").strip()
+        rel_type = str(item.get("type") or "belongs_to").strip() or "belongs_to"
+        if not source or not target:
+            continue
+        if entity_names and (source.lower() not in entity_names or target.lower() not in entity_names):
+            continue
+        key = (source.lower(), target.lower(), field.lower())
+        if key in seen_relationships:
+            continue
+        seen_relationships.add(key)
+        relationships.append(
+            {
+                "source_entity": source,
+                "target_entity": target,
+                "field": field,
+                "type": rel_type,
+                "cardinality": str(item.get("cardinality") or "many_to_one").strip() or "many_to_one",
+            }
+        )
+    if relationships:
+        payload["relationships"] = relationships
+
     if resources:
         api_seed = payload.get("api_endpoints") if isinstance(payload.get("api_endpoints"), list) else []
         page_seed = payload.get("frontend_pages") if isinstance(payload.get("frontend_pages"), list) else []

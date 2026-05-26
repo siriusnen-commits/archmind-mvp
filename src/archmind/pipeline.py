@@ -1118,12 +1118,15 @@ def _write_project_spec(
         apis = suggestion.get("apis") if isinstance(suggestion.get("apis"), list) else []
         pages = suggestion.get("pages") if isinstance(suggestion.get("pages"), list) else []
         resources = suggestion.get("resources") if isinstance(suggestion.get("resources"), list) else []
+        relationships = suggestion.get("relationships") if isinstance(suggestion.get("relationships"), list) else []
         if apis:
             payload["apis"] = apis
         if pages:
             payload["pages"] = pages
         if resources:
             payload["resources"] = resources
+        if relationships:
+            payload["relationships"] = [row for row in relationships if isinstance(row, dict)]
         out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return out
     except Exception:

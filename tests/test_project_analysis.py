@@ -79,6 +79,30 @@ def test_project_analysis_exposes_domains_and_modules_from_spec(tmp_path: Path) 
     assert out["modules"] == ["auth", "dashboard"]
 
 
+def test_project_analysis_exposes_canonical_spec_relationships(tmp_path: Path) -> None:
+    project_dir = tmp_path / "relationship-analysis"
+
+    out = analyze_project(
+        project_dir,
+        project_name="relationship-analysis",
+        spec_payload={
+            "entities": [
+                {"name": "Project", "fields": [{"name": "name", "type": "string"}]},
+                {"name": "Task", "fields": [{"name": "title", "type": "string"}, {"name": "project_id", "type": "int"}]},
+            ],
+            "relationships": [
+                {"source_entity": "Task", "target_entity": "Project", "field": "project_id", "type": "belongs_to"}
+            ],
+            "api_endpoints": ["GET /projects", "GET /tasks"],
+            "frontend_pages": ["projects/list", "tasks/list"],
+        },
+    )
+
+    assert out["relationships"][0]["source_entity"] == "Task"
+    assert out["relationships"][0]["target_entity"] == "Project"
+    assert any(edge["from"] == "Project" and edge["to"] == "Task" for edge in out["entity_graph"]["edges"])
+
+
 def test_project_analysis_runtime_status_keeps_stale_url_as_last_known_not_current(tmp_path: Path) -> None:
     project_dir = tmp_path / "runtime-stale-url"
     out = analyze_project(
