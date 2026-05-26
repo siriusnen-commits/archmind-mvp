@@ -386,6 +386,9 @@ def test_pipeline_project_spec_persists_canonical_contract_keys(tmp_path: Path, 
             "entities": [{"name": "Bookmark"}, {"name": "Category"}],
             "apis": [{"method": "GET", "path": "/bookmarks"}, {"method": "GET", "path": "/categories"}],
             "pages": [{"path": "bookmarks"}, {"path": "categories/[id]"}],
+            "relationships": [
+                {"source_entity": "Bookmark", "target_entity": "Category", "field": "category_id", "type": "belongs_to"}
+            ],
         },
     )
     exit_code = main(
@@ -420,6 +423,45 @@ def test_pipeline_project_spec_persists_canonical_contract_keys(tmp_path: Path, 
     assert "bookmarks/[id]" in page_paths
     assert "categories" in page_paths
     assert "categories/[id]" in page_paths
+    relationships = spec.get("relationships") if isinstance(spec.get("relationships"), list) else []
+    assert any(rel.get("source_entity") == "Bookmark" and rel.get("target_entity") == "Category" for rel in relationships)
+
+
+def test_pipeline_support_ticket_manager_persists_planned_entities_relationships_and_pages(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_seed_scaffold)
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "support ticket manager",
+            "--template",
+            "fullstack-ddd",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "support_ticket_planned",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+
+    assert exit_code == 0
+    spec = json.loads((tmp_path / "support_ticket_planned" / ".archmind" / "project_spec.json").read_text(encoding="utf-8"))
+    names = [str(entity.get("name") or "") for entity in spec.get("entities", []) if isinstance(entity, dict)]
+    assert names == ["Ticket", "Customer", "Agent", "Comment"]
+    relationships = spec.get("relationships") if isinstance(spec.get("relationships"), list) else []
+    assert any(rel.get("from_entity") == "Ticket" and rel.get("to_entity") == "Customer" for rel in relationships)
+    assert any(rel.get("from_entity") == "Comment" and rel.get("to_entity") == "Ticket" for rel in relationships)
+    assert "GET /tickets" in spec.get("api_endpoints", [])
+    assert "GET /comments" in spec.get("api_endpoints", [])
+    assert "tickets/list" in spec.get("frontend_pages", [])
+    assert "comments/list" in spec.get("frontend_pages", [])
 
 
 def test_pipeline_todo_real_path_materialization_avoids_generic_home_and_add_entity_bootstrap(tmp_path: Path, monkeypatch) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from archmind.generator import normalize_project_spec
 from archmind.spec_suggester import suggest_project_spec
 
 
@@ -27,6 +28,77 @@ def test_suggest_project_spec_bug_tracker_routes_to_issue_mvp_not_task() -> None
     assert "issues/list" in out["frontend_pages"]
     assert "issues/new" in out["frontend_pages"]
     assert "issues/detail" in out["frontend_pages"]
+
+
+def test_suggest_project_spec_support_ticket_manager_plans_domain_model() -> None:
+    out = suggest_project_spec("support ticket manager", {"domains": [], "frontend_needed": True})
+
+    names = [entity["name"] for entity in out["entities"]]
+    assert names == ["Ticket", "Customer", "Agent", "Comment"]
+    ticket = next(entity for entity in out["entities"] if entity["name"] == "Ticket")
+    ticket_fields = {str(field.get("name") or "") for field in ticket.get("fields", []) if isinstance(field, dict)}
+    assert {"title", "description", "status", "priority", "customer_id", "agent_id"}.issubset(ticket_fields)
+    relationships = out.get("relationships") if isinstance(out.get("relationships"), list) else []
+    assert any(rel.get("from_entity") == "Ticket" and rel.get("field") == "customer_id" and rel.get("to_entity") == "Customer" for rel in relationships)
+    assert any(rel.get("from_entity") == "Ticket" and rel.get("field") == "agent_id" and rel.get("to_entity") == "Agent" for rel in relationships)
+    assert any(rel.get("from_entity") == "Comment" and rel.get("field") == "ticket_id" and rel.get("to_entity") == "Ticket" for rel in relationships)
+    assert "GET /tickets" in out["api_endpoints"]
+    assert "GET /customers" in out["api_endpoints"]
+    assert "GET /agents" in out["api_endpoints"]
+
+
+def test_suggest_project_spec_asset_tracker_plans_category_and_location() -> None:
+    out = suggest_project_spec("asset tracker", {"domains": [], "frontend_needed": True})
+
+    names = [entity["name"] for entity in out["entities"]]
+    assert names == ["Asset", "Category", "Location"]
+    asset = next(entity for entity in out["entities"] if entity["name"] == "Asset")
+    asset_fields = {str(field.get("name") or "") for field in asset.get("fields", []) if isinstance(field, dict)}
+    assert {"name", "quantity", "category_id", "location_id"}.issubset(asset_fields)
+    relationships = out.get("relationships") if isinstance(out.get("relationships"), list) else []
+    assert any(rel.get("from_entity") == "Asset" and rel.get("to_entity") == "Category" for rel in relationships)
+    assert any(rel.get("from_entity") == "Asset" and rel.get("to_entity") == "Location" for rel in relationships)
+
+
+def test_suggest_project_spec_project_management_plans_projects_tasks_members() -> None:
+    out = suggest_project_spec("project management tool", {"domains": [], "frontend_needed": True})
+
+    names = [entity["name"] for entity in out["entities"]]
+    assert names == ["Project", "Task", "Member"]
+    task = next(entity for entity in out["entities"] if entity["name"] == "Task")
+    task_fields = {str(field.get("name") or "") for field in task.get("fields", []) if isinstance(field, dict)}
+    assert {"title", "status", "project_id", "assignee_id"}.issubset(task_fields)
+    relationships = out.get("relationships") if isinstance(out.get("relationships"), list) else []
+    assert any(rel.get("from_entity") == "Task" and rel.get("to_entity") == "Project" for rel in relationships)
+    assert any(rel.get("from_entity") == "Task" and rel.get("to_entity") == "Member" for rel in relationships)
+
+
+def test_suggest_project_spec_crm_and_habit_domains_plan_multiple_entities() -> None:
+    crm = suggest_project_spec("CRM app", {"domains": [], "frontend_needed": True})
+    crm_names = [entity["name"] for entity in crm["entities"]]
+    assert crm_names == ["Customer", "Deal", "Contact", "Activity"]
+    crm_relationships = crm.get("relationships") if isinstance(crm.get("relationships"), list) else []
+    assert any(rel.get("from_entity") == "Deal" and rel.get("to_entity") == "Customer" for rel in crm_relationships)
+    assert any(rel.get("from_entity") == "Activity" and rel.get("to_entity") == "Customer" for rel in crm_relationships)
+
+    habit = suggest_project_spec("habit tracker", {"domains": [], "frontend_needed": True})
+    habit_names = [entity["name"] for entity in habit["entities"]]
+    assert habit_names == ["Habit", "HabitLog", "Goal"]
+    habit_relationships = habit.get("relationships") if isinstance(habit.get("relationships"), list) else []
+    assert any(rel.get("from_entity") == "HabitLog" and rel.get("to_entity") == "Habit" for rel in habit_relationships)
+
+
+def test_normalize_project_spec_preserves_planned_relationships() -> None:
+    suggested = suggest_project_spec("support ticket manager", {"domains": [], "frontend_needed": True})
+
+    normalized = normalize_project_spec(suggested, "support ticket manager")
+
+    relationships = normalized.get("relationships") if isinstance(normalized.get("relationships"), list) else []
+    assert any(rel.get("from_entity") == "Ticket" and rel.get("to_entity") == "Customer" for rel in relationships)
+    assert any(rel.get("from_entity") == "Ticket" and rel.get("to_entity") == "Agent" for rel in relationships)
+    assert "patterns" in normalized
+    assert "composed_patterns" in normalized
+    assert "ui_hints" in normalized
 
 
 def test_suggest_project_spec_tasks_domain() -> None:

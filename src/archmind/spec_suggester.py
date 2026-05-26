@@ -6,6 +6,7 @@ from typing import Any
 
 from .module_registry import apply_modules_to_starter_profile
 from .reasoning import try_generate_reasoning_json
+from .spec_planner import infer_domain_model, plan_project_spec_from_idea
 
 
 DOMAIN_ENTITY_MAP: dict[str, str] = {
@@ -36,6 +37,14 @@ ENTITY_FIELD_MAP: dict[str, list[dict[str, str]]] = {
         {"name": "status", "type": "string"},
         {"name": "priority", "type": "string"},
     ],
+    "Ticket": [
+        {"name": "title", "type": "string"},
+        {"name": "description", "type": "string"},
+        {"name": "status", "type": "string"},
+        {"name": "priority", "type": "string"},
+        {"name": "customer_id", "type": "int"},
+        {"name": "agent_id", "type": "int"},
+    ],
     "Defect": [
         {"name": "title", "type": "string"},
         {"name": "description", "type": "string"},
@@ -46,6 +55,10 @@ ENTITY_FIELD_MAP: dict[str, list[dict[str, str]]] = {
     "TestRun": [{"name": "result", "type": "string"}, {"name": "executed_at", "type": "datetime"}],
     "Team": [{"name": "name", "type": "string"}],
     "Project": [{"name": "name", "type": "string"}],
+    "Member": [{"name": "name", "type": "string"}, {"name": "email", "type": "string"}],
+    "Customer": [{"name": "name", "type": "string"}, {"name": "email", "type": "string"}],
+    "Agent": [{"name": "name", "type": "string"}, {"name": "email", "type": "string"}],
+    "Supplier": [{"name": "name", "type": "string"}, {"name": "email", "type": "string"}],
     "Document": [{"name": "title", "type": "string"}],
     "Expense": [{"name": "amount", "type": "float"}, {"name": "category", "type": "string"}],
     "Item": [{"name": "name", "type": "string"}, {"name": "quantity", "type": "int"}],
@@ -255,6 +268,118 @@ def _build_core_pages(resource_plural: str) -> list[str]:
     return [f"{resource}/list", f"{resource}/new", f"{resource}/detail"]
 
 
+def _normalize_relationship(row: dict[str, Any]) -> dict[str, str]:
+    source = str(row.get("from_entity") or row.get("source_entity") or row.get("child_entity") or row.get("from") or "").strip()
+    target = str(row.get("to_entity") or row.get("target_entity") or row.get("parent_entity") or row.get("to") or "").strip()
+    field = str(row.get("field") or "").strip()
+    rel_type = str(row.get("type") or "many_to_one").strip() or "many_to_one"
+    if not source or not target:
+        return {}
+    return {
+        "from_entity": source,
+        "to_entity": target,
+        "source_entity": source,
+        "target_entity": target,
+        "field": field,
+        "type": rel_type,
+        "cardinality": str(row.get("cardinality") or rel_type).strip() or rel_type,
+    }
+
+
+def _merge_domain_model(out: dict[str, Any], domain_model: dict[str, Any], *, frontend_needed: bool) -> None:
+    if not isinstance(domain_model, dict) or not domain_model:
+        return
+    planned_entities = [row for row in (domain_model.get("entities") or []) if isinstance(row, dict)]
+    if not planned_entities:
+        return
+
+    entity_rows: list[dict[str, Any]] = [
+        row for row in (out.get("entities") if isinstance(out.get("entities"), list) else []) if isinstance(row, dict)
+    ]
+    by_name = {
+        str(row.get("name") or "").strip().lower(): row
+        for row in entity_rows
+        if str(row.get("name") or "").strip()
+    }
+
+    for planned in planned_entities:
+        entity_name = str(planned.get("name") or "").strip()
+        if not entity_name:
+            continue
+        row = by_name.get(entity_name.lower())
+        if not isinstance(row, dict):
+            row = {"name": entity_name, "fields": []}
+            entity_rows.append(row)
+            by_name[entity_name.lower()] = row
+        fields = row.get("fields") if isinstance(row.get("fields"), list) else []
+        seen_fields = {
+            str(field.get("name") or "").strip().lower()
+            for field in fields
+            if isinstance(field, dict) and str(field.get("name") or "").strip()
+        }
+        for field in planned.get("fields") if isinstance(planned.get("fields"), list) else []:
+            if not isinstance(field, dict):
+                continue
+            field_name = str(field.get("name") or "").strip()
+            field_type = str(field.get("type") or "string").strip().lower() or "string"
+            if not field_name or field_name.lower() in seen_fields:
+                continue
+            fields.append({"name": field_name, "type": field_type})
+            seen_fields.add(field_name.lower())
+        row["fields"] = fields[:6]
+
+    out["entities"] = entity_rows[:4]
+
+    entity_names = [str(row.get("name") or "").strip() for row in out["entities"] if isinstance(row, dict)]
+    api_rows = [str(x).strip() for x in (out.get("api_endpoints") or []) if str(x).strip()]
+    page_rows = [str(x).strip() for x in (out.get("frontend_pages") or []) if str(x).strip()]
+    seen_api = {row.lower() for row in api_rows}
+    seen_page = {row.lower() for row in page_rows}
+    for entity_name in entity_names:
+        _, plural = _entity_slug_and_plural(entity_name)
+        for endpoint in _build_crud_endpoints(plural, full=True):
+            key = endpoint.lower()
+            if key not in seen_api:
+                api_rows.append(endpoint)
+                seen_api.add(key)
+        if frontend_needed:
+            for page in _build_core_pages(plural):
+                key = page.lower()
+                if key not in seen_page:
+                    page_rows.append(page)
+                    seen_page.add(key)
+    out["api_endpoints"] = api_rows[:24]
+    out["frontend_pages"] = page_rows[:24] if frontend_needed else []
+
+    rel_rows: list[dict[str, str]] = [
+        rel for rel in (out.get("relationships") if isinstance(out.get("relationships"), list) else []) if isinstance(rel, dict)
+    ]
+    seen_rels = {
+        (
+            str(rel.get("source_entity") or "").strip().lower(),
+            str(rel.get("target_entity") or "").strip().lower(),
+            str(rel.get("field") or "").strip().lower(),
+        )
+        for rel in rel_rows
+    }
+    current_entity_set = {name.lower() for name in entity_names}
+    for raw_rel in domain_model.get("relationships") if isinstance(domain_model.get("relationships"), list) else []:
+        if not isinstance(raw_rel, dict):
+            continue
+        rel = _normalize_relationship(raw_rel)
+        if not rel:
+            continue
+        if rel["source_entity"].lower() not in current_entity_set or rel["target_entity"].lower() not in current_entity_set:
+            continue
+        key = (rel["source_entity"].lower(), rel["target_entity"].lower(), rel["field"].lower())
+        if key in seen_rels:
+            continue
+        rel_rows.append(rel)
+        seen_rels.add(key)
+    if rel_rows:
+        out["relationships"] = rel_rows[:12]
+
+
 def _build_starter_profile(text: str, domains: list[str], frontend_needed: bool) -> dict[str, Any]:
     normalized = str(text or "").strip().lower()
     domain_set = {str(item).strip().lower() for item in domains if str(item).strip()}
@@ -273,19 +398,23 @@ def _build_starter_profile(text: str, domains: list[str], frontend_needed: bool)
     )
 
     if has_issue_tracker:
-        entity_name = "Defect" if any(_has_word(normalized, token) for token in ("defect", "defects")) else "Issue"
-        resource = "defects" if entity_name == "Defect" else "issues"
+        if any(signal in normalized for signal in ("support ticket", "ticket manager", "support desk", "help desk", "helpdesk")):
+            entity_name = "Ticket"
+        else:
+            entity_name = "Defect" if any(_has_word(normalized, token) for token in ("defect", "defects")) else "Issue"
+        resource = "tickets" if entity_name == "Ticket" else "defects" if entity_name == "Defect" else "issues"
         priority_field = "severity" if entity_name == "Defect" else "priority"
         return {
             "family": "issue_tracker",
             "entities": [entity_name],
             "entity_fields": {
-                entity_name: [
+                entity_name: ENTITY_FIELD_MAP.get(entity_name)
+                or [
                     {"name": "title", "type": "string"},
                     {"name": "description", "type": "string"},
                     {"name": "status", "type": "string"},
                     {"name": priority_field, "type": "string"},
-                ]
+                ],
             },
             "required_api_endpoints": _build_crud_endpoints(resource, full=True),
             "required_frontend_pages": _build_core_pages(resource) if frontend_needed else [],
@@ -489,6 +618,7 @@ def suggest_project_spec(
     auth_signal = _has_auth_signal(text, reasoning)
     domains = [str(x).strip().lower() for x in (reasoning.get("domains") or []) if str(x).strip()]
     frontend_needed = bool(reasoning.get("frontend_needed"))
+    domain_model = infer_domain_model(idea, reasoning)
     starter_profile = _build_starter_profile(text, domains, frontend_needed)
     starter_profile = apply_modules_to_starter_profile(
         starter_profile,
@@ -532,7 +662,7 @@ def suggest_project_spec(
     if "qa" in text and any(k in text for k in ("hardware", "defect", "bug", "issue", "tracker")) and "TestRun" not in seen:
         seen.add("TestRun")
         selected_entities.append("TestRun")
-    if any(k in text for k in ("defect", "bug", "issue", "ticket")) and not ({"Issue", "Defect"} & seen):
+    if any(k in text for k in ("defect", "bug", "issue", "ticket")) and not ({"Issue", "Defect", "Ticket"} & seen):
         issue_entity = "Defect" if "defect" in text else "Issue"
         seen.add(issue_entity)
         selected_entities.append(issue_entity)
@@ -599,6 +729,8 @@ def suggest_project_spec(
         ],
     }
     _enforce_starter_profile(fallback_spec, starter_profile, frontend_needed=frontend_needed)
+    _merge_domain_model(fallback_spec, domain_model, frontend_needed=frontend_needed)
+    fallback_spec = plan_project_spec_from_idea(idea, fallback_spec)
     provider_prompt = (
         "Suggest a compact project spec JSON for the idea.\n"
         "Return JSON object with keys: entities, api_endpoints, frontend_pages.\n"
@@ -687,5 +819,7 @@ def suggest_project_spec(
             out["frontend_pages"] = normalized_pages[:12]
 
     _enforce_starter_profile(out, starter_profile, frontend_needed=frontend_needed)
+    _merge_domain_model(out, domain_model, frontend_needed=frontend_needed)
+    out = plan_project_spec_from_idea(idea, out)
 
     return out

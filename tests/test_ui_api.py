@@ -1106,6 +1106,7 @@ def test_ui_project_analysis_endpoint_response_shape(monkeypatch, tmp_path: Path
     assert payload["project_name"] == "analysis-project"
     assert isinstance(payload["entities"], list)
     assert isinstance(payload["fields_by_entity"], dict)
+    assert isinstance(payload["relationships"], list)
     assert isinstance(payload["apis"], list)
     assert isinstance(payload["pages"], list)
     assert isinstance(payload["entity_graph"], dict)
@@ -1124,6 +1125,32 @@ def test_ui_project_analysis_endpoint_response_shape(monkeypatch, tmp_path: Path
         assert key in payload["next_action"]
     for key in ("gap_type", "reason_summary", "priority_reason", "expected_effect"):
         assert key in payload["next_action_explanation"]
+
+
+def test_ui_project_analysis_exposes_spec_relationships(monkeypatch, tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    project_dir = _make_project(projects_root, "analysis-relationships")
+    spec_path = project_dir / ".archmind" / "project_spec.json"
+    payload = json.loads(spec_path.read_text(encoding="utf-8"))
+    payload["entities"] = [
+        {"name": "Project", "fields": [{"name": "name", "type": "string"}]},
+        {"name": "Task", "fields": [{"name": "title", "type": "string"}, {"name": "project_id", "type": "int"}]},
+    ]
+    payload["relationships"] = [
+        {"source_entity": "Task", "target_entity": "Project", "field": "project_id", "type": "belongs_to"}
+    ]
+    spec_path.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
+    client = TestClient(create_ui_app())
+
+    response = client.get("/ui/projects/analysis-relationships/analysis")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["relationships"][0]["source_entity"] == "Task"
+    assert data["relationships"][0]["target_entity"] == "Project"
+    edges = data["entity_graph"]["edges"]
+    assert any(edge["from"] == "Project" and edge["to"] == "Task" for edge in edges)
 
 
 def test_ui_project_analysis_endpoint_filters_and_limits_next_candidates(monkeypatch, tmp_path: Path) -> None:
