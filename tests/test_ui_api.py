@@ -59,6 +59,15 @@ def _make_project(
     return project_dir
 
 
+def test_ui_api_health_endpoint() -> None:
+    client = TestClient(create_ui_app())
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "service": "archmind-ui-api"}
+
+
 def test_ui_projects_response_shape(monkeypatch, tmp_path: Path) -> None:
     projects_root = tmp_path / "projects"
     _make_project(projects_root, "alpha")

@@ -1077,5 +1077,10 @@ def post_ui_project_delete_all(project_name: str) -> DeleteActionResponse:
 
 def create_ui_app() -> FastAPI:
     app = FastAPI(title="ArchMind UI API")
+
+    @app.get("/health", tags=["health"])
+    def get_health() -> dict[str, str]:
+        return {"status": "ok", "service": "archmind-ui-api"}
+
     app.include_router(router)
     return app
