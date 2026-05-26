@@ -677,6 +677,34 @@ def _build_entity_relation_index(entity_crud_status: dict[str, dict[str, Any]]) 
     return relation_index
 
 
+def _normalize_spec_relationships(spec: dict[str, Any]) -> list[dict[str, str]]:
+    raw_rows = spec.get("relationships") if isinstance(spec.get("relationships"), list) else []
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for row in raw_rows:
+        if not isinstance(row, dict):
+            continue
+        source = _normalize_entity_name(row.get("source_entity") or row.get("child_entity") or row.get("from"))
+        target = _normalize_entity_name(row.get("target_entity") or row.get("parent_entity") or row.get("to"))
+        field = str(row.get("field") or "").strip().lower()
+        if not source or not target:
+            continue
+        key = (source.lower(), target.lower(), field)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(
+            {
+                "source_entity": source,
+                "target_entity": target,
+                "field": field,
+                "type": str(row.get("type") or "belongs_to").strip() or "belongs_to",
+                "cardinality": str(row.get("cardinality") or "many_to_one").strip() or "many_to_one",
+            }
+        )
+    return out
+
+
 def _infer_relation_pairs(
     entities: list[str],
     fields_by_entity: dict[str, list[dict[str, str]]],
@@ -769,6 +797,37 @@ def _infer_relation_pairs(
             "inferred": "hint",
         }
     ]
+
+
+def _spec_relationships_to_relation_pairs(
+    relationships: list[dict[str, str]],
+    relation_index: dict[str, dict[str, str]],
+) -> list[dict[str, str]]:
+    pairs: list[dict[str, str]] = []
+    for row in relationships:
+        source = _normalize_entity_name(row.get("source_entity"))
+        target = _normalize_entity_name(row.get("target_entity"))
+        field = str(row.get("field") or "").strip().lower()
+        if not source or not target:
+            continue
+        source_info = relation_index.get(source) or {}
+        target_info = relation_index.get(target) or {}
+        child_resource = str(source_info.get("resource") or _entity_resource(source)).strip().lower()
+        parent_resource = str(target_info.get("resource") or _entity_resource(target)).strip().lower()
+        if not child_resource or not parent_resource:
+            continue
+        pairs.append(
+            {
+                "parent_entity": target,
+                "parent_resource": parent_resource,
+                "parent_singular": _singularize_resource_name(parent_resource),
+                "child_entity": source,
+                "child_resource": child_resource,
+                "field": field,
+                "inferred": "spec",
+            }
+        )
+    return pairs
 
 
 def _relation_page_name(parent_resource: str, child_resource: str) -> str:
@@ -2009,6 +2068,7 @@ def analyze_project(
     nav_visible_pages = _extract_nav_visible_pages(project_dir, pages)
     runtime_status = _normalize_runtime_status(runtime_payload if isinstance(runtime_payload, dict) else {})
     repository_status = _normalize_repository_status(project_dir)
+    spec_relationships = _normalize_spec_relationships(spec)
     relation_diagnostics = _collect_relation_diagnostics(
         entities,
         fields_by_entity,
@@ -2016,6 +2076,29 @@ def analyze_project(
         apis,
         pages,
     )
+    if spec_relationships:
+        relation_index = _build_entity_relation_index(entity_crud_status)
+        relation_rows = relation_diagnostics.get("relations") if isinstance(relation_diagnostics.get("relations"), list) else []
+        seen_relation_rows = {
+            (
+                str(row.get("parent_entity") or "").strip().lower(),
+                str(row.get("child_entity") or "").strip().lower(),
+                str(row.get("field") or "").strip().lower(),
+            )
+            for row in relation_rows
+            if isinstance(row, dict)
+        }
+        for row in _spec_relationships_to_relation_pairs(spec_relationships, relation_index):
+            key = (
+                str(row.get("parent_entity") or "").strip().lower(),
+                str(row.get("child_entity") or "").strip().lower(),
+                str(row.get("field") or "").strip().lower(),
+            )
+            if key in seen_relation_rows:
+                continue
+            relation_rows.append(row)
+            seen_relation_rows.add(key)
+        relation_diagnostics["relations"] = relation_rows
     relation_pairs = (
         relation_diagnostics.get("relations")
         if isinstance(relation_diagnostics, dict) and isinstance(relation_diagnostics.get("relations"), list)
@@ -2093,6 +2176,7 @@ def analyze_project(
         else [],
         "entities": entities,
         "fields_by_entity": fields_by_entity,
+        "relationships": spec_relationships,
         "apis": apis,
         "crud_coverage": final_crud_coverage,
         "pages": pages,

@@ -386,6 +386,9 @@ def test_pipeline_project_spec_persists_canonical_contract_keys(tmp_path: Path, 
             "entities": [{"name": "Bookmark"}, {"name": "Category"}],
             "apis": [{"method": "GET", "path": "/bookmarks"}, {"method": "GET", "path": "/categories"}],
             "pages": [{"path": "bookmarks"}, {"path": "categories/[id]"}],
+            "relationships": [
+                {"source_entity": "Bookmark", "target_entity": "Category", "field": "category_id", "type": "belongs_to"}
+            ],
         },
     )
     exit_code = main(
@@ -420,6 +423,8 @@ def test_pipeline_project_spec_persists_canonical_contract_keys(tmp_path: Path, 
     assert "bookmarks/[id]" in page_paths
     assert "categories" in page_paths
     assert "categories/[id]" in page_paths
+    relationships = spec.get("relationships") if isinstance(spec.get("relationships"), list) else []
+    assert any(rel.get("source_entity") == "Bookmark" and rel.get("target_entity") == "Category" for rel in relationships)
 
 
 def test_pipeline_todo_real_path_materialization_avoids_generic_home_and_add_entity_bootstrap(tmp_path: Path, monkeypatch) -> None:
