@@ -223,6 +223,7 @@ class ProjectAnalysisResponse(BaseModel):
     entities: list[str] = Field(default_factory=list)
     fields_by_entity: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     relationships: list[dict[str, Any]] = Field(default_factory=list)
+    planning_diagnostics: list[dict[str, Any]] = Field(default_factory=list)
     apis: list[dict[str, str]] = Field(default_factory=list)
     pages: list[str] = Field(default_factory=list)
     entity_graph: dict[str, Any] = Field(default_factory=dict)

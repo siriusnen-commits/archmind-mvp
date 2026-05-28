@@ -9,6 +9,10 @@ def _has_word(text: str, word: str) -> bool:
     return bool(re.search(rf"\b{re.escape(str(word or '').strip().lower())}\b", str(text or "").strip().lower()))
 
 
+def _idea_text(value: str | None) -> str:
+    return re.sub(r"[_-]+", " ", str(value or "").strip().lower())
+
+
 def _field(name: str, field_type: str = "string") -> dict[str, str]:
     return {"name": name, "type": field_type}
 
@@ -26,6 +30,21 @@ def _entity_slug_and_plural(entity_name: str) -> tuple[str, str]:
 
 
 DOMAIN_MODEL_PLANS: list[dict[str, Any]] = [
+    {
+        "type": "employee_onboarding",
+        "signals": ("employee onboarding", "onboarding management", "onboarding management system", "new hire onboarding"),
+        "entities": [
+            {"name": "Employee", "fields": [_field("name"), _field("email"), _field("status"), _field("department_id", "int")]},
+            {"name": "Training", "fields": [_field("title"), _field("status"), _field("due_date", "datetime"), _field("employee_id", "int")]},
+            {"name": "Department", "fields": [_field("name")]},
+            {"name": "OnboardingTask", "fields": [_field("title"), _field("status"), _field("employee_id", "int")]},
+        ],
+        "relationships": [
+            {"from_entity": "Employee", "to_entity": "Department", "field": "department_id", "type": "many_to_one"},
+            {"from_entity": "Training", "to_entity": "Employee", "field": "employee_id", "type": "many_to_one"},
+            {"from_entity": "OnboardingTask", "to_entity": "Employee", "field": "employee_id", "type": "many_to_one"},
+        ],
+    },
     {
         "type": "support_ticket",
         "signals": ("support ticket", "ticket manager", "support desk", "help desk", "helpdesk"),
@@ -124,7 +143,7 @@ def _is_simple_idea(text: str) -> bool:
 
 
 def _select_plan(idea: str | None, reasoning: dict[str, Any] | None = None) -> dict[str, Any]:
-    text = str(idea or "").strip().lower()
+    text = _idea_text(idea)
     domains = {
         str(item).strip().lower()
         for item in ((reasoning or {}).get("domains") if isinstance(reasoning, dict) else []) or []
@@ -140,6 +159,38 @@ def _select_plan(idea: str | None, reasoning: dict[str, Any] | None = None) -> d
         if any(signal in text or _has_word(text, signal) or signal in domains for signal in signals):
             return plan
     return {}
+
+
+def summarize_spec_stage(stage: str, spec: dict[str, Any]) -> dict[str, Any]:
+    entity_rows = spec.get("entities") if isinstance(spec.get("entities"), list) else []
+    return {
+        "stage": str(stage or "").strip(),
+        "entities": [str(row.get("name") or "").strip() for row in entity_rows if isinstance(row, dict) and str(row.get("name") or "").strip()],
+        "patterns": [str(row.get("type") or "").strip() for row in (spec.get("patterns") if isinstance(spec.get("patterns"), list) else []) if isinstance(row, dict) and str(row.get("type") or "").strip()],
+        "composed_patterns": [
+            str(row.get("type") or "").strip()
+            for row in (spec.get("composed_patterns") if isinstance(spec.get("composed_patterns"), list) else [])
+            if isinstance(row, dict) and str(row.get("type") or "").strip()
+        ],
+        "ui_hints": [str(row).strip() for row in (spec.get("ui_hints") if isinstance(spec.get("ui_hints"), list) else []) if str(row).strip()],
+        "generated_pages": [str(row).strip() for row in (spec.get("frontend_pages") if isinstance(spec.get("frontend_pages"), list) else []) if str(row).strip()],
+        "generated_apis": [str(row).strip() for row in (spec.get("api_endpoints") if isinstance(spec.get("api_endpoints"), list) else []) if str(row).strip()],
+    }
+
+
+def append_spec_diagnostic(spec: dict[str, Any], stage: str) -> None:
+    if not isinstance(spec, dict):
+        return
+    diagnostics = spec.get("planning_diagnostics") if isinstance(spec.get("planning_diagnostics"), list) else []
+    row = summarize_spec_stage(stage, spec)
+    if not row.get("stage"):
+        return
+    stage_key = str(row.get("stage") or "")
+    spec["planning_diagnostics"] = [
+        item
+        for item in diagnostics
+        if isinstance(item, dict) and str(item.get("stage") or "") != stage_key
+    ] + [row]
 
 
 def _normalize_relationship(row: dict[str, Any]) -> dict[str, str]:
@@ -317,15 +368,18 @@ def plan_project_spec_from_idea(idea: str, base_spec: dict[str, Any] | None = No
     out["frontend_pages"] = _append_unique(out.get("frontend_pages") if isinstance(out.get("frontend_pages"), list) else [], frontend_pages, lambda item: str(item).strip().lower())[:24]
     out["apis"] = _append_unique(out.get("apis") if isinstance(out.get("apis"), list) else [], apis, lambda item: f"{str(item.get('method') or '').upper()} {str(item.get('path') or '').lower()}" if isinstance(item, dict) else "")[:24]
     out["pages"] = _append_unique(out.get("pages") if isinstance(out.get("pages"), list) else [], pages, lambda item: str(item.get("path") or "").lower() if isinstance(item, dict) else "")[:24]
+    append_spec_diagnostic(out, "planning_engine")
 
     patterns = _infer_patterns(entity_rows)
     composed_patterns, ui_hints = _compose_patterns(patterns)
     if patterns:
         out["patterns"] = patterns
+    append_spec_diagnostic(out, "pattern_inference")
     if composed_patterns:
         out["composed_patterns"] = composed_patterns
     if ui_hints:
         out["ui_hints"] = ui_hints
+    append_spec_diagnostic(out, "composition_engine")
     return out
 
 

@@ -30,6 +30,30 @@ def test_plan_project_spec_support_ticket_manager() -> None:
     assert "show_status_filters" in spec.get("ui_hints", [])
 
 
+def test_plan_project_spec_employee_onboarding_management_system_diagnostics() -> None:
+    spec = plan_project_spec_from_idea("employee_onboarding_management_system")
+
+    names = _entity_names(spec)
+    assert len(names) >= 3
+    assert {"Employee", "Training", "Department"}.issubset(set(names))
+    assert names != ["Task"]
+    assert ("Employee", "department_id", "Department") in _relationships(spec)
+    assert ("Training", "employee_id", "Employee") in _relationships(spec)
+    assert "GET /employees" in spec["api_endpoints"]
+    assert "GET /trainings" in spec["api_endpoints"]
+    assert "GET /departments" in spec["api_endpoints"]
+    assert "employees/list" in spec["frontend_pages"]
+    assert "trainings/list" in spec["frontend_pages"]
+    assert "departments/list" in spec["frontend_pages"]
+
+    diagnostics = [row for row in spec.get("planning_diagnostics", []) if isinstance(row, dict)]
+    stages = {str(row.get("stage") or "") for row in diagnostics}
+    assert {"planning_engine", "pattern_inference", "composition_engine"}.issubset(stages)
+    for row in diagnostics:
+        for key in ("entities", "patterns", "composed_patterns", "ui_hints", "generated_pages", "generated_apis"):
+            assert isinstance(row.get(key), list)
+
+
 def test_plan_project_spec_project_asset_crm_and_habit_domains() -> None:
     project = plan_project_spec_from_idea("project management tool")
     assert _entity_names(project) == ["Project", "Task", "Member"]

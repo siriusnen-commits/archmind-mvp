@@ -1107,6 +1107,7 @@ def test_ui_project_analysis_endpoint_response_shape(monkeypatch, tmp_path: Path
     assert isinstance(payload["entities"], list)
     assert isinstance(payload["fields_by_entity"], dict)
     assert isinstance(payload["relationships"], list)
+    assert isinstance(payload["planning_diagnostics"], list)
     assert isinstance(payload["apis"], list)
     assert isinstance(payload["pages"], list)
     assert isinstance(payload["entity_graph"], dict)
@@ -1139,6 +1140,17 @@ def test_ui_project_analysis_exposes_spec_relationships(monkeypatch, tmp_path: P
     payload["relationships"] = [
         {"source_entity": "Task", "target_entity": "Project", "field": "project_id", "type": "belongs_to"}
     ]
+    payload["planning_diagnostics"] = [
+        {
+            "stage": "planning_engine",
+            "entities": ["Project", "Task"],
+            "patterns": ["workflow_status"],
+            "composed_patterns": [],
+            "ui_hints": [],
+            "generated_pages": ["projects/list", "tasks/list"],
+            "generated_apis": ["GET /projects", "GET /tasks"],
+        }
+    ]
     spec_path.write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setenv("ARCHMIND_PROJECTS_DIR", str(projects_root))
     client = TestClient(create_ui_app())
@@ -1149,6 +1161,8 @@ def test_ui_project_analysis_exposes_spec_relationships(monkeypatch, tmp_path: P
     data = response.json()
     assert data["relationships"][0]["source_entity"] == "Task"
     assert data["relationships"][0]["target_entity"] == "Project"
+    assert data["planning_diagnostics"][0]["stage"] == "planning_engine"
+    assert data["planning_diagnostics"][0]["generated_apis"] == ["GET /projects", "GET /tasks"]
     edges = data["entity_graph"]["edges"]
     assert any(edge["from"] == "Project" and edge["to"] == "Task" for edge in edges)
 

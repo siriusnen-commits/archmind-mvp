@@ -1122,6 +1122,7 @@ def _write_project_spec(
         patterns = suggestion.get("patterns") if isinstance(suggestion.get("patterns"), list) else []
         composed_patterns = suggestion.get("composed_patterns") if isinstance(suggestion.get("composed_patterns"), list) else []
         ui_hints = suggestion.get("ui_hints") if isinstance(suggestion.get("ui_hints"), list) else []
+        planning_diagnostics = suggestion.get("planning_diagnostics") if isinstance(suggestion.get("planning_diagnostics"), list) else []
         if apis:
             payload["apis"] = apis
         if pages:
@@ -1136,6 +1137,14 @@ def _write_project_spec(
             payload["composed_patterns"] = [row for row in composed_patterns if isinstance(row, dict)]
         if ui_hints:
             payload["ui_hints"] = [str(row).strip() for row in ui_hints if str(row).strip()]
+        if planning_diagnostics:
+            payload["planning_diagnostics"] = [row for row in planning_diagnostics if isinstance(row, dict)]
+        try:
+            from archmind.spec_planner import append_spec_diagnostic
+
+            append_spec_diagnostic(payload, "generator")
+        except Exception:
+            pass
         out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return out
     except Exception:
