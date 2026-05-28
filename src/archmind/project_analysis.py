@@ -2179,6 +2179,9 @@ def analyze_project(
         "entities": entities,
         "fields_by_entity": fields_by_entity,
         "relationships": spec_relationships,
+        "planning_diagnostics": [row for row in (spec.get("planning_diagnostics") or []) if isinstance(row, dict)]
+        if isinstance(spec.get("planning_diagnostics"), list)
+        else [],
         "apis": apis,
         "crud_coverage": final_crud_coverage,
         "pages": pages,

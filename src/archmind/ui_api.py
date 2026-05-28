@@ -265,6 +265,7 @@ def get_ui_project_analysis(project_name: str) -> ProjectAnalysisResponse:
             entities=[str(x) for x in (payload.get("entities") or []) if str(x).strip()],
             fields_by_entity=payload.get("fields_by_entity") if isinstance(payload.get("fields_by_entity"), dict) else {},
             relationships=[x for x in (payload.get("relationships") or []) if isinstance(x, dict)],
+            planning_diagnostics=[x for x in (payload.get("planning_diagnostics") or []) if isinstance(x, dict)],
             apis=[x for x in (payload.get("apis") or []) if isinstance(x, dict)],
             pages=[str(x) for x in (payload.get("pages") or []) if str(x).strip()],
             entity_graph=payload.get("entity_graph") if isinstance(payload.get("entity_graph"), dict) else {},

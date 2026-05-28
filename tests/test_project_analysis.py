@@ -93,6 +93,17 @@ def test_project_analysis_exposes_canonical_spec_relationships(tmp_path: Path) -
             "relationships": [
                 {"source_entity": "Task", "target_entity": "Project", "field": "project_id", "type": "belongs_to"}
             ],
+            "planning_diagnostics": [
+                {
+                    "stage": "planning_engine",
+                    "entities": ["Project", "Task"],
+                    "patterns": ["workflow_status"],
+                    "composed_patterns": [],
+                    "ui_hints": [],
+                    "generated_pages": ["projects/list", "tasks/list"],
+                    "generated_apis": ["GET /projects", "GET /tasks"],
+                }
+            ],
             "api_endpoints": ["GET /projects", "GET /tasks"],
             "frontend_pages": ["projects/list", "tasks/list"],
         },
@@ -100,6 +111,8 @@ def test_project_analysis_exposes_canonical_spec_relationships(tmp_path: Path) -
 
     assert out["relationships"][0]["source_entity"] == "Task"
     assert out["relationships"][0]["target_entity"] == "Project"
+    assert out["planning_diagnostics"][0]["stage"] == "planning_engine"
+    assert out["planning_diagnostics"][0]["entities"] == ["Project", "Task"]
     assert any(edge["from"] == "Project" and edge["to"] == "Task" for edge in out["entity_graph"]["edges"])
 
 

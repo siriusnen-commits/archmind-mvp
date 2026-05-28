@@ -6,7 +6,7 @@ from typing import Any
 
 from .module_registry import apply_modules_to_starter_profile
 from .reasoning import try_generate_reasoning_json
-from .spec_planner import infer_domain_model, plan_project_spec_from_idea
+from .spec_planner import append_spec_diagnostic, infer_domain_model, plan_project_spec_from_idea
 
 
 DOMAIN_ENTITY_MAP: dict[str, str] = {
@@ -728,6 +728,7 @@ def suggest_project_spec(
             str(x).strip() for x in (starter_profile.get("required_frontend_expectations") or []) if str(x).strip()
         ],
     }
+    append_spec_diagnostic(fallback_spec, "spec_suggester")
     _enforce_starter_profile(fallback_spec, starter_profile, frontend_needed=frontend_needed)
     _merge_domain_model(fallback_spec, domain_model, frontend_needed=frontend_needed)
     fallback_spec = plan_project_spec_from_idea(idea, fallback_spec)

@@ -18,7 +18,7 @@ from .templates.worker_api import enforce_worker_api
 from .templates.data_tool import enforce_data_tool
 from .backend_runtime import detect_backend_asgi_entry, has_fastapi_app_declaration
 from .reasoning import generate_reasoning_text
-from .spec_planner import plan_project_spec_from_idea
+from .spec_planner import append_spec_diagnostic, plan_project_spec_from_idea
 
 DEBUG_RAW_OUTPUT = Path("examples/last_raw_output.txt")
 DEBUG_REPAIRED_OUTPUT = Path("examples/last_repaired_output.txt")
@@ -5309,6 +5309,10 @@ def normalize_project_spec(raw: Any, idea: str | None = None) -> dict[str, Any]:
         ui_hints = [str(item).strip() for item in raw.get("ui_hints") if str(item).strip()]
         if ui_hints:
             payload["ui_hints"] = ui_hints
+    if isinstance(raw.get("planning_diagnostics"), list):
+        diagnostics = [row for row in raw.get("planning_diagnostics") if isinstance(row, dict)]
+        if diagnostics:
+            payload["planning_diagnostics"] = diagnostics
 
     if resources:
         api_seed = payload.get("api_endpoints") if isinstance(payload.get("api_endpoints"), list) else []
@@ -5336,6 +5340,8 @@ def normalize_project_spec(raw: Any, idea: str | None = None) -> dict[str, Any]:
     if isinstance(idea, str) and idea.strip() and "summary" not in payload:
         payload["summary"] = idea.strip()
 
+    if payload:
+        append_spec_diagnostic(payload, "canonical_spec")
     return payload
 
 

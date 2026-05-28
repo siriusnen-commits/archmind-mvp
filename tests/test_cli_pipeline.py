@@ -464,6 +464,63 @@ def test_pipeline_support_ticket_manager_persists_planned_entities_relationships
     assert "comments/list" in spec.get("frontend_pages", [])
 
 
+def test_pipeline_employee_onboarding_diagnostics_prevent_task_collapse(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_seed_scaffold)
+
+    exit_code = main(
+        [
+            "pipeline",
+            "--idea",
+            "employee_onboarding_management_system",
+            "--template",
+            "fullstack-ddd",
+            "--out",
+            str(tmp_path),
+            "--name",
+            "employee_onboarding_planned",
+            "--backend-only",
+            "--max-iterations",
+            "1",
+            "--model",
+            "none",
+        ]
+    )
+
+    assert exit_code == 0
+    spec = json.loads((tmp_path / "employee_onboarding_planned" / ".archmind" / "project_spec.json").read_text(encoding="utf-8"))
+    names = [str(entity.get("name") or "") for entity in spec.get("entities", []) if isinstance(entity, dict)]
+    assert len(names) >= 3
+    assert {"Employee", "Training", "Department"}.issubset(set(names))
+    assert names != ["Task"]
+    assert not (len(names) == 1 and names[0] == "Task")
+
+    relationships = spec.get("relationships") if isinstance(spec.get("relationships"), list) else []
+    assert any(rel.get("from_entity") == "Employee" and rel.get("to_entity") == "Department" for rel in relationships)
+    assert any(rel.get("from_entity") == "Training" and rel.get("to_entity") == "Employee" for rel in relationships)
+    assert "GET /employees" in spec.get("api_endpoints", [])
+    assert "GET /trainings" in spec.get("api_endpoints", [])
+    assert "GET /departments" in spec.get("api_endpoints", [])
+    assert "employees/list" in spec.get("frontend_pages", [])
+    assert "trainings/list" in spec.get("frontend_pages", [])
+    assert "departments/list" in spec.get("frontend_pages", [])
+
+    diagnostics = [row for row in spec.get("planning_diagnostics", []) if isinstance(row, dict)]
+    stages = {str(row.get("stage") or "") for row in diagnostics}
+    assert {
+        "spec_suggester",
+        "planning_engine",
+        "pattern_inference",
+        "composition_engine",
+        "canonical_spec",
+        "generator",
+    }.issubset(stages)
+    for row in diagnostics:
+        for key in ("entities", "patterns", "composed_patterns", "ui_hints", "generated_pages", "generated_apis"):
+            assert isinstance(row.get(key), list)
+
+
 def test_pipeline_todo_real_path_materialization_avoids_generic_home_and_add_entity_bootstrap(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("archmind.pipeline._resolve_generator_entry", lambda: _fake_generate_project_with_seed_scaffold)
     monkeypatch.setattr(
