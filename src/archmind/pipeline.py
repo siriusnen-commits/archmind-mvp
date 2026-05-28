@@ -1119,6 +1119,9 @@ def _write_project_spec(
         pages = suggestion.get("pages") if isinstance(suggestion.get("pages"), list) else []
         resources = suggestion.get("resources") if isinstance(suggestion.get("resources"), list) else []
         relationships = suggestion.get("relationships") if isinstance(suggestion.get("relationships"), list) else []
+        patterns = suggestion.get("patterns") if isinstance(suggestion.get("patterns"), list) else []
+        composed_patterns = suggestion.get("composed_patterns") if isinstance(suggestion.get("composed_patterns"), list) else []
+        ui_hints = suggestion.get("ui_hints") if isinstance(suggestion.get("ui_hints"), list) else []
         if apis:
             payload["apis"] = apis
         if pages:
@@ -1127,6 +1130,12 @@ def _write_project_spec(
             payload["resources"] = resources
         if relationships:
             payload["relationships"] = [row for row in relationships if isinstance(row, dict)]
+        if patterns:
+            payload["patterns"] = [row for row in patterns if isinstance(row, dict)]
+        if composed_patterns:
+            payload["composed_patterns"] = [row for row in composed_patterns if isinstance(row, dict)]
+        if ui_hints:
+            payload["ui_hints"] = [str(row).strip() for row in ui_hints if str(row).strip()]
         out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return out
     except Exception:

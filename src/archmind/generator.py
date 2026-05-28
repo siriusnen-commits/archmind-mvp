@@ -18,6 +18,7 @@ from .templates.worker_api import enforce_worker_api
 from .templates.data_tool import enforce_data_tool
 from .backend_runtime import detect_backend_asgi_entry, has_fastapi_app_declaration
 from .reasoning import generate_reasoning_text
+from .spec_planner import plan_project_spec_from_idea
 
 DEBUG_RAW_OUTPUT = Path("examples/last_raw_output.txt")
 DEBUG_REPAIRED_OUTPUT = Path("examples/last_repaired_output.txt")
@@ -5184,6 +5185,8 @@ def _page_route_to_rel(page_path: str) -> str:
 def normalize_project_spec(raw: Any, idea: str | None = None) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
+    if isinstance(idea, str) and idea.strip():
+        raw = plan_project_spec_from_idea(idea, raw)
 
     payload: dict[str, Any] = {}
     raw_shape = str(raw.get("shape") or raw.get("app_shape") or "").strip().lower()
@@ -5271,10 +5274,10 @@ def normalize_project_spec(raw: Any, idea: str | None = None) -> dict[str, Any]:
     for item in relationships_raw:
         if not isinstance(item, dict):
             continue
-        source = str(item.get("source_entity") or item.get("child_entity") or item.get("from") or "").strip()
-        target = str(item.get("target_entity") or item.get("parent_entity") or item.get("to") or "").strip()
+        source = str(item.get("from_entity") or item.get("source_entity") or item.get("child_entity") or item.get("from") or "").strip()
+        target = str(item.get("to_entity") or item.get("target_entity") or item.get("parent_entity") or item.get("to") or "").strip()
         field = str(item.get("field") or "").strip()
-        rel_type = str(item.get("type") or "belongs_to").strip() or "belongs_to"
+        rel_type = str(item.get("type") or "many_to_one").strip() or "many_to_one"
         if not source or not target:
             continue
         if entity_names and (source.lower() not in entity_names or target.lower() not in entity_names):
@@ -5285,15 +5288,27 @@ def normalize_project_spec(raw: Any, idea: str | None = None) -> dict[str, Any]:
         seen_relationships.add(key)
         relationships.append(
             {
+                "from_entity": source,
+                "to_entity": target,
                 "source_entity": source,
                 "target_entity": target,
                 "field": field,
                 "type": rel_type,
-                "cardinality": str(item.get("cardinality") or "many_to_one").strip() or "many_to_one",
+                "cardinality": str(item.get("cardinality") or rel_type).strip() or rel_type,
             }
         )
     if relationships:
         payload["relationships"] = relationships
+
+    for key in ("patterns", "composed_patterns"):
+        if isinstance(raw.get(key), list):
+            rows = [row for row in raw.get(key) if isinstance(row, dict)]
+            if rows:
+                payload[key] = rows
+    if isinstance(raw.get("ui_hints"), list):
+        ui_hints = [str(item).strip() for item in raw.get("ui_hints") if str(item).strip()]
+        if ui_hints:
+            payload["ui_hints"] = ui_hints
 
     if resources:
         api_seed = payload.get("api_endpoints") if isinstance(payload.get("api_endpoints"), list) else []

@@ -684,8 +684,8 @@ def _normalize_spec_relationships(spec: dict[str, Any]) -> list[dict[str, str]]:
     for row in raw_rows:
         if not isinstance(row, dict):
             continue
-        source = _normalize_entity_name(row.get("source_entity") or row.get("child_entity") or row.get("from"))
-        target = _normalize_entity_name(row.get("target_entity") or row.get("parent_entity") or row.get("to"))
+        source = _normalize_entity_name(row.get("from_entity") or row.get("source_entity") or row.get("child_entity") or row.get("from"))
+        target = _normalize_entity_name(row.get("to_entity") or row.get("target_entity") or row.get("parent_entity") or row.get("to"))
         field = str(row.get("field") or "").strip().lower()
         if not source or not target:
             continue
@@ -697,9 +697,11 @@ def _normalize_spec_relationships(spec: dict[str, Any]) -> list[dict[str, str]]:
             {
                 "source_entity": source,
                 "target_entity": target,
+                "from_entity": source,
+                "to_entity": target,
                 "field": field,
-                "type": str(row.get("type") or "belongs_to").strip() or "belongs_to",
-                "cardinality": str(row.get("cardinality") or "many_to_one").strip() or "many_to_one",
+                "type": str(row.get("type") or "many_to_one").strip() or "many_to_one",
+                "cardinality": str(row.get("cardinality") or row.get("type") or "many_to_one").strip() or "many_to_one",
             }
         )
     return out

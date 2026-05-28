@@ -6,7 +6,7 @@ from typing import Any
 
 from .module_registry import apply_modules_to_starter_profile
 from .reasoning import try_generate_reasoning_json
-from .spec_planner import infer_domain_model
+from .spec_planner import infer_domain_model, plan_project_spec_from_idea
 
 
 DOMAIN_ENTITY_MAP: dict[str, str] = {
@@ -269,18 +269,20 @@ def _build_core_pages(resource_plural: str) -> list[str]:
 
 
 def _normalize_relationship(row: dict[str, Any]) -> dict[str, str]:
-    source = str(row.get("source_entity") or row.get("child_entity") or row.get("from") or "").strip()
-    target = str(row.get("target_entity") or row.get("parent_entity") or row.get("to") or "").strip()
+    source = str(row.get("from_entity") or row.get("source_entity") or row.get("child_entity") or row.get("from") or "").strip()
+    target = str(row.get("to_entity") or row.get("target_entity") or row.get("parent_entity") or row.get("to") or "").strip()
     field = str(row.get("field") or "").strip()
-    rel_type = str(row.get("type") or "belongs_to").strip() or "belongs_to"
+    rel_type = str(row.get("type") or "many_to_one").strip() or "many_to_one"
     if not source or not target:
         return {}
     return {
+        "from_entity": source,
+        "to_entity": target,
         "source_entity": source,
         "target_entity": target,
         "field": field,
         "type": rel_type,
-        "cardinality": str(row.get("cardinality") or "many_to_one").strip() or "many_to_one",
+        "cardinality": str(row.get("cardinality") or rel_type).strip() or rel_type,
     }
 
 
@@ -326,7 +328,7 @@ def _merge_domain_model(out: dict[str, Any], domain_model: dict[str, Any], *, fr
             seen_fields.add(field_name.lower())
         row["fields"] = fields[:6]
 
-    out["entities"] = entity_rows[:3]
+    out["entities"] = entity_rows[:4]
 
     entity_names = [str(row.get("name") or "").strip() for row in out["entities"] if isinstance(row, dict)]
     api_rows = [str(x).strip() for x in (out.get("api_endpoints") or []) if str(x).strip()]
@@ -346,8 +348,8 @@ def _merge_domain_model(out: dict[str, Any], domain_model: dict[str, Any], *, fr
                 if key not in seen_page:
                     page_rows.append(page)
                     seen_page.add(key)
-    out["api_endpoints"] = api_rows[:15]
-    out["frontend_pages"] = page_rows[:15] if frontend_needed else []
+    out["api_endpoints"] = api_rows[:24]
+    out["frontend_pages"] = page_rows[:24] if frontend_needed else []
 
     rel_rows: list[dict[str, str]] = [
         rel for rel in (out.get("relationships") if isinstance(out.get("relationships"), list) else []) if isinstance(rel, dict)
@@ -375,7 +377,7 @@ def _merge_domain_model(out: dict[str, Any], domain_model: dict[str, Any], *, fr
         rel_rows.append(rel)
         seen_rels.add(key)
     if rel_rows:
-        out["relationships"] = rel_rows[:8]
+        out["relationships"] = rel_rows[:12]
 
 
 def _build_starter_profile(text: str, domains: list[str], frontend_needed: bool) -> dict[str, Any]:
@@ -728,6 +730,7 @@ def suggest_project_spec(
     }
     _enforce_starter_profile(fallback_spec, starter_profile, frontend_needed=frontend_needed)
     _merge_domain_model(fallback_spec, domain_model, frontend_needed=frontend_needed)
+    fallback_spec = plan_project_spec_from_idea(idea, fallback_spec)
     provider_prompt = (
         "Suggest a compact project spec JSON for the idea.\n"
         "Return JSON object with keys: entities, api_endpoints, frontend_pages.\n"
@@ -817,5 +820,6 @@ def suggest_project_spec(
 
     _enforce_starter_profile(out, starter_profile, frontend_needed=frontend_needed)
     _merge_domain_model(out, domain_model, frontend_needed=frontend_needed)
+    out = plan_project_spec_from_idea(idea, out)
 
     return out
