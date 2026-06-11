@@ -272,6 +272,101 @@ def test_generate_project_fullstack_ddd_normalizes_and_applies_multi_entity_seed
     assert 'href: "/tags"' in navigation
 
 
+def test_generate_project_materializes_relation_pages_and_parent_detail_links(tmp_path: Path) -> None:
+    opt = GenerateOptions(out=tmp_path, force=False, name="onboarding_relations", template="fullstack-ddd")
+    setattr(
+        opt,
+        "project_spec",
+        {
+            "entities": [
+                {"name": "Department", "fields": [{"name": "name", "type": "string"}]},
+                {
+                    "name": "Employee",
+                    "fields": [
+                        {"name": "name", "type": "string"},
+                        {"name": "email", "type": "string"},
+                        {"name": "department_id", "type": "int"},
+                    ],
+                },
+                {
+                    "name": "Training",
+                    "fields": [
+                        {"name": "title", "type": "string"},
+                        {"name": "employee_id", "type": "int"},
+                    ],
+                },
+                {
+                    "name": "OnboardingTask",
+                    "fields": [
+                        {"name": "title", "type": "string"},
+                        {"name": "employee_id", "type": "int"},
+                    ],
+                },
+            ],
+            "relationships": [
+                {"from_entity": "Employee", "to_entity": "Department", "field": "department_id"},
+                {"from_entity": "Training", "to_entity": "Employee", "field": "employee_id"},
+                {"from_entity": "OnboardingTask", "to_entity": "Employee", "field": "employee_id"},
+            ],
+        },
+    )
+
+    project_dir = Path(generate_project("employee onboarding management system", opt))
+
+    assert (project_dir / "frontend" / "app" / "employees" / "by_department" / "page.tsx").exists()
+    assert (project_dir / "frontend" / "app" / "trainings" / "by_employee" / "page.tsx").exists()
+    assert (project_dir / "frontend" / "app" / "onboarding_tasks" / "by_employee" / "page.tsx").exists()
+
+    spec = json.loads((project_dir / "archmind_spec.json").read_text(encoding="utf-8"))
+    assert "GET /departments/{id}/employees" in spec.get("api_endpoints", [])
+    assert "GET /employees/{id}/trainings" in spec.get("api_endpoints", [])
+    assert "GET /employees/{id}/onboarding_tasks" in spec.get("api_endpoints", [])
+    assert "employees/by_department" in spec.get("frontend_pages", [])
+    assert "trainings/by_employee" in spec.get("frontend_pages", [])
+    assert "onboarding_tasks/by_employee" in spec.get("frontend_pages", [])
+
+    department_detail = (project_dir / "frontend" / "app" / "departments" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+    employee_detail = (project_dir / "frontend" / "app" / "employees" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+    assert "/employees/by_department?department_id=${id}" in department_detail
+    assert "/trainings/by_employee?employee_id=${id}" in employee_detail
+    assert "/onboarding_tasks/by_employee?employee_id=${id}" in employee_detail
+
+    relation_page = (project_dir / "frontend" / "app" / "employees" / "by_department" / "page.tsx").read_text(encoding="utf-8")
+    assert "fetch(`${apiBaseUrl}/departments/${relationValue}/employees`" in relation_page
+    assert 'fetch(`${apiBaseUrl}/employees`' in relation_page
+    assert "/employees/${item.id}" in relation_page
+    assert "Back to Departments" in relation_page
+    _assert_tsx_syntax_ok(relation_page)
+
+
+def test_normalize_project_spec_derives_relation_page_from_relation_api() -> None:
+    normalized = normalize_project_spec(
+        {
+            "entities": [
+                {"name": "Department", "fields": [{"name": "name", "type": "string"}]},
+                {"name": "Employee", "fields": [{"name": "name", "type": "string"}]},
+            ],
+            "api_endpoints": ["GET /departments/{id}/employees"],
+        }
+    )
+
+    assert "GET /departments/{id}/employees" in normalized.get("api_endpoints", [])
+    assert "employees/by_department" in normalized.get("frontend_pages", [])
+
+
+def test_normalize_project_spec_does_not_force_relation_pages_without_relationships() -> None:
+    normalized = normalize_project_spec(
+        {
+            "entities": [
+                {"name": "Task", "fields": [{"name": "title", "type": "string"}]},
+                {"name": "Note", "fields": [{"name": "title", "type": "string"}]},
+            ],
+        }
+    )
+
+    assert not [page for page in normalized.get("frontend_pages", []) if "/by_" in str(page)]
+
+
 def test_normalize_project_spec_builds_canonical_resources_pages_and_apis() -> None:
     normalized = normalize_project_spec(
         {
@@ -1389,6 +1484,8 @@ def test_relation_create_page_card_uses_query_prefill_and_parent_selector(tmp_pa
     assert 'method: "POST"' in create_text
     assert 'fetch(`${apiBaseUrl}/cards`' in create_text
     assert "/cards/new?board_id=${relationValue}" in relation_text
+    _assert_tsx_syntax_ok(create_text)
+    _assert_tsx_syntax_ok(relation_text)
 
 
 def test_relation_create_page_tag_respects_entry_context_and_has_fallback(tmp_path: Path) -> None:
@@ -1705,6 +1802,38 @@ def test_apply_api_scaffold_normalizes_singular_path_to_plural(tmp_path: Path) -
     assert "app/routers/custom.py" in generated
     custom_text = (project_dir / "app" / "routers" / "custom.py").read_text(encoding="utf-8")
     assert '@router.get("/tasks")' in custom_text
+
+
+def test_apply_api_scaffold_relation_endpoint_returns_filtered_child_rows(tmp_path: Path) -> None:
+    from fastapi.testclient import TestClient
+
+    project_dir = tmp_path / "relation_api_demo"
+    (project_dir / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "requirements.txt").write_text("fastapi\n", encoding="utf-8")
+    (project_dir / "app" / "main.py").write_text("from fastapi import FastAPI\n\napp = FastAPI()\n", encoding="utf-8")
+    apply_entity_scaffold(project_dir, "Department")
+    apply_entity_scaffold(project_dir, "Employee")
+
+    generated = apply_api_scaffold(project_dir, "GET", "/departments/{id}/employees")
+
+    assert "app/routers/custom.py" in generated
+    custom_text = (project_dir / "app" / "routers" / "custom.py").read_text(encoding="utf-8")
+    assert "def _list_related_items" in custom_text
+    assert "return _list_related_items('employees', 'department_id', id)" in custom_text
+
+    app = _import_generated_backend_app(project_dir, f"sqlite:///{project_dir / 'data' / 'relation.db'}")
+    client = TestClient(app)
+    department = client.post("/departments", json={"name": "Engineering"}).json()
+    other = client.post("/departments", json={"name": "Support"}).json()
+    matching = client.post("/employees", json={"name": "Ada", "department_id": department["id"]}).json()
+    client.post("/employees", json={"name": "Grace", "department_id": other["id"]})
+
+    response = client.get(f"/departments/{department['id']}/employees")
+
+    assert response.status_code == 200
+    rows = response.json()
+    assert isinstance(rows, list)
+    assert [row["id"] for row in rows] == [matching["id"]]
 
 
 def test_apply_page_scaffold_creates_explicit_page_and_is_idempotent(tmp_path: Path) -> None:

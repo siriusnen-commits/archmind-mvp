@@ -502,9 +502,25 @@ def test_pipeline_employee_onboarding_diagnostics_prevent_task_collapse(
     assert "GET /employees" in spec.get("api_endpoints", [])
     assert "GET /trainings" in spec.get("api_endpoints", [])
     assert "GET /departments" in spec.get("api_endpoints", [])
+    assert "GET /departments/{id}/employees" in spec.get("api_endpoints", [])
+    assert "GET /employees/{id}/trainings" in spec.get("api_endpoints", [])
+    assert "GET /employees/{id}/onboarding_tasks" in spec.get("api_endpoints", [])
     assert "employees/list" in spec.get("frontend_pages", [])
     assert "trainings/list" in spec.get("frontend_pages", [])
     assert "departments/list" in spec.get("frontend_pages", [])
+    assert "employees/by_department" in spec.get("frontend_pages", [])
+    assert "trainings/by_employee" in spec.get("frontend_pages", [])
+    assert "onboarding_tasks/by_employee" in spec.get("frontend_pages", [])
+
+    project_dir = tmp_path / "employee_onboarding_planned"
+    analysis = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+    assert "employees/by_department" in analysis.get("relation_pages", [])
+    assert "trainings/by_employee" in analysis.get("relation_pages", [])
+    assert "onboarding_tasks/by_employee" in analysis.get("relation_pages", [])
+    warnings = "\n".join(str(item) for item in analysis.get("drift_warnings", []))
+    assert "employees/by_department" not in warnings
+    assert "trainings/by_employee" not in warnings
+    assert "onboarding_tasks/by_employee" not in warnings
 
     diagnostics = [row for row in spec.get("planning_diagnostics", []) if isinstance(row, dict)]
     stages = {str(row.get("stage") or "") for row in diagnostics}

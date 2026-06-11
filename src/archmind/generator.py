@@ -790,6 +790,10 @@ def _infer_relation_pairs_from_spec(spec_payload: dict[str, Any]) -> list[dict[s
     entities = _extract_relation_entities_from_spec(spec_payload)
     if len(entities) < 2:
         return []
+    explicit_pairs = _explicit_relation_pairs_from_spec_payload(spec_payload)
+    if explicit_pairs:
+        return explicit_pairs
+
     alias_to_parent: dict[str, dict[str, str]] = {}
     for entity in entities:
         resource = str(entity.get("resource") or "")
@@ -868,6 +872,106 @@ def _infer_relation_pairs_from_spec(spec_payload: dict[str, Any]) -> list[dict[s
                     "child_field": f"{parent_singular}_id",
                 }
             )
+    return pairs
+
+
+def _explicit_relation_pairs_from_spec_payload(spec_payload: dict[str, Any]) -> list[dict[str, str]]:
+    entities = _extract_relation_entities_from_spec(spec_payload)
+    if len(entities) < 2:
+        return []
+    by_name = {str(entity.get("name") or "").strip().lower(): entity for entity in entities}
+    by_singular = {str(entity.get("resource_singular") or "").strip().lower(): entity for entity in entities}
+
+    pairs: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def add_pair(parent: dict[str, Any], child: dict[str, Any], field: str) -> None:
+        parent_name = str(parent.get("name") or "").strip()
+        parent_resource = str(parent.get("resource") or "").strip().lower()
+        parent_singular = str(parent.get("resource_singular") or _singularize_resource_name(parent_resource)).strip().lower()
+        child_name = str(child.get("name") or "").strip()
+        child_resource = str(child.get("resource") or "").strip().lower()
+        child_field = str(field or f"{parent_singular}_id").strip().lower()
+        if not parent_name or not parent_resource or not parent_singular or not child_name or not child_resource or not child_field:
+            return
+        if parent_name.lower() == child_name.lower():
+            return
+        key = (parent_resource, child_resource, child_field)
+        if key in seen:
+            return
+        seen.add(key)
+        pairs.append(
+            {
+                "parent_name": parent_name,
+                "parent_resource": parent_resource,
+                "parent_singular": parent_singular,
+                "child_name": child_name,
+                "child_resource": child_resource,
+                "child_field": child_field,
+            }
+        )
+
+    relationships = spec_payload.get("relationships") if isinstance(spec_payload.get("relationships"), list) else []
+    for raw in relationships:
+        if not isinstance(raw, dict):
+            continue
+        child_name = str(raw.get("from_entity") or raw.get("source_entity") or raw.get("child_entity") or raw.get("from") or "").strip()
+        parent_name = str(raw.get("to_entity") or raw.get("target_entity") or raw.get("parent_entity") or raw.get("to") or "").strip()
+        child = by_name.get(child_name.lower())
+        parent = by_name.get(parent_name.lower())
+        if parent and child:
+            add_pair(parent, child, str(raw.get("field") or ""))
+
+    for child in entities:
+        child_name = str(child.get("name") or "")
+        fields = child.get("fields") if isinstance(child.get("fields"), list) else []
+        for field_name in fields:
+            field = str(field_name or "").strip().lower()
+            if not field.endswith("_id"):
+                continue
+            parent = by_singular.get(field[:-3].strip("_"))
+            if parent and str(parent.get("name") or "").strip().lower() != child_name.strip().lower():
+                add_pair(parent, child, field)
+
+    return pairs
+
+
+def _relation_pairs_from_api_endpoints(api_endpoints: list[str], entities: list[dict[str, Any]]) -> list[dict[str, str]]:
+    if not api_endpoints or len(entities) < 2:
+        return []
+    by_resource = {str(entity.get("resource") or "").strip().lower(): entity for entity in entities}
+    pairs: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for endpoint in api_endpoints:
+        method, path = _parse_api_endpoint_hint(str(endpoint or ""))
+        if method != "GET" or not path:
+            continue
+        parts = [part for part in path.strip("/").split("/") if part]
+        if len(parts) != 3 or parts[1] != "{id}":
+            continue
+        parent = by_resource.get(parts[0])
+        child = by_resource.get(parts[2])
+        if not parent or not child:
+            continue
+        parent_resource = str(parent.get("resource") or "").strip().lower()
+        child_resource = str(child.get("resource") or "").strip().lower()
+        parent_singular = str(parent.get("resource_singular") or _singularize_resource_name(parent_resource)).strip().lower()
+        if not parent_resource or not child_resource or not parent_singular:
+            continue
+        key = (parent_resource, child_resource)
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append(
+            {
+                "parent_name": str(parent.get("name") or ""),
+                "parent_resource": parent_resource,
+                "parent_singular": parent_singular,
+                "child_name": str(child.get("name") or ""),
+                "child_resource": child_resource,
+                "child_field": f"{parent_singular}_id",
+            }
+        )
     return pairs
 
 
@@ -1769,6 +1873,123 @@ def _is_core_entity_crud_route(backend_app_root: Path, method: str, route_path: 
     return False
 
 
+def _relation_api_context_from_path(route_path: str) -> dict[str, str] | None:
+    path = _canonicalize_api_path(route_path)
+    parts = [part for part in path.strip("/").split("/") if part]
+    if len(parts) != 3 or parts[1] != "{id}":
+        return None
+    parent_resource = _pluralize_resource_name(_normalize_resource_segment(parts[0]))
+    child_resource = _pluralize_resource_name(_normalize_resource_segment(parts[2]))
+    parent_singular = _singularize_resource_name(parent_resource)
+    if not parent_resource or not child_resource or not parent_singular:
+        return None
+    return {
+        "parent_resource": parent_resource,
+        "child_resource": child_resource,
+        "relation_field": f"{parent_singular}_id",
+    }
+
+
+def _render_custom_router_base_content() -> str:
+    return (
+        "from __future__ import annotations\n\n"
+        "import json\n"
+        "import os\n"
+        "import sqlite3\n"
+        "from pathlib import Path\n"
+        "from typing import Any\n\n"
+        "from fastapi import APIRouter\n\n"
+        'router = APIRouter(tags=["custom"])\n\n'
+        "def _project_root() -> Path:\n"
+        "    return Path(__file__).resolve().parents[2]\n\n"
+        "def _resolve_db_path() -> Path:\n"
+        "    db_url = str(os.getenv(\"DB_URL\") or \"\").strip()\n"
+        "    if db_url.startswith(\"sqlite:///\"):\n"
+        "        raw = db_url.replace(\"sqlite:///\", \"\", 1)\n"
+        "        candidate = Path(raw)\n"
+        "        if candidate.is_absolute():\n"
+        "            return candidate\n"
+        "        return (_project_root() / candidate).resolve()\n"
+        "    return (_project_root() / \"data\" / \"app.db\").resolve()\n\n"
+        "def _connect() -> sqlite3.Connection:\n"
+        "    db_path = _resolve_db_path()\n"
+        "    db_path.parent.mkdir(parents=True, exist_ok=True)\n"
+        "    connection = sqlite3.connect(db_path)\n"
+        "    connection.row_factory = sqlite3.Row\n"
+        "    return connection\n\n"
+        "def _ensure_payload_table(connection: sqlite3.Connection, table_name: str) -> None:\n"
+        "    connection.execute(\n"
+        "        f\"\"\"\n"
+        "        CREATE TABLE IF NOT EXISTS {table_name} (\n"
+        "            id INTEGER PRIMARY KEY AUTOINCREMENT,\n"
+        "            payload TEXT NOT NULL,\n"
+        "            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,\n"
+        "            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP\n"
+        "        )\n"
+        "        \"\"\"\n"
+        "    )\n"
+        "    connection.commit()\n\n"
+        "def _row_to_item(row: sqlite3.Row) -> dict[str, Any]:\n"
+        "    payload: dict[str, Any] = {}\n"
+        "    try:\n"
+        "        loaded = json.loads(str(row[\"payload\"] or \"{}\"))\n"
+        "        if isinstance(loaded, dict):\n"
+        "            payload = loaded\n"
+        "    except json.JSONDecodeError:\n"
+        "        payload = {}\n"
+        "    payload[\"id\"] = int(row[\"id\"])\n"
+        "    payload.setdefault(\"created_at\", row[\"created_at\"])\n"
+        "    payload.setdefault(\"updated_at\", row[\"updated_at\"])\n"
+        "    return payload\n\n"
+        "def _list_related_items(child_table: str, relation_field: str, parent_id: int) -> list[dict[str, Any]]:\n"
+        "    with _connect() as connection:\n"
+        "        _ensure_payload_table(connection, child_table)\n"
+        "        rows = connection.execute(\n"
+        "            f\"SELECT id, payload, created_at, updated_at FROM {child_table} ORDER BY id DESC\"\n"
+        "        ).fetchall()\n"
+        "    expected = str(parent_id)\n"
+        "    return [\n"
+        "        item\n"
+        "        for item in (_row_to_item(row) for row in rows)\n"
+        "        if str(item.get(relation_field, \"\")).strip() == expected\n"
+        "    ]\n"
+    )
+
+
+def _render_custom_router_relation_helper_block() -> str:
+    base = _render_custom_router_base_content()
+    marker = 'router = APIRouter(tags=["custom"])\n\n'
+    if marker in base:
+        return base.split(marker, 1)[1]
+    return base
+
+
+def _ensure_custom_router_relation_helpers(content: str) -> str:
+    if "def _list_related_items" in content:
+        return content
+    if content.strip() == 'from fastapi import APIRouter\n\nrouter = APIRouter(tags=["custom"])':
+        return _render_custom_router_base_content()
+    import_block = (
+        "import json\n"
+        "import os\n"
+        "import sqlite3\n"
+        "from pathlib import Path\n"
+        "from typing import Any\n\n"
+    )
+    if "import sqlite3" not in content:
+        if "from __future__ import annotations" in content:
+            content = content.replace("from __future__ import annotations\n\n", "from __future__ import annotations\n\n" + import_block, 1)
+        else:
+            content = import_block + content
+    helper_block = _render_custom_router_relation_helper_block()
+    marker = 'router = APIRouter(tags=["custom"])\n'
+    if marker in content:
+        return content.replace(marker, marker + "\n" + helper_block + "\n", 1)
+    if content and not content.endswith("\n"):
+        content += "\n"
+    return content + "\n" + helper_block
+
+
 def apply_api_scaffold(project_dir: Path, method: str, path: str) -> list[str]:
     """
     Create or update a shared custom router with explicit API endpoints.
@@ -1794,9 +2015,20 @@ def apply_api_scaffold(project_dir: Path, method: str, path: str) -> list[str]:
     fn_name = f"{method_up.lower()}_{safe}"
     needs_id = "{id}" in route_path
     signature = "(id: int)" if needs_id else "()"
-    response = f'{{"endpoint": "{method_up} {route_path}"}}'
+    relation_context = _relation_api_context_from_path(route_path) if method_up == "GET" else None
+    if relation_context:
+        response = (
+            "_list_related_items("
+            + repr(str(relation_context.get("child_resource") or ""))
+            + ", "
+            + repr(str(relation_context.get("relation_field") or ""))
+            + ", "
+            + "id)"
+        )
+    else:
+        response = f'{{"endpoint": "{method_up} {route_path}"}}'
 
-    content = (
+    content = _render_custom_router_base_content() if relation_context else (
         "from fastapi import APIRouter\n\n"
         'router = APIRouter(tags=["custom"])\n'
     )
@@ -1806,6 +2038,8 @@ def apply_api_scaffold(project_dir: Path, method: str, path: str) -> list[str]:
             generated: list[str] = []
             _ensure_named_router_registration(backend_app_root / "main.py", "custom", "custom_router", generated, project_dir)
             return generated
+        if relation_context:
+            content = _ensure_custom_router_relation_helpers(content)
         if content and not content.endswith("\n"):
             content += "\n"
     else:
@@ -2077,11 +2311,13 @@ def _render_frontend_relation_page(
     relation_field: str,
     api_helper_import: str,
 ) -> str:
+    parent_label = _singularize_resource_name(parent_resource).replace("_", " ").title()
+    child_label = child_resource.replace("_", " ").title()
     return (
         '"use client";\n\n'
         'import Link from "next/link";\n'
-        'import { useRouter, useSearchParams } from "next/navigation";\n'
-        'import { useEffect, useState } from "react";\n'
+        'import { useSearchParams } from "next/navigation";\n'
+        'import { Suspense, useEffect, useState } from "react";\n'
         f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n\n'
         "type EntityItem = Record<string, unknown> & { id?: number | string };\n\n"
         "function extractRows(payload: unknown): EntityItem[] {\n"
@@ -2091,7 +2327,7 @@ def _render_frontend_relation_page(
         "  }\n"
         "  return [];\n"
         "}\n\n"
-        f"export default function {component_name}() {{\n"
+        f"function {component_name}Content() {{\n"
         "  const searchParams = useSearchParams();\n"
         f'  const relationValue = String(searchParams.get("{relation_field}") || "").trim();\n'
         "  const [items, setItems] = useState<EntityItem[]>([]);\n"
@@ -2108,14 +2344,19 @@ def _render_frontend_relation_page(
         "      setLoading(true);\n"
         "      setError(\"\");\n"
         "      try {\n"
+        "        let loadedFromScopedEndpoint = false;\n"
         "        if (relationValue) {\n"
         f'          const scoped = await fetch(`${{apiBaseUrl}}/{parent_resource}/${{relationValue}}/{child_resource}`, {{ cache: "no-store" }});\n'
         "          if (scoped.ok) {\n"
         "            const scopedPayload = await scoped.json();\n"
-        "            if (mounted) setItems(extractRows(scopedPayload));\n"
-        "            return;\n"
+        "            const scopedRows = extractRows(scopedPayload);\n"
+        "            if (scopedRows.length > 0 || Array.isArray(scopedPayload) || (scopedPayload && typeof scopedPayload === \"object\" && Array.isArray((scopedPayload as { items?: unknown[] }).items))) {\n"
+        "              loadedFromScopedEndpoint = true;\n"
+        "              if (mounted) setItems(scopedRows);\n"
+        "            }\n"
         "          }\n"
         "        }\n"
+        "        if (loadedFromScopedEndpoint) return;\n"
         f'        const fallback = await fetch(`${{apiBaseUrl}}/{child_resource}`, {{ cache: "no-store" }});\n'
         "        if (!fallback.ok) throw new Error(`HTTP ${fallback.status}`);\n"
         "        const payload = await fallback.json();\n"
@@ -2141,7 +2382,10 @@ def _render_frontend_relation_page(
         "  return (\n"
         '    <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">\n'
         f'      <h1 className="text-lg font-semibold">{title}</h1>\n'
-        "      <div className=\"flex items-center gap-3 text-xs\">\n"
+        f'      <p className="text-sm text-slate-300">{child_label} linked to {parent_label} {{relationValue ? `#${{relationValue}}` : ""}}</p>\n'
+        "      <div className=\"flex flex-wrap items-center gap-3 text-xs\">\n"
+        f'        <Link href="/{parent_resource}" className="text-slate-300 underline">Back to {parent_resource.replace("_", " ").title()}</Link>\n'
+        f'        {{relationValue ? <Link href={{`/{parent_resource}/${{relationValue}}`}} className="text-slate-300 underline">Parent detail</Link> : null}}\n'
         f'        <Link href={{`/{child_resource}/new?{relation_field}=${{relationValue}}`}} className="text-emerald-300 underline">Create new</Link>\n'
         "      </div>\n"
         "      {loading ? <p className=\"text-sm text-slate-300\">{apiBaseLoading ? \"Resolving API base...\" : \"Loading...\"}</p> : null}\n"
@@ -2151,13 +2395,20 @@ def _render_frontend_relation_page(
         '        <ul className="space-y-2 text-sm">\n'
         "          {items.map((item, index) => (\n"
         '            <li key={String(item.id ?? index)} className="rounded-md border border-slate-700 p-2">\n'
-        "              <div className=\"font-medium\">{String(item.title ?? item.name ?? `#${item.id ?? index}`)}</div>\n"
+        f"              {{item.id ? <Link href={{`/{child_resource}/${{item.id}}`}} className=\"font-medium text-cyan-200 underline\">{{String(item.title ?? item.name ?? `#${{item.id ?? index}}`)}}</Link> : <div className=\"font-medium\">{{String(item.title ?? item.name ?? `#${{item.id ?? index}}`)}}</div>}}\n"
         "              <pre className=\"mt-1 overflow-x-auto text-xs text-slate-300\">{JSON.stringify(item, null, 2)}</pre>\n"
         "            </li>\n"
         "          ))}\n"
         "        </ul>\n"
         "      ) : null}\n"
         "    </section>\n"
+        "  );\n"
+        "}\n\n"
+        f"export default function {component_name}() {{\n"
+        "  return (\n"
+        "    <Suspense fallback={<p className=\"text-sm text-slate-300\">Loading related records...</p>}>\n"
+        f"      <{component_name}Content />\n"
+        "    </Suspense>\n"
         "  );\n"
         "}\n"
     )
@@ -2442,7 +2693,7 @@ def _render_frontend_entity_create_page(
             f"    if ({prefix}FromQuery) {{\n"
             f'      setValues((prev) => (prev["{field_name}"] ? prev : {{ ...prev, {field_name!r}: {prefix}FromQuery }}));\n'
             "    }\n"
-            "  }, [searchParams]);\n"
+            f"  }}, [{prefix}FromQuery]);\n"
             "\n  useEffect(() => {\n"
             "    if (apiBaseLoading || !apiBaseUrl) return;\n"
             "    let mounted = true;\n"
@@ -2472,7 +2723,7 @@ def _render_frontend_entity_create_page(
             "  }, [apiBaseLoading, apiBaseUrl]);\n"
         )
         relation_ui_blocks += (
-            f'        {prefix}FromQuery ? (\n'
+            f'        {{{prefix}FromQuery ? (\n'
             f'          <div key="{field_name}" className="space-y-1">\n'
             f'            <label className="text-xs text-slate-300">{parent_label}</label>\n'
             f'            <input value={{values["{field_name}"] || {prefix}FromQuery}} readOnly className="w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100" />\n'
@@ -2496,7 +2747,7 @@ def _render_frontend_entity_create_page(
             f"            {{{prefix}Loading ? <p className=\"text-[11px] text-slate-400\">Loading options...</p> : null}}\n"
             f"            {{{prefix}Error ? <p className=\"text-[11px] text-slate-400\">Option fetch unavailable. Raw input fallback.</p> : null}}\n"
             "          </div>\n"
-            "        )\n"
+            "        )}\n"
         )
     non_relation_fields = [item for item in normalized_fields if str(item.get("name") or "") not in relation_lookup]
     non_relation_field_rows = "".join(
@@ -5336,6 +5587,57 @@ def normalize_project_spec(raw: Any, idea: str | None = None) -> dict[str, Any]:
         if frontend_allowed:
             payload["frontend_pages"] = page_seed
             payload["pages"] = [{"path": _page_rel_to_route_path(page)} for page in page_seed]
+
+    if resources:
+        relation_entities = _extract_relation_entities_from_spec(payload)
+        relation_pairs = _explicit_relation_pairs_from_spec_payload(payload)
+        api_seed = payload.get("api_endpoints") if isinstance(payload.get("api_endpoints"), list) else []
+        relation_pairs.extend(_relation_pairs_from_api_endpoints(api_seed, relation_entities))
+        deduped_relation_pairs: list[dict[str, str]] = []
+        seen_relation_pairs: set[tuple[str, str, str]] = set()
+        for pair in relation_pairs:
+            parent_resource = str(pair.get("parent_resource") or "").strip().lower()
+            parent_singular = str(pair.get("parent_singular") or _singularize_resource_name(parent_resource)).strip().lower()
+            child_resource = str(pair.get("child_resource") or "").strip().lower()
+            child_field = str(pair.get("child_field") or f"{parent_singular}_id").strip().lower()
+            if not parent_resource or not parent_singular or not child_resource:
+                continue
+            key = (parent_resource, child_resource, child_field)
+            if key in seen_relation_pairs:
+                continue
+            seen_relation_pairs.add(key)
+            deduped_relation_pairs.append(
+                {
+                    **pair,
+                    "parent_resource": parent_resource,
+                    "parent_singular": parent_singular,
+                    "child_resource": child_resource,
+                    "child_field": child_field,
+                }
+            )
+        if deduped_relation_pairs:
+            api_seed = payload.get("api_endpoints") if isinstance(payload.get("api_endpoints"), list) else []
+            api_seen = {str(item).strip().lower() for item in api_seed if str(item).strip()}
+            page_seed = payload.get("frontend_pages") if isinstance(payload.get("frontend_pages"), list) else []
+            page_seen = {str(item).strip().lower() for item in page_seed if str(item).strip()}
+            for pair in deduped_relation_pairs:
+                parent_resource = str(pair.get("parent_resource") or "")
+                child_resource = str(pair.get("child_resource") or "")
+                parent_singular = str(pair.get("parent_singular") or "")
+                endpoint = f"GET /{parent_resource}/{{id}}/{child_resource}"
+                if endpoint.lower() not in api_seen:
+                    api_seed.append(endpoint)
+                    api_seen.add(endpoint.lower())
+                if frontend_allowed:
+                    page = f"{child_resource}/by_{parent_singular}"
+                    if page.lower() not in page_seen:
+                        page_seed.append(page)
+                        page_seen.add(page.lower())
+            payload["api_endpoints"] = api_seed
+            payload["apis"] = [{"method": item.split(maxsplit=1)[0], "path": item.split(maxsplit=1)[1]} for item in api_seed]
+            if frontend_allowed:
+                payload["frontend_pages"] = page_seed
+                payload["pages"] = [{"path": _page_rel_to_route_path(page)} for page in page_seed]
 
     if isinstance(idea, str) and idea.strip() and "summary" not in payload:
         payload["summary"] = idea.strip()
