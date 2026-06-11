@@ -991,7 +991,7 @@ def _write_project_spec(
                 continue
             seen_api.add(key)
             api_endpoints.append(text)
-            if len(api_endpoints) >= 20:
+            if len(api_endpoints) >= 40:
                 break
 
         raw_pages = suggestion.get("frontend_pages") if isinstance(suggestion.get("frontend_pages"), list) else []
@@ -1053,7 +1053,7 @@ def _write_project_spec(
                 continue
             seen_api.add(key)
             api_endpoints.append(text)
-            if len(api_endpoints) >= 20:
+            if len(api_endpoints) >= 40:
                 break
 
         existing_frontend_pages = (
