@@ -980,6 +980,123 @@ def test_project_analysis_relation_diagnostics_board_card_include_summary_artifa
     assert out["drift_warnings"] == []
 
 
+def test_project_analysis_exposes_workspace_and_workflow_summaries(tmp_path: Path) -> None:
+    project_dir = tmp_path / "onboarding-workspace-diagnostics"
+    spec = {
+        "entities": [
+            {"name": "Department", "fields": [{"name": "name", "type": "string"}]},
+            {"name": "Employee", "fields": [{"name": "name", "type": "string"}, {"name": "department_id", "type": "int"}]},
+            {
+                "name": "Training",
+                "fields": [
+                    {"name": "title", "type": "string"},
+                    {"name": "status", "type": "string"},
+                    {"name": "employee_id", "type": "int"},
+                ],
+            },
+            {
+                "name": "OnboardingTask",
+                "fields": [
+                    {"name": "title", "type": "string"},
+                    {"name": "workflow_status", "type": "string"},
+                    {"name": "employee_id", "type": "int"},
+                ],
+            },
+        ],
+        "api_endpoints": [
+            "GET /departments",
+            "GET /departments/{id}",
+            "GET /employees",
+            "GET /employees/{id}",
+            "GET /trainings",
+            "GET /trainings/{id}",
+            "GET /onboarding_tasks",
+            "GET /onboarding_tasks/{id}",
+            "GET /departments/{id}/employees",
+            "GET /employees/{id}/trainings",
+            "GET /employees/{id}/onboarding_tasks",
+        ],
+        "frontend_pages": [
+            "departments/list",
+            "departments/detail",
+            "employees/list",
+            "employees/detail",
+            "employees/new",
+            "trainings/list",
+            "trainings/detail",
+            "trainings/new",
+            "onboarding_tasks/list",
+            "onboarding_tasks/detail",
+            "onboarding_tasks/new",
+            "employees/by_department",
+            "trainings/by_employee",
+            "onboarding_tasks/by_employee",
+        ],
+        "relationships": [
+            {"from_entity": "Employee", "to_entity": "Department", "field": "department_id"},
+            {"from_entity": "Training", "to_entity": "Employee", "field": "employee_id"},
+            {"from_entity": "OnboardingTask", "to_entity": "Employee", "field": "employee_id"},
+        ],
+    }
+
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+
+    sections = out["workspace_sections"]
+    section_text = "\n".join(str(row) for row in sections)
+    assert "Department" in section_text
+    assert "Employees Workspace Overview" in section_text
+    assert "Trainings Workspace Overview" in section_text
+    assert "Onboarding Tasks Workspace Overview" in section_text
+    assert "Department detail synthesizes Employee count and recent records" in out["relationship_summaries"]
+    assert "Training workflow summary grouped by status" in out["workflow_summaries"]
+    assert "Onboarding Task workflow summary grouped by status" in out["workflow_summaries"]
+
+
+@pytest.mark.parametrize(
+    ("parent", "child", "field"),
+    [
+        ("Customer", "Ticket", "customer_id"),
+        ("Project", "Task", "project_id"),
+        ("Category", "Asset", "category_id"),
+    ],
+)
+def test_project_analysis_workspace_summaries_are_generic(tmp_path: Path, parent: str, child: str, field: str) -> None:
+    project_dir = tmp_path / f"{parent.lower()}-{child.lower()}-workspace"
+    parent_resource = project_analysis._pluralize_resource_name(parent.lower())
+    child_resource = project_analysis._pluralize_resource_name(child.lower())
+    spec = {
+        "entities": [
+            {"name": parent, "fields": [{"name": "name", "type": "string"}]},
+            {"name": child, "fields": [{"name": "title", "type": "string"}, {"name": field, "type": "int"}]},
+        ],
+        "api_endpoints": [
+            f"GET /{parent_resource}",
+            f"GET /{parent_resource}/{{id}}",
+            f"GET /{child_resource}",
+            f"GET /{child_resource}/{{id}}",
+            f"GET /{parent_resource}/{{id}}/{child_resource}",
+        ],
+        "frontend_pages": [
+            f"{parent_resource}/list",
+            f"{parent_resource}/detail",
+            f"{child_resource}/list",
+            f"{child_resource}/detail",
+            f"{child_resource}/new",
+            f"{child_resource}/by_{parent.lower()}",
+        ],
+    }
+
+    out = analyze_project(project_dir, spec_payload=spec, runtime_payload={})
+
+    assert any(
+        row.get("parent_entity") == parent and row.get("child_entity") == child
+        for row in out["workspace_sections"]
+        if isinstance(row, dict)
+    )
+    child_label = (project_analysis._entity_slug(child) or child).replace("_", " ").title()
+    assert f"{parent} detail synthesizes {child_label} count and recent records" in out["relationship_summaries"]
+
+
 def test_project_analysis_relation_diagnostics_entry_tag_include_summary_artifacts(tmp_path: Path) -> None:
     project_dir = tmp_path / "entry-tag-relation-diagnostics"
     spec = {

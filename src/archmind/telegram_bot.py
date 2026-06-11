@@ -4343,6 +4343,17 @@ async def command_inspect(update: Any, context: Any) -> None:
     relation_pages = [str(x) for x in (analysis.get("relation_pages") or []) if str(x).strip()]
     relation_apis = [str(x) for x in (analysis.get("relation_apis") or []) if str(x).strip()]
     relation_create_flows = [str(x) for x in (analysis.get("relation_create_flows") or []) if str(x).strip()]
+    workspace_sections = []
+    for row in analysis.get("workspace_sections") or []:
+        if not isinstance(row, dict):
+            continue
+        parent = str(row.get("parent_entity") or "").strip()
+        child = str(row.get("child_entity") or "").strip()
+        section = str(row.get("section") or "").strip()
+        if parent and child and section:
+            workspace_sections.append(f"{parent} -> {section}")
+    relationship_summaries = [str(x) for x in (analysis.get("relationship_summaries") or []) if str(x).strip()]
+    workflow_summaries = [str(x) for x in (analysis.get("workflow_summaries") or []) if str(x).strip()]
     drift_warnings = [str(x) for x in (analysis.get("drift_warnings") or []) if str(x).strip()]
     next_action = analysis.get("next_action") if isinstance(analysis.get("next_action"), dict) else {}
     next_kind = str(next_action.get("kind") or "").strip().lower()
@@ -4481,6 +4492,12 @@ async def command_inspect(update: Any, context: Any) -> None:
         _append_truncated_bullets(lines, "Relation APIs:", relation_apis, limit=10, suffix_label="apis")
     if relation_create_flows:
         _append_truncated_bullets(lines, "Relation Create Flow:", relation_create_flows, limit=10, suffix_label="flows")
+    if workspace_sections:
+        _append_truncated_bullets(lines, "Workspace Sections:", workspace_sections, limit=10, suffix_label="sections")
+    if relationship_summaries:
+        _append_truncated_bullets(lines, "Relationship Summaries:", relationship_summaries, limit=10, suffix_label="summaries")
+    if workflow_summaries:
+        _append_truncated_bullets(lines, "Workflow Summaries:", workflow_summaries, limit=10, suffix_label="summaries")
     if drift_warnings:
         _append_truncated_bullets(lines, "Drift Warnings:", drift_warnings, limit=8, suffix_label="warnings")
     if next_kind and next_kind != "none" and (next_reason_summary or next_message):
