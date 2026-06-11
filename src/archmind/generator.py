@@ -1067,6 +1067,26 @@ def _relation_inputs_for_child_resource(project_dir: Path, child_resource: str) 
     return out
 
 
+def _relation_config_rows_for_frontend(relation_specs: list[dict[str, str]] | None) -> str:
+    rows = []
+    seen: set[str] = set()
+    for item in relation_specs or []:
+        field_name = str(item.get("field_name") or "").strip().lower()
+        parent_resource = str(item.get("parent_resource") or "").strip().lower()
+        parent_label = str(item.get("parent_label") or item.get("parent_name") or parent_resource).strip()
+        if not field_name or not parent_resource or field_name in seen:
+            continue
+        seen.add(field_name)
+        rows.append(
+            {
+                "fieldName": field_name,
+                "parentResource": parent_resource,
+                "parentLabel": parent_label.replace("_", " ").title(),
+            }
+        )
+    return "".join(f"  {json.dumps(row)},\n" for row in rows)
+
+
 def _relation_page_context_from_rel(rel: str) -> dict[str, str] | None:
     parts = [part for part in str(rel or "").strip("/").split("/") if part]
     if len(parts) != 2:
@@ -2087,6 +2107,7 @@ def apply_frontend_page_scaffold(project_dir: Path, entity_name: str) -> list[st
             entity_path=plural,
             api_helper_import=list_helper_import,
             field_specs=_entity_field_specs_for_resource(project_dir, plural),
+            relation_specs=_relation_inputs_for_child_resource(project_dir, plural),
         ),
         generated,
         project_dir,
@@ -2147,6 +2168,7 @@ def apply_page_scaffold(project_dir: Path, page_path: str) -> list[str]:
                 entity_path=entity_path,
                 api_helper_import=helper_import,
                 field_specs=_entity_field_specs_for_resource(project_dir, entity_path),
+                relation_specs=_relation_inputs_for_child_resource(project_dir, entity_path),
             ),
             generated,
             project_dir,
@@ -2327,13 +2349,38 @@ def _render_frontend_relation_page(
         "  }\n"
         "  return [];\n"
         "}\n\n"
+        "function itemLabel(item: EntityItem, index: number): string {\n"
+        "  return String(item.title ?? item.name ?? item.label ?? `#${item.id ?? index + 1}`);\n"
+        "}\n\n"
         f"function {component_name}Content() {{\n"
         "  const searchParams = useSearchParams();\n"
         f'  const relationValue = String(searchParams.get("{relation_field}") || "").trim();\n'
         "  const [items, setItems] = useState<EntityItem[]>([]);\n"
+        "  const [parentItem, setParentItem] = useState<EntityItem | null>(null);\n"
         "  const [loading, setLoading] = useState(true);\n"
         "  const [error, setError] = useState(\"\");\n"
         "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
+        "  const parentDisplay = parentItem ? itemLabel(parentItem, 0) : (relationValue ? `#${relationValue}` : \"\");\n\n"
+        "  useEffect(() => {\n"
+        "    if (apiBaseLoading || !apiBaseUrl || !relationValue) {\n"
+        "      setParentItem(null);\n"
+        "      return;\n"
+        "    }\n"
+        "    let mounted = true;\n"
+        "    (async () => {\n"
+        "      try {\n"
+        f'        const response = await fetch(`${{apiBaseUrl}}/{parent_resource}/${{relationValue}}`, {{ cache: "no-store" }});\n'
+        "        if (!response.ok) return;\n"
+        "        const payload = (await response.json()) as EntityItem;\n"
+        "        if (mounted) setParentItem(payload);\n"
+        "      } catch {\n"
+        "        if (mounted) setParentItem(null);\n"
+        "      }\n"
+        "    })();\n"
+        "    return () => {\n"
+        "      mounted = false;\n"
+        "    };\n"
+        "  }, [apiBaseLoading, apiBaseUrl, relationValue]);\n\n"
         "  useEffect(() => {\n"
         "    if (apiBaseLoading || !apiBaseUrl) {\n"
         "      setLoading(true);\n"
@@ -2382,11 +2429,11 @@ def _render_frontend_relation_page(
         "  return (\n"
         '    <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">\n'
         f'      <h1 className="text-lg font-semibold">{title}</h1>\n'
-        f'      <p className="text-sm text-slate-300">{child_label} linked to {parent_label} {{relationValue ? `#${{relationValue}}` : ""}}</p>\n'
+        f'      <p className="text-sm text-slate-300">{child_label} linked to {parent_label} {{parentDisplay}}</p>\n'
         "      <div className=\"flex flex-wrap items-center gap-3 text-xs\">\n"
         f'        <Link href="/{parent_resource}" className="text-slate-300 underline">Back to {parent_resource.replace("_", " ").title()}</Link>\n'
-        f'        {{relationValue ? <Link href={{`/{parent_resource}/${{relationValue}}`}} className="text-slate-300 underline">Parent detail</Link> : null}}\n'
-        f'        <Link href={{`/{child_resource}/new?{relation_field}=${{relationValue}}`}} className="text-emerald-300 underline">Create new</Link>\n'
+        f'        {{relationValue ? <Link href={{`/{parent_resource}/${{relationValue}}`}} className="text-slate-300 underline">Back to {parent_label} detail</Link> : null}}\n'
+        f'        <Link href={{`/{child_resource}/new?{relation_field}=${{relationValue}}`}} className="text-emerald-300 underline">Add { _singularize_resource_name(child_resource).replace("_", " ").title() }</Link>\n'
         "      </div>\n"
         "      {loading ? <p className=\"text-sm text-slate-300\">{apiBaseLoading ? \"Resolving API base...\" : \"Loading...\"}</p> : null}\n"
         "      {!loading && error ? <p className=\"text-sm text-rose-300\">Failed to load: {error}</p> : null}\n"
@@ -2395,7 +2442,7 @@ def _render_frontend_relation_page(
         '        <ul className="space-y-2 text-sm">\n'
         "          {items.map((item, index) => (\n"
         '            <li key={String(item.id ?? index)} className="rounded-md border border-slate-700 p-2">\n'
-        f"              {{item.id ? <Link href={{`/{child_resource}/${{item.id}}`}} className=\"font-medium text-cyan-200 underline\">{{String(item.title ?? item.name ?? `#${{item.id ?? index}}`)}}</Link> : <div className=\"font-medium\">{{String(item.title ?? item.name ?? `#${{item.id ?? index}}`)}}</div>}}\n"
+        f"              {{item.id ? <Link href={{`/{child_resource}/${{item.id}}`}} className=\"font-medium text-cyan-200 underline\">{{itemLabel(item, index)}}</Link> : <div className=\"font-medium\">{{itemLabel(item, index)}}</div>}}\n"
         "              <pre className=\"mt-1 overflow-x-auto text-xs text-slate-300\">{JSON.stringify(item, null, 2)}</pre>\n"
         "            </li>\n"
         "          ))}\n"
@@ -2723,14 +2770,7 @@ def _render_frontend_entity_create_page(
             "  }, [apiBaseLoading, apiBaseUrl]);\n"
         )
         relation_ui_blocks += (
-            f'        {{{prefix}FromQuery ? (\n'
-            f'          <div key="{field_name}" className="space-y-1">\n'
-            f'            <label className="text-xs text-slate-300">{parent_label}</label>\n'
-            f'            <input value={{values["{field_name}"] || {prefix}FromQuery}} readOnly className="w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100" />\n'
-            f'            <p className="text-[11px] text-slate-400">Prefilled from parent context.</p>\n'
-            "          </div>\n"
-            "        ) : "
-            f"{prefix}Options.length > 0 ? (\n"
+            f'        {{{prefix}Options.length > 0 ? (\n'
             f'          <div key="{field_name}" className="space-y-1">\n'
             f'            <label className="text-xs text-slate-300">{parent_label}</label>\n'
             f'            <select id="field-{field_name}" name="{field_name}" value={{values["{field_name}"] || ""}} onChange={{onFieldValueChange("{field_name}")}} autoComplete="off" className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100">\n'
@@ -2739,6 +2779,13 @@ def _render_frontend_entity_create_page(
             "                <option key={opt.id} value={opt.id}>{opt.label}</option>\n"
             "              ))}\n"
             "            </select>\n"
+            f"            {{{prefix}FromQuery ? <p className=\"text-[11px] text-slate-400\">Prefilled from parent context.</p> : null}}\n"
+            "          </div>\n"
+            f"        ) : {prefix}FromQuery ? (\n"
+            f'          <div key="{field_name}" className="space-y-1">\n'
+            f'            <label className="text-xs text-slate-300">{parent_label}</label>\n'
+            f'            <input value={{values["{field_name}"] || {prefix}FromQuery}} readOnly className="w-full rounded-md border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100" />\n'
+            f'            <p className="text-[11px] text-slate-400">Prefilled from parent context. Selector options unavailable.</p>\n'
             "          </div>\n"
             "        ) : (\n"
             f'          <div key="{field_name}" className="space-y-1">\n'
@@ -2898,6 +2945,8 @@ def _render_implemented_page_content(app_root: Path, target: Path, rel: str, pro
             title=title,
             entity_path=entity_path,
             api_helper_import=helper_import,
+            field_specs=_entity_field_specs_for_resource(project_dir, entity_path),
+            relation_specs=_relation_inputs_for_child_resource(project_dir, entity_path),
         )
     if entity_path and route_kind == "detail":
         return _render_frontend_entity_detail_page(
@@ -3014,6 +3063,7 @@ def _render_frontend_entity_list_page(
     detail_href_base: str | None = None,
     api_helper_import: str = "../_lib/apiBase",
     field_specs: list[dict[str, str]] | None = None,
+    relation_specs: list[dict[str, str]] | None = None,
 ) -> str:
     api_path = f"/{str(entity_path or '').strip('/')}"
     if _is_board_like_entity_path(entity_path):
@@ -3067,6 +3117,7 @@ def _render_frontend_entity_list_page(
         else f"`{detail_base}?id=${{String(item.id)}}`"
     )
     field_config_rows = _field_config_rows_for_frontend(field_specs)
+    relation_config_rows = _relation_config_rows_for_frontend(relation_specs)
     is_inventory_like = _is_inventory_like_resource(entity_path, field_specs)
     helper_text = (
         "Track item names, quantities, and useful inventory attributes."
@@ -3087,8 +3138,12 @@ def _render_frontend_entity_list_page(
         f'import {{ useApiBaseUrl }} from "{api_helper_import}";\n\n'
         "type EntityItem = Record<string, unknown> & { id?: number | string };\n"
         "type FieldConfig = { name: string; label: string; kind: string; inputType: string; metadata: boolean };\n\n"
+        "type RelationConfig = { fieldName: string; parentResource: string; parentLabel: string };\n\n"
         "const fieldConfigs: FieldConfig[] = [\n"
         f"{field_config_rows}"
+        "];\n\n"
+        "const relationConfigs: RelationConfig[] = [\n"
+        f"{relation_config_rows}"
         "];\n\n"
         "function textValue(item: EntityItem, field?: FieldConfig): string {\n"
         "  if (!field) return \"\";\n"
@@ -3112,8 +3167,12 @@ def _render_frontend_entity_list_page(
         "  if (field.kind === \"boolean\") return value === \"true\" ? \"Yes\" : \"No\";\n"
         "  return value;\n"
         "}\n\n"
+        "function labelForItem(item: EntityItem, index: number): string {\n"
+        "  return String(item.title ?? item.name ?? item.label ?? `#${item.id ?? index + 1}`);\n"
+        "}\n\n"
         f"export default function {component_name}() {{\n"
         "  const [items, setItems] = useState<EntityItem[]>([]);\n"
+        "  const [relationLookups, setRelationLookups] = useState<Record<string, Record<string, string>>>({});\n"
         "  const [query, setQuery] = useState(\"\");\n"
         "  const [loading, setLoading] = useState(true);\n"
         "  const [error, setError] = useState(\"\");\n"
@@ -3121,11 +3180,18 @@ def _render_frontend_entity_list_page(
         "  const primaryField = fieldConfigs.find((field) => [\"name\", \"title\", \"label\"].includes(field.name));\n"
         "  const quantityField = fieldConfigs.find((field) => field.kind === \"quantity\");\n"
         "  const summaryFields = fieldConfigs.filter((field) => [\"category\", \"sku\", \"price\"].includes(field.kind));\n"
+        "  const relationFieldNames = new Set(relationConfigs.map((relation) => relation.fieldName));\n"
+        "  const relationSummaryFields = fieldConfigs.filter((field) => relationFieldNames.has(field.name));\n"
         "  const visibleItems = useMemo(() => {\n"
         "    const needle = query.trim().toLowerCase();\n"
         "    if (!needle) return items;\n"
         "    return items.filter((item) => Object.values(item).some((value) => String(value ?? \"\").toLowerCase().includes(needle)));\n"
         "  }, [items, query]);\n\n"
+        "  function relationLabel(fieldName: string, value: unknown): string {\n"
+        "    const id = String(value ?? \"\").trim();\n"
+        "    if (!id) return \"(unset)\";\n"
+        "    return relationLookups[fieldName]?.[id] || `#${id}`;\n"
+        "  }\n\n"
         "  useEffect(() => {\n"
         "    if (apiBaseLoading || !apiBaseUrl) {\n"
         "      setLoading(true);\n"
@@ -3159,6 +3225,32 @@ def _render_frontend_entity_list_page(
         "          setLoading(false);\n"
         "        }\n"
         "      }\n"
+        "    })();\n"
+        "    return () => {\n"
+        "      mounted = false;\n"
+        "    };\n"
+        "  }, [apiBaseLoading, apiBaseUrl]);\n\n"
+        "  useEffect(() => {\n"
+        "    if (apiBaseLoading || !apiBaseUrl || relationConfigs.length === 0) return;\n"
+        "    let mounted = true;\n"
+        "    (async () => {\n"
+        "      const nextLookups: Record<string, Record<string, string>> = {};\n"
+        "      await Promise.all(relationConfigs.map(async (relation) => {\n"
+        "        try {\n"
+        "          const response = await fetch(`${apiBaseUrl}/${relation.parentResource}`, { cache: \"no-store\" });\n"
+        "          if (!response.ok) return;\n"
+        "          const payload = await response.json();\n"
+        "          const rows = Array.isArray(payload)\n"
+        "            ? payload\n"
+        "            : Array.isArray((payload as { items?: unknown[] }).items)\n"
+        "              ? (payload as { items: unknown[] }).items\n"
+        "              : [];\n"
+        "          nextLookups[relation.fieldName] = Object.fromEntries((rows as EntityItem[]).map((row, index) => [String(row.id ?? index), labelForItem(row, index)]));\n"
+        "        } catch {\n"
+        "          nextLookups[relation.fieldName] = {};\n"
+        "        }\n"
+        "      }));\n"
+        "      if (mounted) setRelationLookups(nextLookups);\n"
         "    })();\n"
         "    return () => {\n"
         "      mounted = false;\n"
@@ -3203,6 +3295,16 @@ def _render_frontend_entity_list_page(
         '                    <div key={field.name} className="flex justify-between gap-3 rounded bg-slate-900/70 px-2 py-1">\n'
         "                      <dt className=\"text-slate-500\">{field.label}</dt>\n"
         "                      <dd className=\"truncate text-slate-200\">{formatFieldValue(item, field)}</dd>\n"
+        "                    </div>\n"
+        "                  ))}\n"
+        "                </dl>\n"
+        "              ) : null}\n"
+        "              {relationSummaryFields.length > 0 ? (\n"
+        "                <dl className=\"mt-3 grid gap-2 text-xs text-slate-300\">\n"
+        "                  {relationSummaryFields.map((field) => (\n"
+        "                    <div key={field.name} className=\"flex justify-between gap-3 rounded bg-slate-900/70 px-2 py-1\">\n"
+        "                      <dt className=\"text-slate-500\">{field.label}</dt>\n"
+        "                      <dd className=\"truncate text-slate-200\">{relationLabel(field.name, item[field.name])}</dd>\n"
         "                    </div>\n"
         "                  ))}\n"
         "                </dl>\n"
@@ -3270,6 +3372,7 @@ def _render_frontend_entity_detail_page(
     is_bookmark_like = _is_bookmark_like_entity_path(entity_path)
     is_generic_like = not (is_board_like or is_card_like or is_task_like or is_diary_like or is_bookmark_like)
     relation_field_rows = relation_fields if isinstance(relation_fields, list) else []
+    relation_config_rows = _relation_config_rows_for_frontend(relation_field_rows)
     configured_field_rows = field_specs if isinstance(field_specs, list) else []
     field_config_rows = _field_config_rows_for_frontend(configured_field_rows)
     import_link_line = 'import Link from "next/link";\n' if sections or is_generic_like else ""
@@ -3296,6 +3399,7 @@ def _render_frontend_entity_detail_page(
         create_href = str(section.get("create_href") or "").strip()
         if not child_resource or not child_field:
             continue
+        child_singular_title = _singularize_resource_name(child_resource).replace("_", " ").title()
         key = f"related{idx}"
         relation_state_blocks += (
             f"  const [{key}Items, set{key.capitalize()}Items] = useState<EntityItem[]>([]);\n"
@@ -3348,8 +3452,8 @@ def _render_frontend_entity_detail_page(
             '      <section className="space-y-2 rounded-md border border-slate-700 p-3">\n'
             f'        <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">{child_title}</h2>'
             f'<div className="flex gap-3 text-xs">'
-            f'<Link href={{`{relation_href}?{child_field}=${{id}}`}} className="text-cyan-300 underline">View all</Link>'
-            f'<Link href={{`{create_href}?{child_field}=${{id}}`}} className="text-emerald-300 underline">Create new</Link>'
+            f'<Link href={{`{relation_href}?{child_field}=${{id}}`}} className="text-cyan-300 underline">View {child_title}</Link>'
+            f'<Link href={{`{create_href}?{child_field}=${{id}}`}} className="text-emerald-300 underline">Add {child_singular_title}</Link>'
             "</div></div>\n"
             f"        {{{key}Loading ? <p className=\"text-xs text-slate-300\">Loading related items...</p> : null}}\n"
             f"        {{{key}Error ? <p className=\"text-xs text-rose-300\">Failed to load related items: {{{key}Error}}</p> : null}}\n"
@@ -3373,7 +3477,7 @@ def _render_frontend_entity_detail_page(
             + "".join(
                 (
                     f'        <div className="text-xs text-slate-300">{str(row.get("parent_label") or row.get("field_name") or "").replace("_", " ").title()}: '
-                    f'{{String((item as Record<string, unknown>)["{str(row.get("field_name") or "").strip()}"] ?? "(unset)")}}</div>\n'
+                    f'{{relationLabel("{str(row.get("field_name") or "").strip()}", (item as Record<string, unknown>)["{str(row.get("field_name") or "").strip()}"])}}</div>\n'
                 )
                 for row in relation_field_rows
                 if str(row.get("field_name") or "").strip()
@@ -3493,8 +3597,12 @@ def _render_frontend_entity_detail_page(
         f"{imports}\n"
         "type EntityItem = Record<string, unknown>;\n"
         "type FieldConfig = { name: string; label: string; kind: string; inputType: string; metadata: boolean };\n\n"
+        "type RelationConfig = { fieldName: string; parentResource: string; parentLabel: string };\n\n"
         "const fieldConfigs: FieldConfig[] = [\n"
         f"{field_config_rows}"
+        "];\n\n"
+        "const relationConfigs: RelationConfig[] = [\n"
+        f"{relation_config_rows}"
         "];\n\n"
         "function textValue(item: EntityItem, field?: FieldConfig): string {\n"
         "  if (!field) return \"\";\n"
@@ -3510,6 +3618,9 @@ def _render_frontend_entity_detail_page(
         "  if (field.kind === \"boolean\") return value === \"true\" ? \"Yes\" : \"No\";\n"
         "  return value;\n"
         "}\n\n"
+        "function labelForItem(item: EntityItem, index: number): string {\n"
+        "  return String(item.title ?? item.name ?? item.label ?? `#${item.id ?? index + 1}`);\n"
+        "}\n\n"
         f"{helper_extract_rows}\n"
         f"export default function {component_name}() {{\n"
         f"  {hook}\n"
@@ -3518,6 +3629,7 @@ def _render_frontend_entity_detail_page(
         "  const [loading, setLoading] = useState(true);\n"
         "  const [notFound, setNotFound] = useState(false);\n"
         "  const [error, setError] = useState(\"\");\n"
+        "  const [relationLookups, setRelationLookups] = useState<Record<string, Record<string, string>>>({});\n"
         "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
         "  const primaryField = fieldConfigs.find((field) => [\"name\", \"title\", \"label\"].includes(field.name));\n"
         "  const quantityField = fieldConfigs.find((field) => field.kind === \"quantity\");\n"
@@ -3531,6 +3643,11 @@ def _render_frontend_entity_detail_page(
         "    if (!quantityField) return false;\n"
         "    const value = Number((current as Record<string, unknown>)[quantityField.name]);\n"
         "    return Number.isFinite(value) && value <= 5;\n"
+        "  }\n\n"
+        "  function relationLabel(fieldName: string, value: unknown): string {\n"
+        "    const idValue = String(value ?? \"\").trim();\n"
+        "    if (!idValue) return \"(unset)\";\n"
+        "    return relationLookups[fieldName]?.[idValue] || `#${idValue}`;\n"
         "  }\n\n"
         f"{relation_state_blocks}\n"
         "  useEffect(() => {\n"
@@ -3570,6 +3687,32 @@ def _render_frontend_entity_detail_page(
         "      mounted = false;\n"
         "    };\n"
         "  }, [apiBaseLoading, apiBaseUrl, id]);\n\n"
+        "  useEffect(() => {\n"
+        "    if (apiBaseLoading || !apiBaseUrl || relationConfigs.length === 0) return;\n"
+        "    let mounted = true;\n"
+        "    (async () => {\n"
+        "      const nextLookups: Record<string, Record<string, string>> = {};\n"
+        "      await Promise.all(relationConfigs.map(async (relation) => {\n"
+        "        try {\n"
+        "          const response = await fetch(`${apiBaseUrl}/${relation.parentResource}`, { cache: \"no-store\" });\n"
+        "          if (!response.ok) return;\n"
+        "          const payload = await response.json();\n"
+        "          const rows = Array.isArray(payload)\n"
+        "            ? payload\n"
+        "            : Array.isArray((payload as { items?: unknown[] }).items)\n"
+        "              ? (payload as { items: unknown[] }).items\n"
+        "              : [];\n"
+        "          nextLookups[relation.fieldName] = Object.fromEntries((rows as EntityItem[]).map((row, index) => [String(row.id ?? index), labelForItem(row, index)]));\n"
+        "        } catch {\n"
+        "          nextLookups[relation.fieldName] = {};\n"
+        "        }\n"
+        "      }));\n"
+        "      if (mounted) setRelationLookups(nextLookups);\n"
+        "    })();\n"
+        "    return () => {\n"
+        "      mounted = false;\n"
+        "    };\n"
+        "  }, [apiBaseLoading, apiBaseUrl]);\n\n"
         f"{relation_effect_blocks}\n"
         "  return (\n"
         '    <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">\n'

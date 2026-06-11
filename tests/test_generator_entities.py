@@ -328,14 +328,43 @@ def test_generate_project_materializes_relation_pages_and_parent_detail_links(tm
     department_detail = (project_dir / "frontend" / "app" / "departments" / "[id]" / "page.tsx").read_text(encoding="utf-8")
     employee_detail = (project_dir / "frontend" / "app" / "employees" / "[id]" / "page.tsx").read_text(encoding="utf-8")
     assert "/employees/by_department?department_id=${id}" in department_detail
+    assert "/employees/new?department_id=${id}" in department_detail
+    assert "View Employees" in department_detail
+    assert "Add Employee" in department_detail
     assert "/trainings/by_employee?employee_id=${id}" in employee_detail
+    assert "/trainings/new?employee_id=${id}" in employee_detail
     assert "/onboarding_tasks/by_employee?employee_id=${id}" in employee_detail
+    assert "/onboarding_tasks/new?employee_id=${id}" in employee_detail
+    assert "View Trainings" in employee_detail
+    assert "Add Training" in employee_detail
+    assert "View Onboarding Tasks" in employee_detail
+    assert "Add Onboarding Task" in employee_detail
+
+    employee_create = (project_dir / "frontend" / "app" / "employees" / "new" / "page.tsx").read_text(encoding="utf-8")
+    training_create = (project_dir / "frontend" / "app" / "trainings" / "new" / "page.tsx").read_text(encoding="utf-8")
+    task_create = (project_dir / "frontend" / "app" / "onboarding_tasks" / "new" / "page.tsx").read_text(encoding="utf-8")
+    assert "fetch(`${apiBaseUrl}/departments`" in employee_create
+    assert 'searchParams.get("department_id")' in employee_create
+    assert '<select id="field-department_id"' in employee_create
+    assert "relation0Options.length > 0" in employee_create
+    assert "Prefilled from parent context." in employee_create
+    assert "fetch(`${apiBaseUrl}/employees`" in training_create
+    assert '<select id="field-employee_id"' in training_create
+    assert "fetch(`${apiBaseUrl}/employees`" in task_create
+    assert '<select id="field-employee_id"' in task_create
+    _assert_tsx_syntax_ok(employee_create)
+    _assert_tsx_syntax_ok(training_create)
+    _assert_tsx_syntax_ok(task_create)
 
     relation_page = (project_dir / "frontend" / "app" / "employees" / "by_department" / "page.tsx").read_text(encoding="utf-8")
     assert "fetch(`${apiBaseUrl}/departments/${relationValue}/employees`" in relation_page
+    assert "fetch(`${apiBaseUrl}/departments/${relationValue}`" in relation_page
     assert 'fetch(`${apiBaseUrl}/employees`' in relation_page
     assert "/employees/${item.id}" in relation_page
     assert "Back to Departments" in relation_page
+    assert "Back to Department detail" in relation_page
+    assert "/employees/new?department_id=${relationValue}" in relation_page
+    assert "Add Employee" in relation_page
     _assert_tsx_syntax_ok(relation_page)
 
 
@@ -365,6 +394,26 @@ def test_normalize_project_spec_does_not_force_relation_pages_without_relationsh
     )
 
     assert not [page for page in normalized.get("frontend_pages", []) if "/by_" in str(page)]
+
+
+def test_single_entity_create_page_uses_normal_inputs_without_relation_selector(tmp_path: Path) -> None:
+    project_dir = tmp_path / "single_entity_create_no_relation"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps({"entities": [{"name": "Task", "fields": [{"name": "title", "type": "string"}, {"name": "priority", "type": "string"}]}]}),
+        encoding="utf-8",
+    )
+
+    apply_page_scaffold(project_dir, "tasks/new")
+
+    create_text = (project_dir / "frontend" / "app" / "tasks" / "new" / "page.tsx").read_text(encoding="utf-8")
+    assert "RelationOption" in create_text
+    assert "<select" not in create_text
+    assert 'name={field.name}' in create_text
+    assert 'fetch(`${apiBaseUrl}/tasks`' in create_text
+    _assert_tsx_syntax_ok(create_text)
 
 
 def test_normalize_project_spec_builds_canonical_resources_pages_and_apis() -> None:
