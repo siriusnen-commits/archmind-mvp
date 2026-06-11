@@ -3352,6 +3352,7 @@ def _render_frontend_entity_detail_page(
             api_path=api_path,
             id_mode=id_mode,
             api_helper_import=api_helper_import,
+            field_specs=field_specs,
         )
     id_source = (
         'const id = String(searchParams.get("id") || "").trim();'
@@ -3375,6 +3376,16 @@ def _render_frontend_entity_detail_page(
     relation_config_rows = _relation_config_rows_for_frontend(relation_field_rows)
     configured_field_rows = field_specs if isinstance(field_specs, list) else []
     field_config_rows = _field_config_rows_for_frontend(configured_field_rows)
+    workflow_field_name = ""
+    for row in configured_field_rows:
+        if not isinstance(row, dict):
+            continue
+        candidate_name = str(row.get("name") or "").strip()
+        candidate_key = candidate_name.lower()
+        candidate_semantic = str(row.get("semantic_type") or "").strip().lower()
+        if candidate_name and (candidate_semantic == "status" or candidate_key in {"status", "state", "workflow_status"}):
+            workflow_field_name = candidate_name
+            break
     import_link_line = 'import Link from "next/link";\n' if sections or is_generic_like else ""
     helper_extract_rows = ""
     relation_state_blocks = ""
@@ -3580,6 +3591,64 @@ def _render_frontend_entity_detail_page(
             )
             + "        </section>\n"
         )
+    workflow_helpers = ""
+    workflow_state = ""
+    workflow_functions = ""
+    workflow_ui = ""
+    if workflow_field_name:
+        workflow_helpers = (
+            "type WorkflowAction = { label: string; nextValue: string };\n\n"
+            "function workflowActionForStatus(rawStatus: unknown): WorkflowAction | null {\n"
+            "  const status = String(rawStatus ?? \"\").trim().toLowerCase().replace(/-/g, \"_\");\n"
+            "  if ([\"todo\", \"open\", \"pending\"].includes(status)) return { label: \"Start\", nextValue: \"IN_PROGRESS\" };\n"
+            "  if ([\"in_progress\", \"assigned\"].includes(status)) return { label: \"Complete\", nextValue: \"DONE\" };\n"
+            "  if ([\"done\", \"resolved\", \"completed\"].includes(status)) return { label: \"Reopen\", nextValue: \"TODO\" };\n"
+            "  return null;\n"
+            "}\n\n"
+        )
+        workflow_state = (
+            "  const [workflowBusy, setWorkflowBusy] = useState(false);\n"
+            "  const [workflowError, setWorkflowError] = useState(\"\");\n"
+        )
+        workflow_functions = (
+            f'  const workflowFieldName = "{workflow_field_name}";\n'
+            "  const workflowAction = item ? workflowActionForStatus((item as Record<string, unknown>)[workflowFieldName]) : null;\n\n"
+            "  async function applyWorkflowAction(nextValue: string) {\n"
+            "    if (!apiBaseUrl || !id || workflowBusy) return;\n"
+            "    setWorkflowBusy(true);\n"
+            "    setWorkflowError(\"\");\n"
+            "    try {\n"
+            f'      const response = await fetch(`${{apiBaseUrl}}{api_path}/${{id}}`, {{\n'
+            '        method: "PATCH",\n'
+            '        headers: { "Content-Type": "application/json" },\n'
+            "        body: JSON.stringify({ [workflowFieldName]: nextValue }),\n"
+            "      });\n"
+            "      if (!response.ok) throw new Error(`HTTP ${response.status}`);\n"
+            "      await loadItem();\n"
+            "    } catch (e) {\n"
+            "      const message = e instanceof Error ? e.message : String(e || \"unknown error\");\n"
+            "      setWorkflowError(message);\n"
+            "    } finally {\n"
+            "      setWorkflowBusy(false);\n"
+            "    }\n"
+            "  }\n\n"
+        )
+        workflow_ui = (
+            "        <section className=\"space-y-2 rounded-md border border-slate-700 bg-slate-950/50 p-3\">\n"
+            "          <div className=\"flex flex-wrap items-center justify-between gap-2\">\n"
+            "            <div>\n"
+            "              <h3 className=\"text-xs font-semibold uppercase tracking-wide text-slate-300\">Actions</h3>\n"
+            "              <p className=\"text-xs text-slate-500\">Current status: {String((item as Record<string, unknown>)[workflowFieldName] ?? \"(unset)\")}</p>\n"
+            "            </div>\n"
+            "            {workflowAction ? (\n"
+            "              <button type=\"button\" onClick={() => applyWorkflowAction(workflowAction.nextValue)} disabled={workflowBusy} className=\"rounded-md bg-cyan-500 px-3 py-1.5 text-xs font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-60\">\n"
+            "                {workflowBusy ? \"Updating...\" : workflowAction.label}\n"
+            "              </button>\n"
+            "            ) : null}\n"
+            "          </div>\n"
+            "          {workflowError ? <p className=\"text-xs text-rose-300\">Action failed: {workflowError}</p> : null}\n"
+            "        </section>\n"
+        )
     generic_detail_article = (
         "        <article className=\"space-y-4 rounded-xl border border-slate-700 bg-slate-950/50 p-4\">\n"
         "          <div className=\"flex flex-wrap items-start justify-between gap-3\">\n"
@@ -3642,6 +3711,7 @@ def _render_frontend_entity_detail_page(
         "type EntityItem = Record<string, unknown>;\n"
         "type FieldConfig = { name: string; label: string; kind: string; inputType: string; metadata: boolean };\n\n"
         "type RelationConfig = { fieldName: string; parentResource: string; parentLabel: string };\n\n"
+        f"{workflow_helpers}"
         "const fieldConfigs: FieldConfig[] = [\n"
         f"{field_config_rows}"
         "];\n\n"
@@ -3673,6 +3743,7 @@ def _render_frontend_entity_detail_page(
         "  const [loading, setLoading] = useState(true);\n"
         "  const [notFound, setNotFound] = useState(false);\n"
         "  const [error, setError] = useState(\"\");\n"
+        f"{workflow_state}"
         "  const [relationLookups, setRelationLookups] = useState<Record<string, Record<string, string>>>({});\n"
         "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
         "  const primaryField = fieldConfigs.find((field) => [\"name\", \"title\", \"label\"].includes(field.name));\n"
@@ -3694,6 +3765,31 @@ def _render_frontend_entity_detail_page(
         "    return relationLookups[fieldName]?.[idValue] || `#${idValue}`;\n"
         "  }\n\n"
         f"{relation_state_blocks}\n"
+        "  async function loadItem() {\n"
+        "    if (!id || apiBaseLoading || !apiBaseUrl) return;\n"
+        "    setLoading(true);\n"
+        "    setNotFound(false);\n"
+        "    setError(\"\");\n"
+        "    try {\n"
+        f'      const response = await fetch(`${{apiBaseUrl}}{api_path}/${{id}}`, {{ cache: "no-store" }});\n'
+        "      if (response.status === 404) {\n"
+        "        setNotFound(true);\n"
+        "        setItem(null);\n"
+        "        return;\n"
+        "      }\n"
+        "      if (!response.ok) {\n"
+        "        throw new Error(`HTTP ${response.status}`);\n"
+        "      }\n"
+        "      const payload = (await response.json()) as EntityItem;\n"
+        "      setItem(payload);\n"
+        "    } catch (e) {\n"
+        "      const message = e instanceof Error ? e.message : String(e || \"unknown error\");\n"
+        "      setError(message);\n"
+        "    } finally {\n"
+        "      setLoading(false);\n"
+        "    }\n"
+        "  }\n\n"
+        f"{workflow_functions}"
         "  useEffect(() => {\n"
         "    if (!id) {\n"
         "      setLoading(false);\n"
@@ -3704,32 +3800,8 @@ def _render_frontend_entity_detail_page(
         "      setLoading(true);\n"
         "      return;\n"
         "    }\n"
-        "    let mounted = true;\n"
-        "    (async () => {\n"
-        "      setLoading(true);\n"
-        "      setNotFound(false);\n"
-        "      setError(\"\");\n"
-        "      try {\n"
-        f'        const response = await fetch(`${{apiBaseUrl}}{api_path}/${{id}}`, {{ cache: "no-store" }});\n'
-        "        if (response.status === 404) {\n"
-        "          if (mounted) setNotFound(true);\n"
-        "          return;\n"
-        "        }\n"
-        "        if (!response.ok) {\n"
-        "          throw new Error(`HTTP ${response.status}`);\n"
-        "        }\n"
-        "        const payload = (await response.json()) as EntityItem;\n"
-        "        if (mounted) setItem(payload);\n"
-        "      } catch (e) {\n"
-        "        const message = e instanceof Error ? e.message : String(e || \"unknown error\");\n"
-        "        if (mounted) setError(message);\n"
-        "      } finally {\n"
-        "        if (mounted) setLoading(false);\n"
-        "      }\n"
-        "    })();\n"
-        "    return () => {\n"
-        "      mounted = false;\n"
-        "    };\n"
+        "    loadItem();\n"
+        "    // eslint-disable-next-line react-hooks/exhaustive-deps\n"
         "  }, [apiBaseLoading, apiBaseUrl, id]);\n\n"
         "  useEffect(() => {\n"
         "    if (apiBaseLoading || !apiBaseUrl || relationConfigs.length === 0) return;\n"
@@ -3846,6 +3918,7 @@ def _render_frontend_entity_detail_page(
             )
             )
         )
+        + workflow_ui
         + additional_field_ui
         + relation_field_ui
         + "        </>\n"
@@ -4436,6 +4509,7 @@ def _render_frontend_issue_detail_page(
     api_path: str,
     id_mode: str,
     api_helper_import: str,
+    field_specs: list[dict[str, str]] | None = None,
 ) -> str:
     id_source = (
         'const id = String(searchParams.get("id") || "").trim();'
@@ -4448,6 +4522,77 @@ def _render_frontend_issue_detail_page(
         else 'import { useParams } from "next/navigation";\n'
     )
     hook = "const searchParams = useSearchParams();" if id_mode == "query" else "const params = useParams();"
+    configured_field_rows = field_specs if isinstance(field_specs, list) else []
+    workflow_field_name = ""
+    for row in configured_field_rows:
+        if not isinstance(row, dict):
+            continue
+        candidate_name = str(row.get("name") or "").strip()
+        candidate_key = candidate_name.lower()
+        candidate_semantic = str(row.get("semantic_type") or "").strip().lower()
+        if candidate_name and (candidate_semantic == "status" or candidate_key in {"status", "state", "workflow_status"}):
+            workflow_field_name = candidate_name
+            break
+    issue_workflow_helpers = ""
+    issue_workflow_state = ""
+    issue_workflow_functions = ""
+    issue_workflow_ui = ""
+    issue_status_value = "item.status"
+    if workflow_field_name:
+        issue_status_value = "item[workflowFieldName]"
+        issue_workflow_helpers = (
+            "type WorkflowAction = { label: string; nextValue: string };\n\n"
+            "function workflowActionForStatus(rawStatus: unknown): WorkflowAction | null {\n"
+            "  const status = String(rawStatus ?? \"\").trim().toLowerCase().replace(/-/g, \"_\");\n"
+            "  if ([\"todo\", \"open\", \"pending\"].includes(status)) return { label: \"Start\", nextValue: \"IN_PROGRESS\" };\n"
+            "  if ([\"in_progress\", \"assigned\"].includes(status)) return { label: \"Complete\", nextValue: \"DONE\" };\n"
+            "  if ([\"done\", \"resolved\", \"completed\"].includes(status)) return { label: \"Reopen\", nextValue: \"TODO\" };\n"
+            "  return null;\n"
+            "}\n\n"
+        )
+        issue_workflow_state = (
+            "  const [workflowBusy, setWorkflowBusy] = useState(false);\n"
+            "  const [workflowError, setWorkflowError] = useState(\"\");\n"
+        )
+        issue_workflow_functions = (
+            f'  const workflowFieldName = "{workflow_field_name}";\n'
+            "  const workflowAction = item ? workflowActionForStatus(item[workflowFieldName]) : null;\n\n"
+            "  async function applyWorkflowAction(nextValue: string) {\n"
+            "    if (!apiBaseUrl || !id || workflowBusy) return;\n"
+            "    setWorkflowBusy(true);\n"
+            "    setWorkflowError(\"\");\n"
+            "    try {\n"
+            f'      const response = await fetch(`${{apiBaseUrl}}{api_path}/${{id}}`, {{\n'
+            '        method: "PATCH",\n'
+            '        headers: { "Content-Type": "application/json" },\n'
+            "        body: JSON.stringify({ [workflowFieldName]: nextValue }),\n"
+            "      });\n"
+            "      if (!response.ok) throw new Error(`HTTP ${response.status}`);\n"
+            "      await loadItem();\n"
+            "    } catch (e) {\n"
+            "      const message = e instanceof Error ? e.message : String(e || \"unknown error\");\n"
+            "      setWorkflowError(message);\n"
+            "    } finally {\n"
+            "      setWorkflowBusy(false);\n"
+            "    }\n"
+            "  }\n\n"
+        )
+        issue_workflow_ui = (
+            '          <section className="space-y-2 rounded-md border border-slate-800 bg-slate-900/40 p-3">\n'
+            '            <div className="flex flex-wrap items-center justify-between gap-2">\n'
+            "              <div>\n"
+            '                <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-300">Actions</h3>\n'
+            '                <p className="text-xs text-slate-500">Current status: {String(item[workflowFieldName] ?? "(unset)")}</p>\n'
+            "              </div>\n"
+            "              {workflowAction ? (\n"
+            '                <button type="button" onClick={() => applyWorkflowAction(workflowAction.nextValue)} disabled={workflowBusy} className="rounded-md bg-cyan-500 px-3 py-1.5 text-xs font-semibold text-slate-950 disabled:cursor-not-allowed disabled:opacity-60">\n'
+            "                  {workflowBusy ? \"Updating...\" : workflowAction.label}\n"
+            "                </button>\n"
+            "              ) : null}\n"
+            "            </div>\n"
+            "            {workflowError ? <p className=\"text-xs text-rose-300\">Action failed: {workflowError}</p> : null}\n"
+            "          </section>\n"
+        )
     return (
         '"use client";\n\n'
         'import Link from "next/link";\n'
@@ -4473,6 +4618,7 @@ def _render_frontend_issue_detail_page(
         "function priorityValue(item: IssueItem): string {\n"
         "  return String(item.priority ?? item.severity ?? \"unprioritized\");\n"
         "}\n\n"
+        f"{issue_workflow_helpers}"
         f"export default function {component_name}() {{\n"
         f"  {hook}\n"
         f"  {id_source}\n"
@@ -4480,7 +4626,31 @@ def _render_frontend_issue_detail_page(
         "  const [loading, setLoading] = useState(true);\n"
         "  const [notFound, setNotFound] = useState(false);\n"
         "  const [error, setError] = useState(\"\");\n"
+        f"{issue_workflow_state}"
         "  const { apiBaseUrl, apiBaseLoading } = useApiBaseUrl();\n\n"
+        f"{issue_workflow_functions}"
+        "  async function loadItem() {\n"
+        "    if (!id || apiBaseLoading || !apiBaseUrl) return;\n"
+        "    setLoading(true);\n"
+        "    setNotFound(false);\n"
+        "    setError(\"\");\n"
+        "    try {\n"
+        f'      const response = await fetch(`${{apiBaseUrl}}{api_path}/${{id}}`, {{ cache: "no-store" }});\n'
+        "      if (response.status === 404) {\n"
+        "        setNotFound(true);\n"
+        "        setItem(null);\n"
+        "        return;\n"
+        "      }\n"
+        "      if (!response.ok) throw new Error(`HTTP ${response.status}`);\n"
+        "      const payload = (await response.json()) as IssueItem;\n"
+        "      setItem(payload);\n"
+        "    } catch (e) {\n"
+        "      const message = e instanceof Error ? e.message : String(e || \"unknown error\");\n"
+        "      setError(message);\n"
+        "    } finally {\n"
+        "      setLoading(false);\n"
+        "    }\n"
+        "  }\n\n"
         "  useEffect(() => {\n"
         "    if (!id) {\n"
         "      setLoading(false);\n"
@@ -4491,30 +4661,8 @@ def _render_frontend_issue_detail_page(
         "      setLoading(true);\n"
         "      return;\n"
         "    }\n"
-        "    let mounted = true;\n"
-        "    (async () => {\n"
-        "      setLoading(true);\n"
-        "      setNotFound(false);\n"
-        "      setError(\"\");\n"
-        "      try {\n"
-        f'        const response = await fetch(`${{apiBaseUrl}}{api_path}/${{id}}`, {{ cache: "no-store" }});\n'
-        "        if (response.status === 404) {\n"
-        "          if (mounted) setNotFound(true);\n"
-        "          return;\n"
-        "        }\n"
-        "        if (!response.ok) throw new Error(`HTTP ${response.status}`);\n"
-        "        const payload = (await response.json()) as IssueItem;\n"
-        "        if (mounted) setItem(payload);\n"
-        "      } catch (e) {\n"
-        "        const message = e instanceof Error ? e.message : String(e || \"unknown error\");\n"
-        "        if (mounted) setError(message);\n"
-        "      } finally {\n"
-        "        if (mounted) setLoading(false);\n"
-        "      }\n"
-        "    })();\n"
-        "    return () => {\n"
-        "      mounted = false;\n"
-        "    };\n"
+        "    loadItem();\n"
+        "    // eslint-disable-next-line react-hooks/exhaustive-deps\n"
         "  }, [apiBaseLoading, apiBaseUrl, id]);\n\n"
         "  return (\n"
         '    <section className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-4">\n'
@@ -4531,7 +4679,7 @@ def _render_frontend_issue_detail_page(
         "              <h2 className=\"break-words text-xl font-semibold text-slate-100\">{String(item.title ?? `Issue #${id}`)}</h2>\n"
         "            </div>\n"
         '            <div className="flex flex-wrap gap-2">\n'
-        '              <span className={`inline-flex w-fit items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${statusTone(item.status)}`}>{String(item.status ?? "unknown")}</span>\n'
+        f'              <span className={{`inline-flex w-fit items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${{statusTone({issue_status_value})}}`}}>{{String({issue_status_value} ?? "unknown")}}</span>\n'
         '              <span className={`inline-flex w-fit items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${priorityTone(priorityValue(item))}`}>{priorityValue(item)}</span>\n'
         "            </div>\n"
         "          </div>\n"
@@ -4539,6 +4687,7 @@ def _render_frontend_issue_detail_page(
         '            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-300">Description</h3>\n'
         "            <p className=\"whitespace-pre-wrap text-sm leading-7 text-slate-200\">{String(item.description ?? item.content ?? item.summary ?? \"No description provided.\")}</p>\n"
         "          </section>\n"
+        f"{issue_workflow_ui}"
         '          <section className="space-y-2 rounded-md border border-slate-800 bg-slate-900/40 p-3">\n'
         '            <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-300">Metadata</h3>\n'
         '            <dl className="grid gap-2 text-xs text-slate-300 sm:grid-cols-3">\n'
