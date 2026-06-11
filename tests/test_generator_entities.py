@@ -292,6 +292,7 @@ def test_generate_project_materializes_relation_pages_and_parent_detail_links(tm
                     "name": "Training",
                     "fields": [
                         {"name": "title", "type": "string"},
+                        {"name": "status", "type": "string"},
                         {"name": "employee_id", "type": "int"},
                     ],
                 },
@@ -299,6 +300,7 @@ def test_generate_project_materializes_relation_pages_and_parent_detail_links(tm
                     "name": "OnboardingTask",
                     "fields": [
                         {"name": "title", "type": "string"},
+                        {"name": "status", "type": "string"},
                         {"name": "employee_id", "type": "int"},
                     ],
                 },
@@ -331,6 +333,9 @@ def test_generate_project_materializes_relation_pages_and_parent_detail_links(tm
     assert "/employees/new?department_id=${id}" in department_detail
     assert "View Employees" in department_detail
     assert "Add Employee" in department_detail
+    assert "Workspace Overview" in department_detail
+    assert "Employee Count" in department_detail
+    assert "Recent Employees" in department_detail
     assert "/trainings/by_employee?employee_id=${id}" in employee_detail
     assert "/trainings/new?employee_id=${id}" in employee_detail
     assert "/onboarding_tasks/by_employee?employee_id=${id}" in employee_detail
@@ -339,6 +344,14 @@ def test_generate_project_materializes_relation_pages_and_parent_detail_links(tm
     assert "Add Training" in employee_detail
     assert "View Onboarding Tasks" in employee_detail
     assert "Add Onboarding Task" in employee_detail
+    assert "Training Count" in employee_detail
+    assert "Onboarding Task Count" in employee_detail
+    assert "Recent Trainings" in employee_detail
+    assert "Recent Onboarding Tasks" in employee_detail
+    assert "Workflow Summary" in employee_detail
+    assert "workflowStatusEntries" in employee_detail
+    _assert_tsx_syntax_ok(department_detail)
+    _assert_tsx_syntax_ok(employee_detail)
 
     employee_create = (project_dir / "frontend" / "app" / "employees" / "new" / "page.tsx").read_text(encoding="utf-8")
     training_create = (project_dir / "frontend" / "app" / "trainings" / "new" / "page.tsx").read_text(encoding="utf-8")
@@ -394,6 +407,59 @@ def test_normalize_project_spec_does_not_force_relation_pages_without_relationsh
     )
 
     assert not [page for page in normalized.get("frontend_pages", []) if "/by_" in str(page)]
+
+
+@pytest.mark.parametrize(
+    ("parent", "child", "field", "expected_count", "expected_recent", "expected_link"),
+    [
+        ("Customer", "Ticket", "customer_id", "Ticket Count", "Recent Tickets", "/tickets/by_customer?customer_id=${id}"),
+        ("Project", "Task", "project_id", "Task Count", "Recent Tasks", "/tasks/by_project?project_id=${id}"),
+        ("Category", "Asset", "category_id", "Asset Count", "Recent Assets", "/assets/by_category?category_id=${id}"),
+    ],
+)
+def test_relation_workspace_summaries_are_generic(
+    tmp_path: Path,
+    parent: str,
+    child: str,
+    field: str,
+    expected_count: str,
+    expected_recent: str,
+    expected_link: str,
+) -> None:
+    project_dir = tmp_path / f"workspace_{parent.lower()}_{child.lower()}"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "entities": [
+                    {"name": parent, "fields": [{"name": "name", "type": "string"}]},
+                    {
+                        "name": child,
+                        "fields": [
+                            {"name": "title", "type": "string"},
+                            {"name": "status", "type": "string"},
+                            {"name": field, "type": "int"},
+                        ],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    apply_frontend_page_scaffold(project_dir, parent)
+    apply_frontend_page_scaffold(project_dir, child)
+    parent_resource = normalize_project_spec({"entities": [{"name": parent}]}).get("resources", [parent.lower()])[0]
+    detail_text = (project_dir / "frontend" / "app" / parent_resource / "[id]" / "page.tsx").read_text(encoding="utf-8")
+
+    assert "Workspace Overview" in detail_text
+    assert expected_count in detail_text
+    assert expected_recent in detail_text
+    assert "Workflow Summary" in detail_text
+    assert expected_link in detail_text
+    _assert_tsx_syntax_ok(detail_text)
 
 
 def test_single_entity_create_page_uses_normal_inputs_without_relation_selector(tmp_path: Path) -> None:
@@ -1503,6 +1569,8 @@ def test_single_entity_detail_page_has_no_relation_surface(tmp_path: Path) -> No
     assert "Loading related items..." not in detail_text
     assert "View all" not in detail_text
     assert "/tasks/by_task" not in detail_text
+    assert "Workspace Overview" not in detail_text
+    assert "Workflow Summary" not in detail_text
 
 
 def test_relation_create_page_card_uses_query_prefill_and_parent_selector(tmp_path: Path) -> None:

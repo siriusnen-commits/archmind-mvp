@@ -848,6 +848,82 @@ def _has_list_api(apis: list[dict[str, str]], resource: str) -> bool:
     return False
 
 
+def _has_workflow_status_field(fields: list[dict[str, Any]]) -> bool:
+    for field in fields:
+        if not isinstance(field, dict):
+            continue
+        name = str(field.get("name") or "").strip().lower()
+        semantic = str(field.get("semantic_type") or "").strip().lower()
+        if semantic == "status" or name in {"status", "state", "workflow_status"}:
+            return True
+    return False
+
+
+def _collect_workspace_diagnostics(
+    relations: list[dict[str, Any]],
+    fields_by_entity: dict[str, list[dict[str, Any]]],
+) -> dict[str, list[Any]]:
+    workspace_sections: list[dict[str, Any]] = []
+    relationship_summaries: list[str] = []
+    workflow_summaries: list[str] = []
+    seen_sections: set[tuple[str, str, str]] = set()
+    seen_relationships: set[str] = set()
+    seen_workflows: set[str] = set()
+
+    for rel in relations:
+        if not isinstance(rel, dict):
+            continue
+        parent_entity = str(rel.get("parent_entity") or "").strip()
+        parent_resource = str(rel.get("parent_resource") or "").strip().lower()
+        child_entity = str(rel.get("child_entity") or "").strip()
+        child_resource = str(rel.get("child_resource") or "").strip().lower()
+        parent_singular = str(rel.get("parent_singular") or _singularize_resource_name(parent_resource)).strip().lower()
+        relation_field = str(rel.get("field") or f"{parent_singular}_id").strip().lower()
+        if not parent_entity or not parent_resource or not child_entity or not child_resource or not relation_field:
+            continue
+
+        section_key = (parent_entity.lower(), child_entity.lower(), relation_field)
+        if section_key in seen_sections:
+            continue
+        seen_sections.add(section_key)
+
+        child_label = (_entity_slug(child_entity) or child_entity).replace("_", " ").title()
+        child_plural_label = child_resource.replace("_", " ").title()
+        relation_page = _relation_page_name(parent_resource, child_resource)
+        create_page = _normalize_page(f"{child_resource}/new")
+        has_workflow = _has_workflow_status_field(fields_by_entity.get(child_entity) or [])
+
+        workspace_sections.append(
+            {
+                "parent_entity": parent_entity,
+                "child_entity": child_entity,
+                "relation_field": relation_field,
+                "section": f"{child_plural_label} Workspace Overview",
+                "summaries": [f"{child_label} count", f"recent {child_plural_label.lower()}"],
+                "relation_page": relation_page,
+                "create_page": create_page,
+                "workflow_summary": has_workflow,
+            }
+        )
+
+        relationship_summary = f"{parent_entity} detail synthesizes {child_label} count and recent records"
+        if relationship_summary not in seen_relationships:
+            seen_relationships.add(relationship_summary)
+            relationship_summaries.append(relationship_summary)
+
+        if has_workflow:
+            workflow_summary = f"{child_label} workflow summary grouped by status"
+            if workflow_summary not in seen_workflows:
+                seen_workflows.add(workflow_summary)
+                workflow_summaries.append(workflow_summary)
+
+    return {
+        "workspace_sections": workspace_sections,
+        "relationship_summaries": relationship_summaries,
+        "workflow_summaries": workflow_summaries,
+    }
+
+
 def _collect_relation_diagnostics(
     entities: list[str],
     fields_by_entity: dict[str, list[dict[str, str]]],
@@ -2106,6 +2182,7 @@ def analyze_project(
         if isinstance(relation_diagnostics, dict) and isinstance(relation_diagnostics.get("relations"), list)
         else []
     )
+    workspace_diagnostics = _collect_workspace_diagnostics(relation_pairs, fields_by_entity)
     entity_graph = _build_entity_graph(entities, entity_crud_status, relation_pairs)
     api_map = _build_api_map(entities, apis)
     page_map = _build_page_map(entities, pages)
@@ -2197,6 +2274,9 @@ def analyze_project(
         "relation_create_flows": (
             relation_diagnostics.get("relation_create_flows") if isinstance(relation_diagnostics, dict) else []
         ),
+        "workspace_sections": workspace_diagnostics.get("workspace_sections", []),
+        "relationship_summaries": workspace_diagnostics.get("relationship_summaries", []),
+        "workflow_summaries": workspace_diagnostics.get("workflow_summaries", []),
         "drift_warnings": relation_diagnostics.get("drift_warnings") if isinstance(relation_diagnostics, dict) else [],
         "entity_graph": entity_graph,
         "api_map": api_map,

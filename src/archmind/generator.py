@@ -3390,6 +3390,29 @@ def _render_frontend_entity_detail_page(
             "  }\n"
             "  return [];\n"
             "}\n"
+            "\nfunction relatedRecordLabel(row: EntityItem, index: number): string {\n"
+            "  const value = row.title ?? row.name ?? row.label ?? row.email ?? row.id ?? `#${index + 1}`;\n"
+            "  return String(value || `#${index + 1}`);\n"
+            "}\n"
+            "\nfunction relatedRecordTime(row: EntityItem): number {\n"
+            "  const raw = row.updated_at ?? row.updatedAt ?? row.created_at ?? row.createdAt ?? row.id;\n"
+            "  if (typeof raw === \"number\") return raw;\n"
+            "  const parsed = Date.parse(String(raw ?? \"\"));\n"
+            "  return Number.isFinite(parsed) ? parsed : 0;\n"
+            "}\n"
+            "\nfunction recentRelatedRecords(rows: EntityItem[]): EntityItem[] {\n"
+            "  return [...rows].sort((a, b) => relatedRecordTime(b) - relatedRecordTime(a)).slice(0, 5);\n"
+            "}\n"
+            "\nfunction workflowStatusEntries(rows: EntityItem[]): Array<[string, number]> {\n"
+            "  const counts: Record<string, number> = {};\n"
+            "  rows.forEach((row) => {\n"
+            "    const raw = row.status ?? row.state ?? row.workflow_status;\n"
+            "    const key = String(raw ?? \"\").trim();\n"
+            "    if (!key) return;\n"
+            "    counts[key] = (counts[key] ?? 0) + 1;\n"
+            "  });\n"
+            "  return Object.entries(counts).sort((a, b) => a[0].localeCompare(b[0]));\n"
+            "}\n"
         )
     for idx, section in enumerate(sections):
         child_title = str(section.get("child_title") or "").strip() or "Related"
@@ -3449,9 +3472,9 @@ def _render_frontend_entity_detail_page(
             f"  }}, [apiBaseLoading, apiBaseUrl, id]);\n"
         )
         relation_ui_blocks += (
-            '      <section className="space-y-2 rounded-md border border-slate-700 p-3">\n'
-            f'        <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-semibold">{child_title}</h2>'
-            f'<div className="flex gap-3 text-xs">'
+            '      <section className="space-y-3 rounded-md border border-slate-700 bg-slate-950/40 p-3">\n'
+            f'        <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Workspace Overview</p><h2 className="text-sm font-semibold">{child_title}</h2></div>'
+            f'<div className="flex flex-wrap gap-3 text-xs">'
             f'<Link href={{`{relation_href}?{child_field}=${{id}}`}} className="text-cyan-300 underline">View {child_title}</Link>'
             f'<Link href={{`{create_href}?{child_field}=${{id}}`}} className="text-emerald-300 underline">Add {child_singular_title}</Link>'
             "</div></div>\n"
@@ -3459,14 +3482,35 @@ def _render_frontend_entity_detail_page(
             f"        {{{key}Error ? <p className=\"text-xs text-rose-300\">Failed to load related items: {{{key}Error}}</p> : null}}\n"
             f"        {{{key}Items.length === 0 && !{key}Loading && !{key}Error ? <p className=\"text-xs text-slate-300\">No related items yet.</p> : null}}\n"
             f"        {{{key}Items.length > 0 ? (\n"
-            '          <ul className="space-y-2 text-xs">\n'
-            f"            {{{key}Items.map((row, idx) => (\n"
-            '              <li key={String((row as Record<string, unknown>).id ?? idx)} className="rounded border border-slate-700 bg-slate-950/60 p-2">\n'
-            "                <div className=\"font-medium\">{String((row as Record<string, unknown>).title ?? (row as Record<string, unknown>).name ?? `#${idx}`)}</div>\n"
-            "                <pre className=\"mt-1 overflow-x-auto text-[11px] text-slate-400\">{JSON.stringify(row, null, 2)}</pre>\n"
-            "              </li>\n"
-            "            ))}\n"
-            "          </ul>\n"
+            '          <div className="space-y-3">\n'
+            '            <div className="grid gap-2 sm:grid-cols-2">\n'
+            '              <div className="rounded-md border border-slate-800 bg-slate-900/70 p-3">\n'
+            f'                <div className="text-2xl font-semibold text-slate-100">{{{key}Items.length}}</div>\n'
+            f'                <div className="text-xs uppercase tracking-wide text-slate-500">{child_singular_title} Count</div>\n'
+            "              </div>\n"
+            '              <div className="rounded-md border border-slate-800 bg-slate-900/70 p-3">\n'
+            f'                <div className="text-2xl font-semibold text-slate-100">{{recentRelatedRecords({key}Items).length}}</div>\n'
+            f'                <div className="text-xs uppercase tracking-wide text-slate-500">Recent {child_title}</div>\n'
+            "              </div>\n"
+            "            </div>\n"
+            f"            {{workflowStatusEntries({key}Items).length > 0 ? (\n"
+            '              <div className="rounded-md border border-slate-800 bg-slate-900/70 p-3">\n'
+            '                <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-300">Workflow Summary</h3>\n'
+            '                <div className="mt-2 flex flex-wrap gap-2">\n'
+            f"                  {{workflowStatusEntries({key}Items).map(([status, count]) => (\n"
+            '                    <span key={status} className="rounded-full border border-slate-700 bg-slate-950 px-2 py-1 text-[11px] text-slate-200">{status}: {count}</span>\n'
+            "                  ))}\n"
+            "                </div>\n"
+            "              </div>\n"
+            "            ) : null}\n"
+            f'            <div className="space-y-2"><h3 className="text-xs font-semibold uppercase tracking-wide text-slate-300">Recent {child_title}</h3>\n'
+            '              <ul className="space-y-2 text-xs">\n'
+            f"                {{recentRelatedRecords({key}Items).map((row, idx) => (\n"
+            f'                  <li key={{String((row as Record<string, unknown>).id ?? idx)}} className="flex items-center justify-between gap-2 rounded border border-slate-800 bg-slate-950/60 p-2"><span className="min-w-0 truncate font-medium">{{relatedRecordLabel(row, idx)}}</span><Link href={{`/{child_resource}/${{String((row as Record<string, unknown>).id ?? \"\")}}`}} className="shrink-0 text-cyan-300 underline">Open</Link></li>\n'
+            "                ))}\n"
+            "              </ul>\n"
+            "            </div>\n"
+            "          </div>\n"
             "        ) : null}\n"
             "      </section>\n"
         )
