@@ -482,6 +482,95 @@ def test_single_entity_create_page_uses_normal_inputs_without_relation_selector(
     _assert_tsx_syntax_ok(create_text)
 
 
+@pytest.mark.parametrize(
+    ("entity", "field_name", "route"),
+    [
+        ("Task", "status", "tasks"),
+        ("Ticket", "state", "tickets"),
+        ("OnboardingTask", "workflow_status", "onboarding_tasks"),
+    ],
+)
+def test_generated_detail_page_includes_workflow_actions_for_status_fields(
+    tmp_path: Path,
+    entity: str,
+    field_name: str,
+    route: str,
+) -> None:
+    project_dir = tmp_path / f"workflow_{route}"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps(
+            {
+                "entities": [
+                    {
+                        "name": entity,
+                        "fields": [
+                            {"name": "title", "type": "string"},
+                            {"name": field_name, "type": "string"},
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    apply_frontend_page_scaffold(project_dir, entity)
+    detail_text = (project_dir / "frontend" / "app" / route / "[id]" / "page.tsx").read_text(encoding="utf-8")
+
+    assert "Actions" in detail_text
+    assert "workflowActionForStatus" in detail_text
+    assert 'return { label: "Start", nextValue: "IN_PROGRESS" }' in detail_text
+    assert 'return { label: "Complete", nextValue: "DONE" }' in detail_text
+    assert 'return { label: "Reopen", nextValue: "TODO" }' in detail_text
+    assert 'method: "PATCH"' in detail_text
+    assert f"fetch(`${{apiBaseUrl}}/{route}/${{id}}`" in detail_text
+    assert f'body: JSON.stringify({{ [workflowFieldName]: nextValue }})' in detail_text
+    assert f'const workflowFieldName = "{field_name}";' in detail_text
+    assert "await loadItem();" in detail_text
+    _assert_tsx_syntax_ok(detail_text)
+
+
+def test_generated_detail_page_omits_workflow_actions_without_status_field(tmp_path: Path) -> None:
+    project_dir = tmp_path / "workflow_no_status"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps({"entities": [{"name": "Asset", "fields": [{"name": "title", "type": "string"}]}]}),
+        encoding="utf-8",
+    )
+
+    apply_frontend_page_scaffold(project_dir, "Asset")
+    detail_text = (project_dir / "frontend" / "app" / "assets" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+
+    assert "workflowActionForStatus" not in detail_text
+    assert "applyWorkflowAction" not in detail_text
+    assert "Current status:" not in detail_text
+    _assert_tsx_syntax_ok(detail_text)
+
+
+def test_issue_like_detail_page_omits_workflow_actions_without_status_field(tmp_path: Path) -> None:
+    project_dir = tmp_path / "workflow_ticket_no_status"
+    (project_dir / "frontend" / "app").mkdir(parents=True, exist_ok=True)
+    (project_dir / "frontend" / "package.json").write_text('{"name":"frontend"}\n', encoding="utf-8")
+    (project_dir / ".archmind").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".archmind" / "project_spec.json").write_text(
+        json.dumps({"entities": [{"name": "Ticket", "fields": [{"name": "title", "type": "string"}]}]}),
+        encoding="utf-8",
+    )
+
+    apply_frontend_page_scaffold(project_dir, "Ticket")
+    detail_text = (project_dir / "frontend" / "app" / "tickets" / "[id]" / "page.tsx").read_text(encoding="utf-8")
+
+    assert "workflowActionForStatus" not in detail_text
+    assert "applyWorkflowAction" not in detail_text
+    assert "Current status:" not in detail_text
+    _assert_tsx_syntax_ok(detail_text)
+
+
 def test_normalize_project_spec_builds_canonical_resources_pages_and_apis() -> None:
     normalized = normalize_project_spec(
         {
@@ -1078,6 +1167,10 @@ def test_issue_frontend_pages_render_status_priority_badges_without_raw_json(tmp
     assert "Open issue" in list_text
     assert "Description" in detail_text
     assert "Metadata" in detail_text
+    assert "Actions" in detail_text
+    assert "workflowActionForStatus" in detail_text
+    assert 'body: JSON.stringify({ [workflowFieldName]: nextValue })' in detail_text
+    assert 'method: "PATCH"' in detail_text
     assert "item.description ?? item.content ?? item.summary" in detail_text
     assert '"name": "priority", "label": "Priority", "placeholder": "priority", "inputType": "text"' in create_text
     assert "onCompositionStart={() => setComposingField(field.name)}" in create_text
